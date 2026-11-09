@@ -862,8 +862,9 @@ function lookupClass(decision: {
     : { kind: "github", status: decision.status };
 }
 
-// The route the run would have used. The trigger has no routing text, only
-// whether it names OpenCode (action.yml's own test for the OpenCode install).
+// The route the run would have used. The trigger has no models text, only
+// whether the models in effect name OpenCode: the platform's, or else the
+// `models` input's (action.yml's HAS_OPENCODE_ROUTING, D1).
 function backendOf(deps: CiTriggerDeps): string {
   return deps.env.HAS_OPENCODE_ROUTING === "true" ? "opencode" : "claude";
 }

@@ -17,12 +17,20 @@ inputs:
     description: 'Removed: pass CRYSK_CLAUDE_OAUTH_TOKEN in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   routing:
-    description: 'Removed: models are set per role (models) on the Crysk platform. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
+    description: 'Removed: set the models per role in the models input instead (from vars.CRYSK_MODELS), or in the Crysk platform''s model settings for a connected repository. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
     default: ''
   opencode-auth:
     description: 'Removed: pass one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
+  models:
+    description: 'The models per role, as JSON: the models object of the personal config, from role (default, hunter.logic, judge, ...) to an ordered list of models, the first one tried first, e.g. {"default": ["claude:sonnet-latest"], "hunter.logic": ["opencode:deepseek/deepseek-chat", "claude:sonnet-latest"]}. An entry is a model name or {"model": ..., "effort": ...}. Pass it from a repository variable, models: followed by the vars.CRYSK_MODELS expression. Read by the setup step only, with the engine''s own parser, and written to the runner''s personal config file; a malformed value fails the run (CRYSK-CONFIG-INVALID). A repository connected to the Crysk platform takes its models from the platform''s model settings, which win whole: this input and credentials are then ignored with a warning. Empty: every role runs the default Claude model.'
+    required: false
+    default: ''
+  credentials:
+    description: 'Which Claude credential the review uses, and in what order, as JSON, e.g. {"claude": ["subscription", "api_key"]} (subscription is CRYSK_CLAUDE_OAUTH_TOKEN, api_key is CRYSK_CLAUDE_API_KEY, both in crysk-secrets). Pass it from a repository variable, credentials: followed by the vars.CRYSK_CREDENTIALS expression. Read and written like models, beside it. Empty: the subscription first.'
+    required: false
+    default: ''
   crysk-secrets:
     description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _. A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). The input is read on stdin by those three steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
     required: false
@@ -184,10 +192,13 @@ runs:
         # step reads it. The run step writes the cli-started marker here too.
         # One path, bound the same way in all three steps (T2b).
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
-        # Presence only: whether the platform's models name OpenCode. It names
-        # the backend of a no-credential outcome. The routing input no longer
-        # counts: a value there stops the run (HAS_ROUTING above).
-        HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' }}
+        # Presence only, never the models text: whether the models in effect
+        # name OpenCode. It names the backend of a no-credential outcome. The
+        # platform's models win over the models input (D1): its output is `true`
+        # or `false` when the platform sent models, and empty otherwise (then the
+        # input decides). The routing input no longer counts: a value there
+        # stops the run (HAS_ROUTING above).
+        HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.models, 'opencode:')) }}
         # The attempt of this run. A re-run keeps the run id, so the record names
         # the attempt, and the publisher orders a re-run's comments by it.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -219,8 +230,15 @@ runs:
       shell: bash
       env:
         # The removed routing and opencode-auth inputs are not bound: the trigger
-        # stops any run that passes a value in them (U5), so setup.ts reads them
-        # as empty.
+        # stops any run that passes a value in them (U5), and setup.ts no longer
+        # reads them (D6).
+        # The models per role and the Claude credential order (D1), bound only
+        # here. setup.ts reads them with the engine's person parser and writes
+        # them as the personal config file, unless the platform sent a person
+        # layer, which wins whole (the inputs are then ignored with a warning).
+        # Not secrets: repository variables, never a value from crysk-secrets.
+        MODELS_INPUT: ${{ inputs.models }}
+        CREDENTIALS_INPUT: ${{ inputs.credentials }}
         # Platform mode only: the file the connect step left (empty in a
         # standalone run, which then changes nothing). The step writes the
         # platform's `person` layer to the personal config file, and its
@@ -252,10 +270,13 @@ runs:
     # installer is named, not built.
     #
     # Installed when the setup step wrote an OpenCode auth file from the
-    # CRYSK_OPENCODE_* secrets, or when the platform's models name OpenCode
-    # (L28 decision 3): a self-hosted runner's own auth file still gets the CLI.
+    # CRYSK_OPENCODE_* secrets, or when the models in effect name OpenCode
+    # (L28 decision 3): a self-hosted runner's own auth file, or a free model
+    # that needs no credential, still gets the CLI. opencode-models is the setup
+    # step's reading of the models in effect, the platform's or the models
+    # input's (E-f F3).
     - name: Install OpenCode CLI
-      if: ${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.platform.outputs.routing-opencode == 'true') }}
+      if: ${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') }}
       shell: bash
       run: |
         curl -fsSL https://opencode.ai/install | bash -s -- --version 1.18.30

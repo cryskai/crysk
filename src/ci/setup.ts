@@ -67,7 +67,7 @@ import {
   parseModelName,
   parseModelsConfig,
 } from "#model/model-name";
-import { parseLocalConfig } from "#review/preflight";
+import { parseGlobalConfig, parseLocalConfig } from "#review/preflight";
 import { commandForms } from "../brand";
 import {
   duplicateWorkflowProblem,
@@ -704,10 +704,12 @@ export async function appendIgnorePatterns(
 }
 
 export interface MaterializeCiOpenCodeDataOptions {
-  // The removed `routing` input (S2). No longer read (F0, D6): the trigger stops
-  // a workflow that passes one. Kept only while callers outside F0 still pass it.
-  routing?: string;
-  opencodeAuth?: string;
+  // E-f F3 (D1): the `models` and `credentials` inputs, raw JSON text, which a
+  // standalone workflow fills from vars.CRYSK_MODELS and vars.CRYSK_CREDENTIALS.
+  // Read with the engine's person parser and written as the personal file,
+  // unless a platform person layer exists, which wins whole.
+  modelsInput?: string;
+  credentialsInput?: string;
   home?: string;
   env?: Readonly<Record<string, string | undefined>>;
   // Platform mode: the person layer the Crysk platform returned (`{}` when it
@@ -717,18 +719,24 @@ export interface MaterializeCiOpenCodeDataOptions {
   // person layer on a runner whose HOME outlives the job.
   platformPerson?: Record<string, unknown>;
   // U3: the parsed `crysk-secrets` input, when it was given. Its CRYSK_OPENCODE_*
-  // secrets build the OpenCode auth file for the providers the person layer's
-  // models name, and win over the old `opencode-auth` input.
+  // secrets build the OpenCode auth file for the providers the models in effect
+  // name.
   cryskSecrets?: CryskSecretsParse;
 }
 
 export interface MaterializeCiOpenCodeDataResult {
   // Notices for the job log: names and provider ids only, never a value.
   readonly notices: readonly string[];
-  // Whether this step wrote the OpenCode auth file: from the CRYSK_OPENCODE_*
-  // secrets for the providers the models name, or from the old opencode-auth
-  // input. The Install OpenCode CLI step runs only then (U5).
+  // Warnings for the job log, the same rule: the inputs a platform layer overrode.
+  readonly warnings: readonly string[];
+  // Whether this step wrote the OpenCode auth file from the CRYSK_OPENCODE_*
+  // secrets for the providers the models name. The Install OpenCode CLI step
+  // runs then (U5).
   readonly openCodeAuthWritten: boolean;
+  // Whether the models in effect, the platform's or the inputs', run an
+  // OpenCode model (the judge's entries aside). The Install OpenCode CLI step
+  // runs then too, so a free model with no credential still gets the CLI.
+  readonly openCodeModels: boolean;
 }
 
 // The file the publisher reads when this step fails on a malformed input, and
@@ -738,14 +746,20 @@ const AUTH_CLASS: ErrorClass = {
   kind: "credential",
   failureClass: "malformed_payload",
 };
-// The details the record carries. Each names the input that is wrong and never
-// its content, so a secret cannot reach the PR.
-const AUTH_NOT_JSON = "the opencode-auth input is not valid JSON";
-const AUTH_NOT_OBJECT = "the opencode-auth input must be a JSON object";
-const AUTH_INPUT_IGNORED =
-  "the opencode-auth input is ignored: the CRYSK_OPENCODE_* secrets build the OpenCode auth file.";
+// The models and credentials inputs (D1): one class, CRYSK-CONFIG-INVALID's
+// `models-input` variant. Its details name the input and never its content (the
+// variable may hold anything, a pasted key included), so the publisher can put
+// them on the PR. The parser's own message, which names the entry, goes to the
+// step's log only, through F2's redaction; a JSON syntax error's text is never
+// printed, since it can quote the input.
+const MODELS_INPUT_CLASS: ErrorClass = {
+  kind: "config-parse",
+  source: "models-input",
+};
+const INPUTS_IGNORED_WARNING =
+  "The models and credentials inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.";
 
-// An OpenCode auth or crysk-secrets input the user configured wrongly. `message` is the
+// A crysk-secrets, models or credentials input the user configured wrongly. `message` is the
 // line stderr has always printed; `cls` and `detail` are what the record carries.
 class SetupInputError extends Error {
   readonly cls: ErrorClass;
@@ -778,7 +792,8 @@ async function writeOwnerOnlyFile(file: string, body: string): Promise<void> {
 // counted even when every role overrides it (a record nobody reads costs nothing).
 // Read through parseModelsConfig, the engine's own parser, so a change to the
 // shape of a list entry (E-g) is a type error here, never a silent skip. Models
-// that do not parse yield none; assertPlatformPerson refuses them by name.
+// that do not parse yield none; assertPlatformPerson and readConfigInput refuse
+// them by name before this runs.
 function openCodeProvidersOfModels(models: unknown): string[] {
   if (models === undefined) return [];
   let config: ModelsConfig;
@@ -859,25 +874,59 @@ function assembleOpenCodeAuth(
     );
   }
   // A provider with no secret matters only when the secrets build the file:
-  // otherwise the old opencode-auth input (or nothing) serves, as before.
+  // otherwise this step writes no auth file, and the runner's own (or none, for
+  // a free model) serves, as before.
   if (manifest.length > 0) notices.push(...missing);
   return { records, manifest, notices, problems };
+}
+
+// One of the two inputs (D1), read the way the person parser reads that key in
+// ~/.crysk/config.json: the value is the key's own object, checked under that
+// key alone. Returns undefined for an empty input.
+function readConfigInput(
+  raw: string | undefined,
+  key: "models" | "credentials",
+): unknown {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const label = `the ${key} input`;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new SetupInputError(
+      MODELS_INPUT_CLASS,
+      `${label} is not valid JSON`,
+      `CI ${key} input is not valid JSON`,
+    );
+  }
+  try {
+    parseGlobalConfig(JSON.stringify({ [key]: value }), label);
+  } catch (error) {
+    throw new SetupInputError(
+      MODELS_INPUT_CLASS,
+      `${label} does not follow the ${key} rules (the setup step's log names the entry)`,
+      messageOf(error),
+    );
+  }
+  return value;
 }
 
 // CI data plane: the person layer + 0600 auth.json. HOME must be a real
 // directory — empty/unset fails loud with no cwd fallback, because falling
 // back would write person keys into the checkout (.prhero/config.json), which
 // the repo parser rejects. Never log the auth blob; never inject readerFn.
-// In platform mode the platform's person layer is that one file. The `routing`
-// input is gone (S2): the trigger stops a workflow that passes one, and this
-// step does not read it (F0, D6).
 //
-// U3: when the CRYSK_OPENCODE_* secrets serve at least one provider the models
-// name, they build auth.json alone and the `opencode-auth` input is ignored with
-// a notice (never merged: one source per file). A manifest beside it names the
-// secret behind each record, for the run's credential kind. When they serve
-// none, the `opencode-auth` input works exactly as before, and a manifest an
-// earlier run left is removed, so it never describes a file it did not build.
+// The person layer in effect (D1): the platform's when it sent one, whole, with
+// the models and credentials inputs ignored and a warning; otherwise the inputs,
+// read with the person parser before anything is written. The `routing` and
+// `opencode-auth` inputs are gone (S2, D6): the trigger stops a workflow that
+// passes either, and this step does not read them.
+//
+// U3: the CRYSK_OPENCODE_* secrets build auth.json for the providers the models
+// in effect name. A manifest beside it names the secret behind each record, for
+// the run's credential kind. When they serve none, a manifest an earlier run left
+// is removed, so it never describes a file it did not build, and an auth file
+// already on the runner (a self-hosted runner's own) is left alone.
 export async function materializeCiOpenCodeData(
   options: MaterializeCiOpenCodeDataOptions = {},
 ): Promise<MaterializeCiOpenCodeDataResult> {
@@ -889,18 +938,41 @@ export async function materializeCiOpenCodeData(
     );
   }
 
-  const authRaw = options.opencodeAuth ?? env.OPENCODE_AUTH_INPUT ?? "";
   const platformMode = options.platformPerson !== undefined;
   const platformPerson = options.platformPerson ?? {};
+  const platformLayer = Object.keys(platformPerson).length > 0;
+  const personFile = prheroLayout(home).reviewConfigPath;
 
+  const warnings: string[] = [];
+  let personBody: Record<string, unknown>;
+  if (platformLayer) {
+    // Validated whole by the engine's person parser before anything is written.
+    assertPlatformPerson(platformPerson, personFile);
+    personBody = { ...platformPerson };
+    // The inputs are not even read: a value the platform overrides is not this
+    // run's configuration, so a malformed one must not fail it.
+    const inputGiven = [options.modelsInput, options.credentialsInput].some(
+      (raw) => raw !== undefined && raw.trim() !== "",
+    );
+    if (inputGiven) warnings.push(INPUTS_IGNORED_WARNING);
+  } else {
+    const models = readConfigInput(options.modelsInput, "models");
+    const credentials = readConfigInput(
+      options.credentialsInput,
+      "credentials",
+    );
+    personBody = {
+      ...(models === undefined ? {} : { models }),
+      ...(credentials === undefined ? {} : { credentials }),
+    };
+  }
+
+  const providers = openCodeProvidersOfModels(personBody.models);
   const notices: string[] = [];
   const assembly =
     options.cryskSecrets === undefined
       ? undefined
-      : assembleOpenCodeAuth(
-          options.cryskSecrets,
-          openCodeProvidersOfModels(platformPerson.models),
-        );
+      : assembleOpenCodeAuth(options.cryskSecrets, providers);
   if (assembly !== undefined && assembly.problems.length > 0) {
     const detail = assembly.problems.join("; ");
     throw new SetupInputError(
@@ -913,45 +985,8 @@ export async function materializeCiOpenCodeData(
     assembly !== undefined && assembly.manifest.length > 0
       ? assembly
       : undefined;
-  if (fromSecrets !== undefined) {
-    notices.push(...fromSecrets.notices);
-    if (authRaw.trim() !== "") notices.push(AUTH_INPUT_IGNORED);
-  }
+  if (fromSecrets !== undefined) notices.push(...fromSecrets.notices);
 
-  let authBody: string | undefined;
-  if (authRaw.trim() !== "" && fromSecrets === undefined) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(authRaw);
-    } catch {
-      throw new SetupInputError(
-        AUTH_CLASS,
-        AUTH_NOT_JSON,
-        "CI opencode-auth is not valid JSON",
-      );
-    }
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      throw new SetupInputError(
-        AUTH_CLASS,
-        AUTH_NOT_OBJECT,
-        "CI opencode-auth must be a JSON object",
-      );
-    }
-    authBody = authRaw;
-  }
-
-  const personFile = prheroLayout(home).reviewConfigPath;
-  // Validated whole by the engine's person parser before anything is written.
-  if (Object.keys(platformPerson).length > 0) {
-    assertPlatformPerson(platformPerson, personFile);
-  }
-  const personBody: Record<string, unknown> = {
-    ...platformPerson,
-  };
   if (Object.keys(personBody).length > 0) {
     await mkdir(path.dirname(personFile), { recursive: true });
     await writeFile(personFile, `${JSON.stringify(personBody, null, 2)}\n`);
@@ -971,12 +1006,13 @@ export async function materializeCiOpenCodeData(
       serializeOpenCodeSecretManifest(fromSecrets.manifest),
     );
   } else {
-    if (authBody !== undefined) await writeOwnerOnlyFile(authPath, authBody);
     await rm(manifestPath, { force: true });
   }
   return {
     notices,
-    openCodeAuthWritten: fromSecrets !== undefined || authBody !== undefined,
+    warnings,
+    openCodeAuthWritten: fromSecrets !== undefined,
+    openCodeModels: providers.length > 0,
   };
 }
 
@@ -1063,8 +1099,8 @@ async function writeSetupRecord(
 }
 
 // The `crysk-secrets` input (S8, L13). Every value is masked before this step
-// writes anything else, a refused input fails the step like a malformed auth
-// input, and later steps learn only which credentials exist: names, Claude
+// writes anything else, a refused input fails the step with a setup record,
+// and later steps learn only which credentials exist: names, Claude
 // kinds and OpenCode provider tokens, never a value, and never GITHUB_ENV.
 // Empty input: nothing is printed or written, exactly as before the input
 // existed. The OpenCode secrets build the auth file (U3, materializeCiOpenCodeData);
@@ -1097,8 +1133,8 @@ function intakeCryskSecrets(
   return parsed;
 }
 
-// The step's whole job. Returns the exit code. A malformed auth or secrets input
-// is the user's configuration, so it also leaves setup.json for the publisher;
+// The step's whole job. Returns the exit code. A malformed secrets, models or
+// credentials input is the user's configuration, so it also leaves setup.json for the publisher;
 // any other failure (HOME, a write) stays unclassified, with no record.
 async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
   try {
@@ -1113,16 +1149,25 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
       platform !== undefined || deps.env.CRYSK_PLATFORM_CONNECTED === "true";
     const materialized = await materializeCiOpenCodeData({
       env: deps.env,
+      modelsInput: deps.env.MODELS_INPUT ?? "",
+      credentialsInput: deps.env.CREDENTIALS_INPUT ?? "",
       ...(platformMode ? { platformPerson: platform?.person ?? {} } : {}),
       ...(cryskSecrets === undefined ? {} : { cryskSecrets }),
     });
+    for (const warning of materialized.warnings) {
+      deps.stderr(`::warning::${escapeCommandData(warning)}\n`);
+    }
     for (const notice of materialized.notices) {
       deps.stderr(`::notice::${escapeCommandData(notice)}\n`);
     }
-    // Presence only: the Install OpenCode CLI step keys on it, so the CLI is
-    // installed when an OpenCode credential the run can use was written.
+    // Presence only: the Install OpenCode CLI step keys on these, so the CLI is
+    // installed when an OpenCode credential the run can use was written, or when
+    // the models in effect run an OpenCode model (a free one needs none).
     if (materialized.openCodeAuthWritten) {
       deps.appendOutput("opencode-auth-file=true\n");
+    }
+    if (materialized.openCodeModels) {
+      deps.appendOutput("opencode-models=true\n");
     }
     // WHY the run step needs to know: it passes `--post` whenever the `post`
     // input is true (the default), and an explicit CLI option outranks the

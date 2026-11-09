@@ -144,13 +144,10 @@ describe("routing value", () => {
   // rather than pretend the route still works, until the sandbox sets models (F7).
   test("configures nothing in the real CI materializer until the sandbox sets models", async () => {
     home = await mkdtemp(path.join(tmpdir(), "pr-hero-sandbox-seed-"));
-    const env = { HOME: home };
-    await materializeCiOpenCodeData({
-      routing: routingValueFor("big-pickle"),
-      opencodeAuth: "",
-      home,
-      env,
-    });
+    // The sandbox's routing value, where the old step read it: no option takes
+    // it any more (D6), and the environment variable is not read either.
+    const env = { HOME: home, ROUTING_INPUT: routingValueFor("big-pickle") };
+    await materializeCiOpenCodeData({ home, env });
     expect(existsSync(prheroLayout(home).reviewConfigPath)).toBe(false);
     expect(existsSync(resolveOpenCodeAuthPath(env, home))).toBe(false);
   });

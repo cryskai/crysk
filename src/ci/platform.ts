@@ -395,15 +395,16 @@ export async function runPlatformConnect(
     // output) and an empty config both skip everything.
     if (configFile !== undefined) {
       deps.appendOutput(`config-file=${configFile}\n`);
-      // The same test the OpenCode install step makes of the routing input
-      // (`contains(inputs.routing, 'opencode')`): platform routing that names
-      // OpenCode needs the CLI installed too. Present whenever the platform
-      // sent a routing, `false` included, because platform routing wins over
-      // the input: action.yml reads an empty output as "use the input's" and
-      // any value as the platform's answer, so a platform routing that does not
-      // name OpenCode overrides an input that does.
-      // Read off `models` now (S1): an `opencode:` model needs the CLI. A
-      // platform `routing` is refused by the setup step's person parser.
+      // Whether the platform's models name OpenCode (S1): an `opencode:` model
+      // needs the CLI installed. Present whenever the platform sent models,
+      // `false` included, because the platform's models win over the `models`
+      // input (D1): the trigger's backend flag in action.yml reads an empty
+      // output as "use the input's" (`contains(inputs.models, 'opencode:')`)
+      // and any value as the platform's answer, so platform models that do not
+      // name OpenCode override an input that does. The OpenCode install step
+      // also reads the setup step's `opencode-models`, its own reading of the
+      // models in effect. A platform `routing` is refused by the setup step's
+      // person parser.
       const models = result.config?.person.models;
       if (models !== undefined) {
         deps.appendOutput(

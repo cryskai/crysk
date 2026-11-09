@@ -657,10 +657,11 @@ describe("Packaging & distribution configuration", () => {
       // Outputs of the platform connect step (empty in a standalone run).
       platform?: Record<string, string>;
     }
-    // Whether the platform's models name OpenCode. The routing input no longer
-    // counts: a value there stops the run at the trigger (U5).
+    // Whether the models in effect name OpenCode: the platform's answer when it
+    // sent models (`true` or `false`), the models input's otherwise (E-f F3, D1).
+    // The routing input no longer counts: a value there stops the run (U5).
     const EFFECTIVE_OPENCODE_ROUTING =
-      "steps.platform.outputs.routing-opencode == 'true'";
+      "steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.models, 'opencode:'))";
 
     function resolveEnv(
       env: Record<string, string>,
@@ -692,9 +693,14 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
-        // Whether the platform's models name OpenCode.
+        // The models in effect: the platform's answer when it sent models,
+        // the models input's otherwise.
         if (expr === EFFECTIVE_OPENCODE_ROUTING) {
-          return String(ctx.platform?.["routing-opencode"] === "true");
+          const platformRouting = ctx.platform?.["routing-opencode"] ?? "";
+          return String(
+            platformRouting === "true" ||
+              (platformRouting === "" && input("models").includes("opencode:")),
+          );
         }
         const materialized = /^steps\.materialize\.outputs\.([\w-]+)$/.exec(
           expr,
@@ -989,17 +995,42 @@ describe("Packaging & distribution configuration", () => {
     });
 
     // L28 decision 3: the CLI is installed when the setup step wrote an OpenCode
-    // auth file from the CRYSK_OPENCODE_* secrets, or when the platform's models
-    // name OpenCode (a self-hosted runner's own auth file still gets the CLI).
-    test("the OpenCode CLI is installed when setup wrote its auth file or the platform's models name OpenCode", () => {
+    // auth file from the CRYSK_OPENCODE_* secrets, or when the models in effect
+    // name OpenCode (a self-hosted runner's own auth file, or a free model, still
+    // gets the CLI). E-f F3: the setup step reports the models in effect, the
+    // models input included, as opencode-models.
+    test("the OpenCode CLI is installed when setup wrote its auth file or the models in effect name OpenCode", () => {
       const install = steps().find(
         (step) => step.name === "Install OpenCode CLI",
       );
       expect(String(install?.if)).toBe(
-        `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || ${EFFECTIVE_OPENCODE_ROUTING}) }}`,
+        `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') }}`,
       );
-      // The removed inputs never decide it.
+      // No input decides it: the setup step read the models input already.
       expect(String(install?.if)).not.toContain("inputs.");
+    });
+
+    // E-f F3 (D1): the two inputs reach the setup step only, as values. The
+    // trigger learns only whether the models input names OpenCode.
+    test("only the setup step binds the models and credentials inputs as values", () => {
+      for (const input of ["models", "credentials"]) {
+        expect(parsedAction().inputs[input]?.required, input).toBe(false);
+        expect(parsedAction().inputs[input]?.default, input).toBe("");
+        const binders = steps().filter((step) =>
+          JSON.stringify(step).includes(`inputs.${input} }}`),
+        );
+        expect(
+          binders.map((step) => step.id),
+          input,
+        ).toEqual(["materialize"]);
+      }
+      const setup = steps().find((step) => step.id === "materialize");
+      expect(setup?.env?.MODELS_INPUT).toBe(`\${{ inputs.models }}`);
+      expect(setup?.env?.CREDENTIALS_INPUT).toBe(`\${{ inputs.credentials }}`);
+      const mentions = steps()
+        .filter((step) => JSON.stringify(step).includes("inputs.models"))
+        .map((step) => step.id);
+      expect(mentions).toEqual(["trigger", "materialize"]);
     });
 
     test.each([
@@ -1017,10 +1048,54 @@ describe("Packaging & distribution configuration", () => {
       ["no platform routing, input names OpenCode", "", "opencode", "false"],
       ["no platform routing, input empty", "", "", "false"],
     ])(
-      "the trigger's backend flag follows only the platform's models: %s",
+      "the trigger's backend flag never follows the routing input: %s",
       (_label, platformRouting, routing, expected) => {
         const env = resolveEnv(triggerStep()?.env ?? {}, {
           inputs: { routing },
+          github: {},
+          trigger: {},
+          runner: { temp: "/runner/temp" },
+          platform: { "routing-opencode": platformRouting },
+        });
+        expect(env.HAS_OPENCODE_ROUTING).toBe(expected);
+      },
+    );
+
+    // E-f F3 (D1): the models input names the backend when the platform sent no
+    // models; models the platform sent win, `false` included.
+    test.each([
+      [
+        "no platform models, input names OpenCode",
+        "",
+        "opencode:deepseek/deepseek-chat",
+        "true",
+      ],
+      [
+        "no platform models, input names Claude only",
+        "",
+        "claude:sonnet-latest",
+        "false",
+      ],
+      ["no platform models, input empty", "", "", "false"],
+      [
+        "platform names OpenCode, input Claude only",
+        "true",
+        "claude:sonnet-latest",
+        "true",
+      ],
+      [
+        "platform does not, input names OpenCode",
+        "false",
+        "opencode:deepseek/deepseek-chat",
+        "false",
+      ],
+    ])(
+      "the trigger's backend flag follows the models in effect: %s",
+      (_label, platformRouting, model, expected) => {
+        const env = resolveEnv(triggerStep()?.env ?? {}, {
+          inputs: {
+            models: model === "" ? "" : JSON.stringify({ default: [model] }),
+          },
           github: {},
           trigger: {},
           runner: { temp: "/runner/temp" },

@@ -37,8 +37,8 @@ const SETUP_SCRIPT = path.resolve(
 );
 
 const PLATFORM_MODELS = { default: ["opencode:deepseek/deepseek-chat"] };
-const INPUT_ROUTING = JSON.stringify({
-  default: { backend: "opencode", provider: "openai" },
+const INPUT_MODELS = JSON.stringify({
+  default: ["opencode:openai/gpt-5"],
 });
 const ROUTING_GONE =
   '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`';
@@ -217,14 +217,13 @@ describe("readPlatformConfig", () => {
 describe("materializeCiOpenCodeData with a platform person layer", () => {
   const personPath = () => prheroLayout(fixture.home).reviewConfigPath;
   const run = (options: {
-    routing?: string;
+    modelsInput?: string;
     platformPerson?: Record<string, unknown>;
   }) =>
     materializeCiOpenCodeData({
       home: fixture.home,
       env: { HOME: fixture.home },
-      opencodeAuth: "",
-      routing: options.routing ?? "",
+      modelsInput: options.modelsInput ?? "",
       ...(options.platformPerson === undefined
         ? {}
         : { platformPerson: options.platformPerson }),
@@ -241,14 +240,19 @@ describe("materializeCiOpenCodeData with a platform person layer", () => {
     });
   });
 
-  test("platform models win over the routing input", async () => {
-    await run({
-      routing: INPUT_ROUTING,
+  // D1 (E-f F3): the platform's person layer wins whole over the models input,
+  // which is ignored with a warning.
+  test("platform models win over the models input, which is ignored with a warning", async () => {
+    const result = await run({
+      modelsInput: INPUT_MODELS,
       platformPerson: { models: PLATFORM_MODELS, scout: true },
     });
     const layer = parseGlobalConfig(await readFile(personPath(), "utf8"));
     expect(layer.models).toEqual(PLATFORM_MODELS);
     expect(layer.scout).toBe(true);
+    expect(result.warnings).toEqual([
+      "The models and credentials inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.",
+    ]);
   });
 
   test("platform routing is refused with the new form before anything is written", async () => {
@@ -335,8 +339,6 @@ describe("the engine's loader over what platform mode delivers", () => {
     await materializeCiOpenCodeData({
       home: fixture.home,
       env: { HOME: fixture.home },
-      opencodeAuth: "",
-      routing: "",
       platformPerson: PERSON,
     });
     const delivered = await deliverPlatformRepoLayer({
@@ -364,8 +366,6 @@ describe("the engine's loader over what platform mode delivers", () => {
     await materializeCiOpenCodeData({
       home: fixture.home,
       env: { HOME: fixture.home },
-      opencodeAuth: "",
-      routing: "",
       platformPerson: PERSON,
     });
     await writeRepoFile(".crysk", { max_changed_lines: 2500 });
@@ -412,8 +412,8 @@ describe("setup.ts in platform mode (real entry point)", () => {
       env: {
         ...process.env,
         HOME: fixture.home,
-        ROUTING_INPUT: "",
-        OPENCODE_AUTH_INPUT: "",
+        MODELS_INPUT: "",
+        CREDENTIALS_INPUT: "",
         CRYSK_OUTCOME_DIR: path.join(fixture.runnerTemp, "outcome"),
         GITHUB_OUTPUT: githubOutput,
         CRYSK_PLATFORM_CONFIG_FILE: platformFile,
