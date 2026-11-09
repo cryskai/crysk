@@ -1643,6 +1643,8 @@ export class StepExecutionHarness implements StepRunner {
     // The same attempt's cause with harness causes kept (watchdog_timeout,
     // format_violation): what StepResult.finalCause reports, for the fallback.
     let lastCause: FailureCause | undefined;
+    // The final attempt was refused by a fenced spend bucket (StepResult.spendFenced).
+    let spendFenced = false;
     // Attempts earlier models of this step already used (StepSpec.attempt-
     // Offset). Every per-attempt artifact is named by `attemptOffset +
     // attempts`, so a fallback model never overwrites the first model's logs
@@ -1796,10 +1798,17 @@ export class StepExecutionHarness implements StepRunner {
         isTransportFailureCause(attemptResult.resolution.cause)
           ? attemptResult.resolution.cause
           : undefined;
-      lastCause =
-        attemptResult.resolution.kind === "cause"
-          ? attemptResult.resolution.cause
-          : undefined;
+      // A fenced attempt never reached the provider, so it has no cause of
+      // its own: finalCause stays the one the last attempt that did reach it
+      // ended on, which is what a fallback decides on.
+      if (attemptResult.fenced === true) {
+        spendFenced = true;
+      } else {
+        lastCause =
+          attemptResult.resolution.kind === "cause"
+            ? attemptResult.resolution.cause
+            : undefined;
+      }
       if (attemptResult.resolution.kind === "legacy_terminal") {
         break;
       }
@@ -1905,6 +1914,7 @@ export class StepExecutionHarness implements StepRunner {
         ? {}
         : { failureCause: lastFailureCause }),
       ...(lastCause === undefined ? {} : { finalCause: lastCause }),
+      ...(spendFenced ? { spendFenced: true as const } : {}),
       ...(lastOutcome?.failureDetail === undefined
         ? {}
         : { failureDetail: lastOutcome.failureDetail }),
@@ -2146,6 +2156,7 @@ export class StepExecutionHarness implements StepRunner {
             stderrTail: error.message,
           },
           resolution: { kind: "legacy_terminal" },
+          fenced: true,
         };
       }
       throw error;
@@ -2575,4 +2586,7 @@ type AttemptRunResult =
       readonly resolution: CauseResolution;
       readonly parseError?: string;
       readonly reservation?: SpendReservation;
+      // The spend ledger refused the reservation because the bucket is
+      // fenced: the transport was never called.
+      readonly fenced?: true;
     };
