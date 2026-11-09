@@ -6,6 +6,8 @@ import {
   LEGACY_WORKFLOW_RELATIVE_PATH,
   WORKFLOW_RELATIVE_PATH,
 } from "./brand-paths";
+import { claudeCredentialProjectionReady } from "./model/provider-capabilities";
+import { claudeCredentialPresence } from "./security/claude-credential";
 import { resolveOpenCodeAuthPath } from "./security/credential-broker";
 
 export type SystemTool = "git" | "claude" | "gh" | "codegraph";
@@ -28,6 +30,8 @@ export interface CheckSystemToolsOptions {
   exists?: (path: string) => boolean;
   env?: Record<string, string | undefined>;
   home?: string;
+  // Injectable so the Keychain half of the Claude login check is testable off macOS.
+  platform?: NodeJS.Platform;
 }
 
 export interface InstallSystemToolOptions {
@@ -103,6 +107,7 @@ export async function checkSystemTools(
   const exists = options.exists ?? existsSync;
   const env = options.env ?? process.env;
   const home = options.home ?? os.homedir();
+  const platform = options.platform ?? process.platform;
 
   // 1. git
   const gitBin = await which("git");
@@ -134,26 +139,28 @@ export async function checkSystemTools(
     const res = await exec([claudeBin, "--version"]);
     const version = res.stdout.trim().replace(/^claude-code\//, "");
 
-    // Check auth mechanisms
-    const hasToken =
-      Boolean(
-        env.CLAUDE_CODE_OAUTH_TOKEN &&
-          env.CLAUDE_CODE_OAUTH_TOKEN.trim().length > 0,
-      ) ||
-      Boolean(env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.trim().length > 0);
-
-    const hasSessionFile =
-      exists(path.join(home, ".claude.json")) ||
-      exists(path.join(home, ".claude", "session.json"));
-
-    const authOk = hasToken || hasSessionFile;
+    // The rule a run applies (U2, security/claude-credential.ts): a Claude
+    // credential variable (CRYSK_CLAUDE_* first, then the CLI's own names), or
+    // the machine's own login. `~/.claude.json` and `~/.claude/session.json` do
+    // not count: every Claude user has the first, API-key users included. The
+    // login half is defaultClaudeLoginPresent's, rebuilt over the injected
+    // `exists`, `home` and `platform`, because that function reads the real
+    // filesystem and HOME. On macOS it is the Keychain broker being available
+    // (`/usr/bin/security`), not the Keychain item itself: the doctor says
+    // what the run will choose, and a run on a Mac chooses the login.
+    const loginPresent =
+      claudeCredentialProjectionReady({ platform, existsFn: exists }) ||
+      exists(path.join(home, ".claude", ".credentials.json"));
+    const presence = claudeCredentialPresence(env, loginPresent);
+    const authOk =
+      presence.subscription !== undefined || presence.api_key !== undefined;
     claudeStatus = {
       installed: true,
       version: version.length > 0 ? version : undefined,
       authOk,
       hint: authOk
         ? undefined
-        : "Run 'claude' in your terminal to complete login or set ANTHROPIC_API_KEY",
+        : "Run 'claude' in your terminal to log in, or set CRYSK_CLAUDE_OAUTH_TOKEN (from 'claude setup-token') or CRYSK_CLAUDE_API_KEY",
     };
   }
 

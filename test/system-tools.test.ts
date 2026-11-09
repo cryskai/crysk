@@ -99,18 +99,111 @@ describe("checkSystemTools (offline with injected fakes)", () => {
       expect(status.claude.authOk).toBe(true);
     });
 
-    test("claude installed with session file (~/.claude.json) reports authOk: true", async () => {
-      const status = await checkSystemTools({
-        cwd: "/repo",
-        which: () => "/bin/claude",
-        exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+    // The doctor reads the same credentials a run does (U2,
+    // security/claude-credential.ts): `~/.claude.json` is no credential, every
+    // Claude user has it, API-key users included.
+    const claudeAuth = async (
+      options: Pick<
+        Parameters<typeof checkSystemTools>[0] & object,
+        "exists" | "env" | "platform"
+      >,
+    ) =>
+      (
+        await checkSystemTools({
+          cwd: "/repo",
+          which: () => "/bin/claude",
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          home: "/home/user",
+          platform: "linux",
+          ...options,
+        })
+      ).claude;
+
+    test("~/.claude.json alone is no credential: authOk false with a hint naming the CRYSK_CLAUDE_* secrets", async () => {
+      const status = await claudeAuth({
         exists: (p) => p === "/home/user/.claude.json",
         env: {},
-        home: "/home/user",
       });
 
-      expect(status.claude.installed).toBe(true);
-      expect(status.claude.authOk).toBe(true);
+      expect(status.installed).toBe(true);
+      expect(status.authOk).toBe(false);
+      expect(status.hint).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
+      expect(status.hint).toContain("CRYSK_CLAUDE_API_KEY");
+    });
+
+    test("~/.claude/session.json alone is no credential either", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/home/user/.claude/session.json",
+        env: {},
+      });
+
+      expect(status.authOk).toBe(false);
+    });
+
+    test("CRYSK_CLAUDE_OAUTH_TOKEN reports authOk: true", async () => {
+      const status = await claudeAuth({
+        exists: () => false,
+        env: { CRYSK_CLAUDE_OAUTH_TOKEN: "oauth-tok" },
+      });
+
+      expect(status.authOk).toBe(true);
+      expect(status.hint).toBeUndefined();
+    });
+
+    test("CRYSK_CLAUDE_API_KEY reports authOk: true", async () => {
+      const status = await claudeAuth({
+        exists: () => false,
+        env: { CRYSK_CLAUDE_API_KEY: "sk-test" },
+      });
+
+      expect(status.authOk).toBe(true);
+    });
+
+    test("a whitespace-only CRYSK_CLAUDE_OAUTH_TOKEN is no credential", async () => {
+      const status = await claudeAuth({
+        exists: () => false,
+        env: { CRYSK_CLAUDE_OAUTH_TOKEN: "  " },
+      });
+
+      expect(status.authOk).toBe(false);
+    });
+
+    test("ANTHROPIC_AUTH_TOKEN alone is no credential (a run strips it)", async () => {
+      const status = await claudeAuth({
+        exists: () => false,
+        env: { ANTHROPIC_AUTH_TOKEN: "bearer" },
+      });
+
+      expect(status.authOk).toBe(false);
+    });
+
+    test("the CLI's OAuth store ~/.claude/.credentials.json reports authOk: true", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/home/user/.claude/.credentials.json",
+        env: {},
+      });
+
+      expect(status.authOk).toBe(true);
+    });
+
+    test("macOS with the Keychain broker (/usr/bin/security) reports authOk: true", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/usr/bin/security",
+        env: {},
+        platform: "darwin",
+      });
+
+      expect(status.authOk).toBe(true);
+    });
+
+    test("/usr/bin/security off macOS is no Keychain login", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/usr/bin/security",
+        env: {},
+        platform: "linux",
+      });
+
+      expect(status.authOk).toBe(false);
     });
 
     test("claude installed but unauthenticated reports authOk: false with actionable hint", async () => {

@@ -293,6 +293,14 @@ export async function countFreeRouteSteps(input: {
   const verdicts = await Promise.all(
     input.steps.map(async ({ route }) => {
       if (route.backend !== "opencode") return false;
+      // The provider literal, not U3's kind-follows-secret rule: `openai` on a
+      // CRYSK_OPENCODE_OPENAI_API_KEY is metered and admission probes it
+      // (production-runtime.ts, openCodeFreeVerdicts), but this count never
+      // does, so an OpenAI model listed free would bind as free while the plan
+      // card counted it metered. Following the secret needs the run's secret
+      // names here, from review.ts and pr/plan.ts; left for that change (L47).
+      // Narrow in practice: on an API key (an empty OpenCode home, 2026-11-09)
+      // OpenAI lists 80 of 83 models priced, the 3 at zero being image models.
       if (route.provider === OPENCODE_OAUTH_PROVIDER) return false;
       try {
         return await probe(route.provider, route.modelSnapshot);

@@ -297,13 +297,8 @@ function stepRouteFor(
 
 // An internal model string (a bare alias or a full name) as a route, with no
 // role and no `models`: what a caller outside the plan needs to know which
-// backend a model runs on. The second parameter is the removed `routing`,
-// always undefined now; it stays only while benchmarks/martian/martian-evidence.ts
-// still passes it, and goes with that call.
-export function resolveModelRoute(
-  model: string,
-  _removedRouting?: undefined,
-): ResolvedModelRoute {
+// backend a model runs on.
+export function resolveModelRoute(model: string): ResolvedModelRoute {
   return routeForModel(toModelName(model, "spec", "route"));
 }
 
@@ -386,17 +381,14 @@ function assertHunterRolesExist(
   }
 }
 
-// The removed alias-keyed routing (S2). Typed loosely and refused at run time,
-// kept only because scripts/opencode-prompt-probe.ts (imported by a test, so
-// typechecked) still passes one; it goes when that script moves to `models`.
-export type RoutingConfig = Readonly<Record<string, unknown>>;
-
 export interface BuildRoutePlanInput {
   readonly agents: readonly RouteAgent[];
   readonly cliModel?: string;
   readonly models?: ModelsConfig;
-  // Removed (S2): passing one throws. See RoutingConfig.
-  readonly routingConfig?: RoutingConfig;
+  // The removed alias-keyed routing (S2): passing one throws. No caller passes
+  // it any more; it stays only while test/model/role-routing.test.ts pins the
+  // throw, and goes with that test (L47).
+  readonly routingConfig?: Readonly<Record<string, unknown>>;
   readonly frontmatterModel?: (agentKey: string) => string | undefined;
   readonly summarizer?: { model?: string; frontmatterModel?: string };
   readonly scout?: {
