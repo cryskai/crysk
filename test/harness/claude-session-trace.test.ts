@@ -81,6 +81,8 @@ function fakeProc(stdoutBody: string) {
 async function reviewWithSession(options: {
   sessionFile: "written" | "missing";
   credential: "projected" | "operator";
+  transcript?: string;
+  staleTrace?: boolean;
 }): Promise<{
   result: StepResult;
   tracePath: string;
@@ -111,7 +113,7 @@ async function reviewWithSession(options: {
           `${SESSION_ID}.jsonl`,
         );
         mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, TRANSCRIPT);
+        writeFileSync(file, options.transcript ?? TRANSCRIPT);
       }
       return fakeProc(cliResult());
     }) as unknown as typeof Bun.spawn,
@@ -131,6 +133,8 @@ async function reviewWithSession(options: {
       CLAUDE_CONFIG_DIR: operatorConfig,
     },
   });
+  const tracePath = path.join(steps, `trace.${STEP}.attempt1.jsonl`);
+  if (options.staleTrace) writeFileSync(tracePath, "stale previous run\n");
   const result = await harness.run({
     name: STEP,
     systemPromptPath,
@@ -147,7 +151,7 @@ async function reviewWithSession(options: {
   });
   return {
     result,
-    tracePath: path.join(steps, `trace.${STEP}.attempt1.jsonl`),
+    tracePath,
     broker,
     operatorConfig:
       options.credential === "operator" ? operatorConfig : undefined,
@@ -185,10 +189,37 @@ describe("Claude session trace", () => {
     expect(existsSync(broker?.lastHome ?? "")).toBe(false);
   });
 
+  test("a quoted password inside a tool result is redacted and the line still parses", async () => {
+    const transcript = `${JSON.stringify({
+      type: "tool_result",
+      content: JSON.stringify({ password: "hunter2" }),
+    })}\n`;
+    const { tracePath } = await reviewWithSession({
+      sessionFile: "written",
+      credential: "projected",
+      transcript,
+    });
+    const copy = await Bun.file(tracePath).text();
+    expect(copy).not.toContain("hunter2");
+    const line = JSON.parse(copy.trim()) as { content: string };
+    expect(JSON.parse(line.content)).toEqual({ password: "[REDACTED]" });
+  });
+
   test("a missing session file still finishes the attempt and warns", async () => {
     const { result, tracePath } = await reviewWithSession({
       sessionFile: "missing",
       credential: "projected",
+    });
+    expect(result.status).toBe("ok");
+    expect(result.stderrTail).toContain(MISSING_FILE);
+    expect(existsSync(tracePath)).toBe(false);
+  });
+
+  test("a missing session file does not keep a transcript from an earlier run", async () => {
+    const { result, tracePath } = await reviewWithSession({
+      sessionFile: "missing",
+      credential: "projected",
+      staleTrace: true,
     });
     expect(result.status).toBe("ok");
     expect(result.stderrTail).toContain(MISSING_FILE);
