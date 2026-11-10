@@ -20,6 +20,7 @@ import {
   recordPendingCreatedAt,
   recordReviewDelivered,
   recordReviewing,
+  recordRunDir,
   recordUnsettledStatus,
   writeCliRecord,
   writeFatalCliRecord,
@@ -29,6 +30,7 @@ import {
   type CliRecord,
   PENDING_AT_FILE,
   parseCliRecord,
+  RUN_DIR_FILE,
 } from "#ci/outcome";
 
 const SHA = "e".repeat(40);
@@ -390,6 +392,41 @@ describe("recordPendingCreatedAt (SB3)", () => {
   test("writes nothing outside action mode", () => {
     recordPendingCreatedAt("2026-10-17T10:00:00Z", {});
     expect(existsSync(path.join(dir, PENDING_AT_FILE))).toBe(false);
+  });
+});
+
+// The trace step (src/ci/platform-trace.ts) reads the run directory from here when
+// the run step published no run_dir output: every hunter failed, a fatal error, a
+// cancelled job.
+describe("recordRunDir", () => {
+  let root: string;
+  let dir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-run-dir-"));
+    dir = path.join(root, "outcome");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("writes the run directory's path in action mode", () => {
+    const runDir = path.join(root, "runs", "pr-7-abcdef12-1");
+    recordRunDir(runDir, { CRYSK_OUTCOME_DIR: dir });
+    expect(readFileSync(path.join(dir, RUN_DIR_FILE), "utf8")).toBe(
+      `${runDir}\n`,
+    );
+  });
+
+  test("writes nothing outside action mode", () => {
+    recordRunDir(path.join(root, "runs", "pr-7-abcdef12-1"), {});
+    expect(existsSync(path.join(dir, RUN_DIR_FILE))).toBe(false);
+  });
+
+  test("a path with a line break writes nothing", () => {
+    recordRunDir(`${root}/runs\n/etc`, { CRYSK_OUTCOME_DIR: dir });
+    expect(existsSync(path.join(dir, RUN_DIR_FILE))).toBe(false);
   });
 });
 

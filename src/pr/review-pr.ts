@@ -22,6 +22,7 @@ import path from "node:path";
 import {
   cliHeadField,
   hunterFailureRecords,
+  recordRunDir,
   writeCliRecord,
 } from "#ci/cli-record";
 import { planCiExcludedSkip, planCiSizeSkip } from "#ci/gates";
@@ -653,6 +654,9 @@ export async function reviewPr(
       prNumber,
       headSha,
     );
+    // Action mode only: the trace step reads the run's files from here when
+    // the run step publishes no run_dir (src/ci/cli-record.ts recordRunDir).
+    recordRunDir(runDir);
     // diff.patch is the EFFECTIVE diff — exactly what the hunters read (see
     // filterDiffByIgnoreRules); diff.raw.patch preserves the unfiltered
     // bytes, and only when the filter actually dropped something.

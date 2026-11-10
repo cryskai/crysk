@@ -214,6 +214,12 @@ export const CLI_RECORD_FILE = "cli.json";
 // pending landed. The cancel settle overwrites only the pending with exactly this time.
 export const PENDING_AT_FILE = "pending-at";
 
+// The run directory the CLI created, written by recordRunDir (src/ci/cli-record.ts)
+// as soon as it exists. The run step's `run_dir` output is empty when every hunter
+// failed, on a fatal error and on a cancelled job, and the trace step
+// (src/ci/platform-trace.ts) still needs the files of exactly those runs.
+export const RUN_DIR_FILE = "run-dir";
+
 // The URL of this run's attempt, or undefined outside GitHub Actions. The CLI's pending names
 // it as its target_url, and the cancel settle compares a pending with it (SB3 follow-up), so
 // the CLI and the publisher share this one builder: they cannot disagree on the URL. An attempt

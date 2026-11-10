@@ -653,6 +653,7 @@ describe("Packaging & distribution configuration", () => {
       with?: Record<string, string | number | boolean>;
       run?: string;
       shell?: string;
+      "continue-on-error"?: boolean;
     };
     const steps = () => parsedAction().runs.steps as ActionStep[];
     const triggerStep = () => steps().find((step) => step.id === "trigger");
@@ -1285,7 +1286,10 @@ describe("Packaging & distribution configuration", () => {
       // The cancelled-run refresh sits between the report and the settle.
       expect(all[publish + 2]?.id).toBe("platform-settle");
       expect(settle).toBe(publish + 3);
-      expect(upload).toBe(settle + 1);
+      // The trace upload (platform mode only) follows the settle, so a
+      // cancelled run's trace rides the cancelled-run refresh's token.
+      expect(all[settle + 1]?.id).toBe("trace");
+      expect(upload).toBe(settle + 2);
       const step = all[publish];
       // A cancelled job still reaches always() steps, so always() would publish
       // a false install failure on a superseded head. !cancelled() keeps the
@@ -1371,6 +1375,15 @@ describe("Packaging & distribution configuration", () => {
         ...String(step?.run ?? "").matchAll(/\$\{\{[^}]*\}\}/g),
       ].map((match) => match[0]);
       expect(expressions).toEqual([`\${{ github.action_path }}`]);
+    });
+
+    // WHY: tracing is best effort (S10). The step exits 0 on every failure it
+    // can catch, but the runner can still kill it (out of memory on a huge
+    // trace), and that must not turn the review's job red.
+    test("the trace step continues on error, and still runs on every outcome", () => {
+      const step = steps().find((candidate) => candidate.id === "trace");
+      expect(step?.["continue-on-error"]).toBe(true);
+      expect(String(step?.if ?? "").startsWith("${{ always() && ")).toBe(true);
     });
 
     // WHY: gh run rerun keeps the run id. The publisher compares the record's

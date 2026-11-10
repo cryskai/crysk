@@ -2,12 +2,13 @@ import { existsSync } from "node:fs";
 import { mkdir, open, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
+  EXPRESSION_VALUE,
+  isNonSecretValue,
   isSecretName,
   nameParts,
   redactEvidenceText,
   redactSecretShapes,
 } from "../security/evidence-redaction";
-import { redactDiagnostic } from "../security/redact";
 import type { TransportRequest } from "./contracts";
 
 export const CLAUDE_TRACE_MISSES = [
@@ -302,6 +303,106 @@ function redactScalar(value: unknown): unknown {
   throw new Error("non-JSON session value");
 }
 
+// The trace's copy of redactDiagnostic (src/security/redact.ts), which stays
+// as it is because config validation relies on it. Its key shapes are kept,
+// except that `sk-` must start a word, as in redactEvidenceText: `crysk-loop`
+// is a path, not a key. Its keyword rule read a workflow file as credentials
+// (`id-token: write`, `github-token: ${{ github.token }}`, "an id-token so
+// the run"), so the trace's rule differs in four ways: a value never sits on
+// the next line (a YAML value there is redactSecretShapes' job), an expression
+// is read whole, a value that cannot be a secret is kept (isNonSecretValue),
+// and after only a space a token or API key value must look like a key.
+const TRACE_KEY_SHAPES: readonly RegExp[] = [
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}/g,
+  // Known key bodies need no word boundary, so a key glued to an encoded or
+  // escaped prefix (`%3D`, `%22`, `\t`) is still caught; `crysk-loop` is not.
+  /sk-(?:ant|proj|or|svcacct|admin)-[A-Za-z0-9_-]{8,}/g,
+  /sk-[A-Za-z0-9]{32,}/g,
+  /gh[pousr]_[A-Za-z0-9_]{20,}/g,
+  /Bearer\s+\S+/gi,
+  /AIza[0-9A-Za-z_-]{35}/g,
+  /gsk_[A-Za-z0-9]{20,}/g,
+  /xai-[A-Za-z0-9]{20,}/g,
+];
+const TRACE_KEYWORD_VALUE = new RegExp(
+  String.raw`(api[_-]?key|token|password)([ \t"':=]+)(${EXPRESSION_VALUE}|\S+)`,
+  "gi",
+);
+// redactDiagnostic's prose words, still the rule after `password` and a space:
+// "the password swordfish was wrong" hides swordfish.
+const PROSE_AFTER_PASSWORD = new Set([
+  "is",
+  "was",
+  "are",
+  "were",
+  "has",
+  "have",
+  "had",
+  "will",
+  "would",
+  "can",
+  "could",
+  "must",
+  "should",
+  "not",
+  "no",
+  "in",
+  "on",
+  "at",
+  "of",
+  "or",
+  "and",
+  "to",
+  "for",
+  "from",
+  "with",
+  "expired",
+  "invalid",
+  "rejected",
+  "revoked",
+  "missing",
+  "required",
+  "provided",
+  "found",
+  "refused",
+  "denied",
+]);
+const SENTENCE_END = /[.,;:!?)\]"']+$/;
+
+// A token or key written after only a space: a digit, or 16 characters or
+// more in both cases. Prose words ("so", "the", "comes", "—") are neither.
+function looksLikeKeyValue(word: string): boolean {
+  return (
+    /\d/.test(word) ||
+    (/^[A-Za-z0-9_+/=.-]{16,}$/.test(word) &&
+      /[a-z]/.test(word) &&
+      /[A-Z]/.test(word))
+  );
+}
+
+function redactTraceDiagnostic(text: string): string {
+  let redacted = text;
+  for (const shape of TRACE_KEY_SHAPES) {
+    redacted = redacted.replace(shape, "[REDACTED]");
+  }
+  return redacted.replace(
+    TRACE_KEYWORD_VALUE,
+    (match: string, keyword: string, separator: string, value: string) => {
+      // Already hidden by an earlier rule: `[REDACTED]`, `[REDACTED HEADER]`.
+      if (value.startsWith("[REDACTED")) return match;
+      const bare = value.replace(SENTENCE_END, "");
+      const hidden = `${keyword}${separator}[REDACTED]`;
+      if (!/^[ \t]+$/.test(separator)) {
+        return isNonSecretValue(bare, keyword) ? match : hidden;
+      }
+      if (/^password$/i.test(keyword)) {
+        return PROSE_AFTER_PASSWORD.has(bare.toLowerCase()) ? match : hidden;
+      }
+      return looksLikeKeyValue(value) ? hidden : match;
+    },
+  );
+}
+
 // A string that holds JSON (a config file a hunter Read) is redacted twice
 // over: the quote-safe text patterns run on the raw string first, where a key
 // still sits next to its value, then the parse redacts every key and string
@@ -329,9 +430,49 @@ function redactSessionString(
       // Text that only looks like JSON. The text patterns run on it below.
     }
   }
-  return redactDiagnostic(
+  return redactTraceDiagnostic(
     redactEvidenceText(redactSecretShapes(value, isSessionSecretName, true)),
   );
+}
+
+// The session copy's string rules, for text that leaves the runner in a review
+// trace (src/ci/trace-bundle.ts): prompts, outputs, tool arguments and results.
+export function redactSessionText(value: string): string {
+  return redactSessionString(value, 0, { nodes: 0 });
+}
+
+// The session copy's key rules over a whole parsed document, with no node cap:
+// an OpenCode capture holds thousands of records, and redactEvidence, which
+// wrote it, kept values under names such as `apiToken` (its key rule is the
+// narrow shared one). Strings under a credential-like name go, numbers stay,
+// and every other string takes redactSessionText. A branch deeper than the
+// bound is replaced whole, never copied raw.
+export function redactSessionDocument(value: unknown, depth = 0): unknown {
+  if (depth > DOCUMENT_MAX_DEPTH) return "[REDACTED]";
+  if (typeof value === "string") return redactSessionText(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSessionDocument(item, depth + 1));
+  }
+  if (typeof value === "object" && value !== null) {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (SESSION_SECRET_KEY.test(key)) out[key] = "[REDACTED]";
+      else if (isSessionSecretName(key)) out[key] = credentialValue(item);
+      else out[key] = redactSessionDocument(item, depth + 1);
+    }
+    return out;
+  }
+  return typeof value === "number" || typeof value === "boolean" ? value : null;
+}
+
+const DOCUMENT_MAX_DEPTH = 64;
+
+function credentialValue(value: unknown): unknown {
+  try {
+    return redactStrings(value, 0, { nodes: 0 });
+  } catch {
+    return "[REDACTED]";
+  }
 }
 
 async function dropStaleTrace(dest: string): Promise<void> {

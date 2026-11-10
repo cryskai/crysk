@@ -339,6 +339,7 @@ describe("runPlatformConnect", () => {
     const outputs = h.events.filter((e) => e.startsWith("output:"));
     expect(outputs).toEqual([
       "output:data-mode=metadata_only\n",
+      "output:trace-content=false\n",
       `output:github-token=${GITHUB_TOKEN}\n`,
       `output:run-token=${RUN_TOKEN}\n`,
       "output:github-actor=crysk-dev[bot]\n",
@@ -492,6 +493,7 @@ describe("platform review configuration", () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(h.events.filter((e) => e.startsWith("output:"))).toEqual([
       "output:data-mode=metadata_only\n",
+      "output:trace-content=false\n",
       `output:github-token=${GITHUB_TOKEN}\n`,
       `output:run-token=${RUN_TOKEN}\n`,
       `output:config-file=${file}\n`,
@@ -730,6 +732,62 @@ describe("action.yml platform wiring", () => {
     );
   });
 
+  test("the trace step runs after the report and the cancel refresh, on every outcome, in platform mode only", () => {
+    const at = steps.findIndex((s) => s.id === "trace");
+    const step = steps[at] as Step;
+    expect(at).toBeGreaterThan(steps.findIndex((s) => s.id === "report"));
+    expect(at).toBeGreaterThan(
+      steps.findIndex((s) => s.id === "platform-settle"),
+    );
+    expect(step.run).toContain("src/ci/platform-trace.ts");
+    // always(): failed and cancelled runs are the traces that matter most.
+    expect(step.if?.startsWith("${{ always() && ")).toBe(true);
+    expect(step.if).toContain(
+      "github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != ''",
+    );
+    expect(step.if).toContain(
+      "(steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true')",
+    );
+    // A standalone run has no run token, so it never reaches the step.
+    expect(step.if).toContain(
+      "(steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '')",
+    );
+  });
+
+  test("the trace step pairs its run token with that exchange's trace content (newest first)", () => {
+    const step = find("trace");
+    expect(step.env?.CRYSK_RUN_TOKEN).toBe(
+      expression(
+        "steps.platform-settle.outputs.run-token || steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token",
+      ),
+    );
+    expect(step.env?.CRYSK_TRACE_CONTENT).toBe(
+      expression(
+        "steps.platform-settle.outputs.trace-content || steps.platform-publish.outputs.trace-content || steps.platform.outputs.trace-content",
+      ),
+    );
+    expect(step.env?.CRYSK_JOB_STATUS).toBe(expression("job.status"));
+    // The refresh that runs only on a cancel: a second, documented signal.
+    expect(step.env?.CRYSK_CANCEL_REFRESH).toBe(
+      expression("steps.platform-settle.outcome"),
+    );
+    expect(step.env?.CRYSK_ACTION_PATH).toBe(expression("github.action_path"));
+    expect(step.env?.CRYSK_RUN_DIR).toBe(
+      expression("steps.run-crysk.outputs.run_dir"),
+    );
+    // The Claude variables are emptied, as in every step after Connect.
+    for (const name of [
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "ANTHROPIC_AUTH_TOKEN",
+      "CRYSK_CLAUDE_OAUTH_TOKEN",
+      "CRYSK_CLAUDE_API_KEY",
+    ]) {
+      expect(step.env?.[name]).toBe("");
+    }
+    expect(JSON.stringify(step.env)).not.toMatch(/api\.crysk|https?:/);
+  });
+
   test("the Report step reads the data mode from the same exchange as its run token (the refresh, else the first)", () => {
     expect(find("report").env?.CRYSK_DATA_MODE).toBe(
       expression(
@@ -871,5 +929,70 @@ describe("platform data mode", () => {
     });
     expect(code).toBe(1);
     expect(failed).toEqual([]);
+  });
+});
+
+// S4 of the review-traces plan: the platform, not the engine, decides whether a
+// trace may carry content. Only an explicit `true` does; anything else reads as
+// false, as data_mode fails closed to metadata_only.
+describe("platform trace content", () => {
+  async function exchange(traceContent: unknown) {
+    const { fn } = fakeFetch(() =>
+      json(200, { ...SUCCESS, trace_content: traceContent }),
+    );
+    return await exchangePlatformToken({
+      fetch: fn,
+      env: ENV,
+      baseUrl: BASE,
+      mask: () => {},
+    });
+  }
+
+  test("true is returned as trace content", async () => {
+    const result = await exchange(true);
+    expect(result.ok && result.traceContent).toBe(true);
+  });
+
+  test.each([
+    ["absent", undefined],
+    ["false", false],
+    ["a string", "true"],
+    ["a number", 1],
+    ["null", null],
+  ])("%s is no trace content", async (_label, value) => {
+    const result = await exchange(value);
+    expect(result.ok).toBe(true);
+    expect(result).not.toHaveProperty("traceContent");
+  });
+
+  function connect(body: Record<string, unknown>) {
+    const outputs: string[] = [];
+    const { fn } = fakeFetch(() => json(200, { ...SUCCESS, ...body }));
+    return {
+      outputs,
+      run: () =>
+        runPlatformConnect({
+          fetch: fn,
+          env: ENV,
+          baseUrl: BASE,
+          stdout: () => {},
+          appendOutput: (text) => outputs.push(text),
+        }),
+    };
+  }
+
+  test.each([
+    [true, "trace-content=true\n"],
+    [undefined, "trace-content=false\n"],
+    ["yes", "trace-content=false\n"],
+  ])("trace_content %p writes %p before the run token", async (value, line) => {
+    const h = connect({ trace_content: value });
+    expect(await h.run()).toBe(0);
+    expect(h.outputs.filter((o) => o.startsWith("trace-content="))).toEqual([
+      line,
+    ]);
+    expect(h.outputs.indexOf(line)).toBeLessThan(
+      h.outputs.indexOf(`run-token=${RUN_TOKEN}\n`),
+    );
   });
 });

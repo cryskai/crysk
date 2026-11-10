@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { redactSessionText } from "../../src/execution/claude-session-trace";
 import { redactEvidenceText } from "../../src/security/evidence-redaction";
 import {
   looksLikeCredential,
@@ -356,5 +357,387 @@ describe("redactEvidenceText: secret shapes (audit R2)", () => {
   ])("redacting twice gives the same text (%#)", (text) => {
     const once = redactEvidenceText(text);
     expect(redactEvidenceText(once)).toBe(once);
+  });
+});
+
+// V1 (odd/tasks/review-traces.md): a workflow file a hunter Read lost every
+// line that names a token or a secret, though none of its values can be one.
+// A value that is a GitHub Actions expression, a permission word, a
+// placeholder, an environment reference, a boolean or a small number is kept.
+describe("redactEvidenceText: values that cannot be secrets", () => {
+  test.each([
+    ["a permission word", "permissions:\n  id-token: write\n  contents: read"],
+    ["a permission none", "id-token: none"],
+    ["inherited secrets", "    secrets: inherit"],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+    ["a GitHub expression", "github-token: ${{ github.token }}"],
+    [
+      "a secret passed by expression",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+      "CRYSK_CLAUDE_API_KEY=${{ secrets.CRYSK_CLAUDE_API_KEY }}",
+    ],
+    [
+      "an expression holding quotes",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+      "CRYSK_X_API_KEY=${{ secrets[format('CRYSK_{0}_API_KEY', inputs.p)] }}",
+    ],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+    ["a quoted expression", '"api_key": "${{ secrets.API_KEY }}"'],
+    ["a YAML block scalar", "crysk-secrets: |"],
+    ["a section whose next line is a key", "secrets:\n  CRYSK_X: inherit"],
+    [
+      "a section whose key follows a blank line",
+      "secrets:\n\n  token: inherit",
+    ],
+    [
+      "a comment under an empty key, then a key",
+      "password:\n  # set later\nother: value",
+    ],
+    ["an angle-bracket placeholder", "api_key: <your-api-key>"],
+    ["an x placeholder", "API_TOKEN=xxxxxxxx"],
+    ["a starred placeholder", 'password: "***"'],
+    ["changeme", "SECRET_KEY=changeme"],
+    ["a shell variable", "GITHUB_TOKEN=$GITHUB_TOKEN"],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+    ["a braced shell variable", "GITHUB_TOKEN=${GITHUB_TOKEN}"],
+    ["a process.env reference", "apiKey: process.env.ANTHROPIC_API_KEY"],
+    ["a boolean", "id-token: false"],
+    ["a small number", "refresh_token: 0"],
+  ])("%s is kept", (_name, text) => {
+    expect(redactEvidenceText(text)).toBe(text);
+  });
+
+  test.each([
+    ["a numeric PIN", "password=1234", "password=[REDACTED]"],
+    [
+      "a YAML value on the line after its key",
+      `password:\n  ${TOKEN_VALUE}`,
+      "password:\n  [REDACTED]",
+    ],
+    [
+      "a key on the line after a secrets: section",
+      `secrets:\n  API_TOKEN: ${TOKEN_VALUE}`,
+      "secrets:\n  API_TOKEN: [REDACTED]",
+    ],
+    [
+      "text after a closed expression",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+      '"api_key": "${{ x }}literal }}"',
+      '"api_key": "[REDACTED]"',
+    ],
+    [
+      "a permission word with more after it",
+      "token: write-abc123",
+      "token: [REDACTED]",
+    ],
+    [
+      "a dollar sign that starts a password",
+      "password: $ecret1",
+      "password: [REDACTED]",
+    ],
+    [
+      "a long number under a key name",
+      "API_KEY=123456789012345678",
+      "API_KEY=[REDACTED]",
+    ],
+    [
+      "a placeholder word inside a value",
+      "api_key=xxxabc123",
+      "api_key=[REDACTED]",
+    ],
+    [
+      "a YAML value after a blank line",
+      `password:\n\n hunter2`,
+      "password:\n\n [REDACTED]",
+    ],
+    [
+      "a YAML value after an indented comment line",
+      `password:\n  # the db one\n  hunter2`,
+      "password:\n  # the db one\n  [REDACTED]",
+    ],
+    [
+      "a camelCase YAML value on the next line",
+      `apiKey:\n ${TOKEN_VALUE}`,
+      "apiKey:\n [REDACTED]",
+    ],
+  ])("%s is still redacted", (_name, text, expected) => {
+    expect(redactEvidenceText(text)).toBe(expected);
+  });
+});
+
+// The trace's redactor (redactSessionText) adds wider session names (auth,
+// oauth, credential, session) and reads camelCase unquoted names.
+describe("redactSessionText: values that cannot be secrets", () => {
+  test.each([
+    [
+      "an OAuth secret passed by expression",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+      "CRYSK_OPENCODE_OPENAI_OAUTH=${{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}",
+    ],
+    ["a YAML block scalar", "          crysk-secrets: |"],
+    ["a credential placeholder", "credentials: <path-to-credentials>"],
+    [
+      "a camelCase secret from the environment",
+      "clientSecret: process.env.CLIENT_SECRET",
+    ],
+  ])("%s is kept", (_name, text) => {
+    expect(redactSessionText(text)).toBe(text);
+  });
+
+  test("a camelCase secret with a literal value is still redacted", () => {
+    expect(redactSessionText(`clientSecret: ${TOKEN_VALUE}`)).toBe(
+      "clientSecret: [REDACTED]",
+    );
+  });
+});
+
+// A sandbox trace showed `id-[REDACTED]` for `id-token: write` and
+// `github-[REDACTED] github.[REDACTED]` for `github-token: ${{ github.token }}`:
+// redactDiagnostic's keyword rule read a workflow file a hunter Read as a list
+// of credentials. The trace keeps its own copy of that rule, and redactDiagnostic
+// (which also backs config validation) is unchanged.
+const WORKFLOW = [
+  "# Crysk review. The job mints an id-token so the run can call the platform,",
+  "# and the github-token below lets it post comments. No token is stored, and",
+  "# the api-key comes from a repository secret.",
+  "name: crysk",
+  "on:",
+  "  workflow_call:",
+  "    secrets:",
+  "      api-token:",
+  "        required: true",
+  "        description: The token the review uses",
+  "permissions:",
+  "  contents: read",
+  "  pull-requests: write",
+  "  id-token: write",
+  "jobs:",
+  "  review:",
+  "    runs-on: ubuntu-latest",
+  "    steps:",
+  "      - uses: cryskai/crysk@v1",
+  "        with:",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          github-token: ${{ github.token }}",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          api-key: ${{ secrets.CRYSK_CLAUDE_API_KEY }}",
+  "        env:",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          CRYSK_CLAUDE_API_KEY: ${{ secrets.CRYSK_CLAUDE_API_KEY }}",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          CRYSK_X_API_KEY: ${{ secrets[format('CRYSK_{0}_API_KEY', inputs.p)] }}",
+  "          #   CRYSK_CLAUDE_OAUTH_TOKEN — from `claude setup-token`: a long-lived",
+  "          #     (~1 year) token draws on your Claude subscription.",
+  '      - run: crysk review --token "$GITHUB_TOKEN"',
+  "  reusable:",
+  "    uses: ./.github/workflows/crysk-reusable.yml",
+  "    secrets: inherit",
+].join("\n");
+
+describe("redactSessionText: a workflow file stays readable", () => {
+  test("a workflow with permissions, expressions and comments about tokens loses nothing", () => {
+    expect(redactSessionText(WORKFLOW)).toBe(WORKFLOW);
+  });
+
+  test.each([
+    ["a permission word after a token name", "  id-token: write"],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+    ["an expression after a token name", "github-token: ${{ github.token }}"],
+    [
+      "an expression after a quoted token name",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+      '--token "${{ secrets.GITHUB_TOKEN }}"',
+    ],
+    ["a compound name followed by prose", "mints an id-token so the run"],
+    ["a token followed by prose", "The token the review uses"],
+    ["an api key followed by prose", "the api-key comes from a secret"],
+    ["a dash after a token name", "CRYSK_CLAUDE_OAUTH_TOKEN — from setup"],
+    ["a product path holding sk-", "./.github/workflows/crysk-reusable.yml"],
+    [
+      "a YAML key on the line after a token key",
+      "api-token:\n  required: true",
+    ],
+    [
+      "a YAML key after a blank line under a token key",
+      "api-token:\n\n  required: true",
+    ],
+  ])("%s is kept", (_name, text) => {
+    expect(redactSessionText(text)).toBe(text);
+  });
+});
+
+// Every shape redactDiagnostic redacts in the tests above, with a real secret
+// value, plus the shapes redactEvidenceText redacts: the trace must never be
+// weaker than it was when it ran redactDiagnostic.
+describe("redactSessionText: every real secret is still redacted", () => {
+  test.each([
+    [
+      "an sk- key",
+      "auth failed for sk-a1B2c3D4e5F6g7H8",
+      "sk-a1B2c3D4e5F6g7H8",
+    ],
+    ["a ghp_ token", `push denied: ghp_${"a1_".repeat(10)}`, "a1_".repeat(10)],
+    ["a gho_ token", `gho_${"z9".repeat(20)}`, "z9".repeat(20)],
+    ["a ghu_ token", `ghu_${"z9".repeat(20)}`, "z9".repeat(20)],
+    ["a ghs_ token", `ghs_${"z9".repeat(20)}`, "z9".repeat(20)],
+    ["a ghr_ token", `ghr_${"z9".repeat(20)}`, "z9".repeat(20)],
+    ["a Bearer header", "authorization: Bearer abc.def.ghi", "abc.def.ghi"],
+    ["a lower-case bearer header", "AUTHORIZATION: bearer tok", "tok"],
+    [
+      "a Bearer value in prose",
+      "sent Bearer abc.def.ghi upstream",
+      "abc.def.ghi",
+    ],
+    ["a JSON api_key", '{"api_key": "supersecret123"}', "supersecret123"],
+    ["a JSON api-key in text", 'config {"api-key":"abcd1234"}', "abcd1234"],
+    ["a password assignment", "password=hunter2", "hunter2"],
+    ["a token assignment", "token: abc123", "abc123"],
+    [
+      "a compound token name assigned",
+      "github-token: abc123def456",
+      "abc123def456",
+    ],
+    ["a password glued to a prose word", "password is1234", "is1234"],
+    ["a password with digits after can", "password can8472", "can8472"],
+    ["a token glued to no", "token no123!", "no123"],
+    ["a token glued to to", "token to123", "to123"],
+    [
+      "a token value after a space",
+      "invalid token abc123def456",
+      "abc123def456",
+    ],
+    [
+      "a long token value with no digit",
+      "the token AbCdEfGhIjKlMnOpQrSt was used",
+      "AbCdEfGhIjKlMnOpQrSt",
+    ],
+    [
+      "an api key sk- value",
+      "api key sk-ant-api03-AbCdEf123456",
+      "AbCdEf123456",
+    ],
+    [
+      "a password word in prose",
+      "the password swordfish was wrong",
+      "swordfish",
+    ],
+    ["a Google key", `provider refused ${GOOGLE_KEY} at startup`, GOOGLE_KEY],
+    ["a Groq key", `provider refused ${GROQ_KEY} at startup`, GROQ_KEY],
+    ["an xAI key", `provider refused ${XAI_KEY} at startup`, XAI_KEY],
+    ["a PEM private key", `key:\n${PEM_KEY}\ndone`, PEM_BODY],
+    ["an AWS key id", `id ${AWS_KEY_ID} used`, AWS_KEY_ID],
+    ["an AWS secret", `AWS_SECRET_ACCESS_KEY=${AWS_SECRET}`, AWS_SECRET],
+    ["a URL password", `postgres://app:${DB_PASSWORD}@db/app`, DB_PASSWORD],
+    ["a Stripe key", `stripe ${STRIPE_LIVE}`, STRIPE_LIVE],
+    ["a JWT", `cached ${JWT} here`, JWT],
+    [
+      "a YAML value on the next line",
+      `password:\n  ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    [
+      "a YAML value after a blank line",
+      `password:\n\n ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    [
+      "a YAML value after an indented comment line",
+      `password:\n  # the db one\n  ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    [
+      "a camelCase YAML value after a blank line",
+      `apiKey:\n\n ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    ["a quoted token", `"apiToken": "${TOKEN_VALUE}"`, TOKEN_VALUE],
+    [
+      "a secret in a workflow env",
+      `${WORKFLOW}\n  API_TOKEN: ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    ...["sk-zz9Z8Y7X6W5V", "q".repeat(22), "eyJhbGciOi", "abcd1234"].map(
+      (secret) => [
+        `the combined diagnostic tail without ${secret.slice(0, 6)}`,
+        [
+          "error: request to provider failed",
+          `sent key sk-zz9Z8Y7X6W5V and ghp_${"q".repeat(22)}`,
+          "header was Bearer eyJhbGciOi",
+          'config {"api-key":"abcd1234"}',
+        ].join("\n"),
+        secret,
+      ],
+    ),
+  ])("%s", (_name, text, secret) => {
+    const out = redactSessionText(text);
+    expect(out).not.toContain(secret);
+    expect(out).toContain("[REDACTED");
+  });
+
+  test.each([
+    [WORKFLOW],
+    ["token: abc123 and password=hunter2"],
+    [`provider refused ${GOOGLE_KEY} with Bearer abc.def`],
+  ])("redacting twice gives the same text (%#)", (text) => {
+    const once = redactSessionText(text);
+    expect(redactSessionText(once)).toBe(once);
+  });
+});
+
+// A key glued to an encoded or escaped prefix (`%3D`, `%22`, `\t`) has no
+// word boundary before it; the known key bodies are matched without one.
+describe("redactSessionText: a key after an encoded or escaped prefix", () => {
+  const anthropic = `sk-ant-api03-${"A1b2C3d4".repeat(4)}`;
+  const openai = `sk-proj-${"Zx9Yw8Vu".repeat(4)}`;
+  const openrouter = `sk-or-v1-${"0a1b2c3d".repeat(8)}`;
+  const legacy = `sk-${"Q7r8S9t0".repeat(6)}`;
+  test.each([
+    [`GET /x?key%3D${anthropic}`, anthropic],
+    [`api_key%3D${openai}`, openai],
+    [`%22apiKey%22%3A%22${anthropic}%22`, anthropic],
+    [`x${openai}`, openai],
+    [`echo "a\\t${anthropic}"`, anthropic],
+    [`body=key%3D${openrouter}&x=1`, openrouter],
+    [`v%3D${legacy}`, legacy],
+  ])("%s hides the key", (text, key) => {
+    expect(redactSessionText(text)).not.toContain(key.slice(8));
+  });
+
+  test("paths with sk- inside a word stay readable", () => {
+    const text = "skills/crysk-loop/SKILL.md and crysk-reusable.yml";
+    expect(redactSessionText(text)).toBe(text);
+  });
+});
+
+// A line of unclosed expressions after secret names (`token=${{ ` again and
+// again) once cost a scan to the end of the line from every start. Redacting
+// stays linear: 4 MiB, the largest string a capture accepts, takes a few
+// hundred milliseconds, where the quadratic scan took minutes. The bound
+// leaves room for a slow runner and still fails on any per-start rescan; each
+// repeat is redacted as it would be alone.
+describe("redaction stays linear on unclosed expressions", () => {
+  const MIB = 1024 * 1024;
+  test.each([
+    ["redactEvidenceText", redactEvidenceText, "token=${{ "],
+    ["redactEvidenceText", redactEvidenceText, "a=${{ "],
+    ["redactSessionText", redactSessionText, "token=${{ "],
+    ["redactSessionText", redactSessionText, "password: ${{ "],
+    ["redactEvidenceText", redactEvidenceText, "token: # "],
+    ["redactSessionText", redactSessionText, "apiKey:\n#"],
+  ])("%s on a 4 MiB line of %p", (_name, redact, unit) => {
+    const count = Math.floor((4 * MIB) / unit.length);
+    const started = performance.now();
+    const out = redact(unit.repeat(count));
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(2_000);
+    expect(out).toBe(redact(unit).repeat(count));
+  });
+
+  test("an unclosed expression after a secret name is hidden, not kept", () => {
+    expect(redactEvidenceText("token=${{ a token=${{ b")).toBe(
+      "token=[REDACTED] a token=[REDACTED] b",
+    );
   });
 });
