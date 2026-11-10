@@ -453,3 +453,179 @@ describe("redactSessionText: values that cannot be secrets", () => {
     );
   });
 });
+
+// A sandbox trace showed `id-[REDACTED]` for `id-token: write` and
+// `github-[REDACTED] github.[REDACTED]` for `github-token: ${{ github.token }}`:
+// redactDiagnostic's keyword rule read a workflow file a hunter Read as a list
+// of credentials. The trace keeps its own copy of that rule, and redactDiagnostic
+// (which also backs config validation) is unchanged.
+const WORKFLOW = [
+  "# Crysk review. The job mints an id-token so the run can call the platform,",
+  "# and the github-token below lets it post comments. No token is stored, and",
+  "# the api-key comes from a repository secret.",
+  "name: crysk",
+  "on:",
+  "  workflow_call:",
+  "    secrets:",
+  "      api-token:",
+  "        required: true",
+  "        description: The token the review uses",
+  "permissions:",
+  "  contents: read",
+  "  pull-requests: write",
+  "  id-token: write",
+  "jobs:",
+  "  review:",
+  "    runs-on: ubuntu-latest",
+  "    steps:",
+  "      - uses: cryskai/crysk@v1",
+  "        with:",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          github-token: ${{ github.token }}",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          api-key: ${{ secrets.CRYSK_CLAUDE_API_KEY }}",
+  "        env:",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          CRYSK_CLAUDE_API_KEY: ${{ secrets.CRYSK_CLAUDE_API_KEY }}",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+  "          CRYSK_X_API_KEY: ${{ secrets[format('CRYSK_{0}_API_KEY', inputs.p)] }}",
+  "          #   CRYSK_CLAUDE_OAUTH_TOKEN — from `claude setup-token`: a long-lived",
+  "          #     (~1 year) token draws on your Claude subscription.",
+  '      - run: crysk review --token "$GITHUB_TOKEN"',
+  "  reusable:",
+  "    uses: ./.github/workflows/crysk-reusable.yml",
+  "    secrets: inherit",
+].join("\n");
+
+describe("redactSessionText: a workflow file stays readable", () => {
+  test("a workflow with permissions, expressions and comments about tokens loses nothing", () => {
+    expect(redactSessionText(WORKFLOW)).toBe(WORKFLOW);
+  });
+
+  test.each([
+    ["a permission word after a token name", "  id-token: write"],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+    ["an expression after a token name", "github-token: ${{ github.token }}"],
+    [
+      "an expression after a quoted token name",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow text, asserted, not evaluated
+      '--token "${{ secrets.GITHUB_TOKEN }}"',
+    ],
+    ["a compound name followed by prose", "mints an id-token so the run"],
+    ["a token followed by prose", "The token the review uses"],
+    ["an api key followed by prose", "the api-key comes from a secret"],
+    ["a dash after a token name", "CRYSK_CLAUDE_OAUTH_TOKEN — from setup"],
+    ["a product path holding sk-", "./.github/workflows/crysk-reusable.yml"],
+    [
+      "a YAML key on the line after a token key",
+      "api-token:\n  required: true",
+    ],
+  ])("%s is kept", (_name, text) => {
+    expect(redactSessionText(text)).toBe(text);
+  });
+});
+
+// Every shape redactDiagnostic redacts in the tests above, with a real secret
+// value, plus the shapes redactEvidenceText redacts: the trace must never be
+// weaker than it was when it ran redactDiagnostic.
+describe("redactSessionText: every real secret is still redacted", () => {
+  test.each([
+    [
+      "an sk- key",
+      "auth failed for sk-a1B2c3D4e5F6g7H8",
+      "sk-a1B2c3D4e5F6g7H8",
+    ],
+    ["a ghp_ token", `push denied: ghp_${"a1_".repeat(10)}`, "a1_".repeat(10)],
+    ["a gho_ token", `gho_${"z9".repeat(20)}`, "z9".repeat(20)],
+    ["a ghu_ token", `ghu_${"z9".repeat(20)}`, "z9".repeat(20)],
+    ["a ghs_ token", `ghs_${"z9".repeat(20)}`, "z9".repeat(20)],
+    ["a ghr_ token", `ghr_${"z9".repeat(20)}`, "z9".repeat(20)],
+    ["a Bearer header", "authorization: Bearer abc.def.ghi", "abc.def.ghi"],
+    ["a lower-case bearer header", "AUTHORIZATION: bearer tok", "tok"],
+    [
+      "a Bearer value in prose",
+      "sent Bearer abc.def.ghi upstream",
+      "abc.def.ghi",
+    ],
+    ["a JSON api_key", '{"api_key": "supersecret123"}', "supersecret123"],
+    ["a JSON api-key in text", 'config {"api-key":"abcd1234"}', "abcd1234"],
+    ["a password assignment", "password=hunter2", "hunter2"],
+    ["a token assignment", "token: abc123", "abc123"],
+    [
+      "a compound token name assigned",
+      "github-token: abc123def456",
+      "abc123def456",
+    ],
+    ["a password glued to a prose word", "password is1234", "is1234"],
+    ["a password with digits after can", "password can8472", "can8472"],
+    ["a token glued to no", "token no123!", "no123"],
+    ["a token glued to to", "token to123", "to123"],
+    [
+      "a token value after a space",
+      "invalid token abc123def456",
+      "abc123def456",
+    ],
+    [
+      "a long token value with no digit",
+      "the token AbCdEfGhIjKlMnOpQrSt was used",
+      "AbCdEfGhIjKlMnOpQrSt",
+    ],
+    [
+      "an api key sk- value",
+      "api key sk-ant-api03-AbCdEf123456",
+      "AbCdEf123456",
+    ],
+    [
+      "a password word in prose",
+      "the password swordfish was wrong",
+      "swordfish",
+    ],
+    ["a Google key", `provider refused ${GOOGLE_KEY} at startup`, GOOGLE_KEY],
+    ["a Groq key", `provider refused ${GROQ_KEY} at startup`, GROQ_KEY],
+    ["an xAI key", `provider refused ${XAI_KEY} at startup`, XAI_KEY],
+    ["a PEM private key", `key:\n${PEM_KEY}\ndone`, PEM_BODY],
+    ["an AWS key id", `id ${AWS_KEY_ID} used`, AWS_KEY_ID],
+    ["an AWS secret", `AWS_SECRET_ACCESS_KEY=${AWS_SECRET}`, AWS_SECRET],
+    ["a URL password", `postgres://app:${DB_PASSWORD}@db/app`, DB_PASSWORD],
+    ["a Stripe key", `stripe ${STRIPE_LIVE}`, STRIPE_LIVE],
+    ["a JWT", `cached ${JWT} here`, JWT],
+    [
+      "a YAML value on the next line",
+      `password:\n  ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    ["a quoted token", `"apiToken": "${TOKEN_VALUE}"`, TOKEN_VALUE],
+    [
+      "a secret in a workflow env",
+      `${WORKFLOW}\n  API_TOKEN: ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    ...["sk-zz9Z8Y7X6W5V", "q".repeat(22), "eyJhbGciOi", "abcd1234"].map(
+      (secret) => [
+        `the combined diagnostic tail without ${secret.slice(0, 6)}`,
+        [
+          "error: request to provider failed",
+          `sent key sk-zz9Z8Y7X6W5V and ghp_${"q".repeat(22)}`,
+          "header was Bearer eyJhbGciOi",
+          'config {"api-key":"abcd1234"}',
+        ].join("\n"),
+        secret,
+      ],
+    ),
+  ])("%s", (_name, text, secret) => {
+    const out = redactSessionText(text);
+    expect(out).not.toContain(secret);
+    expect(out).toContain("[REDACTED");
+  });
+
+  test.each([
+    [WORKFLOW],
+    ["token: abc123 and password=hunter2"],
+    [`provider refused ${GOOGLE_KEY} with Bearer abc.def`],
+  ])("redacting twice gives the same text (%#)", (text) => {
+    const once = redactSessionText(text);
+    expect(redactSessionText(once)).toBe(once);
+  });
+});
