@@ -71,7 +71,24 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 const SHA = /^[0-9a-f]{40}$/;
 
-export interface RunReportAgent {
+// The token split of pipeline.json's `usage_v2`, under the platform's names. Each key is sent only when the
+// engine reported it as a non-negative number, so a provider that reports no cache sends no cache keys
+// rather than a zero it never measured.
+interface ReportTokens {
+  input_uncached?: number;
+  input_cache_read?: number;
+  input_cache_write?: number;
+  output?: number;
+}
+
+// Added beside the legacy fields, never replacing them: `cost_usd` stays the cash cost (0 on a
+// subscription), and `list_cost_usd` is what the same tokens cost at list price whatever paid for them.
+interface ReportUsageSplit {
+  tokens?: ReportTokens;
+  list_cost_usd?: number;
+}
+
+export interface RunReportAgent extends ReportUsageSplit {
   agent_key: string;
   model?: string;
   tokens_in: number;
@@ -100,7 +117,7 @@ export interface RunReportBody {
     unresolved_blocking?: number;
     refuted_by_hunter?: Record<string, number>;
   };
-  usage: {
+  usage: ReportUsageSplit & {
     tokens_in: number;
     tokens_out: number;
     cost_usd: number;
@@ -108,6 +125,7 @@ export interface RunReportBody {
     wall_ms?: number;
     index_ms?: number;
     sync_ms?: number;
+    billing?: "subscription" | "metered";
   };
   agents: RunReportAgent[];
   // Which findings stay open, under ids that last across runs. Absent when the run recorded none.
@@ -206,6 +224,7 @@ export function buildRunReport(
       ...(telemetry.sync_ms === undefined
         ? {}
         : { sync_ms: count(telemetry.sync_ms) }),
+      ...runUsageSplit(input.run.pipeline),
     },
     agents: buildAgents(doc, input.run.pipeline),
     ...findingStates(input.run.findingStates),
@@ -327,47 +346,74 @@ function buildAgents(
   doc: FindingsDocument,
   pipeline: unknown,
 ): RunReportAgent[] {
-  const models = stepModels(pipeline);
+  const steps = pipelineSteps(pipeline);
   const perAgent = doc.telemetry.per_agent ?? {};
   // validateFindingsDocument only checks that `telemetry` is an object, so a
   // row that is not one is skipped instead of read.
-  return Object.entries(perAgent as Record<string, unknown>)
-    .filter(
-      (entry): entry is [string, Record<string, unknown>] =>
-        typeof entry[1] === "object" &&
-        entry[1] !== null &&
-        !Array.isArray(entry[1]),
-    )
-    .slice(0, MAX_AGENTS)
-    .map(([key, row]) => {
-      const model = modelOf(models, key);
-      return {
-        agent_key: key,
-        ...(model === undefined ? {} : { model }),
-        tokens_in: count(row.tokens_in),
-        tokens_out: count(row.tokens_out),
-        cost_usd: cost(row.cost_usd_est),
-        duration_ms: count(row.duration_ms),
-        ...(typeof row.attempts === "number" && row.attempts > 0
-          ? { attempts: count(row.attempts) }
-          : {}),
-        ...(typeof row.status === "string" ? { status: row.status } : {}),
-      };
-    });
+  const rows = Object.entries(perAgent as Record<string, unknown>).filter(
+    (entry): entry is [string, Record<string, unknown>] =>
+      typeof entry[1] === "object" &&
+      entry[1] !== null &&
+      !Array.isArray(entry[1]),
+  );
+  // Owners are decided over every row, the capped ones too, so a step of a row
+  // past the cap is dropped with it instead of landing on another row.
+  const owned = stepsByOwner(
+    steps,
+    rows.map(([key]) => key),
+  );
+  return rows.slice(0, MAX_AGENTS).map(([key, row]) => {
+    const model = modelOf(steps, key);
+    return {
+      agent_key: key,
+      ...(model === undefined ? {} : { model }),
+      tokens_in: count(row.tokens_in),
+      tokens_out: count(row.tokens_out),
+      cost_usd: cost(row.cost_usd_est),
+      duration_ms: count(row.duration_ms),
+      ...(typeof row.attempts === "number" && row.attempts > 0
+        ? { attempts: count(row.attempts) }
+        : {}),
+      ...(typeof row.status === "string" ? { status: row.status } : {}),
+      ...agentUsageSplit(owned.get(key) ?? []),
+    };
+  });
 }
 
-// pipeline.json's `steps[]` rows are `{ name, model, ... }`.
-function stepModels(pipeline: unknown): Array<{ name: string; model: string }> {
+// pipeline.json's `steps[]` rows are `{ name, model, usage_v2, model_attempts, ... }`.
+// Only what this file reads is kept, and `usage_v2` stays unread until the
+// split below checks each of its fields.
+interface PipelineStep {
+  name: string;
+  model?: string;
+  usage?: unknown;
+  modelUsages?: unknown[];
+}
+
+function pipelineSteps(pipeline: unknown): PipelineStep[] {
   if (typeof pipeline !== "object" || pipeline === null) return [];
   const steps = (pipeline as { steps?: unknown }).steps;
   if (!Array.isArray(steps)) return [];
-  const rows: Array<{ name: string; model: string }> = [];
+  const rows: PipelineStep[] = [];
   for (const step of steps) {
     if (typeof step !== "object" || step === null) continue;
-    const { name, model } = step as { name?: unknown; model?: unknown };
-    if (typeof name === "string" && typeof model === "string" && model !== "") {
-      rows.push({ name, model });
-    }
+    const { name, model, usage_v2, model_attempts } = step as Record<
+      string,
+      unknown
+    >;
+    if (typeof name !== "string") continue;
+    rows.push({
+      name,
+      ...(typeof model === "string" && model !== "" ? { model } : {}),
+      usage: usage_v2,
+      ...(Array.isArray(model_attempts)
+        ? {
+            modelUsages: model_attempts.map(
+              (entry) => (entry as { usage_v2?: unknown } | null)?.usage_v2,
+            ),
+          }
+        : {}),
+    });
   }
   return rows;
 }
@@ -384,18 +430,203 @@ const STEP_NAME_ALIASES: Readonly<Record<string, string>> = {
   adjudicator: "adjudicate",
 };
 
+// The one rule that says a step belongs to a `per_agent` row: the model a row
+// reports and the usage it sums both follow it, so they cannot disagree about
+// which steps are the row's. `exact` is a step named for the row itself; the
+// rest is a fan-out step named after it.
+function stepMatch(
+  stepName: string,
+  key: string,
+): "exact" | "fan-out" | undefined {
+  const stem = STEP_NAME_ALIASES[key] ?? key;
+  if (stepName === key || stepName === stem || stepName === `hunter-${key}`) {
+    return "exact";
+  }
+  return stepName.startsWith(`${stem}-`) ? "fan-out" : undefined;
+}
+
 function modelOf(
-  steps: ReadonlyArray<{ name: string; model: string }>,
+  steps: ReadonlyArray<PipelineStep>,
   key: string,
 ): string | undefined {
-  const stem = STEP_NAME_ALIASES[key] ?? key;
   return steps.find(
-    (step) =>
-      step.name === key ||
-      step.name === stem ||
-      step.name === `hunter-${key}` ||
-      step.name.startsWith(`${stem}-`),
+    (step) => step.model !== undefined && stepMatch(step.name, key),
   )?.model;
+}
+
+// Each step goes to one row at most, so no step is counted twice: a row named
+// for the step wins over a row it fans out from, and otherwise the first row
+// in `per_agent` order. A step no row claims (the warmups) is left out here and
+// still counts in the run's own `usage_v2`.
+function stepsByOwner(
+  steps: ReadonlyArray<PipelineStep>,
+  keys: ReadonlyArray<string>,
+): Map<string, PipelineStep[]> {
+  const owned = new Map<string, PipelineStep[]>();
+  for (const step of steps) {
+    const owner =
+      keys.find((key) => stepMatch(step.name, key) === "exact") ??
+      keys.find((key) => stepMatch(step.name, key) === "fan-out");
+    if (owner === undefined) continue;
+    owned.set(owner, [...(owned.get(owner) ?? []), step]);
+  }
+  return owned;
+}
+
+// The engine's normalized usage (execution/usage-normalized.ts), read field by
+// field because this file only trusts what it checks: the run's own `usage_v2`
+// and each step's, which already sums all of that step's attempts and models.
+// Numbers and one enum only, so nothing the customer wrote can ride along. A
+// field that is missing or malformed is left out on its own; the rest of the
+// report never depends on it.
+type UsageRecord = Record<string, unknown>;
+
+function usageRecord(value: unknown): UsageRecord | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as UsageRecord)
+    : undefined;
+}
+
+function amount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+// Absent when no source is: the same rule as `sumNormalizedUsage`, whose
+// totals the run's `usage_v2` already carries.
+function sumDefined(
+  values: ReadonlyArray<number | undefined>,
+): number | undefined {
+  return values.every((value) => value === undefined)
+    ? undefined
+    : values.reduce<number>((total, value) => total + (value ?? 0), 0);
+}
+
+function leaves(tokens: UsageRecord, names: readonly string[]) {
+  return sumDefined(names.map((name) => amount(tokens[name])));
+}
+
+// The leaves are disjoint by the §8 contract, so adding them never counts a
+// token twice. Uncached input is `inputUncached`, plus `inputOther` where an
+// inclusive provider total was split into leaves. Output is everything billed
+// as output, reasoning included, as `outputTokensKnown` counts it.
+function tokenSplit(usage: UsageRecord | undefined): ReportTokens {
+  const tokens = usageRecord(usage?.tokens);
+  if (tokens === undefined) return {};
+  const split: ReportTokens = {
+    input_uncached: leaves(tokens, ["inputUncached", "inputOther"]),
+    input_cache_read: leaves(tokens, ["inputCacheRead"]),
+    input_cache_write: leaves(tokens, ["inputCacheWrite"]),
+    output: leaves(tokens, ["outputVisible", "outputReasoning", "outputOther"]),
+  };
+  return Object.fromEntries(
+    Object.entries(split)
+      .filter((entry): entry is [string, number] => entry[1] !== undefined)
+      .map(([key, value]) => [key, Math.round(value)]),
+  );
+}
+
+// The list price of what one usage record consumed. The Claude CLI files the
+// CLI's list total in exactly one field (transports/claude-code-cli.ts,
+// `costFor`): `notionalCostUsd` on a subscription, which charges nothing, and
+// `cashCostUsd` on a per-token key, where list price is the charge. Any other
+// billing (free, or unknown because attempts disagreed) names no field that
+// holds a list price, so it has none rather than a guessed one.
+function listCost(usage: UsageRecord | undefined): number | undefined {
+  switch (usage?.billingMode) {
+    case "subscription":
+      return amount(usage.notionalCostUsd);
+    case "metered":
+      return amount(usage.cashCostUsd);
+    default:
+      return undefined;
+  }
+}
+
+// A step whose models billed differently reads `unknown` once summed, so its
+// list cost is each model's own (`model_attempts[].usage_v2`, kept for exactly
+// this). Unknown when any model that reported usage cannot be priced.
+function stepListCost(step: PipelineStep): number | undefined {
+  const usage = usageRecord(step.usage);
+  const own = listCost(usage);
+  if (own !== undefined || step.modelUsages === undefined) return own;
+  return sumAll(
+    step.modelUsages.map(usageRecord).filter((entry) => entry !== undefined),
+    listCost,
+  );
+}
+
+// A sum only when every record that reported usage has a value: one unpriced
+// part would make the total look smaller than what was spent.
+function sumAll<T>(
+  items: readonly T[],
+  value: (item: T) => number | undefined,
+): number | undefined {
+  if (items.length === 0) return undefined;
+  let total = 0;
+  for (const item of items) {
+    const part = value(item);
+    if (part === undefined) return undefined;
+    total += part;
+  }
+  return total;
+}
+
+function splitFields(
+  tokens: ReportTokens,
+  listUsd: number | undefined,
+): ReportUsageSplit {
+  return {
+    ...(Object.keys(tokens).length === 0 ? {} : { tokens }),
+    ...(listUsd === undefined ? {} : { list_cost_usd: listUsd }),
+  };
+}
+
+// The run's tokens and billing come from its own `usage_v2`. Its list cost is the
+// sum of every step's, by the rule an agent row uses: the rolled-up notional total
+// counts only the steps that filed one while the tokens count them all, so a step
+// with no list price drops the run's list cost rather than leaving it short. A
+// pipeline with no per-step usage falls back to the run's own figure.
+function runUsageSplit(
+  pipeline: unknown,
+): ReportUsageSplit & { billing?: "subscription" | "metered" } {
+  const usage = usageRecord(usageRecord(pipeline)?.usage_v2);
+  if (usage === undefined) return {};
+  const billing = usage.billingMode;
+  // Every step that filed usage, a malformed record included: one that cannot be
+  // read cannot be priced, so it drops the sum rather than shrinking it.
+  const priced = pipelineSteps(pipeline).filter(
+    (step) => step.usage !== undefined,
+  );
+  return {
+    ...splitFields(
+      tokenSplit(usage),
+      priced.length > 0 ? sumAll(priced, stepListCost) : listCost(usage),
+    ),
+    ...(billing === "subscription" || billing === "metered" ? { billing } : {}),
+  };
+}
+
+// A row's split is the sum of the steps it owns, refuter fan-out included.
+function agentUsageSplit(steps: ReadonlyArray<PipelineStep>): ReportUsageSplit {
+  const usages = steps.filter((step) => usageRecord(step.usage) !== undefined);
+  if (usages.length === 0) return {};
+  const splits = usages.map((step) => tokenSplit(usageRecord(step.usage)));
+  const tokens = Object.fromEntries(
+    (
+      [
+        "input_uncached",
+        "input_cache_read",
+        "input_cache_write",
+        "output",
+      ] as const
+    ).flatMap((key) => {
+      const total = sumDefined(splits.map((split) => split[key]));
+      return total === undefined ? [] : [[key, total]];
+    }),
+  );
+  return splitFields(tokens, sumAll(usages, stepListCost));
 }
 
 // Reads findings.json and pipeline.json from a run directory. A missing or

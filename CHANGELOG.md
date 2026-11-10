@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Platform mode: the run report carries the cache split and the list-price cost.** The run's `usage`
+  and each agent row gain `tokens` (`input_uncached`, `input_cache_read`, `input_cache_write`, `output`) and
+  `list_cost_usd`, and the run's `usage` gains `billing` (`subscription` or `metered`), all read from
+  `pipeline.json`'s `usage_v2`. On a Claude subscription the list cost is the notional cost, so the platform
+  can show what a review costs even when `cost_usd`, the cash cost, is 0. An agent row sums every step it
+  owns, the refuter's one step per finding included. Every new field is optional: a run without `usage_v2`,
+  or with a malformed figure, leaves out only that field, and the existing fields are unchanged.
+
 ### Fixed
 
 - **A model whose provider has no credential is refused by name, before anything spends.** An OpenCode
