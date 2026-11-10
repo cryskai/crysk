@@ -38,6 +38,12 @@ import {
   persistAttemptEvidence,
 } from "./attempt-evidence";
 import {
+  CLAUDE_TRACE_MISSES,
+  claudeSessionTracePath,
+  claudeTraceCaptureAnnotation,
+  copyRetainedClaudeSession,
+} from "./claude-session-trace";
+import {
   BucketBreakerTrippedError,
   ConcurrencyAdmissionAbortedError,
 } from "./concurrency-limiter";
@@ -417,12 +423,32 @@ function projectionWarningAnnotation(failureClass: string): string {
   return `[pr-hero] credential projection unavailable (${failureClass}); child runs with operator environment`;
 }
 
+async function withClaudeSessionTrace(
+  step: StepSpec,
+  request: TransportRequest,
+  attempt: number,
+  outcome: TransportOutcome,
+): Promise<TransportOutcome> {
+  const reason = await copyRetainedClaudeSession(
+    request,
+    claudeSessionTracePath(step.outPath, step.name, attempt),
+  );
+  if (reason === undefined) return outcome;
+  return {
+    ...outcome,
+    stderrTail: `${outcome.stderrTail}\n${claudeTraceCaptureAnnotation(reason)}`,
+  };
+}
+
 export function isHarnessStderrAnnotation(line: string): boolean {
   const trimmed = line.trim();
   return (
     trimmed === DESTROY_FAILED_ANNOTATION ||
     trimmed === AMBIENT_METERED_ANNOTATION ||
-    PROJECTION_WARNING_ANNOTATION.test(trimmed)
+    PROJECTION_WARNING_ANNOTATION.test(trimmed) ||
+    CLAUDE_TRACE_MISSES.some(
+      (reason) => trimmed === claudeTraceCaptureAnnotation(reason),
+    )
   );
 }
 
@@ -2508,7 +2534,12 @@ export class StepExecutionHarness implements StepRunner {
     // `execution.cancelled` is the only path executeSession takes without
     // ever invoking `onData`, and `onData` is what both delivery variants
     // above come from.
-    const outcome = execution.outcome as TransportOutcome;
+    const outcome = await withClaudeSessionTrace(
+      step,
+      request,
+      attempt,
+      execution.outcome as TransportOutcome,
+    );
 
     if (execution.delivery?.delivered) {
       return { kind: "delivered", outcome, parsed: execution.delivery.parsed };

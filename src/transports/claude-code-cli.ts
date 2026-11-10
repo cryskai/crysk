@@ -5,6 +5,7 @@ import { CLAUDE_CAPABILITY_STATICS } from "#model/provider-capabilities";
 import { claudeCliModel } from "#model/routing";
 import type { BucketScope } from "../execution/bucket-id";
 import { deriveBucketId } from "../execution/bucket-id";
+import { retainClaudeSession } from "../execution/claude-session-trace";
 import type {
   FailureCredential,
   ObservedModel,
@@ -973,6 +974,8 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       // `result`. That message is not the agent's answer: it fails the attempt with its
       // typed cause, is never handed to the draft parser (which would spend a format retry
       // on it), and its words go to the attempt's diagnostics.
+      retainClaudeSession(request, stdout);
+
       const failureCredential =
         apiError === undefined
           ? undefined
