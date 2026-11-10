@@ -1540,6 +1540,24 @@ describe("setup.ts reads the crysk-secrets input", () => {
     );
   });
 
+  // Missing credential (S5): the notice is printed also when no provider got a
+  // record and the step writes no auth file, the case admission then refuses.
+  test("a provider with no CRYSK secret is named even when no auth file is written", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-55aa" },
+      withModels({
+        default: ["opencode:aiand/deepseek-ai/deepseek-v4.1-flash-1017"],
+      }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.authText).toBeUndefined();
+    expect(result.stderr).toContain(
+      "::notice::OpenCode provider aiand: no CRYSK_OPENCODE_AIAND_API_KEY or CRYSK_OPENCODE_AIAND_OAUTH secret is set, so the auth file has no record for it.",
+    );
+    expect(result.stderr).not.toContain("::error::");
+    expect(result.stderr.includes("SENTINEL")).toBe(false);
+  });
+
   // D6 (E-f F3): the opencode-auth input is gone. The trigger stops a workflow
   // that passes one (CRYSK-INPUT-REMOVED) and action.yml never binds it here, so
   // a value left in the environment (a job-level env, say) is not read.

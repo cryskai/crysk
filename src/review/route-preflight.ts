@@ -17,6 +17,7 @@ import { resolveEngineAssets } from "../assets";
 import { CliError } from "../errors";
 import type { RunnerBackend } from "../execution/contracts";
 import {
+  type OpenCodeCredentialRefusal,
   type ProductionAdmissionContext,
   prepareProductionAdmissionContext,
   probeBindingsReadiness,
@@ -28,6 +29,7 @@ import type {
 } from "../runner-authority";
 import {
   ClaudeCredentialRefusalError,
+  CredentialRefusalError,
   claudeCredentialRefusal,
   type RunClaudeCredential,
 } from "../security/claude-credential";
@@ -232,6 +234,21 @@ export async function resolveRoutePlanAtConfirm(input: {
   return routePlan;
 }
 
+// The OpenCode refusal: a route the plan runs has no credential record in the run's
+// OpenCode auth file (openCodeCredentialRefusal, production-runtime.ts). It is the
+// failure the route's first step would hit (CRYSK-CRED-UNUSABLE), raised before any
+// spend.
+export class OpenCodeCredentialRefusalError extends CredentialRefusalError {
+  constructor(refusal: OpenCodeCredentialRefusal) {
+    super(
+      refusal.message,
+      { kind: "credential", failureClass: refusal.failureClass },
+      refusal.params,
+      `no credential record for OpenCode provider ${refusal.params.provider}; refused before any provider spend`,
+    );
+  }
+}
+
 export interface ProductionRoutePlanResult {
   readonly routePlan: ResolvedRoutePlan;
   readonly productionAdmission: ProductionAdmissionContext;
@@ -284,6 +301,11 @@ export async function resolveProductionRoutePlanAtConfirm(input: {
       : { claudeCredential: input.claudeRun.kind }),
   });
   if ("error" in productionAdmission) {
+    if (productionAdmission.credentialRefusal !== undefined) {
+      throw new OpenCodeCredentialRefusalError(
+        productionAdmission.credentialRefusal,
+      );
+    }
     throw new CliError(
       `production admission failed: ${productionAdmission.error}`,
     );

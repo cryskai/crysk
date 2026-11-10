@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A model whose provider has no credential is refused by name, before anything spends.** An OpenCode
+  model with an effort used to fail listing its variants (`opencode models <provider> exited 1`) and was
+  reported as `CRYSK-UNCLASSIFIED`; without an effort it passed admission and failed at its first hunter.
+  Admission now checks that the OpenCode auth file holds a record for every model the plan may run,
+  fallbacks included and free models excepted, and refuses the run naming the provider and the
+  `CRYSK_OPENCODE_<PROVIDER>_API_KEY` secret that did not reach it, classified `CRYSK-CRED-UNUSABLE` with the
+  route's OpenCode fixes. A plan with a Claude route and no Claude credential is now `CRYSK-CRED-MISSING`
+  instead of `CRYSK-UNCLASSIFIED`. Both settle the CI admission row as a skip that spent nothing, and the
+  setup step names a provider with no `CRYSK_OPENCODE_*` secret even when no auth file is written.
+
 ### Removed
 
 - The `lifecycle` hunter is retired from the default review. Measured before the decision: on

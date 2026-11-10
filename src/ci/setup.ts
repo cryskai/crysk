@@ -912,10 +912,12 @@ function assembleOpenCodeAuth(
         : `OpenCode provider ${provider}: ${choice.secret} (${label}) builds its auth record; ${choice.unused} is not used, because the subscription comes first.`,
     );
   }
-  // A provider with no secret matters only when the secrets build the file:
-  // otherwise this step writes no auth file, and the runner's own (or none, for
-  // a free model) serves, as before.
-  if (manifest.length > 0) notices.push(...missing);
+  // A provider with no secret is named whenever the crysk-secrets input was given,
+  // also when no provider got a record and this step writes no auth file: a metered
+  // model of that provider is then refused at admission (openCodeCredentialRefusal,
+  // production-runtime.ts), and this line says why in the setup step. A notice, not a
+  // failure: a free model of that provider runs with no record.
+  notices.push(...missing);
   return { records, manifest, notices, problems };
 }
 
@@ -1024,7 +1026,9 @@ export async function materializeCiOpenCodeData(
     assembly !== undefined && assembly.manifest.length > 0
       ? assembly
       : undefined;
-  if (fromSecrets !== undefined) notices.push(...fromSecrets.notices);
+  // Also when no record was built: the notices then name only the providers with no
+  // secret (assembleOpenCodeAuth).
+  if (assembly !== undefined) notices.push(...assembly.notices);
 
   if (Object.keys(personBody).length > 0) {
     await mkdir(path.dirname(personFile), { recursive: true });

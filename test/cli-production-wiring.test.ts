@@ -20,7 +20,10 @@ import {
   productionFallbackRegistry,
   soleOpenCodeCredentialOf,
 } from "../src/production-runtime";
-import { enforceProviderCapabilityGate } from "../src/review/route-preflight";
+import {
+  enforceProviderCapabilityGate,
+  OpenCodeCredentialRefusalError,
+} from "../src/review/route-preflight";
 import {
   ClaudeCredentialRefusalError,
   resolveRunClaudeCredential,
@@ -82,6 +85,26 @@ function fixtureDeps(
   };
 }
 
+// The OpenCode auth file admission's credential check reads (missing credential,
+// openCodeCredentialRefusal): a record for every provider these tests name, of the
+// kind its route binds, in a data home inside the test's own dir, so the
+// developer's real auth file is never read.
+const FIXTURE_AUTH = {
+  openai: { type: "oauth", refresh: "r", access: "a", expires: 0 },
+  zai: { type: "api", key: "k" },
+};
+
+async function writeAuthFixture(
+  dir: string,
+  auth: Record<string, unknown> = FIXTURE_AUTH,
+): Promise<string> {
+  const dataHome = path.join(dir, "xdg-auth");
+  const authFile = resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome });
+  await mkdir(path.dirname(authFile), { recursive: true });
+  await writeFile(authFile, JSON.stringify(auth));
+  return dataHome;
+}
+
 describe("CLI production wiring (verify C1/C3)", () => {
   test("prepareProductionAdmissionContext admits OpenCode with D1-11 evidence", async () => {
     const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-prod-"));
@@ -101,7 +124,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
       });
@@ -148,7 +171,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
         credentialBrokers: { opencode: injected },
@@ -190,7 +213,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
       });
@@ -305,7 +328,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
         modelsConfigured: true,
         workspaceRoot: tmpDir,
         buildRoutePlan: async () => plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
       });
@@ -372,8 +395,9 @@ describe("CLI production wiring (verify C1/C3)", () => {
       ).rejects.toThrow(/no Claude credential this run may use is set/);
     });
 
-    // R003 (#494): plan.ts settles the CI row as gate-skipped by this class.
-    test("the refusal is a ClaudeCredentialRefusalError, still a plain CliError", async () => {
+    // R003 (#494): plan.ts settles the CI row as gate-skipped by this class. It names
+    // CRYSK-CRED-MISSING's class, so cli.json says the credential is missing.
+    test("the refusal is a ClaudeCredentialRefusalError, a CliError classified as a missing credential", async () => {
       const error = await resolveProductionRoutePlanAtConfirm({
         modelsConfigured: false,
         workspaceRoot: "/nowhere",
@@ -384,7 +408,13 @@ describe("CLI production wiring (verify C1/C3)", () => {
       }).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(ClaudeCredentialRefusalError);
       expect(error).toBeInstanceOf(CliError);
-      expect((error as CliError).cls).toBeUndefined();
+      expect((error as CliError).cls).toEqual({
+        kind: "trigger",
+        check: "no-credential",
+      });
+      expect((error as ClaudeCredentialRefusalError).params).toEqual({
+        backend: "claude",
+      });
     });
 
     test("a plan with no Claude route ignores Claude credentials", async () => {
@@ -411,7 +441,10 @@ describe("CLI production wiring (verify C1/C3)", () => {
           authorityDeps: fixtureDeps(tmpDir, claude, opencode),
           claudeRun: resolveRunClaudeCredential({
             credentials: { claude: ["api_key"] },
-            env: { PATH: tmpDir },
+            env: {
+              PATH: tmpDir,
+              XDG_DATA_HOME: await writeAuthFixture(tmpDir),
+            },
             loginPresent: false,
           }),
         });
@@ -552,7 +585,10 @@ describe("CLI production wiring (verify C1/C3)", () => {
         return await prepareProductionAdmissionContext({
           workspaceRoot: tmpDir,
           plan,
-          env: { PATH: tmpDir },
+          env: {
+            PATH: tmpDir,
+            XDG_DATA_HOME: await writeAuthFixture(tmpDir),
+          },
           loadSdk: mockLoadSdk,
           authorityDeps: fixtureDeps(tmpDir, claude, opencode),
         });
@@ -658,6 +694,10 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const dataHome = path.join(tmpDir, "xdg-data");
       const authPath = resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome });
       await mkdir(path.dirname(authPath), { recursive: true });
+      await writeFile(
+        authPath,
+        JSON.stringify({ openai: { type: "api", key: "k" } }),
+      );
       await writeFile(
         openCodeSecretManifestPath(authPath),
         serializeOpenCodeSecretManifest([
@@ -773,7 +813,7 @@ describe("fallback models at the pre-confirm admission", () => {
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
       });
@@ -810,7 +850,7 @@ describe("fallback models at the pre-confirm admission", () => {
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan: claudeThenOpenCode(),
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: {
           ...fixtureDeps(tmpDir, claude, missing),
@@ -850,6 +890,22 @@ describe("an OpenCode effort is checked against the model's variants before the 
     "openai/gpt-5-nano",
     JSON.stringify({ id: "gpt-5-nano", status: "active", variants: {} }),
   ].join("\n");
+  // A model the `opencode` provider declares free (model/free-discovery.ts).
+  const FREE_LISTING = [
+    "opencode/free-model",
+    JSON.stringify({
+      id: "free-model",
+      status: "active",
+      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    }),
+  ].join("\n");
+  // The OpenCode auth file the run's env points to: the openai login the
+  // OAuth route needs and a deepseek API key, so these tests reach the
+  // variants check (the credential check runs before it).
+  const AUTH = {
+    openai: { type: "oauth", refresh: "r", access: "a", expires: 0 },
+    deepseek: { type: "api", key: "k" },
+  };
 
   async function withFixture(
     run: (ctx: {
@@ -859,6 +915,11 @@ describe("an OpenCode effort is checked against the model's variants before the 
         entries: Array<string | { model: string; effort?: string }>,
       ) => ReturnType<typeof resolveProductionRoutePlanAtConfirm>;
     }) => Promise<void>,
+    options: {
+      // The auth file's content (an object, or raw text), or null for no file.
+      readonly auth?: Record<string, unknown> | string | null;
+      readonly env?: Record<string, string>;
+    } = {},
   ): Promise<void> {
     const tmpDir = await realpath(
       await mkdtemp(path.join(tmpdir(), "pr-hero-cli-variants-")),
@@ -867,6 +928,20 @@ describe("an OpenCode effort is checked against the model's variants before the 
       const log = path.join(tmpDir, "opencode.log");
       const listing = path.join(tmpDir, "listing.txt");
       await writeFile(listing, `${LISTING}\n`);
+      const freeListing = path.join(tmpDir, "free-listing.txt");
+      await writeFile(freeListing, `${FREE_LISTING}\n`);
+      // XDG_DATA_HOME is pinned to the fixture, so the developer's own
+      // OpenCode auth file is never read.
+      const xdg = path.join(tmpDir, "xdg");
+      const auth = options.auth === undefined ? AUTH : options.auth;
+      if (auth !== null) {
+        const authFile = resolveOpenCodeAuthPath({ XDG_DATA_HOME: xdg });
+        await mkdir(path.dirname(authFile), { recursive: true });
+        await writeFile(
+          authFile,
+          typeof auth === "string" ? auth : JSON.stringify(auth),
+        );
+      }
       const claude = await writeExecutable(
         tmpDir,
         "claude",
@@ -880,6 +955,7 @@ describe("an OpenCode effort is checked against the model's variants before the 
           `echo "$*" >> "${log}"`,
           'if [ "$1" = "--version" ]; then echo "1.18.30"; exit 0; fi',
           `if [ "$1" = "models" ] && [ "$2" = "openai" ]; then cat "${listing}"; exit 0; fi`,
+          `if [ "$1" = "models" ] && [ "$2" = "opencode" ]; then cat "${freeListing}"; exit 0; fi`,
           'if [ "$1" = "models" ]; then echo "Provider not found: $2" >&2; exit 1; fi',
           "exit 0",
           "",
@@ -901,7 +977,7 @@ describe("an OpenCode effort is checked against the model's variants before the 
                   models: { "hunter.logic": entries },
                 }),
               ]),
-            env: { PATH: tmpDir },
+            env: { PATH: tmpDir, XDG_DATA_HOME: xdg, ...options.env },
             loadSdk: mockLoadSdk,
             authorityDeps: fixtureDeps(tmpDir, claude, opencode),
           }),
@@ -1010,6 +1086,134 @@ describe("an OpenCode effort is checked against the model's variants before the 
         : "";
       expect(text.split("\n").filter((l) => l.startsWith("models"))).toEqual(
         [],
+      );
+    });
+  });
+
+  // Missing credential: a model whose provider has no record in the run's
+  // OpenCode auth file is refused before the variants check, by name, as the
+  // credential failure its first step would hit (CRYSK-CRED-UNUSABLE), with or
+  // without an effort, fallbacks included. A free model needs no record.
+  describe("an OpenCode route with no credential record is refused at admission", () => {
+    const AIAND = "opencode:aiand/deepseek-ai/deepseek-v4.1-flash-1017";
+    const CI = { GITHUB_ACTIONS: "true" };
+    const AIAND_REFUSAL =
+      "models name OpenCode provider aiand (hunter-logic), but no CRYSK_OPENCODE_AIAND_API_KEY secret reached the run (the OpenCode auth file has no aiand record): set it and pass it in the crysk-secrets input";
+
+    async function refusedWith(promise: Promise<unknown>): Promise<unknown> {
+      try {
+        await promise;
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    }
+
+    test("a model with an effort and no record names the provider and its secret, not the listing", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(
+            resolve([{ model: AIAND, effort: "xhigh" }]),
+          );
+          expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
+          expect(error).toBeInstanceOf(CliError);
+          const refusal = error as OpenCodeCredentialRefusalError;
+          expect(refusal.message).toBe(AIAND_REFUSAL);
+          expect(refusal.cls).toEqual({
+            kind: "credential",
+            failureClass: "missing_provider_record",
+          });
+          expect(refusal.params).toEqual({
+            backend: "opencode",
+            provider: "aiand",
+            model: "deepseek-ai/deepseek-v4.1-flash-1017",
+            step: "hunter-logic",
+            secret: "CRYSK_OPENCODE_AIAND_API_KEY",
+          });
+        },
+        { auth: null, env: CI },
+      );
+    });
+
+    test("the same model with no effort is refused at admission too", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(resolve([AIAND]));
+          expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
+          expect((error as Error).message).toBe(AIAND_REFUSAL);
+        },
+        // An auth file holding other providers only: still no aiand record.
+        { env: CI },
+      );
+    });
+
+    test("a fallback with no record refuses the whole run", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(
+            resolve(["claude:sonnet-latest", AIAND]),
+          );
+          expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
+          expect((error as Error).message).toBe(AIAND_REFUSAL);
+        },
+        { auth: null, env: CI },
+      );
+    });
+
+    test("a free model with no record is admitted", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const routed = await resolve(["opencode:opencode/free-model"]);
+          expect(routed?.routePlan.steps[0]?.route.provider).toBe("opencode");
+        },
+        { auth: null, env: CI },
+      );
+    });
+
+    test("openai on its ChatGPT login names the _OAUTH secret and the _API_KEY alternative", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(resolve(["opencode:openai/gpt-5"]));
+          expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
+          const refusal = error as OpenCodeCredentialRefusalError;
+          expect(refusal.message).toBe(
+            "models name OpenCode provider openai (hunter-logic), but no CRYSK_OPENCODE_OPENAI_OAUTH secret reached the run (the OpenCode auth file has no openai subscription record): set it, or CRYSK_OPENCODE_OPENAI_API_KEY to bill per token, and pass it in the crysk-secrets input",
+          );
+          expect(refusal.cls).toEqual({
+            kind: "credential",
+            failureClass: "missing_subscription_record",
+          });
+        },
+        { auth: { deepseek: { type: "api", key: "k" } }, env: CI },
+      );
+    });
+
+    test("outside CI the refusal names opencode auth login", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(resolve([AIAND]));
+          expect((error as Error).message).toBe(
+            "models name OpenCode provider aiand (hunter-logic), but the OpenCode auth file has no aiand record: run `opencode auth login` and add aiand's API key",
+          );
+        },
+        { auth: null },
+      );
+    });
+
+    test("an auth file that is not JSON is left to the broker's own error", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          // Not refused here: the run goes on to the variants check, whose
+          // listing of aiand fails as before.
+          const error = await refusedWith(
+            resolve([{ model: AIAND, effort: "xhigh" }]),
+          );
+          expect(error).not.toBeInstanceOf(OpenCodeCredentialRefusalError);
+          expect((error as Error).message).toContain(
+            "(opencode models aiand exited 1)",
+          );
+        },
+        { auth: "not json", env: CI },
       );
     });
   });

@@ -1,11 +1,17 @@
 // S5 (odd/tasks/role-model-routing.md): which Claude credential a run uses, and the env
 // its child sees. Assertions read key presence and kinds only; no test prints an env.
 import { describe, expect, test } from "bun:test";
+import { classifyCliError } from "#ci/classify-error";
+import { codeOf } from "#ci/outcome";
+import type { AdmissionRecord } from "../../src/ci/admission-ledger";
 import { deriveCiBillingMode } from "../../src/ci/gates";
 import { envBillsMetered } from "../../src/execution/usage-normalized";
+import { settleClaudeCredentialRefusal } from "../../src/pr/admission";
 import type { ClaudeCredentialKind } from "../../src/review/preflight";
+import { OpenCodeCredentialRefusalError } from "../../src/review/route-preflight";
 import {
   CLAUDE_CREDENTIAL_VARIABLES,
+  ClaudeCredentialRefusalError,
   claudeCredentialPresence,
   claudeCredentialRefusal,
   claudeRunEnv,
@@ -275,6 +281,99 @@ describe("claudeCredentialRefusal", () => {
       api_key: "ANTHROPIC_API_KEY",
     });
     expect(claudeCredentialRefusal(selection, true)).toBeUndefined();
+  });
+
+  // Missing credential: the refusal is a missing credential in cli.json, not
+  // CRYSK-UNCLASSIFIED, and its message is unchanged.
+  test("the refusal error is classified CRYSK-CRED-MISSING and keeps its message", () => {
+    const error = new ClaudeCredentialRefusalError("no Claude credential");
+    expect(error.message).toBe("no Claude credential");
+    expect(codeOf(classifyCliError(error))).toBe("CRYSK-CRED-MISSING");
+  });
+});
+
+// R003 (#494) + missing credential (S4): every admission credential refusal stops a CI
+// run before any spend, so its ledger row settles as gate-skipped with the refusal's
+// own reason; the OpenCode one included, never `failed`.
+describe("a credential refusal settles the CI ledger row as an unspent skip", () => {
+  function ledgerState() {
+    const record: AdmissionRecord = {
+      schemaVersion: 1,
+      prNumber: 7,
+      headSha: "a".repeat(40),
+      policyHash: "deadbeefcafefeed",
+      reservationId: "reservation-cred",
+      attemptNumber: 1,
+      status: "reserved",
+      decisionReason: "reason recorded before settlement",
+      priorScore: null,
+      blockingCount: null,
+      advisoryCount: null,
+      workflowRunId: null,
+      createdAt: "2026-11-10T12:00:00.000Z",
+      settledAt: null,
+    };
+    return {
+      record,
+      checkRunId: 11,
+      headSha: "a".repeat(40),
+      operatorRoot: "/repo",
+    };
+  }
+  // Every gh call answers a check-run id; the argv is kept.
+  function fakeGh(calls: string[][]): typeof Bun.spawn {
+    return ((argv: string[]) => {
+      calls.push(argv);
+      const out = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"id":11}'));
+          controller.close();
+        },
+      });
+      return {
+        stdout: out,
+        stderr: new ReadableStream({ start: (c) => c.close() }),
+        exited: Promise.resolve(0),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+  }
+
+  test("an OpenCode route with no record settles gate-skipped, naming the provider", async () => {
+    const state = ledgerState();
+    const calls: string[][] = [];
+    await settleClaudeCredentialRefusal(
+      state,
+      new OpenCodeCredentialRefusalError({
+        message: "models name OpenCode provider aiand (hunter-logic), but …",
+        failureClass: "missing_provider_record",
+        params: {
+          backend: "opencode",
+          provider: "aiand",
+          model: "deepseek-ai/deepseek-v4.1-flash-1017",
+          step: "hunter-logic",
+        },
+      }),
+      { spawnFn: fakeGh(calls) },
+    );
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(
+      "no credential record for OpenCode provider aiand; refused before any provider spend",
+    );
+    expect(calls.length).toBe(1);
+  });
+
+  test("the Claude refusal keeps its own reason", async () => {
+    const state = ledgerState();
+    await settleClaudeCredentialRefusal(
+      state,
+      new ClaudeCredentialRefusalError("no Claude credential"),
+      { spawnFn: fakeGh([]) },
+    );
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(
+      "no Claude credential the run may use is set; refused before any provider spend",
+    );
   });
 });
 
