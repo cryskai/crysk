@@ -385,6 +385,14 @@ describe("redactEvidenceText: values that cannot be secrets", () => {
     ["a quoted expression", '"api_key": "${{ secrets.API_KEY }}"'],
     ["a YAML block scalar", "crysk-secrets: |"],
     ["a section whose next line is a key", "secrets:\n  CRYSK_X: inherit"],
+    [
+      "a section whose key follows a blank line",
+      "secrets:\n\n  token: inherit",
+    ],
+    [
+      "a comment under an empty key, then a key",
+      "password:\n  # set later\nother: value",
+    ],
     ["an angle-bracket placeholder", "api_key: <your-api-key>"],
     ["an x placeholder", "API_TOKEN=xxxxxxxx"],
     ["a starred placeholder", 'password: "***"'],
@@ -436,6 +444,21 @@ describe("redactEvidenceText: values that cannot be secrets", () => {
       "a placeholder word inside a value",
       "api_key=xxxabc123",
       "api_key=[REDACTED]",
+    ],
+    [
+      "a YAML value after a blank line",
+      `password:\n\n hunter2`,
+      "password:\n\n [REDACTED]",
+    ],
+    [
+      "a YAML value after an indented comment line",
+      `password:\n  # the db one\n  hunter2`,
+      "password:\n  # the db one\n  [REDACTED]",
+    ],
+    [
+      "a camelCase YAML value on the next line",
+      `apiKey:\n ${TOKEN_VALUE}`,
+      "apiKey:\n [REDACTED]",
     ],
   ])("%s is still redacted", (_name, text, expected) => {
     expect(redactEvidenceText(text)).toBe(expected);
@@ -536,6 +559,10 @@ describe("redactSessionText: a workflow file stays readable", () => {
       "a YAML key on the line after a token key",
       "api-token:\n  required: true",
     ],
+    [
+      "a YAML key after a blank line under a token key",
+      "api-token:\n\n  required: true",
+    ],
   ])("%s is kept", (_name, text) => {
     expect(redactSessionText(text)).toBe(text);
   });
@@ -610,6 +637,21 @@ describe("redactSessionText: every real secret is still redacted", () => {
       `password:\n  ${TOKEN_VALUE}`,
       TOKEN_VALUE,
     ],
+    [
+      "a YAML value after a blank line",
+      `password:\n\n ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    [
+      "a YAML value after an indented comment line",
+      `password:\n  # the db one\n  ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
+    [
+      "a camelCase YAML value after a blank line",
+      `apiKey:\n\n ${TOKEN_VALUE}`,
+      TOKEN_VALUE,
+    ],
     ["a quoted token", `"apiToken": "${TOKEN_VALUE}"`, TOKEN_VALUE],
     [
       "a secret in a workflow env",
@@ -682,6 +724,8 @@ describe("redaction stays linear on unclosed expressions", () => {
     ["redactEvidenceText", redactEvidenceText, "a=${{ "],
     ["redactSessionText", redactSessionText, "token=${{ "],
     ["redactSessionText", redactSessionText, "password: ${{ "],
+    ["redactEvidenceText", redactEvidenceText, "token: # "],
+    ["redactSessionText", redactSessionText, "apiKey:\n#"],
   ])("%s on a 4 MiB line of %p", (_name, redact, unit) => {
     const count = Math.floor((4 * MIB) / unit.length);
     const started = performance.now();

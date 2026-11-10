@@ -97,6 +97,11 @@ export function isNonSecretValue(value: string, name = ""): boolean {
 // Its body never holds another `${{` and is at most 512 characters, so a line
 // of unclosed `token=${{ ` is scanned once, not to its end from every start.
 export const EXPRESSION_VALUE = String.raw`\$\{\{(?:[^$}\r\n]|\$(?!\{\{)|\}(?!\})){0,512}\}\}(?=[\s,;&"'\\]|$)`;
+// A YAML `:` value may sit below its key, past up to three blank or comment
+// lines, unless that line is a key of its own: a `secrets:` section's first
+// entry is not its value, and a comment is never one. The key must end its
+// line, so each line is crossed from at most the three keys above it.
+const YAML_VALUE_BELOW = String.raw`:(?:[ \t]*\r?\n(?:[ \t]*(?:#[^\r\n]*)?\r?\n){0,3}(?![ \t]*[\w.-]+[ \t]*:(?:\s|$))[ \t]*(?!#)|[ \t]*)`;
 
 // Every pattern below stops at quotes and backslashes, so it can run on JSON
 // text without breaking the parse that follows. Each one starts only where a
@@ -125,10 +130,9 @@ const QUOTED_ASSIGNMENT =
 // the caller asks for it, so `privateKey = loadKey()` in a code window reads as
 // before; the session copy asks, since a YAML file spells `privateKey: abc`.
 // An `=` value stays on its line, so an empty `TOKEN=` never takes the next
-// variable. A YAML `:` value may sit on the next line, unless that line is a
-// key of its own: a `secrets:` section's first entry is not its value.
+// variable. A `:` value may sit below its key (YAML_VALUE_BELOW).
 const UNQUOTED_ASSIGNMENT = new RegExp(
-  String.raw`(?<![\w.-])([A-Za-z][\w-]*)([ \t]*(?:=|:(?:[ \t]*\r?\n(?![ \t]*[\w.-]+[ \t]*:(?:\s|$)))?)[ \t]*)(${EXPRESSION_VALUE}|[^\s,;&"'\\]+)`,
+  String.raw`(?<![\w.-])([A-Za-z][\w-]*)([ \t]*(?:=[ \t]*|${YAML_VALUE_BELOW}))(${EXPRESSION_VALUE}|[^\s,;&"'\\]+)`,
   "g",
 );
 
@@ -165,9 +169,11 @@ export function redactSecretShapes(
     );
 }
 
-// A credential keyword, its separator on the same line, and the value.
+// A credential keyword, its separator, and the value: on the same line after
+// `=`, and after `:` also below the key (YAML_VALUE_BELOW), so a camelCase
+// `apiKey:` the unquoted rule leaves alone still loses a value on a later line.
 const LEGACY_KEYWORD_VALUE = new RegExp(
-  String.raw`((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret)[ \t]*[=:][ \t]*)(${EXPRESSION_VALUE}|[^\s,;&]+)`,
+  String.raw`((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret)[ \t]*(?:=[ \t]*|${YAML_VALUE_BELOW}))(${EXPRESSION_VALUE}|[^\s,;&]+)`,
   "gi",
 );
 
