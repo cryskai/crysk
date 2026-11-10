@@ -60,6 +60,42 @@ export function isSecretName(name: string): boolean {
   );
 }
 
+// Values that cannot be a credential, whatever name they are assigned to: a
+// GitHub Actions expression, a permission or `secrets:` word, a YAML block
+// scalar indicator, a placeholder, an environment reference, a boolean, or a
+// small number. A workflow file a hunter reads is full of them
+// (`id-token: write`, `API_KEY=${{ secrets.API_KEY }}`). The whole value must
+// match, so `write-abc123` or `xxxabc123` is still a value to hide. A number
+// stays hidden under a password name, and past five digits under any name,
+// since a PIN or a numeric key is a secret.
+const NON_SECRET_VALUES: readonly RegExp[] = [
+  /^\$\{\{(?:(?!\}\})[^\r\n])*\}\}$/,
+  /^(?:read|write|none|read-all|write-all|inherit)$/,
+  /^[|>][+-]?[1-9]?$/,
+  /^<[^<>\r\n]*>$/,
+  /^(?:x{3,}|X{3,}|\*{3,}|changeme|\[REDACTED\])$/,
+  /^\$[A-Z_][A-Z0-9_]*$/,
+  /^\$\{[A-Z_][A-Z0-9_]*\}$/,
+  /^(?:process\.env|Bun\.env|import\.meta\.env)\.[A-Za-z_]\w*$/,
+  /^(?:true|false)$/i,
+];
+const PASSWORD_WORDS = new Set(["password", "passwd", "passphrase", "pin"]);
+
+export function isNonSecretValue(value: string, name = ""): boolean {
+  const bare = value.replace(/^\\*(["'])(.*)\\*\1$/, "$2");
+  if (bare === "" || NON_SECRET_VALUES.some((shape) => shape.test(bare))) {
+    return true;
+  }
+  return (
+    /^\d{1,5}$/.test(bare) &&
+    !nameParts(name).some((part) => PASSWORD_WORDS.has(part))
+  );
+}
+
+// A GitHub Actions expression is one value even though it holds spaces, so
+// `token: ${{ github.token }}` is read whole and kept, not cut at `${{`.
+const EXPRESSION_VALUE = String.raw`\$\{\{[^\r\n]*?\}\}(?=[\s,;&"'\\]|$)`;
+
 // Every pattern below stops at quotes and backslashes, so it can run on JSON
 // text without breaking the parse that follows. Each one starts only where a
 // run begins (lookbehind, not \b), so a long run of word characters is
@@ -82,8 +118,13 @@ const QUOTED_ASSIGNMENT =
 // snake_case and kebab-case names. camelCase is left to the quoted form unless
 // the caller asks for it, so `privateKey = loadKey()` in a code window reads as
 // before; the session copy asks, since a YAML file spells `privateKey: abc`.
-const UNQUOTED_ASSIGNMENT =
-  /(?<![\w.-])([A-Za-z][\w-]*)(\s*[=:]\s*)([^\s,;&"'\\]+)/g;
+// An `=` value stays on its line, so an empty `TOKEN=` never takes the next
+// variable. A YAML `:` value may sit on the next line, unless that line is a
+// key of its own: a `secrets:` section's first entry is not its value.
+const UNQUOTED_ASSIGNMENT = new RegExp(
+  String.raw`(?<![\w.-])([A-Za-z][\w-]*)([ \t]*(?:=|:(?:[ \t]*\r?\n(?![ \t]*[\w.-]+[ \t]*:(?:\s|$)))?)[ \t]*)(${EXPRESSION_VALUE}|[^\s,;&"'\\]+)`,
+  "g",
+);
 
 /**
  * The credential shapes that need no surrounding context, plus assignments to
@@ -100,15 +141,29 @@ export function redactSecretShapes(
     .replace(AWS_ACCESS_KEY_ID, REDACTED)
     .replace(STRIPE_KEY, REDACTED)
     .replace(JWT, REDACTED)
-    .replace(QUOTED_ASSIGNMENT, (match, name: string, separator: string) =>
-      isSecret(name) ? `${name}${separator}${REDACTED}` : match,
+    .replace(
+      QUOTED_ASSIGNMENT,
+      (match, name: string, separator: string, value: string) =>
+        isSecret(name) && !isNonSecretValue(value, name)
+          ? `${name}${separator}${REDACTED}`
+          : match,
     )
-    .replace(UNQUOTED_ASSIGNMENT, (match, name: string, separator: string) =>
-      (unquotedCamelCase || !/[a-z][A-Z]/.test(name)) && isSecret(name)
-        ? `${name}${separator}${REDACTED}`
-        : match,
+    .replace(
+      UNQUOTED_ASSIGNMENT,
+      (match, name: string, separator: string, value: string) =>
+        (unquotedCamelCase || !/[a-z][A-Z]/.test(name)) &&
+        isSecret(name) &&
+        !isNonSecretValue(value, name)
+          ? `${name}${separator}${REDACTED}`
+          : match,
     );
 }
+
+// A credential keyword, its separator on the same line, and the value.
+const LEGACY_KEYWORD_VALUE = new RegExp(
+  String.raw`((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret)[ \t]*[=:][ \t]*)(${EXPRESSION_VALUE}|[^\s,;&]+)`,
+  "gi",
+);
 
 export function redactEvidenceText(value: string): string {
   return redactSecretShapes(value)
@@ -132,9 +187,8 @@ export function redactEvidenceText(value: string): string {
       /\b(?:sk-[\w-]+|gh[pousr]_[\w]+|github_pat_[\w]+|Bearer\s+[^\s,;]+)/gi,
       "[REDACTED]",
     )
-    .replace(
-      /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret)\s*[=:]\s*)[^\s,;&]+/gi,
-      "$1[REDACTED]",
+    .replace(LEGACY_KEYWORD_VALUE, (match, keyword: string, value: string) =>
+      isNonSecretValue(value, keyword) ? match : `${keyword}[REDACTED]`,
     );
 }
 /** JSON-only bounded traversal: never call getters, custom iterators or toJSON. */
