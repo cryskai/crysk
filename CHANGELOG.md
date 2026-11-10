@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Platform mode: every run sends the Crysk platform its full trace.** A new `Upload the Crysk trace` step
+  runs on every outcome (`always()`), failed, refused and cancelled runs included, and posts one
+  OpenTelemetry trace in OTLP/JSON (GenAI semantic conventions, message schema v1.41.0) to `/runs/trace`: a
+  root span for the run with its outcome and `CRYSK-*` code, a span per pipeline step with every field of its
+  `pipeline.json` row, a `chat` span per attempt with the model, provider, token usage and list-price cost,
+  and an `execute_tool` span per tool call read from the Claude session transcript or the OpenCode capture.
+  The prompts, answers, tool arguments and results and the raw transcripts go only when the token exchange's
+  new `trace_content` is `true` (output as `trace-content`; absent reads as `false`), and pass the secret
+  redaction first. A trace over the platform's 25 MB cap drops transcripts, then content, and is marked
+  `truncated`. The CLI records its run directory in the outcome directory (`run-dir`) so the step finds the
+  files of a run whose `run_dir` output stayed empty. A failed upload is a warning (one retry on HTTP 503),
+  and a standalone run sends nothing. See `docs/github-actions.md`, "Review traces".
 - **Platform mode: the run report carries the cache split and the list-price cost.** The run's `usage`
   and each agent row gain `tokens` (`input_uncached`, `input_cache_read`, `input_cache_write`, `output`) and
   `list_cost_usd`, and the run's `usage` gains `billing` (`subscription` or `metered`), all read from

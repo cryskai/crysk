@@ -651,6 +651,64 @@ repeat of the same upload and is not an error). Like the report, the upload neve
 (the run was not reported first), 401, 400 (with the API's message), 413 (too large) or a network error
 prints a `::warning::` naming the status and message, never the token, and the step exits 0.
 
+### Review traces
+
+In platform mode every run also sends the platform its full trace, so a review can be studied after the
+runner is gone, a failed one above all. An `Upload the Crysk trace` step runs after `Report to Crysk` and
+after the cancelled-run token refresh, on **every** outcome (`always()`): a reviewed run, a run where every
+hunter failed, a fatal error, an admission refusal such as a missing provider credential, and a cancelled
+job. It runs only when the run is platform-dispatched and a run token exists; a standalone run never
+reaches it and sends nothing anywhere.
+
+**What is sent.** One OpenTelemetry trace in OTLP/JSON (`ExportTraceServiceRequest`), following the
+OpenTelemetry GenAI semantic conventions; the message JSON follows the v1.41.0 schema (the conventions are
+still in Development, so the engine pins that version and records it as `crysk.genai.semconv`):
+
+- a root span `invoke_workflow crysk.review` with the outcome, `run_status`, the `CRYSK-*` code (the one the
+  publish step renders), the CLI's error class, the PR number, the head sha and the engine version, plus every
+  field of `pipeline.json` (scout, consolidation and the rest of its stage records), `findings.json` (each
+  finding's tier and refuter verdict, the dedupe merges, the root causes) and `cli.json` as `crysk.pipeline.*`,
+  `crysk.findings.*` and `crysk.cli.*` attributes;
+- an `invoke_agent <step>` span per pipeline step, carrying every field of that step's `pipeline.json` row as
+  `crysk.step.*` (route, effort, status, attempts, each fallback model in `model_attempts`, usage,
+  reservations, failure);
+- a `chat <model>` span per attempt, with `gen_ai.provider.name`, `gen_ai.request.model`,
+  `gen_ai.response.model`, `gen_ai.response.finish_reasons`, the token usage (`gen_ai.usage.input_tokens`
+  including the cache, `gen_ai.usage.output_tokens` including reasoning, the cache read and creation and the
+  reasoning tokens apart), `gen_ai.usage.cost` (list price in USD: the notional cost on a subscription, the
+  cash cost on a per-token key) and the attempt's evidence and settlement as `crysk.attempt.*`;
+- an `execute_tool <tool>` span per tool call the model made, read from the Claude CLI session transcript
+  or the OpenCode capture, with `gen_ai.tool.name`, the call id and its timing.
+
+Every span has its start and end time, from the attempt's settlement record and the transcript. The body is
+`{ schema: "crysk.trace.v1", outcome, code, content, truncated, otlp, transcripts }`, gzip-compressed, posted
+to `https://api.crysk.dev/runs/trace` with the newest run token (the cancelled-run refresh's, else the
+publish refresh's, else the first exchange's). When the run published no run directory (every hunter
+failed, a fatal error, a cancelled job), the step reads the directory the CLI recorded in the outcome
+directory as soon as it created it. With no run directory at all (a refusal before the review started), the
+trace is the root span alone, built from `cli.json`.
+
+**Content and `trace_content`.** Content means the system prompts, the prompts, the model's answers (its
+thinking included when the transcript recorded it), tool call arguments and results, error text, and the
+raw per-attempt transcripts (the Claude CLI session JSONL and the OpenCode capture) the trace was built from.
+The platform decides whether a run's trace may carry it: every token exchange returns `trace_content`, and
+the step outputs it as `trace-content` (`true` only when the platform sent exactly `true`; anything else,
+or nothing, is `false`). The trace step reads the value from the same exchange as its run token. With
+`false` the trace carries metadata only: no content attribute, no status message, no transcript, and no
+attribute that is more than one word. Today the platform answers `true` for a `full` repository and `false`
+for a `metadata_only` one, and strips content again on its side. Every content string passes the engine's
+secret redaction on the runner before it is sent; the OpenCode capture is also redacted by key, so a value
+under a credential-like name (`apiToken`) never leaves.
+
+**Size.** The platform accepts at most 25 MB compressed and 200 MB uncompressed. A larger trace drops the
+transcripts, the largest first, then the content, and sets `truncated: true`; the metadata always stays. A
+trace too large even then is not sent, with a `::warning::`.
+
+The trace never fails the job. An HTTP 503 (the platform could not store it) is retried once; any other
+failure, a 401, 400, 413, 5xx or a network error, prints a `::warning::` naming the status and the API's
+message, never the token, and the step exits 0. A repeat of the same run attempt is answered as already
+recorded and is not an error.
+
 ## Security considerations
 
 ### Fork pull requests
