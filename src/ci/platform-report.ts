@@ -583,22 +583,26 @@ function splitFields(
   };
 }
 
-// The run's split comes from its own `usage_v2`. Its list cost too, unless the
-// steps billed differently (`unknown`), and then it is the sum of every step's.
+// The run's tokens and billing come from its own `usage_v2`. Its list cost is the
+// sum of every step's, by the rule an agent row uses: the rolled-up notional total
+// counts only the steps that filed one while the tokens count them all, so a step
+// with no list price drops the run's list cost rather than leaving it short. A
+// pipeline with no per-step usage falls back to the run's own figure.
 function runUsageSplit(
   pipeline: unknown,
 ): ReportUsageSplit & { billing?: "subscription" | "metered" } {
   const usage = usageRecord(usageRecord(pipeline)?.usage_v2);
   if (usage === undefined) return {};
   const billing = usage.billingMode;
+  // Every step that filed usage, a malformed record included: one that cannot be
+  // read cannot be priced, so it drops the sum rather than shrinking it.
   const priced = pipelineSteps(pipeline).filter(
-    (step) => usageRecord(step.usage) !== undefined,
+    (step) => step.usage !== undefined,
   );
   return {
     ...splitFields(
       tokenSplit(usage),
-      listCost(usage) ??
-        (billing === "unknown" ? sumAll(priced, stepListCost) : undefined),
+      priced.length > 0 ? sumAll(priced, stepListCost) : listCost(usage),
     ),
     ...(billing === "subscription" || billing === "metered" ? { billing } : {}),
   };

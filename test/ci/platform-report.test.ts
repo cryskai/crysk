@@ -883,6 +883,30 @@ describe("buildRunReport: the cache split and the list-price cost", () => {
     expect(agent(body, "reliability")?.list_cost_usd).toBe(1.5);
   });
 
+  // The run's own notional total sums only the steps that filed one, while its
+  // tokens cover every step: an unpriced step must drop the run's list cost, as it
+  // drops its agent row's, instead of leaving a figure below the tokens beside it.
+  test("a single-mode run with a step that filed no list price sends no run list cost", () => {
+    const unpriced = usageV2("subscription", [1, 1, 1, 1], 0);
+    delete unpriced.notionalCostUsd;
+    const pipeline = {
+      usage_v2: usageV2("subscription", [2, 2, 2, 2], 1.5),
+      steps: [
+        {
+          name: "hunter-reliability",
+          model: "m",
+          usage_v2: usageV2("subscription", [1, 1, 1, 1], 1.5),
+        },
+        { name: "refuter-F001", model: "m", usage_v2: unpriced },
+      ],
+    };
+    const body = report({ findings: FINDINGS, pipeline });
+    expect(body?.usage).toMatchObject({ billing: "subscription" });
+    expect(body?.usage).not.toHaveProperty("list_cost_usd");
+    expect(agent(body, "reliability")?.list_cost_usd).toBe(1.5);
+    expect(agent(body, "refuter")).not.toHaveProperty("list_cost_usd");
+  });
+
   test("reasoning output counts as output and an inclusive total's uncached residual as uncached input", () => {
     const pipeline = {
       usage_v2: {
