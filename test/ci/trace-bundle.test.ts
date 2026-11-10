@@ -839,6 +839,66 @@ describe("buildTraceBundle: findings in a metadata trace", () => {
   });
 });
 
+// The harness records the step's logical model (`sonnet`) as
+// `identity.executionModel`, beside the route it actually sent. A route plan
+// can send that step to an OpenCode model, and the trace must name that model.
+describe("buildTraceBundle: the model a chat names is the route's", () => {
+  function runWithRoute(
+    route: { backend: string; provider: string; modelSnapshot: string },
+    alias: string,
+  ): TraceRunInput {
+    const run = reviewedRun();
+    const hunter = run.steps[0];
+    const attempt = hunter?.attempts[0];
+    if (attempt === undefined) throw new Error("fixture lost its hunter");
+    const base = evidence("hunter-reliability", 1, alias, "success", 1, 6);
+    attempt.evidence = {
+      ...base,
+      identity: { route, executionModel: alias },
+    };
+    return run;
+  }
+
+  test.each([
+    [
+      "an OpenCode route run under an alias",
+      {
+        backend: "opencode",
+        provider: "aiand",
+        modelSnapshot: "deepseek-ai/deepseek-v4.1-flash-1017",
+      },
+      "sonnet",
+      "deepseek-ai/deepseek-v4.1-flash-1017",
+    ],
+    [
+      "a Claude route",
+      {
+        backend: "claude-code",
+        provider: "anthropic",
+        modelSnapshot: "sonnet",
+      },
+      "sonnet",
+      "sonnet",
+    ],
+  ])("%s", (_name, route, alias, ran) => {
+    const bundle = buildTraceBundle(runWithRoute(route, alias), true);
+    const chat = spans(bundle).find(
+      (span) =>
+        attr(span, "gen_ai.operation.name") === "chat" &&
+        attr(span, "crysk.step.name") === "hunter-reliability",
+    );
+    expect(chat?.name).toBe(`chat ${ran}`);
+    expect(attr(chat, "gen_ai.request.model")).toBe(ran);
+    expect(attr(chat, "gen_ai.provider.name")).toBe(route.provider);
+    expect(attr(chat, "crysk.attempt.identity.execution_model")).toBe(alias);
+    expect(
+      bundle.transcripts
+        .filter((t) => t.step === "hunter-reliability")
+        .map((t) => t.model),
+    ).toEqual([ran]);
+  });
+});
+
 describe("buildTraceBundle: a hunters-failed run", () => {
   const bundle = buildTraceBundle(huntersFailedRun(), true);
   const root = named(bundle, "invoke_workflow crysk.review");

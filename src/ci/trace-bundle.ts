@@ -417,7 +417,12 @@ function attemptFacts(evidence: unknown): AttemptFacts {
   const settlement = isRecord(evidence.settlement) ? evidence.settlement : {};
   const times = isRecord(settlement.timestamps) ? settlement.timestamps : {};
   const facts: AttemptFacts = {};
-  const model = str(identity.executionModel) ?? str(route.modelSnapshot);
+  // The route's model is the one that ran: the Claude CLI's `--model` or the
+  // OpenCode model id. `executionModel` is the step's logical model, which a
+  // route plan may send elsewhere; it stays on the span as
+  // `crysk.attempt.identity.execution_model` and names only evidence that
+  // carries no route.
+  const model = str(route.modelSnapshot) ?? str(identity.executionModel);
   if (model !== undefined) facts.model = model;
   const provider = str(route.provider);
   if (provider !== undefined) facts.provider = provider;
