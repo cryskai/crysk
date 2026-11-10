@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
-import { redactEvidence } from "../security/evidence-redaction";
+import { redactEvidenceText } from "../security/evidence-redaction";
 import { redactDiagnostic } from "../security/redact";
 import type { TransportRequest } from "./contracts";
 
@@ -88,7 +88,10 @@ export async function copyRetainedClaudeSession(
   dest: string,
 ): Promise<ClaudeTraceMiss | undefined> {
   const noted = retained.get(request);
-  if (noted === undefined) return undefined;
+  if (noted === undefined) {
+    await dropStaleTrace(dest);
+    return undefined;
+  }
   if (noted === NO_SESSION) {
     await dropStaleTrace(dest);
     return NO_SESSION;
@@ -115,9 +118,14 @@ export async function copyRetainedClaudeSession(
   }
 }
 
-// One JSON object per line. Redacting the raw text breaks the line and misses a
-// secret that is still escaped inside a string. Parse first, then the existing
-// JSON redactor. A line that cannot be redacted is omitted, not copied raw.
+// Same key rule as redactEvidence. Embedded JSON is parsed before any text
+// pattern runs, so a regex cannot eat the quotes that the next parse needs.
+const SESSION_SECRET_KEY =
+  /authorization|cookie|password|secret|api.?key|access.?token|refresh.?token|^token$|^key$/i;
+const MAX_DEPTH = 12;
+const MAX_NODES = 20_000;
+
+// One JSON object per line. A line that cannot be redacted is omitted, not copied raw.
 export function redactSessionJsonl(text: string): string {
   const trailingNewline = text.endsWith("\n");
   const lines = text.split("\n");
@@ -125,7 +133,9 @@ export function redactSessionJsonl(text: string): string {
   const redacted = lines.map((line) => {
     if (line.length === 0) return line;
     try {
-      return JSON.stringify(redactNestedJson(redactEvidence(JSON.parse(line))));
+      return JSON.stringify(
+        redactSessionValue(JSON.parse(line), 0, { nodes: 0 }),
+      );
     } catch {
       return JSON.stringify({ crysk: "session line omitted" });
     }
@@ -133,34 +143,62 @@ export function redactSessionJsonl(text: string): string {
   return redacted.join("\n") + (trailingNewline ? "\n" : "");
 }
 
-function redactNestedJson(value: unknown, depth = 0): unknown {
-  if (depth > 4) return value;
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    const wrapped =
-      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-      (trimmed.startsWith("[") && trimmed.endsWith("]"));
-    if (!wrapped) return redactDiagnostic(value);
-    try {
-      const inner = JSON.parse(trimmed) as unknown;
-      if (typeof inner !== "object" || inner === null)
-        return redactDiagnostic(value);
-      return JSON.stringify(redactNestedJson(redactEvidence(inner), depth + 1));
-    } catch {
-      return redactDiagnostic(value);
-    }
+function redactSessionValue(
+  value: unknown,
+  depth: number,
+  budget: { nodes: number },
+): unknown {
+  if (++budget.nodes > MAX_NODES || depth > MAX_DEPTH) {
+    throw new Error("session redaction limit");
   }
+  if (typeof value === "string")
+    return redactSessionString(value, depth, budget);
   if (Array.isArray(value)) {
-    return value.map((item) => redactNestedJson(item, depth + 1));
+    return value.map((item) => redactSessionValue(item, depth + 1, budget));
   }
   if (typeof value === "object" && value !== null) {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new Error("non-JSON session value");
+    }
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      out[key] = redactNestedJson(item, depth + 1);
+      out[key] = SESSION_SECRET_KEY.test(key)
+        ? "[REDACTED]"
+        : redactSessionValue(item, depth + 1, budget);
     }
     return out;
   }
-  return value;
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "number"
+  ) {
+    return value;
+  }
+  throw new Error("non-JSON session value");
+}
+
+function redactSessionString(
+  value: string,
+  depth: number,
+  budget: { nodes: number },
+): string {
+  const trimmed = value.trim();
+  const wrapped =
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"));
+  if (wrapped) {
+    try {
+      const inner = JSON.parse(trimmed) as unknown;
+      if (typeof inner === "object" && inner !== null) {
+        return JSON.stringify(redactSessionValue(inner, depth + 1, budget));
+      }
+    } catch {
+      // Text that only looks like JSON. The text patterns run on it below.
+    }
+  }
+  return redactDiagnostic(redactEvidenceText(value));
 }
 
 async function dropStaleTrace(dest: string): Promise<void> {

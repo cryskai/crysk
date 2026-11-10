@@ -6,6 +6,7 @@ import path from "node:path";
 import type { PipelineInput } from "#review/pipeline";
 import { runPipeline } from "#review/pipeline";
 import type { StepResult, StepRunner, StepSpec } from "#review/step-runner";
+import { redactSessionJsonl } from "../../src/execution/claude-session-trace";
 import { StepExecutionHarness } from "../../src/execution/harness";
 import type {
   CredentialBroker,
@@ -159,6 +160,44 @@ async function reviewWithSession(options: {
 }
 
 describe("Claude session trace", () => {
+  test("a provider key five levels down is redacted", () => {
+    const key = "AIza12345678901234567890123456789012345";
+    const line = {
+      message: { content: [{ input: { command: `echo ${key}` } }] },
+    };
+    const out = redactSessionJsonl(`${JSON.stringify(line)}\n`);
+    expect(out).not.toContain(key);
+    const parsed = JSON.parse(out.trim()) as {
+      message: { content: Array<{ input: { command: string } }> };
+    };
+    expect(parsed.message.content[0]?.input.command).toBe("echo [REDACTED]");
+  });
+
+  test("embedded JSON is redacted before the text patterns run", () => {
+    const inner = JSON.stringify({
+      Authorization: "Bearer abc",
+      Cookie: "sid=123",
+    });
+    const out = redactSessionJsonl(`${JSON.stringify({ content: inner })}\n`);
+    expect(out).not.toContain("abc");
+    expect(out).not.toContain("sid=123");
+    const parsed = JSON.parse(out.trim()) as { content: string };
+    expect(JSON.parse(parsed.content)).toEqual({
+      Authorization: "[REDACTED]",
+      Cookie: "[REDACTED]",
+    });
+  });
+
+  test("a line past the redaction limit is omitted instead of copied raw", () => {
+    let value: unknown = "password hunter2";
+    for (let i = 0; i < 14; i++) value = { nest: value };
+    const out = redactSessionJsonl(`${JSON.stringify(value)}\n`);
+    expect(out).not.toContain("hunter2");
+    expect(JSON.parse(out.trim())).toEqual({
+      crysk: "session line omitted",
+    });
+  });
+
   test("a Claude attempt copies its session transcript into the run dir", async () => {
     const { result, tracePath } = await reviewWithSession({
       sessionFile: "written",
