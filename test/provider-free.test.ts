@@ -64,6 +64,19 @@ async function writeOpenCodeFixture(
   return { canonicalPath, sha256: hasher.digest("hex") };
 }
 
+// The run's OpenCode auth file, with the `opencode` API record a metered route of
+// that provider needs: admission refuses a non-free route whose provider has no
+// record (openCodeCredentialRefusal, production-runtime.ts).
+async function writeOpenCodeAuth(dir: string): Promise<string> {
+  const dataHome = path.join(dir, "xdg-auth");
+  await mkdir(path.join(dataHome, "opencode"), { recursive: true });
+  await writeFile(
+    path.join(dataHome, "opencode", "auth.json"),
+    JSON.stringify({ opencode: { type: "api", key: "k" } }),
+  );
+  return dataHome;
+}
+
 function freeStdout(
   provider: string,
   model: string,
@@ -680,7 +693,7 @@ describe("#182 wiring: bindings, server, gates", () => {
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeOpenCodeAuth(tmpDir) },
         loadSdk: async () =>
           ({
             createOpencodeClient: () => ({ session: {}, event: {} }),
@@ -935,7 +948,10 @@ describe("#182 wiring: bindings, server, gates", () => {
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: `${tmpDir}:/usr/bin:/bin` },
+        env: {
+          PATH: `${tmpDir}:/usr/bin:/bin`,
+          XDG_DATA_HOME: await writeOpenCodeAuth(tmpDir),
+        },
         loadSdk: async () =>
           ({
             createOpencodeClient: () => ({ session: {}, event: {} }),
