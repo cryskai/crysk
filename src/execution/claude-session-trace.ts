@@ -314,6 +314,10 @@ function redactScalar(value: unknown): unknown {
 // and after only a space a token or API key value must look like a key.
 const TRACE_KEY_SHAPES: readonly RegExp[] = [
   /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}/g,
+  // Known key bodies need no word boundary, so a key glued to an encoded or
+  // escaped prefix (`%3D`, `%22`, `\t`) is still caught; `crysk-loop` is not.
+  /sk-(?:ant|proj|or|svcacct|admin)-[A-Za-z0-9_-]{8,}/g,
+  /sk-[A-Za-z0-9]{32,}/g,
   /gh[pousr]_[A-Za-z0-9_]{20,}/g,
   /Bearer\s+\S+/gi,
   /AIza[0-9A-Za-z_-]{35}/g,

@@ -629,3 +629,28 @@ describe("redactSessionText: every real secret is still redacted", () => {
     expect(redactSessionText(once)).toBe(once);
   });
 });
+
+// A key glued to an encoded or escaped prefix (`%3D`, `%22`, `\t`) has no
+// word boundary before it; the known key bodies are matched without one.
+describe("redactSessionText: a key after an encoded or escaped prefix", () => {
+  const anthropic = `sk-ant-api03-${"A1b2C3d4".repeat(4)}`;
+  const openai = `sk-proj-${"Zx9Yw8Vu".repeat(4)}`;
+  const openrouter = `sk-or-v1-${"0a1b2c3d".repeat(8)}`;
+  const legacy = `sk-${"Q7r8S9t0".repeat(6)}`;
+  test.each([
+    [`GET /x?key%3D${anthropic}`, anthropic],
+    [`api_key%3D${openai}`, openai],
+    [`%22apiKey%22%3A%22${anthropic}%22`, anthropic],
+    [`x${openai}`, openai],
+    [`echo "a\\t${anthropic}"`, anthropic],
+    [`body=key%3D${openrouter}&x=1`, openrouter],
+    [`v%3D${legacy}`, legacy],
+  ])("%s hides the key", (text, key) => {
+    expect(redactSessionText(text)).not.toContain(key.slice(8));
+  });
+
+  test("paths with sk- inside a word stay readable", () => {
+    const text = "skills/crysk-loop/SKILL.md and crysk-reusable.yml";
+    expect(redactSessionText(text)).toBe(text);
+  });
+});
