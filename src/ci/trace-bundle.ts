@@ -48,6 +48,7 @@ import {
   openCodeConversation,
   parseClaudeSession,
   type ToolCall,
+  withoutContent,
 } from "./trace-transcripts";
 
 export const TRACE_SCHEMA = "crysk.trace.v1";
@@ -142,6 +143,11 @@ export interface TraceAttemptInput {
   sessionJsonl?: string;
   // steps/evidence.<step>.attempt<n>.capture.json (OpenCode).
   openCodeCapture?: string;
+  // What a metadata trace reads of that transcript or capture instead of its
+  // text (src/ci/platform-trace.ts readRunSteps): tool calls without arguments
+  // or results, the finish reason, the response model and the times. Used
+  // only when neither text is present.
+  transcriptMetadata?: Conversation;
 }
 
 export interface TraceStepInput {
@@ -511,6 +517,9 @@ function parseAttempt(attempt: TraceAttemptInput): ParsedAttempt {
       return { conversation: { input: [], output: [], tools: [] } };
     }
   }
+  if (attempt.transcriptMetadata !== undefined) {
+    return { conversation: withoutContent(attempt.transcriptMetadata) };
+  }
   return { conversation: { input: [], output: [], tools: [] } };
 }
 
@@ -519,16 +528,7 @@ function parseAttempt(attempt: TraceAttemptInput): ParsedAttempt {
 // fallback never parses the transcripts again.
 type MetadataViews = Map<TraceAttemptInput, Conversation>;
 
-function metadataView(conversation: Conversation): Conversation {
-  return {
-    ...conversation,
-    input: [],
-    output: [],
-    tools: conversation.tools.map(
-      ({ arguments: _a, result: _r, ...call }) => call,
-    ),
-  };
-}
+const metadataView = withoutContent;
 
 // Root-level `crysk.*` keys, beside the flattened records.
 function rootAttributes(run: TraceRunInput, content: boolean): Attributes {

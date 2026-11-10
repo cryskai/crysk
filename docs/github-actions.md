@@ -678,8 +678,8 @@ still in Development, so the engine pins that version and records it as `crysk.g
   reasoning tokens apart), `gen_ai.usage.cost` (list price in USD: the notional cost on a subscription, the
   cash cost on a per-token key) and the attempt's evidence and settlement as `crysk.attempt.*`;
 - an `execute_tool <tool>` span per tool call the model made, read from the Claude CLI session transcript
-  or the OpenCode capture, with `gen_ai.tool.name`, the call id and its timing. Only a trace with content
-  has them (see below): a metadata trace never reads the transcripts.
+  or the OpenCode capture, with `gen_ai.tool.name`, the call id, its timing and whether it failed. A
+  metadata trace has them too, without the arguments and result (see below).
 
 Every span has its start and end time, from the attempt's settlement record and the transcript. The body is
 `{ schema: "crysk.trace.v1", outcome, code, content, truncated, otlp, transcripts }`, gzip-compressed, posted
@@ -696,9 +696,11 @@ The platform decides whether a run's trace may carry it: every token exchange re
 the step outputs it as `trace-content` (`true` only when the platform sent exactly `true`; anything else,
 or nothing, is `false`). The trace step reads the value from the same exchange as its run token. With
 `false` the trace carries metadata only: no content attribute, no status message, no transcript, and no
-attribute that is more than one word. The step then reads no transcript, capture, prompt or output file at
-all, only the evidence, so a metadata trace has no `execute_tool` spans and takes its response model from
-the evidence. Each finding keeps only the fields the findings upload keeps for a
+attribute that is more than one word. The step then reads no prompt or output file and holds no transcript
+whole: it scans each Claude session line by line, at most 4 MiB at a time (a longer line is skipped), and
+parses each OpenCode capture (at most 4 MiB, as its writer caps it), keeping only each tool call's name, id,
+times and status, the finish reason and the response model. So a metadata trace has the same spans as a
+trace with content, with no content on them. Each finding keeps only the fields the findings upload keeps for a
 `metadata_only` repository (never its `symbol`, `dedupe_key`, `hop_trail` or `proof_refs`), and the
 refuted, merged and root-cause records become their counts. Today the platform answers `true` for a `full` repository and `false`
 for a `metadata_only` one, and strips content again on its side. Every string in the OTLP document, a
@@ -712,8 +714,8 @@ transcripts, the largest first, then the content, and sets `truncated: true`; th
 trace too large even then is not sent, with a `::warning::`. The step serializes and compresses the OTLP
 document and each transcript once, as separate pieces of one gzip stream, so both sizes of any choice of
 transcripts are exact and nothing is encoded twice; content whose text alone passes 200 MB is not built
-past that point. Eight 30 MB Claude sessions peaked at about 1.5 GB of memory with content, 0.1 GB
-without.
+past that point. Eight 30 MB Claude sessions peaked at about 1.5 GB of memory with content, and at
+under 0.2 GB without, their 10,000 tool calls scanned.
 
 The trace never fails the job; the step is also `continue-on-error`, so even the runner killing it cannot
 turn the job red. An HTTP 503 (the platform could not store it) is retried once; any other

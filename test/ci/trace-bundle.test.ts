@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { gunzipSync } from "node:zlib";
+import { readRunSteps } from "../../src/ci/platform-trace";
 import {
   buildTraceBundle,
   encodeTrace,
@@ -375,6 +379,41 @@ function admissionRefusal(): TraceRunInput {
   };
 }
 
+// reviewedRun() written to a run directory and read back by the trace step's
+// reader for a metadata trace (content false), so the steps come from disk.
+function reviewedRunFromDisk(): TraceRunInput {
+  const run = reviewedRun();
+  const dir = mkdtempSync(path.join(tmpdir(), "crysk-trace-bundle-"));
+  try {
+    const steps = path.join(dir, "steps");
+    mkdirSync(steps, { recursive: true });
+    for (const step of run.steps) {
+      for (const attempt of step.attempts) {
+        const base = `${step.name}.attempt${attempt.attempt}`;
+        writeFileSync(
+          path.join(steps, `evidence.${base}.json`),
+          JSON.stringify(attempt.evidence),
+        );
+        if (attempt.sessionJsonl !== undefined) {
+          writeFileSync(
+            path.join(steps, `trace.${base}.jsonl`),
+            attempt.sessionJsonl,
+          );
+        }
+        if (attempt.openCodeCapture !== undefined) {
+          writeFileSync(
+            path.join(steps, `evidence.${base}.capture.json`),
+            attempt.openCodeCapture,
+          );
+        }
+      }
+    }
+    return { ...run, steps: readRunSteps(dir, run.pipeline, false) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function spans(bundle: TraceBundle): OtlpSpan[] {
   return bundle.otlp.resourceSpans.flatMap((r) =>
     r.scopeSpans.flatMap((s) => s.spans),
@@ -673,13 +712,50 @@ describe("buildTraceBundle: trace_content false", () => {
     }
   });
 
-  test("the metadata stays: models, tokens, cost and times", () => {
-    const chat = named(reviewed, "chat sonnet");
+  // Through the production path: the run directory's files, read the way the
+  // trace step reads them for a metadata trace.
+  test("the metadata stays: models, tokens, cost, times and tool calls", () => {
+    const fromDisk = buildTraceBundle(reviewedRunFromDisk(), false);
+    const chat = named(fromDisk, "chat sonnet");
     expect(attr(chat, "gen_ai.request.model")).toBe("sonnet");
+    expect(attr(chat, "gen_ai.response.model")).toBe("claude-sonnet-4-5");
+    expect(attr(chat, "gen_ai.response.finish_reasons")).toEqual(["end_turn"]);
     expect(attr(chat, "gen_ai.usage.input_tokens")).toBe(8 + 47217 + 14487);
     expect(attr(chat, "gen_ai.usage.cost")).toBe(0.0881657);
-    expect(attr(named(reviewed, "execute_tool Read"), "gen_ai.tool.name")).toBe(
-      "Read",
+    const read = named(fromDisk, "execute_tool Read");
+    expect(attr(read, "gen_ai.tool.name")).toBe("Read");
+    expect([read.startTimeUnixNano, read.endTimeUnixNano]).toEqual([
+      nanos(3),
+      nanos(4),
+    ]);
+    const grep = named(fromDisk, "execute_tool grep");
+    expect([grep.startTimeUnixNano, grep.endTimeUnixNano]).toEqual([
+      nanos(11),
+      nanos(12),
+    ]);
+    expect(
+      attr(
+        named(fromDisk, "chat opencode:openai/gpt-5"),
+        "gen_ai.response.model",
+      ),
+    ).toBe("gpt-5");
+  });
+
+  // A metadata trace and a content trace of the same run have the same spans,
+  // and differ only by the content attributes.
+  test("the span tree read from disk equals the content trace's without its content", () => {
+    const shape = (bundle: TraceBundle) =>
+      spans(bundle).map((span) => ({
+        name: span.name,
+        start: span.startTimeUnixNano,
+        end: span.endTimeUnixNano,
+        status: span.status.code,
+        tool: attr(span, "gen_ai.tool.name"),
+        model: attr(span, "gen_ai.response.model"),
+        finish: attr(span, "gen_ai.response.finish_reasons"),
+      }));
+    expect(shape(buildTraceBundle(reviewedRunFromDisk(), false))).toEqual(
+      shape(buildTraceBundle(reviewedRun(), true)),
     );
   });
 });

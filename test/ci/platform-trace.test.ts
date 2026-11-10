@@ -12,6 +12,11 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { parseCliRecord, parseTriggerRecord } from "../../src/ci/outcome";
 import { readRunSteps, runTraceStep } from "../../src/ci/platform-trace";
+import {
+  parseClaudeSession,
+  scanClaudeSessionFile,
+  withoutContent,
+} from "../../src/ci/trace-transcripts";
 
 const RUN_TOKEN = "run_token_secret";
 const HEAD = "067297acd7e7aac125a156bf597f4d05d255659e";
@@ -207,8 +212,23 @@ async function run(
 
 type Span = {
   name: string;
+  startTimeUnixNano?: string;
+  endTimeUnixNano?: string;
+  status?: { code: number };
   attributes: Array<{ key: string; value: Record<string, unknown> }>;
 };
+const nanos = (seconds: number) =>
+  String(BigInt(T0 + seconds * 1000) * 1_000_000n);
+// An attribute's value: a string, number or boolean, or an array's strings.
+function attrOf(span: Span | undefined, key: string): unknown {
+  const value = span?.attributes.find((item) => item.key === key)?.value;
+  if (value === undefined) return undefined;
+  if ("stringValue" in value) return value.stringValue;
+  if ("intValue" in value) return Number(value.intValue);
+  if ("boolValue" in value) return value.boolValue;
+  const array = value.arrayValue as { values: Array<{ stringValue: string }> };
+  return array.values.map((item) => item.stringValue);
+}
 function spansOf(body: Record<string, unknown>): Span[] {
   const otlp = body.otlp as {
     resourceSpans: Array<{ scopeSpans: Array<{ spans: Span[] }> }>;
@@ -262,9 +282,9 @@ describe("runTraceStep: the upload", () => {
     }
   });
 
-  // B2: a metadata trace carries nothing from a transcript, so reading one (up
-  // to 65 MiB each) only cost memory. Nor are the prompt, body or output read.
-  test("trace content false: no transcript, capture, prompt, body or output is read", () => {
+  // B2: a metadata trace sends nothing from a transcript, so the transcript is
+  // never held whole: no session text, capture, prompt, body or output is kept.
+  test("trace content false: no transcript, capture, prompt, body or output is kept", () => {
     reviewedRunDir();
     write(path.join(runDir, "steps", "hunter-logic.body.md"), PROMPT);
     write(
@@ -278,33 +298,203 @@ describe("runTraceStep: the upload", () => {
     expect(steps.map((step) => Object.keys(step).sort())).toEqual([
       ["attempts", "name"],
     ]);
-    expect(
-      steps[0]?.attempts.map((attempt) => Object.keys(attempt).sort()),
-    ).toEqual([["attempt", "evidence"]]);
+    const [attempt] = steps[0]?.attempts ?? [];
+    expect(attempt).not.toHaveProperty("sessionJsonl");
+    expect(attempt).not.toHaveProperty("openCodeCapture");
+    expect(JSON.stringify(steps)).not.toContain(PROMPT);
   });
 
-  test("trace content false: a transcript's tool call leaves no span", async () => {
+  // S1: a tool call's name and timing are metadata. A metadata trace reads
+  // them off the transcript line by line and drops the arguments and result.
+  test("trace content false: a Claude session's tool calls become execute_tool spans with no content", async () => {
     triggerRecord();
     cliRecord({ v: 1, outcome: "reviewed", head_sha: HEAD });
     reviewedRunDir();
-    write(
-      path.join(runDir, "steps", "trace.hunter-logic.attempt1.jsonl"),
-      `${JSON.stringify({
+    const toolArgument = "src/PLANTED-ARGUMENT.ts";
+    const toolResult = "PLANTED-RESULT export const x = 1";
+    const lines = [
+      {
+        type: "user",
+        timestamp: at(1),
+        message: { role: "user", content: PROMPT },
+      },
+      {
         type: "assistant",
         timestamp: at(2),
         message: {
           id: "msg_1",
-          content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }],
+          model: "claude-sonnet-4-5-20250929",
+          stop_reason: "tool_use",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "Read",
+              input: { file_path: toolArgument },
+            },
+            {
+              type: "tool_use",
+              id: "toolu_2",
+              name: "Grep",
+              input: { pattern: toolArgument },
+            },
+          ],
         },
-      })}\n`,
+      },
+      {
+        type: "user",
+        timestamp: at(3),
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_1",
+              content: toolResult,
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        timestamp: at(4),
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_2",
+              is_error: true,
+              content: [{ type: "text", text: toolResult }],
+            },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        timestamp: at(5),
+        message: {
+          id: "msg_2",
+          model: "claude-sonnet-4-5-20250929",
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "PLANTED-ANSWER" }],
+        },
+      },
+    ];
+    write(
+      path.join(runDir, "steps", "trace.hunter-logic.attempt1.jsonl"),
+      `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
     );
     const r = await run([202], env({ CRYSK_TRACE_CONTENT: "false" }));
-    const names = spansOf(r.received[0]?.body ?? {}).map((span) => span.name);
-    expect(names).toEqual([
-      "invoke_workflow crysk.review",
-      "invoke_agent hunter-logic",
-      "chat sonnet",
+    const body = r.received[0]?.body ?? {};
+    const all = spansOf(body);
+    const tools = all
+      .filter((span) => span.name.startsWith("execute_tool "))
+      .map((span) => ({
+        name: span.name,
+        tool: attrOf(span, "gen_ai.tool.name"),
+        id: attrOf(span, "gen_ai.tool.call.id"),
+        isError: attrOf(span, "crysk.tool.is_error"),
+        start: span.startTimeUnixNano,
+        end: span.endTimeUnixNano,
+        status: span.status?.code,
+      }));
+    expect(tools).toEqual([
+      {
+        name: "execute_tool Read",
+        tool: "Read",
+        id: "toolu_1",
+        isError: false,
+        start: nanos(2),
+        end: nanos(3),
+        status: 0,
+      },
+      {
+        name: "execute_tool Grep",
+        tool: "Grep",
+        id: "toolu_2",
+        isError: true,
+        start: nanos(2),
+        end: nanos(4),
+        status: 2,
+      },
     ]);
+    const chat = all.find((span) => span.name === "chat sonnet");
+    expect(attrOf(chat, "gen_ai.response.model")).toBe(
+      "claude-sonnet-4-5-20250929",
+    );
+    expect(attrOf(chat, "gen_ai.response.finish_reasons")).toEqual([
+      "end_turn",
+    ]);
+    expect(body.transcripts).toEqual([]);
+    const serialized = JSON.stringify(body);
+    for (const planted of [
+      PROMPT,
+      toolArgument,
+      toolResult,
+      "PLANTED-ANSWER",
+    ]) {
+      expect(serialized).not.toContain(planted);
+    }
+  });
+
+  test("trace content false: an OpenCode capture's tool calls become execute_tool spans with no content", async () => {
+    triggerRecord();
+    cliRecord({ v: 1, outcome: "reviewed", head_sha: HEAD });
+    reviewedRunDir();
+    rmSync(path.join(runDir, "steps", "trace.hunter-logic.attempt1.jsonl"));
+    const toolResult = "PLANTED-RESULT export const x = 1";
+    write(
+      path.join(runDir, "steps", "evidence.hunter-logic.attempt1.capture.json"),
+      {
+        records: [
+          {
+            observedMs: T0 + 1000,
+            kind: "readback",
+            data: {
+              messages: [
+                {
+                  info: { role: "user" },
+                  parts: [{ type: "text", text: PROMPT }],
+                },
+                {
+                  info: { role: "assistant", modelID: "gpt-5", finish: "stop" },
+                  parts: [
+                    {
+                      type: "tool",
+                      tool: "grep",
+                      callID: "call_1",
+                      state: {
+                        status: "completed",
+                        input: { pattern: "PLANTED-ARGUMENT" },
+                        output: toolResult,
+                        time: { start: T0 + 2000, end: T0 + 3000 },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    );
+    const r = await run([202], env({ CRYSK_TRACE_CONTENT: "false" }));
+    const body = r.received[0]?.body ?? {};
+    const tool = spansOf(body).find(
+      (span) => span.name === "execute_tool grep",
+    );
+    expect({
+      id: attrOf(tool, "gen_ai.tool.call.id"),
+      start: tool?.startTimeUnixNano,
+      end: tool?.endTimeUnixNano,
+    }).toEqual({ id: "call_1", start: nanos(2), end: nanos(3) });
+    const chat = spansOf(body).find((span) => span.name === "chat sonnet");
+    expect(attrOf(chat, "gen_ai.response.model")).toBe("gpt-5");
+    const serialized = JSON.stringify(body);
+    for (const planted of [PROMPT, "PLANTED-ARGUMENT", toolResult]) {
+      expect(serialized).not.toContain(planted);
+    }
   });
 
   test("with no run token nothing is sent, and the step still exits 0", async () => {
@@ -571,5 +761,95 @@ describe("platform-trace.ts runs before `bun install`", () => {
       expect(files).toContain(path.join(ROOT, reached));
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("scanClaudeSessionFile: a session read line by line", () => {
+  // Tool names with multi-byte characters, so a 7-byte chunk splits a line and
+  // a character; no trailing newline, so the last line ends at end of file.
+  function session(over: { bigLine?: string } = {}): string {
+    const lines: unknown[] = [
+      { type: "user", timestamp: at(1), message: { content: PROMPT } },
+      {
+        type: "assistant",
+        timestamp: at(2),
+        message: {
+          id: "m1",
+          model: "claude-opus-4-1",
+          stop_reason: "tool_use",
+          content: [
+            { type: "tool_use", id: "t1", name: "Lé€ctura", input: { q: 1 } },
+          ],
+        },
+      },
+      ...(over.bigLine === undefined
+        ? []
+        : [
+            {
+              type: "user",
+              timestamp: at(3),
+              message: {
+                content: [
+                  { type: "tool_result", tool_use_id: "t1", is_error: true },
+                ],
+              },
+              padding: over.bigLine,
+            },
+          ]),
+      {
+        type: "user",
+        timestamp: at(4),
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: "PLANTED-RESULT",
+            },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        timestamp: at(5),
+        message: {
+          id: "m2",
+          stop_reason: "end_turn",
+          content: [{ type: "tool_use", id: "t2", name: "Grep", input: {} }],
+        },
+      },
+    ];
+    return lines.map((line) => JSON.stringify(line)).join("\n");
+  }
+
+  test("equals the whole-text parse without its content, whatever the chunk size", () => {
+    const text = session();
+    const file = path.join(root, "session.jsonl");
+    write(file, text);
+    expect(
+      scanClaudeSessionFile(file, { chunkBytes: 7, lineBytes: 4096 }),
+    ).toEqual(withoutContent(parseClaudeSession(text)));
+  });
+
+  test("a line past the cap is skipped and the lines after it are read", () => {
+    const file = path.join(root, "session.jsonl");
+    write(file, session({ bigLine: "x".repeat(600) }));
+    const scanned = scanClaudeSessionFile(file, {
+      chunkBytes: 64,
+      lineBytes: 512,
+    });
+    // The skipped line would have marked t1 failed at second 3.
+    expect(scanned?.tools).toEqual([
+      { id: "t1", name: "Lé€ctura", startMs: T0 + 2000, endMs: T0 + 4000 },
+      { id: "t2", name: "Grep", startMs: T0 + 5000 },
+    ]);
+    expect(scanned?.finishReason).toBe("end_turn");
+    expect(scanned?.responseModel).toBe("claude-opus-4-1");
+  });
+
+  test("a file that cannot be opened reads as nothing", () => {
+    expect(scanClaudeSessionFile(path.join(root, "missing.jsonl"))).toBe(
+      undefined,
+    );
   });
 });

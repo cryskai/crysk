@@ -48,6 +48,12 @@ import {
   type TraceRunInput,
   type TraceStepInput,
 } from "./trace-bundle";
+import {
+  type Conversation,
+  openCodeConversation,
+  scanClaudeSessionFile,
+  withoutContent,
+} from "./trace-transcripts";
 
 // A 25 MB body over a slow link, but never the job's tail held for long.
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -133,10 +139,12 @@ const TRANSCRIPT = /^trace\.(.+)\.attempt(\d+)\.jsonl$/;
 // step whose evidence or transcript exists without a pipeline row (a run that
 // stopped before it wrote pipeline.json).
 //
-// Without `content` only the evidence is read. The transcripts (up to 65 MiB
-// each), the captures, the prompts and the outputs are content, and reading
-// them for a metadata trace cost memory for nothing but the tool spans, which
-// a metadata trace therefore does not have.
+// Without `content` no content is kept. The prompts and outputs are not read.
+// Each Claude session (up to 65 MiB) is scanned line by line for its tool
+// calls' names and times, its finish reason and its response model, never held
+// whole (scanClaudeSessionFile); each OpenCode capture, which its writer caps
+// at 4 MiB (src/transports/opencode-evidence.ts), is parsed whole, reduced the
+// same way and dropped. So a metadata trace has the content trace's spans.
 export function readRunSteps(
   runDir: string,
   pipeline: unknown,
@@ -161,7 +169,16 @@ export function readRunSteps(
     const file = path.join(stepsDir, name);
     const capture = CAPTURE.exec(name);
     if (capture?.[1] !== undefined) {
-      if (!content) continue;
+      if (!content) {
+        // A session, when there is one, says more (parseAttempt reads it
+        // first); names sort captures before sessions.
+        const found = captureMetadata(file);
+        if (found !== undefined) {
+          const attempt = attemptOf(capture[1], Number(capture[2]));
+          attempt.transcriptMetadata ??= found;
+        }
+        continue;
+      }
       const text = readText(file, MAX_TRANSCRIPT_BYTES);
       if (text !== undefined) {
         attemptOf(capture[1], Number(capture[2])).openCodeCapture = text;
@@ -177,7 +194,13 @@ export function readRunSteps(
       continue;
     }
     const transcript = TRANSCRIPT.exec(name);
-    if (transcript?.[1] !== undefined && content) {
+    if (transcript?.[1] !== undefined && !content) {
+      const found = scanClaudeSessionFile(file);
+      if (found !== undefined) {
+        attemptOf(transcript[1], Number(transcript[2])).transcriptMetadata =
+          found;
+      }
+    } else if (transcript?.[1] !== undefined) {
       const text = readText(file, MAX_TRANSCRIPT_BYTES);
       if (text !== undefined) {
         attemptOf(transcript[1], Number(transcript[2])).sessionJsonl = text;
@@ -227,6 +250,15 @@ export function readRunSteps(
       attempts,
     };
   });
+}
+
+// An OpenCode capture's metadata: its conversation without content. The text
+// and the parsed capture are dropped on return.
+function captureMetadata(file: string): Conversation | undefined {
+  const parsed = readJson(file);
+  return parsed === undefined
+    ? undefined
+    : withoutContent(openCodeConversation(parsed));
 }
 
 interface OutcomeFacts {
