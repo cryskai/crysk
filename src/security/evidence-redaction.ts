@@ -100,8 +100,12 @@ export const EXPRESSION_VALUE = String.raw`\$\{\{[^\r\n]*?\}\}(?=[\s,;&"'\\]|$)`
 // text without breaking the parse that follows. Each one starts only where a
 // run begins (lookbehind, not \b), so a long run of word characters is
 // scanned once, not once per character.
+// A block cut before its END line runs to the last base64 character. The run
+// also takes the gutter of a line-numbered Read (`     2→` or `     2\t`,
+// raw or JSON-escaped): digits and whitespace are already base64 run
+// characters, so only the arrow and the escaped tab are added.
 const PEM_PRIVATE_KEY =
-  /-----BEGIN[A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----(?:[\s\S]*?-----END[A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----|(?:[A-Za-z0-9+/=\s]|\\[nr])*)/g;
+  /-----BEGIN[A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----(?:[\s\S]*?-----END[A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----|(?:[A-Za-z0-9+/=\s\u2192]|\\[nrt])*)/g;
 // `scheme://user:password@`, for every scheme: postgres, mysql, mongodb+srv,
 // redis, amqp. The user goes too, since it is often a key id.
 const URL_CREDENTIALS =

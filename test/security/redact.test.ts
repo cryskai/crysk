@@ -241,6 +241,20 @@ describe("redactEvidenceText: secret shapes (audit R2)", () => {
       `-----BEGIN ${"PRIVATE"} KEY-----\n${PEM_BODY}`,
       "[REDACTED]",
     ],
+    [
+      "a PEM block cut before its END line in a line-numbered Read",
+      [`-----BEGIN ${"PRIVATE"} KEY-----`, PEM_BODY, `${"Zz8yWq".repeat(6)}`]
+        .map((line, at) => `${String(at + 1).padStart(6)}\u2192${line}`)
+        .join("\n"),
+      "     1\u2192[REDACTED]",
+    ],
+    [
+      "a PEM block cut before its END line in a tab-numbered Read",
+      [`-----BEGIN ${"PRIVATE"} KEY-----`, PEM_BODY, `${"Zz8yWq".repeat(6)}`]
+        .map((line, at) => `${String(at + 1).padStart(6)}\t${line}`)
+        .join("\n"),
+      "     1\t[REDACTED]",
+    ],
     ["an AWS access key id", `id ${AWS_KEY_ID} used`, "id [REDACTED] used"],
     ["an AWS temporary key id", `id ${AWS_SESSION_KEY_ID}`, "id [REDACTED]"],
     [

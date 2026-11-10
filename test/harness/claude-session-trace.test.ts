@@ -621,6 +621,17 @@ describe("Claude session trace: secrets in a Read result (audit R1)", () => {
     );
   });
 
+  test("a PEM key cut before its END line is gone from both copies of a Read", () => {
+    const body = ["MIIEow", "Qk9mN2xZ".repeat(8), "Zz8yWq".repeat(6)];
+    const cutKey = `-----BEGIN ${"PRIVATE"} KEY-----\n${body.join("\n")}\n`;
+    const out = redactSessionJsonl(
+      `${JSON.stringify(readResultLine(cutKey))}\n`,
+    );
+    const line = JSON.parse(out);
+    expect(line.message.content[0].content).toBe("     1\u2192[REDACTED]");
+    expect(line.toolUseResult.file.content).toBe("[REDACTED]");
+  });
+
   test("keys that name a credential lose their string values, not their numbers", () => {
     const line = {
       apiToken: "v1",
