@@ -8,8 +8,10 @@ import {
   type OtlpSpan,
   snakeKey,
   type TraceBundle,
+  type TraceCodec,
   type TraceRunInput,
 } from "../../src/ci/trace-bundle";
+import { redactSessionJsonl } from "../../src/execution/claude-session-trace";
 
 const HEAD = "067297acd7e7aac125a156bf597f4d05d255659e";
 const T0 = Date.parse("2026-11-10T10:00:00.000Z");
@@ -877,8 +879,169 @@ describe("content redaction", () => {
   });
 });
 
+// B1: the word rule let a single word through raw, so a bare key in a field
+// such as a finding's symbol skipped redaction. Each key below is one word.
+const KEYS = {
+  anthropic: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ",
+  aws: "AKIAIOSFODNN7EXAMPLE",
+  openai: "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+  github: SECRET,
+};
+const leaked = (bundle: TraceBundle): string[] => {
+  const serialized = JSON.stringify(bundle);
+  return Object.values(KEYS).filter((key) => serialized.includes(key));
+};
+
+// Every string leaf of a record, replaced by a bare key.
+function plantEvery(value: unknown): unknown {
+  if (typeof value === "string") return KEYS.github;
+  if (Array.isArray(value)) return value.map(plantEvery);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, plantEvery(item)]),
+    );
+  }
+  return value;
+}
+
+// The reviewed run with a bare key in every string leaf of its records and as
+// every step's name.
+function plantedEverywhere(): TraceRunInput {
+  const run = reviewedRun();
+  return {
+    ...run,
+    cli: plantEvery(run.cli),
+    pipeline: plantEvery(run.pipeline),
+    findings: plantEvery(run.findings),
+    steps: run.steps.map((step) => ({
+      ...step,
+      name: KEYS.github,
+      attempts: step.attempts.map((attempt) => ({
+        ...attempt,
+        evidence: plantEvery(attempt.evidence),
+      })),
+    })),
+  };
+}
+
+describe("redaction: a bare key in a single-word value", () => {
+  // The finding fields the verifier found raw (content mode keeps them), and
+  // leaves a metadata trace keeps too: a pipeline.json step leaf, an evidence
+  // leaf, a cli.json leaf and a tool name.
+  function plantedRun(): TraceRunInput {
+    const run = reviewedRun();
+    const findings = run.findings as { findings: Record<string, unknown>[] };
+    const pipeline = run.pipeline as { steps: Record<string, unknown>[] };
+    return {
+      ...run,
+      cli: { v: 1, outcome: "reviewed", cls: { kind: KEYS.anthropic } },
+      pipeline: {
+        ...pipeline,
+        steps: [
+          {
+            ...HUNTER_STEP,
+            route: { ...HUNTER_STEP.route, gateway: KEYS.aws },
+          },
+          REFUTER_STEP,
+        ],
+      },
+      findings: {
+        ...findings,
+        findings: findings.findings.map((finding) => ({
+          ...finding,
+          symbol: KEYS.anthropic,
+          dedupe_key: KEYS.aws,
+          proof_refs: [KEYS.openai],
+          hop_trail: [KEYS.github],
+        })),
+      },
+      steps: run.steps.map((step) => ({
+        ...step,
+        attempts: step.attempts.map((attempt) => {
+          const doc = attempt.evidence as {
+            identity: { route: Record<string, unknown> };
+          };
+          return {
+            ...attempt,
+            evidence: {
+              ...doc,
+              identity: {
+                ...doc.identity,
+                route: { ...doc.identity.route, backend: KEYS.openai },
+              },
+            },
+            // The OpenCode capture is redacted here. A Claude session is the
+            // CLI's redacted copy already (redactSessionJsonl), the next test.
+            ...(attempt.openCodeCapture === undefined
+              ? {}
+              : {
+                  openCodeCapture: attempt.openCodeCapture.replace(
+                    '"tool":"grep"',
+                    `"tool":"${KEYS.github}"`,
+                  ),
+                }),
+          };
+        }),
+      })),
+    };
+  }
+
+  test.each([true, false])(
+    "content %p: none of the planted keys leaves raw",
+    (content) => {
+      expect(leaked(buildTraceBundle(plantedRun(), content))).toEqual([]);
+    },
+  );
+
+  // The trace step sends the session file the CLI wrote, whose copy ran
+  // redactSessionJsonl; the bundle does not redact that text a second time.
+  test("a Claude session as the CLI copies it carries no key", () => {
+    const run = reviewedRun();
+    const session = redactSessionJsonl(
+      claudeSession().replace('"name":"Read"', `"name":"${KEYS.github}"`),
+    );
+    const steps = run.steps.map((step) => ({
+      ...step,
+      attempts: step.attempts.map((attempt) =>
+        attempt.sessionJsonl === undefined
+          ? attempt
+          : { ...attempt, sessionJsonl: session },
+      ),
+    }));
+    expect(leaked(buildTraceBundle({ ...run, steps }, true))).toEqual([]);
+  });
+
+  test("content true: the finding's single-word fields arrive redacted, not dropped", () => {
+    const root = named(
+      buildTraceBundle(plantedRun(), true),
+      "invoke_workflow crysk.review",
+    );
+    expect(attr(root, "crysk.findings.findings.0.symbol")).toBe("[REDACTED]");
+    expect(attr(root, "crysk.findings.findings.0.proof_refs")).toEqual([
+      "[REDACTED]",
+    ]);
+  });
+
+  test.each([true, false])(
+    "content %p: a key in any string leaf of the run's records never leaves",
+    (content) => {
+      expect(leaked(buildTraceBundle(plantedEverywhere(), content))).toEqual(
+        [],
+      );
+    },
+  );
+});
+
 describe("encodeTrace: the size cap", () => {
-  const identity = (bytes: Uint8Array) => bytes;
+  // The body uncompressed: pieces joined as they are, so a size is a JSON size.
+  const codec = (
+    piece: (bytes: Uint8Array) => Uint8Array = (bytes) => bytes,
+  ): TraceCodec => ({
+    overhead: 0,
+    piece,
+    join: (pieces) => Buffer.concat(pieces),
+  });
+  const identity = codec();
   const big = (char: string, size: number) => char.repeat(size);
   function run(): TraceRunInput {
     const base = reviewedRun();
@@ -979,12 +1142,12 @@ describe("encodeTrace: the size cap", () => {
   test("an encoding that throws counts as over the cap, and the metadata still goes", () => {
     // JSON.stringify throws a RangeError past the engine's string limit; a
     // bundle that cannot be encoded must lose its transcripts, not the trace.
-    const strict = (bytes: Uint8Array) => {
+    const strict = codec((bytes) => {
       if (new TextDecoder().decode(bytes).includes("bbbb")) {
         throw new RangeError("Invalid string length");
       }
       return bytes;
-    };
+    });
     const result = encodeTrace(
       run(),
       true,
@@ -1008,6 +1171,87 @@ describe("encodeTrace: the size cap", () => {
       identity,
     );
     expect(result.ok).toBe(false);
+  });
+
+  // B2: the encoder re-encoded the whole bundle once per dropped transcript,
+  // so its work grew with the square of the transcripts. Each transcript is
+  // now compressed at most once, and the whole body at most three times.
+  test("the work stays bounded however many transcripts must drop", () => {
+    const base = reviewedRun();
+    const sizes = Array.from({ length: 50 }, (_, i) => 1_000 + i * 97);
+    const many: TraceRunInput = {
+      ...base,
+      steps: base.steps.map((step) =>
+        step.name === "hunter-reliability"
+          ? {
+              ...step,
+              attempts: sizes.map((size, i) => ({
+                attempt: i + 1,
+                evidence: evidence(
+                  "hunter-reliability",
+                  i + 1,
+                  "sonnet",
+                  "success",
+                  1,
+                  6,
+                ),
+                sessionJsonl: big("c", size),
+              })),
+            }
+          : step,
+      ),
+    };
+    const whole = encodeTrace(
+      many,
+      true,
+      {
+        compressed: Number.MAX_SAFE_INTEGER,
+        decompressed: Number.MAX_SAFE_INTEGER,
+      },
+      identity,
+    );
+    if (!whole.ok) throw new Error("unreachable");
+    const fullSize = sizeOf(whole.bundle);
+    // Room for the metadata and content plus about half the transcripts.
+    const withoutTranscripts = sizeOf({ ...whole.bundle, transcripts: [] });
+    const limit =
+      withoutTranscripts + Math.floor((fullSize - withoutTranscripts) / 2);
+    let compressed = 0;
+    const counting = codec((bytes) => {
+      compressed += bytes.byteLength;
+      return bytes;
+    });
+    const result = encodeTrace(
+      many,
+      true,
+      { compressed: limit, decompressed: Number.MAX_SAFE_INTEGER },
+      counting,
+    );
+    if (!result.ok) throw new Error("the capped trace was not built");
+    expect(result.bundle.truncated).toBe(true);
+    expect(result.body.byteLength).toBeLessThanOrEqual(limit);
+    // The largest went first: what is left are the smallest.
+    const kept = result.bundle.transcripts.map((t) => t.text.length);
+    const smallest = [
+      ...sizes,
+      ...whole.bundle.transcripts
+        .filter((t) => t.step !== "hunter-reliability")
+        .map((t) => t.text.length),
+    ]
+      .sort((a, b) => a - b)
+      .slice(0, kept.length);
+    expect([...kept].sort((a, b) => a - b)).toEqual(smallest);
+    expect(compressed).toBeLessThanOrEqual(fullSize + 3 * limit);
+  });
+
+  test("the default body is one gzip stream of the kept pieces", () => {
+    const result = encodeTrace(run(), true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.bundle.transcripts.length).toBe(3);
+    // gunzip checks the CRC-32 and the length of the joined pieces.
+    expect(
+      JSON.parse(new TextDecoder().decode(gunzipSync(result.body))),
+    ).toEqual(result.bundle);
   });
 
   test("the body is gzip by default", () => {
@@ -1082,6 +1326,9 @@ describe("contract: a built bundle passes the platform's traceBundleSchema", () 
     ["reviewed, metadata", reviewedRun(), false],
     ["hunters-failed", huntersFailedRun(), true],
     ["admission refusal", admissionRefusal(), false],
+    // Redaction leaves `[REDACTED]` in names and values: still in shape.
+    ["keys everywhere, content", plantedEverywhere(), true],
+    ["keys everywhere, metadata", plantedEverywhere(), false],
   ] as const)("%s", (_label, run, content) => {
     const bundle = buildTraceBundle(run, content);
     expect(violations(bundle)).toEqual([]);

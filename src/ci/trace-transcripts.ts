@@ -199,15 +199,11 @@ function claudePart(block: Record<string, unknown>): MessagePart | undefined {
 
 // The capture's newest readback: the session's messages as OpenCode returned
 // them, `{ info: { role, modelID, finish, time }, parts: [...] }` each. An
-// absent or elided readback leaves the conversation empty.
-export function parseOpenCodeCapture(text: string): Conversation {
+// absent or elided readback leaves the conversation empty. The capture comes
+// parsed: the trace builder parses each one once, for its conversation and its
+// redacted transcript.
+export function openCodeConversation(capture: unknown): Conversation {
   const conversation: Conversation = { input: [], output: [], tools: [] };
-  let capture: unknown;
-  try {
-    capture = JSON.parse(text);
-  } catch {
-    return conversation;
-  }
   const records =
     isRecord(capture) && Array.isArray(capture.records)
       ? capture.records.filter(isRecord)

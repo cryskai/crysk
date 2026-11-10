@@ -23,15 +23,20 @@
 // its side by an allowlist (apps/api/src/runs/trace.ts); this side is the
 // first of the two.
 //
-// REDACTION: every content string passes the session copy's redaction
-// (redactSessionText / redactSessionDocument in
-// src/execution/claude-session-trace.ts) before it is placed here. The Claude
-// session transcripts are already that copy.
+// REDACTION: every string the OTLP document carries passes the session copy's
+// redaction (redactSessionText / redactSessionDocument in
+// src/execution/claude-session-trace.ts), a single word as much as a prompt: a
+// bare key is one word. One choke point holds it: an attribute's string can
+// only be a `Redacted`, which only redactText and redactJson make, and span
+// names, status messages and the transcripts' step and model go through them
+// too. The Claude session transcripts are that copy already (the CLI's
+// redactSessionJsonl, src/execution/claude-session-trace.ts), so their text is
+// not redacted a second time; an OpenCode capture is redacted here, by key.
 //
 // BUILTINS ONLY: see trace-transcripts.ts.
 
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import { crc32, deflateRawSync, constants as zlibConstants } from "node:zlib";
 import {
   redactSessionDocument,
   redactSessionText,
@@ -40,8 +45,8 @@ import { metadataOnlyFinding } from "./platform-report";
 import {
   type ChatMessage,
   type Conversation,
+  openCodeConversation,
   parseClaudeSession,
-  parseOpenCodeCapture,
   type ToolCall,
 } from "./trace-transcripts";
 
@@ -71,6 +76,20 @@ export interface TraceTranscript {
   model: string;
   kind: TranscriptKind;
   text: string;
+}
+
+declare const redactedBrand: unique symbol;
+// A string that went through the secret redaction. Nothing else may become an
+// attribute's string value.
+type Redacted = string & { readonly [redactedBrand]: true };
+
+function redactText(value: string): Redacted {
+  return redactSessionText(value) as Redacted;
+}
+
+// A document's strings, redacted by key and by text, as JSON.
+function redactJson(value: unknown): Redacted {
+  return JSON.stringify(redactSessionDocument(value)) as Redacted;
 }
 
 type AnyValue =
@@ -183,29 +202,88 @@ export function snakeKey(name: string): string {
     .replace(/[^a-z0-9_]+/g, "_");
 }
 
+type NumberValue = { intValue: string } | { doubleValue: number };
+type ScalarValue =
+  | NumberValue
+  | { boolValue: boolean }
+  | { arrayValue: { values: NumberValue[] } };
+
+// Thrown when the content strings alone pass the budget: the content cannot
+// fit, so encodeTrace stops building it and sends the metadata.
+class ContentOverBudget extends Error {}
+
+// The content characters a build may hold; each is at least one byte of JSON.
+interface ContentBudget {
+  left: number;
+  // Redacting this much content leaves garbage worth collecting (encodeTrace).
+  settle?: { every: number; since: number; run: () => void };
+}
+
 class Attributes {
   readonly list: KeyValue[] = [];
-  constructor(private readonly content: boolean) {}
+  constructor(
+    private readonly content: boolean,
+    private readonly budget?: ContentBudget,
+  ) {}
 
-  private put(key: string, value: AnyValue): void {
+  private spend(value: Redacted): Redacted {
+    const budget = this.budget;
+    if (budget === undefined) return value;
+    budget.left -= value.length;
+    if (budget.left < 0) throw new ContentOverBudget();
+    const settle = budget.settle;
+    if (settle !== undefined) {
+      settle.since += value.length;
+      if (settle.since >= settle.every) {
+        settle.since = 0;
+        settle.run();
+      }
+    }
+    return value;
+  }
+
+  private set(key: string, value: AnyValue): void {
     const at = this.list.findIndex((item) => item.key === key);
     if (at === -1) this.list.push({ key, value });
     else this.list[at] = { key, value };
   }
 
-  // A word always; anything longer or with spaces only as content, redacted.
+  // The only ways in: a string must be Redacted.
+  private put(key: string, value: ScalarValue): void {
+    this.set(key, value);
+  }
+
+  private putString(key: string, value: Redacted): void {
+    this.set(key, { stringValue: value });
+  }
+
+  // What a metadata trace may keep of a string: one word before and after
+  // redaction. With content, anything, redacted.
+  private kept(value: string): Redacted | undefined {
+    if (!this.content && !WORD.test(value)) return undefined;
+    const safe = redactText(value);
+    return this.content || WORD.test(safe) ? safe : undefined;
+  }
+
+  // A word always; anything longer or with spaces only as content. Redacted
+  // either way.
   text(key: string, value: string | undefined): void {
     if (value === undefined || value === "") return;
-    if (WORD.test(value)) this.put(key, { stringValue: value });
-    else if (this.content) {
-      this.put(key, { stringValue: redactSessionText(value) });
+    const safe = this.kept(value);
+    if (safe !== undefined) this.putString(key, safe);
+  }
+
+  // Content only, whatever its shape, redacted as text.
+  contentText(key: string, value: string | undefined): void {
+    if (this.content && value !== undefined) {
+      this.putString(key, this.spend(redactText(value)));
     }
   }
 
-  // Content only, whatever its shape.
-  contentText(key: string, value: string | undefined): void {
+  // Content only: a structured value as JSON, redacted by key and by text.
+  contentJson(key: string, value: unknown): void {
     if (this.content && value !== undefined) {
-      this.put(key, { stringValue: value });
+      this.putString(key, this.spend(redactJson(value)));
     }
   }
 
@@ -225,10 +303,10 @@ class Attributes {
 
   words(key: string, values: string[]): void {
     const kept = values
-      .filter((value) => WORD.test(value) || this.content)
-      .map((value) => (WORD.test(value) ? value : redactSessionText(value)));
+      .map((value) => this.kept(value))
+      .filter((value): value is Redacted => value !== undefined);
     if (kept.length > 0) {
-      this.put(key, {
+      this.set(key, {
         arrayValue: { values: kept.map((value) => ({ stringValue: value })) },
       });
     }
@@ -294,11 +372,12 @@ function num(value: unknown): number | undefined {
     : undefined;
 }
 
-// A span name is `{operation} {target}`. The target keeps the characters a
-// backend reads as one token; anything else becomes `_`.
+// A span name is `{operation} {target}`. The target, redacted, keeps the
+// characters a backend reads as one token; anything else becomes `_`.
 function spanName(operation: string, target: string | undefined): string {
   if (target === undefined || target === "") return operation;
-  return `${operation} ${target.replace(/[^\x21-\x7e]/g, "_").slice(0, 200)}`;
+  const safe = redactText(target);
+  return `${operation} ${safe.replace(/[^\x21-\x7e]/g, "_").slice(0, 200)}`;
 }
 
 interface Window {
@@ -413,19 +492,42 @@ function pipelineSteps(pipeline: unknown): Record<string, unknown>[] {
     : [];
 }
 
-// The parts the conventions name, every string redacted.
-function redactedJson(value: unknown): string {
-  return JSON.stringify(redactSessionDocument(value));
+interface ParsedAttempt {
+  conversation: Conversation;
+  // The OpenCode capture, parsed once for the conversation and the transcript;
+  // undefined when it does not parse (and is then never sent).
+  capture?: unknown;
 }
 
-function conversationOf(attempt: TraceAttemptInput): Conversation {
+function parseAttempt(attempt: TraceAttemptInput): ParsedAttempt {
   if (attempt.sessionJsonl !== undefined) {
-    return parseClaudeSession(attempt.sessionJsonl);
+    return { conversation: parseClaudeSession(attempt.sessionJsonl) };
   }
   if (attempt.openCodeCapture !== undefined) {
-    return parseOpenCodeCapture(attempt.openCodeCapture);
+    try {
+      const capture: unknown = JSON.parse(attempt.openCodeCapture);
+      return { conversation: openCodeConversation(capture), capture };
+    } catch {
+      return { conversation: { input: [], output: [], tools: [] } };
+    }
   }
-  return { input: [], output: [], tools: [] };
+  return { conversation: { input: [], output: [], tools: [] } };
+}
+
+// What a metadata trace reads of a conversation: no message, no tool argument
+// or result. encodeTrace keeps these from its content build, so its metadata
+// fallback never parses the transcripts again.
+type MetadataViews = Map<TraceAttemptInput, Conversation>;
+
+function metadataView(conversation: Conversation): Conversation {
+  return {
+    ...conversation,
+    input: [],
+    output: [],
+    tools: conversation.tools.map(
+      ({ arguments: _a, result: _r, ...call }) => call,
+    ),
+  };
 }
 
 // Root-level `crysk.*` keys, beside the flattened records.
@@ -497,6 +599,21 @@ export function buildTraceBundle(
   run: TraceRunInput,
   content: boolean,
 ): TraceBundle {
+  return build(run, content, { views: new Map() });
+}
+
+interface BuildOptions {
+  views: MetadataViews;
+  budget?: ContentBudget;
+  // Called after each attempt that had a transcript (see encodeTrace).
+  settle?: () => void;
+}
+
+function build(
+  run: TraceRunInput,
+  content: boolean,
+  { views, budget, settle }: BuildOptions,
+): TraceBundle {
   const seed = `${run.headSha ?? ""}:${run.startedAtMs}`;
   const traceId = hex(`trace:${seed}`, 32);
   const id = (key: string) => hex(`span:${seed}:${key}`, 16);
@@ -532,14 +649,18 @@ export function buildTraceBundle(
     const finalAttempt = attempts.at(-1)?.attempt;
     for (const attempt of attempts) {
       const facts = attemptFacts(attempt.evidence);
-      const conversation = conversationOf(attempt);
+      const known = content ? undefined : views.get(attempt);
+      const parsed: ParsedAttempt =
+        known === undefined ? parseAttempt(attempt) : { conversation: known };
+      const conversation = parsed.conversation;
+      if (known === undefined) views.set(attempt, metadataView(conversation));
       const chatId = id(`chat:${step.name}:${attempt.attempt}`);
       const chatWindow: Window = {};
       widen(chatWindow, facts.start, facts.end);
       if (chatWindow.start === undefined) {
         widen(chatWindow, conversation.startMs, conversation.endMs);
       }
-      const attrs = new Attributes(content);
+      const attrs = new Attributes(content, budget);
       const model = facts.model ?? str(meta?.model);
       attrs.text("gen_ai.operation.name", "chat");
       attrs.text("gen_ai.provider.name", facts.provider);
@@ -571,6 +692,7 @@ export function buildTraceBundle(
           spanId: id(`tool:${step.name}:${attempt.attempt}:${index}`),
           parentSpanId: chatId,
           content,
+          ...(budget === undefined ? {} : { budget }),
           fallbackMs: chatWindow.start ?? run.startedAtMs,
         }),
       );
@@ -604,8 +726,16 @@ export function buildTraceBundle(
       pending.push({ span: chat, window: chatWindow });
       stepSpans.push(chat, ...toolSpans);
       widen(stepWindow, chatWindow.start, chatWindow.end);
-      if (content)
-        transcripts.push(...transcriptsOf(step.name, attempt, model));
+      if (content) {
+        transcripts.push(...transcriptsOf(step.name, attempt, parsed, model));
+      }
+      if (
+        known === undefined &&
+        (attempt.sessionJsonl !== undefined ||
+          attempt.openCodeCapture !== undefined)
+      ) {
+        settle?.();
+      }
     }
 
     const attrs = new Attributes(content);
@@ -663,10 +793,12 @@ export function buildTraceBundle(
   const resource = new Attributes(content);
   resource.text("service.name", "crysk");
   resource.text("service.version", run.engineVersion);
+  const version =
+    run.engineVersion === undefined ? undefined : redactText(run.engineVersion);
   return {
     schema: TRACE_SCHEMA,
     outcome: run.outcome,
-    code: run.code,
+    code: run.code === null ? null : redactText(run.code),
     content,
     truncated: false,
     otlp: {
@@ -677,9 +809,7 @@ export function buildTraceBundle(
             {
               scope: {
                 name: "crysk",
-                ...(run.engineVersion === undefined
-                  ? {}
-                  : { version: run.engineVersion }),
+                ...(version === undefined ? {} : { version }),
               },
               spans: [root, ...children],
             },
@@ -697,7 +827,7 @@ function withMessage(
 ): { code: number; message?: string } {
   return message === undefined
     ? { code }
-    : { code, message: redactSessionText(message) };
+    : { code, message: redactText(message) };
 }
 
 // The cause pipeline.json recorded for the model this attempt ran, when that
@@ -723,10 +853,9 @@ function writeChatContent(
   context: { final: boolean; completion?: string },
 ): void {
   if (step.systemPrompt !== undefined) {
-    attrs.contentText(
-      "gen_ai.system_instructions",
-      redactedJson([{ type: "text", content: step.systemPrompt }]),
-    );
+    attrs.contentJson("gen_ai.system_instructions", [
+      { type: "text", content: step.systemPrompt },
+    ]);
   }
   const input: ChatMessage[] =
     conversation.input.length > 0
@@ -740,7 +869,7 @@ function writeChatContent(
           ]
         : [];
   if (input.length > 0) {
-    attrs.contentText("gen_ai.input.messages", redactedJson(input));
+    attrs.contentJson("gen_ai.input.messages", input);
   }
   // Without a transcript, the final attempt's output file is what it answered.
   const output: ChatMessage[] =
@@ -759,7 +888,7 @@ function writeChatContent(
           ]
         : [];
   if (output.length > 0) {
-    attrs.contentText("gen_ai.output.messages", redactedJson(output));
+    attrs.contentJson("gen_ai.output.messages", output);
   }
 }
 
@@ -770,31 +899,22 @@ function toolSpan(
     spanId: string;
     parentSpanId: string;
     content: boolean;
+    budget?: ContentBudget;
     // Where a call with no recorded time sits: its attempt's start.
     fallbackMs: number;
   },
 ): OtlpSpan {
-  const attrs = new Attributes(context.content);
+  const attrs = new Attributes(context.content, context.budget);
   attrs.text("gen_ai.operation.name", "execute_tool");
   attrs.text("gen_ai.tool.name", call.name);
   attrs.text("gen_ai.tool.call.id", call.id);
   attrs.bool("crysk.tool.is_error", call.isError === true);
-  if (context.content) {
-    if (call.arguments !== undefined) {
-      attrs.contentText(
-        "gen_ai.tool.call.arguments",
-        typeof call.arguments === "string"
-          ? redactSessionText(call.arguments)
-          : redactedJson(call.arguments),
-      );
-    }
-    if (call.result !== undefined) {
-      attrs.contentText(
-        "gen_ai.tool.call.result",
-        redactSessionText(call.result),
-      );
-    }
+  if (typeof call.arguments === "string") {
+    attrs.contentText("gen_ai.tool.call.arguments", call.arguments);
+  } else {
+    attrs.contentJson("gen_ai.tool.call.arguments", call.arguments);
   }
+  attrs.contentText("gen_ai.tool.call.result", call.result);
   const start = call.startMs ?? call.endMs ?? context.fallbackMs;
   const end = call.endMs ?? start;
   return {
@@ -813,32 +933,30 @@ function toolSpan(
 function transcriptsOf(
   step: string,
   attempt: TraceAttemptInput,
+  parsed: ParsedAttempt,
   model: string | undefined,
 ): TraceTranscript[] {
-  const out: TraceTranscript[] = [];
-  const base = { step, attempt: attempt.attempt, model: model ?? "" };
+  const base = {
+    step: redactText(step),
+    attempt: attempt.attempt,
+    model: model === undefined ? "" : redactText(model),
+  };
   if (attempt.sessionJsonl !== undefined) {
-    out.push({
-      ...base,
-      kind: "claude-session-jsonl",
-      text: attempt.sessionJsonl,
-    });
+    // The CLI's redacted copy (see REDACTION in the header).
+    return [
+      { ...base, kind: "claude-session-jsonl", text: attempt.sessionJsonl },
+    ];
   }
-  if (attempt.openCodeCapture !== undefined) {
-    // Never sent raw: a capture that does not parse is left out.
-    try {
-      const capture: unknown = JSON.parse(attempt.openCodeCapture);
-      out.push({
-        ...base,
-        kind: "opencode-capture",
-        text: JSON.stringify(redactSessionDocument(capture)),
-      });
-    } catch {
-      // see above
-    }
+  // Never sent raw: a capture that does not parse is left out.
+  if (parsed.capture !== undefined) {
+    return [
+      { ...base, kind: "opencode-capture", text: redactJson(parsed.capture) },
+    ];
   }
-  return out;
+  return [];
 }
+
+const SETTLE_EVERY_CHARS = 16 * 1024 * 1024;
 
 export type EncodedTrace =
   | {
@@ -856,9 +974,48 @@ export interface TraceLimits {
   decompressed: number;
 }
 
+// How the body is compressed, one piece at a time. The pieces are compressed
+// independently and joined in order, so a piece's compressed size is final
+// the moment it is compressed and a piece can be left out without touching
+// the others. The default is gzip (gzipCodec); tests pass an identity codec.
+export interface TraceCodec {
+  // Bytes the join adds around the pieces.
+  overhead: number;
+  piece(bytes: Uint8Array): Uint8Array;
+  // The body: the pieces in order, given the uncompressed whole's length and
+  // CRC-32.
+  join(pieces: Uint8Array[], raw: { length: number; crc: number }): Uint8Array;
+}
+
+// One gzip member (RFC 1952) whose deflate stream is the pieces in order. Each
+// piece is raw deflate ending on a sync flush: byte-aligned, with no final
+// block and no reference before its own start, so pieces join by
+// concatenation; an empty final block closes the stream.
+const gzipCodec: TraceCodec = {
+  overhead: 10 + 2 + 8,
+  piece: (bytes) =>
+    deflateRawSync(bytes, { finishFlush: zlibConstants.Z_SYNC_FLUSH }),
+  join(pieces, raw) {
+    const header = Uint8Array.from([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]);
+    const trailer = new Uint8Array(8);
+    const view = new DataView(trailer.buffer);
+    view.setUint32(0, raw.crc >>> 0, true);
+    view.setUint32(4, raw.length >>> 0, true);
+    return Buffer.concat([header, ...pieces, Uint8Array.from([3, 0]), trailer]);
+  },
+};
+
 // Fits the bundle under both platform caps (contract: drop transcripts, the
 // largest first, then the content, and set `truncated`; the OTLP metadata
 // always survives). `ok: false` when even the metadata does not fit.
+//
+// WHY pieces: re-encoding the whole bundle after each dropped transcript grew
+// with the square of the transcripts, and a runner ran out of memory on eight
+// 30 MB sessions. Now the OTLP document and each transcript are serialized and
+// compressed once, as pieces (TraceCodec); both sizes of any choice of
+// transcripts are then exact sums, and the body joins the chosen pieces. The
+// bound: every transcript is compressed at most once, the OTLP document at
+// most twice (with its content, then without), and the body never again.
 export function encodeTrace(
   run: TraceRunInput,
   content: boolean,
@@ -866,70 +1023,255 @@ export function encodeTrace(
     compressed: TRACE_COMPRESSED_MAX_BYTES,
     decompressed: TRACE_DECOMPRESSED_MAX_BYTES,
   },
-  gzip: (bytes: Uint8Array) => Uint8Array = (bytes) => gzipSync(bytes),
+  codec: TraceCodec = gzipCodec,
 ): EncodedTrace {
-  const bundle = buildTraceBundle(run, content);
-  const largestFirst = [...bundle.transcripts].sort(
-    (a, b) => b.text.length - a.text.length,
-  );
-  let jsonBytes = 0;
-  let compressedBytes = 0;
-  // An encoding that throws (JSON.stringify's RangeError past the runtime's
-  // string limit, a gzip out of memory) is over the cap like any other.
-  const fits = (candidate: TraceBundle): Uint8Array | undefined => {
-    try {
-      const json = new TextEncoder().encode(JSON.stringify(candidate));
-      jsonBytes = json.byteLength;
-      if (jsonBytes > limits.decompressed) {
-        compressedBytes = Number.POSITIVE_INFINITY;
-        return undefined;
-      }
-      const body = gzip(json);
-      compressedBytes = body.byteLength;
-      return compressedBytes <= limits.compressed ? body : undefined;
-    } catch {
-      compressedBytes = Number.POSITIVE_INFINITY;
-      return undefined;
-    }
-  };
+  const views: MetadataViews = new Map();
+  // WHY a collection after each transcript: parsing and redacting a 30 MB
+  // session leaves several times that in garbage, and the runtime let it pile
+  // up across sessions (eight of them peaked at 2.4 GB; collected, 1.6 GB).
+  // Content redacted in between counts too (SETTLE_EVERY_CHARS).
+  const settle = () => Bun.gc(true);
+  // Content strings past the uncompressed cap cannot fit with any transcript
+  // dropped, so the build stops there and the metadata goes (below).
+  let bundle: TraceBundle | undefined;
+  try {
+    bundle = build(run, content, {
+      views,
+      budget: {
+        left: limits.decompressed,
+        settle: { every: SETTLE_EVERY_CHARS, since: 0, run: settle },
+      },
+      settle,
+    });
+  } catch (error) {
+    if (!(error instanceof ContentOverBudget)) throw error;
+  }
+  const total =
+    bundle?.transcripts.length ??
+    run.steps.reduce(
+      (n, step) =>
+        n +
+        step.attempts.filter(
+          (a) =>
+            a.sessionJsonl !== undefined || a.openCodeCapture !== undefined,
+        ).length,
+      0,
+    );
+  let failure = { compressedBytes: 0, jsonBytes: 0 };
 
-  let dropped = 0;
-  let current = bundle;
-  for (;;) {
-    const body = fits(current);
-    if (body !== undefined) {
-      return {
-        ok: true,
-        body,
-        bundle: current,
-        droppedTranscripts: dropped,
-        droppedContent: false,
-      };
+  if (bundle !== undefined) {
+    const full = bundle;
+    const otlp = pieceOf(codec, full.otlp, limits);
+    if (otlp.ok) {
+      const comma = pieceOf(codec, ",", limits, true);
+      // Largest first, each serialized and compressed once, and only while
+      // it could still fit on its own.
+      const transcripts = full.transcripts
+        .map((transcript, index) => ({
+          transcript,
+          index,
+          piece: pieceOf(codec, transcript, limits),
+        }))
+        .sort((a, b) => b.transcript.text.length - a.transcript.text.length);
+      let dropped = 0;
+      for (; dropped <= transcripts.length; dropped++) {
+        // The smallest survive, sent in the bundle's own order.
+        const kept = transcripts
+          .slice(dropped)
+          .sort((a, b) => a.index - b.index);
+        if (kept.some((item) => !item.piece.ok)) continue;
+        const truncated = dropped > 0;
+        const pieces = [
+          headPiece(codec, full, truncated, limits),
+          otlp,
+          pieceOf(codec, ',"transcripts":[', limits, true),
+          ...kept.flatMap((item, i) =>
+            i === 0 ? [item.piece] : [comma, item.piece],
+          ),
+          pieceOf(codec, "]}", limits, true),
+        ];
+        const joined = join(codec, pieces, limits);
+        if (!joined.ok) {
+          failure = joined;
+          continue;
+        }
+        return {
+          ok: true,
+          body: joined.body,
+          bundle: {
+            ...full,
+            truncated,
+            transcripts: kept.map((item) => item.transcript),
+          },
+          droppedTranscripts: dropped,
+          droppedContent: false,
+        };
+      }
+    } else {
+      failure = otlp;
     }
-    if (dropped >= largestFirst.length) break;
-    const drop = largestFirst[dropped];
-    dropped += 1;
-    current = {
-      ...current,
-      truncated: true,
-      transcripts: current.transcripts.filter((item) => item !== drop),
-    };
   }
 
   // The content attributes go next, all together; `content` keeps saying what
   // the engine was told, and `truncated` says why the content is absent.
   const metadata: TraceBundle = {
-    ...buildTraceBundle(run, false),
+    ...build(run, false, { views, settle }),
     content,
     truncated: true,
   };
-  const body = fits(metadata);
-  if (body === undefined) return { ok: false, compressedBytes, jsonBytes };
+  const otlp = pieceOf(codec, metadata.otlp, limits);
+  const joined = otlp.ok
+    ? join(
+        codec,
+        [
+          headPiece(codec, metadata, true, limits),
+          otlp,
+          pieceOf(codec, ',"transcripts":[]}', limits, true),
+        ],
+        limits,
+      )
+    : otlp;
+  if (!joined.ok) {
+    return {
+      ok: false,
+      compressedBytes: joined.compressedBytes,
+      jsonBytes: Math.max(joined.jsonBytes, failure.jsonBytes),
+    };
+  }
   return {
     ok: true,
-    body,
+    body: joined.body,
     bundle: metadata,
-    droppedTranscripts: dropped,
+    droppedTranscripts: total,
     droppedContent: content,
   };
+}
+
+type Piece =
+  | { ok: true; compressed: Uint8Array; length: number; crc: number }
+  | { ok: false; compressedBytes: number; jsonBytes: number };
+
+// A value as JSON (a string given `literal` is taken as written), compressed.
+// Serializing or compressing that throws (JSON.stringify's RangeError past the
+// runtime's string limit, a compression out of memory), or a piece past
+// either cap alone, cannot be sent.
+function pieceOf(
+  codec: TraceCodec,
+  value: unknown,
+  limits: TraceLimits,
+  literal = false,
+): Piece {
+  let length = 0;
+  try {
+    const text = literal ? String(value) : JSON.stringify(value);
+    const bytes = new TextEncoder().encode(text);
+    length = bytes.byteLength;
+    if (length > limits.decompressed) {
+      return {
+        ok: false,
+        compressedBytes: Number.POSITIVE_INFINITY,
+        jsonBytes: length,
+      };
+    }
+    const compressed = codec.piece(bytes);
+    if (compressed.byteLength > limits.compressed) {
+      return {
+        ok: false,
+        compressedBytes: compressed.byteLength,
+        jsonBytes: length,
+      };
+    }
+    return { ok: true, compressed, length, crc: crc32(bytes) };
+  } catch {
+    return {
+      ok: false,
+      compressedBytes: Number.POSITIVE_INFINITY,
+      jsonBytes: length,
+    };
+  }
+}
+
+// The bundle's fields before `transcripts`, in the order
+// JSON.stringify(bundle) writes them, up to the OTLP document.
+function headPiece(
+  codec: TraceCodec,
+  bundle: TraceBundle,
+  truncated: boolean,
+  limits: TraceLimits,
+): Piece {
+  const head = JSON.stringify({
+    schema: bundle.schema,
+    outcome: bundle.outcome,
+    code: bundle.code,
+    content: bundle.content,
+    truncated,
+  });
+  return pieceOf(codec, `${head.slice(0, -1)},"otlp":`, limits, true);
+}
+
+function join(
+  codec: TraceCodec,
+  pieces: Piece[],
+  limits: TraceLimits,
+):
+  | { ok: true; body: Uint8Array }
+  | { ok: false; compressedBytes: number; jsonBytes: number } {
+  let length = 0;
+  let compressedBytes = codec.overhead;
+  let crc = 0;
+  for (const piece of pieces) {
+    if (!piece.ok) return piece;
+    crc = crc32Combine(crc, piece.crc, piece.length);
+    length += piece.length;
+    compressedBytes += piece.compressed.byteLength;
+  }
+  if (length > limits.decompressed || compressedBytes > limits.compressed) {
+    return { ok: false, compressedBytes, jsonBytes: length };
+  }
+  const body = codec.join(
+    pieces.map((piece) => (piece as { compressed: Uint8Array }).compressed),
+    { length, crc },
+  );
+  return { ok: true, body };
+}
+
+// zlib's crc32_combine: the CRC-32 of A followed by B, from both CRCs and B's
+// length, by multiplying A's CRC through len(B) zero bytes in GF(2).
+function gf2Times(matrix: Uint32Array, vector: number): number {
+  let sum = 0;
+  let row = 0;
+  let rest = vector >>> 0;
+  while (rest !== 0) {
+    if (rest & 1) sum ^= matrix[row] ?? 0;
+    rest >>>= 1;
+    row += 1;
+  }
+  return sum >>> 0;
+}
+
+function gf2Square(out: Uint32Array, matrix: Uint32Array): void {
+  for (let n = 0; n < 32; n++) out[n] = gf2Times(matrix, matrix[n] ?? 0);
+}
+
+function crc32Combine(crc1: number, crc2: number, len2: number): number {
+  if (len2 <= 0) return crc1 >>> 0;
+  const even = new Uint32Array(32);
+  const odd = new Uint32Array(32);
+  odd[0] = 0xedb88320;
+  for (let n = 1, row = 1; n < 32; n++, row <<= 1) odd[n] = row;
+  gf2Square(even, odd);
+  gf2Square(odd, even);
+  let crc = crc1 >>> 0;
+  let rest = len2;
+  for (;;) {
+    gf2Square(even, odd);
+    if (rest % 2 === 1) crc = gf2Times(even, crc);
+    rest = Math.floor(rest / 2);
+    if (rest === 0) break;
+    gf2Square(odd, even);
+    if (rest % 2 === 1) crc = gf2Times(odd, crc);
+    rest = Math.floor(rest / 2);
+    if (rest === 0) break;
+  }
+  return (crc ^ crc2) >>> 0;
 }
