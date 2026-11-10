@@ -1132,6 +1132,55 @@ describe("the summarizer and scout rows read the route plan", () => {
     expect(pr).toMatch(/summarizer\s+claude:fable-latest/);
   });
 
+  test("a long model name is separated from what follows it", () => {
+    const ctx = planContext({
+      routePlan,
+      options: options({ scout: true }),
+    });
+    const text = flat(renderPlan(ctx, false));
+    expect(text).toContain("claude:fable-latest always");
+    expect(text).toContain("opencode:openai/gpt-5-mini diff-only");
+  });
+
+  // A re-review with nothing new to discover runs neither stage, so neither row
+  // may name a model: the plan omits both steps, and the defaults are not what runs.
+  test("a pass that skips discovery says the summarizer and the scout do not run", () => {
+    const skipped = prPlanContext({
+      routePlan: createResolvedRoutePlan([]),
+      options: options({ pr: 6, scout: true }),
+      rereview: {
+        case: "B",
+        lastHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        discoveryRestricted: false,
+        skipDiscovery: true,
+      },
+    });
+    for (const text of [
+      flat(renderPrPlan(skipped, false)),
+      flat(prPlanDetails(skipped, false)),
+    ]) {
+      expect(text).toMatch(/summarizer\s+-\s+not run this pass/);
+      expect(text).toMatch(/scout\s+-\s+not run this pass/);
+      expect(text).not.toMatch(/summarizer\s+haiku/);
+    }
+    const discovering = flat(
+      renderPrPlan(
+        prPlanContext({
+          routePlan,
+          options: options({ pr: 6, scout: true }),
+          rereview: {
+            case: "B",
+            lastHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            discoveryRestricted: false,
+            skipDiscovery: false,
+          },
+        }),
+        false,
+      ),
+    );
+    expect(discovering).toMatch(/summarizer\s+claude:fable-latest always/);
+  });
+
   test("with no plan the rows keep their defaults", () => {
     const text = flat(
       renderPlan(planContext({ options: options({ scout: true }) }), false),

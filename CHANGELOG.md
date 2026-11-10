@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of `CRYSK-UNCLASSIFIED`. Both settle the CI admission row as a skip that spent nothing, and the
   setup step names a provider with no `CRYSK_OPENCODE_*` secret even when no auth file is written.
 
+- A re-review with nothing new to discover no longer prints a model on the plan's summarizer and
+  scout rows. Neither stage runs on that pass, so the rows read `not run this pass (nothing new to
+  review)` instead of the default `haiku`, which named a model the review's `models` did not use.
+  A model name longer than its column is also separated from the text after it, which read
+  `(effort high)always`.
+
 ### Removed
 
 - The `lifecycle` hunter is retired from the default review. Measured before the decision: on
