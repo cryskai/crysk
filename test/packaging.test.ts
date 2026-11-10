@@ -1285,7 +1285,10 @@ describe("Packaging & distribution configuration", () => {
       // The cancelled-run refresh sits between the report and the settle.
       expect(all[publish + 2]?.id).toBe("platform-settle");
       expect(settle).toBe(publish + 3);
-      expect(upload).toBe(settle + 1);
+      // The trace upload (platform mode only) follows the settle, so a
+      // cancelled run's trace rides the cancelled-run refresh's token.
+      expect(all[settle + 1]?.id).toBe("trace");
+      expect(upload).toBe(settle + 2);
       const step = all[publish];
       // A cancelled job still reaches always() steps, so always() would publish
       // a false install failure on a superseded head. !cancelled() keeps the

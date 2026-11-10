@@ -593,6 +593,50 @@ runs:
         CRYSK_PUBLISH_MODE: cancelled
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
+    # Platform mode only: send the Crysk platform this run's full trace (every
+    # step, attempt, model call and tool call, with timings, tokens and cost),
+    # so failed runs can be studied after the runner is gone. src/ci/platform-trace.ts
+    # builds it from the run directory (the run step's run_dir, else the CLI's
+    # run-dir record) and posts it gzip-compressed to the constant URL in
+    # src/ci/platform.ts, with the newest run token: the cancelled-run refresh's,
+    # else the publish refresh's, else the first exchange's.
+    #
+    # WHY always(): the runs that fail, every hunter dying, an admission
+    # refusal, a cancelled job, are the traces worth the most. With no run
+    # directory the trace is the run's outcome alone, from cli.json.
+    #
+    # WHY trace-content comes from the same exchange as the run token: the
+    # platform decides whether the trace may carry the review's content
+    # (prompts, outputs, tool calls), and only an exact `true` lets it.
+    #
+    # WHY it cannot turn the job red: a failed upload is a `::warning::` and the
+    # step exits 0; one retry on a 503. Builtins only, like the report: it runs
+    # even when nothing installed. A standalone run has no run token, so it
+    # never reaches this step and sends nothing.
+    - name: Upload the Crysk trace
+      id: trace
+      if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
+      shell: bash
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
+        CRYSK_RUN_TOKEN: ${{ steps.platform-settle.outputs.run-token || steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}
+        # Written by each exchange before its run token, so the newest token
+        # always has its own value beside it. Anything but `true` sends
+        # metadata only.
+        CRYSK_TRACE_CONTENT: ${{ steps.platform-settle.outputs.trace-content || steps.platform-publish.outputs.trace-content || steps.platform.outputs.trace-content }}
+        CRYSK_RUN_DIR: ${{ steps.run-crysk.outputs.run_dir }}
+        CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        # `cancelled` names a cancelled job, whose records stop mid-run.
+        CRYSK_JOB_STATUS: ${{ job.status }}
+        TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
+        TRIGGER_HEAD_SHA: ${{ steps.trigger.outputs.head_sha }}
+      run: bun "${{ github.action_path }}/src/ci/platform-trace.ts"
+
     # Without this step the triage half of the review loop has no input.
     # `crysk triage reply --pr <n> --from <run-dir> --finding F00N` is the
     # ONLY supported way to answer a posted finding, and `--from` REQUIRES a

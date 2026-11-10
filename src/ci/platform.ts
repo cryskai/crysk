@@ -104,12 +104,15 @@ export type PlatformTokenResult =
   // `config` is absent when the platform sent none or only empty objects.
   // `dataMode` is absent when the platform sent none or anything but exactly
   // `full` or `metadata_only`; the connect step reads absence as metadata_only.
+  // `traceContent` is present, and true, only when the platform sent exactly
+  // `true`; the connect step reads absence as false.
   | {
       ok: true;
       githubToken: string;
       runToken: string;
       githubActor?: string;
       dataMode?: PlatformDataMode;
+      traceContent?: true;
       config?: PlatformConfig;
     }
   // `message` names the HTTP status and the API's own `message` when there was
@@ -247,6 +250,7 @@ export async function exchangePlatformToken(
       run_token?: unknown;
       github_actor?: unknown;
       data_mode?: unknown;
+      trace_content?: unknown;
       config?: unknown;
     };
     const {
@@ -291,6 +295,10 @@ export async function exchangePlatformToken(
       ...(dataMode === "full" || dataMode === "metadata_only"
         ? { dataMode }
         : {}),
+      // WHY fail closed: whether a review trace may carry the customer's code
+      // is the platform's decision (`trace_content`, today its data mode), so
+      // an absent or malformed value sends metadata only.
+      ...(body.trace_content === true ? { traceContent: true as const } : {}),
       ...(config.config === undefined ? {} : { config: config.config }),
     };
   } catch (error) {
@@ -376,6 +384,10 @@ export async function runPlatformConnect(
     // run token always left its mode, and the report never pairs a fresh
     // token with the stale first-exchange mode.
     deps.appendOutput(`data-mode=${result.dataMode ?? "metadata_only"}\n`);
+    // The trace step (src/ci/platform-trace.ts) pairs it with this exchange's
+    // run token, like the report step does data-mode, so it is written before
+    // the tokens for the same reason.
+    deps.appendOutput(`trace-content=${result.traceContent === true}\n`);
     if (result.dataMode === undefined) {
       deps.stdout(
         "::notice title=crysk::The Crysk platform sent no recognised data_mode; treating this repository as metadata_only, so no finding text is uploaded.\n",

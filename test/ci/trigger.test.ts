@@ -23,6 +23,7 @@ import { CI_REVIEW_COMMENT, CI_REVIEW_FULL_COMMENT } from "#ci/force-comment";
 import {
   PENDING_AT_FILE,
   parseTriggerRecord,
+  RUN_DIR_FILE,
   type TriggerRecord,
 } from "#ci/outcome";
 import {
@@ -1726,7 +1727,10 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       writeFileSync(path.join(dir, "setup.json"), "{}");
       // SB3: an older run's pending identity would let the cancel settle trust its pending.
       writeFileSync(path.join(dir, PENDING_AT_FILE), "2026-10-17T10:00:00Z\n");
+      // An older run's run directory would hand the trace step another run's files.
+      writeFileSync(path.join(dir, RUN_DIR_FILE), "/old/runs/pr-1-x-1\n");
       runShell({ ...baseEnv(), CRYSK_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, RUN_DIR_FILE))).toBe(false);
       expect(existsSync(path.join(dir, PENDING_AT_FILE))).toBe(false);
       expect(existsSync(path.join(dir, "cli-started"))).toBe(false);
       expect(existsSync(path.join(dir, "setup.json"))).toBe(false);

@@ -357,12 +357,12 @@ function huntersFailedRun(): TraceRunInput {
 function admissionRefusal(): TraceRunInput {
   return {
     outcome: "error",
-    code: "CRYSK-CRED-MISSING",
+    code: "CRYSK-CRED-UNUSABLE",
     cli: {
       v: 1,
       outcome: "error",
-      cls: { kind: "credential", failureClass: "env-absent" },
-      params: { provider: "openai", secret: "CRYSK_OPENAI_API_KEY" },
+      cls: { kind: "credential", failureClass: "missing_provider_record" },
+      params: { provider: "openai", backend: "opencode" },
     },
     steps: [],
     prNumber: 7,
@@ -719,11 +719,11 @@ describe("buildTraceBundle: an admission refusal with no run directory", () => {
   test("one root span with the outcome, the code and the CLI class", () => {
     expect(rest).toEqual([]);
     expect(bundle.outcome).toBe("error");
-    expect(bundle.code).toBe("CRYSK-CRED-MISSING");
+    expect(bundle.code).toBe("CRYSK-CRED-UNUSABLE");
     expect(root?.name).toBe("invoke_workflow crysk.review");
-    expect(attr(root, "crysk.run.code")).toBe("CRYSK-CRED-MISSING");
+    expect(attr(root, "crysk.run.code")).toBe("CRYSK-CRED-UNUSABLE");
     expect(attr(root, "crysk.cli.class")).toBe("credential");
-    expect(attr(root, "crysk.cli.params.secret")).toBe("CRYSK_OPENAI_API_KEY");
+    expect(attr(root, "crysk.cli.params.provider")).toBe("openai");
     expect(root?.startTimeUnixNano).toBe(nanos(0));
     expect(root?.endTimeUnixNano).toBe(nanos(3));
     expect(root?.status).toEqual({ code: 2 });

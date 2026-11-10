@@ -733,6 +733,9 @@ const CLI_RECORD = "cli.json";
 // The CLI's pending identity (src/ci/outcome.ts PENDING_AT_FILE, pinned equal by a test). A
 // stale one would let the cancel settle trust an older run's pending.
 const PENDING_AT = "pending-at";
+// The CLI's run directory (src/ci/outcome.ts RUN_DIR_FILE, pinned equal by a test).
+// A stale one would hand the trace step an older run's files.
+const RUN_DIR = "run-dir";
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
   // The markers the publisher reads stay strict: a stale one would mislead it.
@@ -743,6 +746,7 @@ function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
     SETUP_RECORD,
     CLI_RECORD,
     PENDING_AT,
+    RUN_DIR,
   ]) {
     fs.remove(path.join(dir, name));
   }

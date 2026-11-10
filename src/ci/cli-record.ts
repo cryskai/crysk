@@ -49,6 +49,7 @@ import {
   knownTransportCause,
   PENDING_AT_FILE,
   parseCliRecord,
+  RUN_DIR_FILE,
   safeFailureDetail,
   safeModelName,
   safeProviderName,
@@ -159,6 +160,26 @@ export function recordPendingCreatedAt(
   } catch (error) {
     process.stderr.write(
       `crysk: could not write the pending record: ${errnoCode(error)}\n`,
+    );
+  }
+}
+
+// The run directory's writer: src/pr/review-pr.ts calls it as soon as the directory
+// exists, so a run that never reaches the run step's outputs (every hunter failed, a
+// fatal error, a cancelled job) still names its files for the trace step
+// (src/ci/platform-trace.ts). Never throws, and writes nothing outside action mode. A
+// path with a line break writes nothing: the reader takes the first line.
+export function recordRunDir(
+  runDir: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
+  if (dir === "" || runDir === "" || /[\r\n]/.test(runDir)) return;
+  try {
+    writeRecordAtomically(dir, RUN_DIR_FILE, `${runDir}\n`, NODE_FS);
+  } catch (error) {
+    process.stderr.write(
+      `crysk: could not write the run directory record: ${errnoCode(error)}\n`,
     );
   }
 }
