@@ -5,13 +5,7 @@ import { redactEvidenceText } from "../security/evidence-redaction";
 import { redactDiagnostic } from "../security/redact";
 import type { TransportRequest } from "./contracts";
 
-// The CLI's own session id (`--session-id` requires a UUID). Anything else is
-// not a filename we will search for.
-const SESSION_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export const CLAUDE_TRACE_MISSES = [
-  "no session id",
   "session file missing",
   "more than one session file",
   "session trace write failed",
@@ -19,12 +13,10 @@ export const CLAUDE_TRACE_MISSES = [
 
 export type ClaudeTraceMiss = (typeof CLAUDE_TRACE_MISSES)[number];
 
-const NO_SESSION: ClaudeTraceMiss = "no session id";
-
-// The transport sees the CLI stdout; the harness owns the run-dir path. The
-// request object is the only value both already hold, so the id crosses
-// without a new field on TransportOutcome.
-const retained = new WeakMap<TransportRequest, string | ClaudeTraceMiss>();
+// The transport names the CLI's session; the harness owns the run-dir path.
+// The request object is the only value both already hold, so the id crosses
+// without a new field on TransportRequest or TransportOutcome.
+const retained = new WeakMap<TransportRequest, string>();
 
 export function claudeSessionTracePath(
   outPath: string,
@@ -41,27 +33,22 @@ export function claudeTraceCaptureAnnotation(reason: ClaudeTraceMiss): string {
   return `[pr-hero] claude session trace was not copied (${reason})`;
 }
 
-export function sessionIdFromCliStdout(stdout: string): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return undefined;
-  }
-  const sessionId = (parsed as { session_id?: unknown }).session_id;
-  return typeof sessionId === "string" && SESSION_ID.test(sessionId)
-    ? sessionId
-    : undefined;
+// A fresh id for the CLI's `--session-id`, which requires a UUID. The engine
+// picks it instead of reading the CLI's result: an attempt that times out, is
+// killed or is cancelled prints no result, yet its session file is written as
+// the conversation goes, and failed attempts are the transcripts that matter
+// most.
+export function newClaudeSessionId(): string {
+  return crypto.randomUUID();
 }
 
+// Called once the child is spawned, so an attempt that never started a CLI
+// (prompt integrity denied, execve refused) has no transcript to look for.
 export function retainClaudeSession(
   request: TransportRequest,
-  stdout: string,
+  sessionId: string,
 ): void {
-  retained.set(request, sessionIdFromCliStdout(stdout) ?? NO_SESSION);
+  retained.set(request, sessionId);
 }
 
 async function findSessionFile(
@@ -80,9 +67,10 @@ async function findSessionFile(
   return only === undefined ? "session file missing" : only;
 }
 
-// Copies one attempt's session JSONL into the run dir. Undefined means the
-// attempt was not a finished Claude CLI process, or the copy landed. A miss
-// string is a warning: the caller must not fail the attempt.
+// Copies one attempt's session JSONL into the run dir, whatever way the
+// attempt ended. Undefined means no Claude CLI process was spawned, or the
+// copy landed. A miss string is a warning: the caller must not fail the
+// attempt.
 export async function copyRetainedClaudeSession(
   request: TransportRequest,
   dest: string,
@@ -91,10 +79,6 @@ export async function copyRetainedClaudeSession(
   if (noted === undefined) {
     await dropStaleTrace(dest);
     return undefined;
-  }
-  if (noted === NO_SESSION) {
-    await dropStaleTrace(dest);
-    return NO_SESSION;
   }
   try {
     const source = await findSessionFile(

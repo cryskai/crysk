@@ -5,7 +5,10 @@ import { CLAUDE_CAPABILITY_STATICS } from "#model/provider-capabilities";
 import { claudeCliModel } from "#model/routing";
 import type { BucketScope } from "../execution/bucket-id";
 import { deriveBucketId } from "../execution/bucket-id";
-import { retainClaudeSession } from "../execution/claude-session-trace";
+import {
+  newClaudeSessionId,
+  retainClaudeSession,
+} from "../execution/claude-session-trace";
 import type {
   FailureCredential,
   ObservedModel,
@@ -759,6 +762,13 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       "--exclude-dynamic-system-prompt-sections",
     );
 
+    // The engine names the session so its transcript can be found however
+    // the attempt ends, including a timeout, a kill or a cancel that leaves no
+    // result to read the id from. `-p` never resumes, so a fresh id per spawn
+    // cannot collide.
+    const claudeSessionId = newClaudeSessionId();
+    args.push("--session-id", claudeSessionId);
+
     const start = performance.now();
 
     // §6.3: hash/mode/symlink verification happens immediately before spawn;
@@ -822,6 +832,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
     }
 
     ACTIVE_CHILD_PROCS.add(proc);
+    retainClaudeSession(request, claudeSessionId);
 
     let cascadePromise: Promise<CascadeResult> | undefined;
     let provenPgid: number | undefined;
@@ -970,12 +981,14 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
               ...(escalatedToKill ? { signal: "SIGKILL" } : {}),
             };
 
+      // The result's `session_id` is not read for the transcript: the id passed
+      // as `--session-id` is the one retained at spawn, and it wins if the two
+      // ever differ, because only it exists on every way an attempt ends.
+      //
       // The CLI exits 0 when the API rejected the request, with the provider's message in
       // `result`. That message is not the agent's answer: it fails the attempt with its
       // typed cause, is never handed to the draft parser (which would spend a format retry
       // on it), and its words go to the attempt's diagnostics.
-      retainClaudeSession(request, stdout);
-
       const failureCredential =
         apiError === undefined
           ? undefined

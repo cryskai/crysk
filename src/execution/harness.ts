@@ -39,6 +39,7 @@ import {
 } from "./attempt-evidence";
 import {
   CLAUDE_TRACE_MISSES,
+  type ClaudeTraceMiss,
   claudeSessionTracePath,
   claudeTraceCaptureAnnotation,
   copyRetainedClaudeSession,
@@ -423,16 +424,27 @@ function projectionWarningAnnotation(failureClass: string): string {
   return `[pr-hero] credential projection unavailable (${failureClass}); child runs with operator environment`;
 }
 
+// Runs before the attempt returns, so before run() destroys the credential
+// projection whose HOME holds the session file. A failed copy is only ever a
+// warning: it cannot change how the attempt ended.
+function copyClaudeSessionTrace(
+  step: StepSpec,
+  request: TransportRequest,
+  attempt: number,
+): Promise<ClaudeTraceMiss | undefined> {
+  return copyRetainedClaudeSession(
+    request,
+    claudeSessionTracePath(step.outPath, step.name, attempt),
+  ).catch((): ClaudeTraceMiss => "session trace write failed");
+}
+
 async function withClaudeSessionTrace(
   step: StepSpec,
   request: TransportRequest,
   attempt: number,
   outcome: TransportOutcome,
 ): Promise<TransportOutcome> {
-  const reason = await copyRetainedClaudeSession(
-    request,
-    claudeSessionTracePath(step.outPath, step.name, attempt),
-  );
+  const reason = await copyClaudeSessionTrace(step, request, attempt);
   if (reason === undefined) return outcome;
   return {
     ...outcome,
@@ -2527,6 +2539,9 @@ export class StepExecutionHarness implements StepRunner {
     }
 
     if (execution.cancelled) {
+      // A cancelled attempt has no outcome to carry a warning, but what it did
+      // before the stop is still worth keeping.
+      await copyClaudeSessionTrace(step, request, attempt);
       return { kind: "cancelled" };
     }
 

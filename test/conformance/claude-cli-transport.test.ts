@@ -1551,6 +1551,22 @@ describe("ClaudeCodeCliTransport prompt delivery and isolation argv (#314)", () 
     ).toHaveLength(1);
   });
 
+  test("each spawn names its own session with a fresh UUID", async () => {
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const first = await captureSpawn(makeRequest());
+    const second = await captureSpawn(makeRequest());
+    const sessionOf = (args: string[]): string | undefined => {
+      const at = args.indexOf("--session-id");
+      return at === -1 ? undefined : args[at + 1];
+    };
+    expect(sessionOf(first.args)).toMatch(uuid);
+    expect(sessionOf(second.args)).toMatch(uuid);
+    expect(sessionOf(first.args)).not.toBe(sessionOf(second.args));
+    expect(first.args.filter((a) => a === "--session-id")).toHaveLength(1);
+    expect(first.args).not.toContain("--resume");
+  });
+
   test("without an MCP config no MCP flag is emitted, and the rest still are", async () => {
     const { args } = await captureSpawn(makeRequest());
     expect(args).not.toContain("--mcp-config");
