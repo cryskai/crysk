@@ -318,19 +318,25 @@ function plannedModel(
   return step === undefined ? undefined : formatStepRoute(step);
 }
 
+// What a stage left out of a re-review with nothing new to discover says in
+// place of a model: the plan omits its step, so no model would be the one run.
+const NOT_RUN_THIS_PASS = `${"-".padEnd(8)}not run this pass (nothing new to review)`;
+
+// `skipped` is a re-review that skips discovery, which runs no summarizer. It
+// is passed rather than read off a missing step: a plan with no route plan at
+// all is the older path, where the default model is what runs.
 function summarizerRow(
   summary: SummarySettings,
   routePlan?: ResolvedRoutePlan,
+  skipped = false,
 ): string {
+  const label = "summarizer".padEnd(12);
+  if (summary.enabled && skipped) return `${label}${NOT_RUN_THIS_PASS}`;
   const model =
     plannedModel(routePlan, "summarizer") ??
     summary.model ??
     DEFAULT_SUMMARY_MODEL;
-  return (
-    `summarizer`.padEnd(12) +
-    `${model}`.padEnd(8) +
-    (summary.enabled ? "always" : "disabled")
-  );
+  return `${label}${model.padEnd(8)} ${summary.enabled ? "always" : "disabled"}`;
 }
 
 export function summarizerLabel(summary: SummarySettings): string {
@@ -344,9 +350,11 @@ export function summarizerLabel(summary: SummarySettings): string {
 function scoutRow(
   options: Pick<CliOptions, "scout" | "scoutModel" | "model">,
   routePlan?: ResolvedRoutePlan,
+  skipped = false,
 ): string {
   const label = "scout".padEnd(12);
   if (!options.scout) return `${label}${"-".padEnd(8)}disabled`;
+  if (skipped) return `${label}${NOT_RUN_THIS_PASS}`;
   // The same chain the pipeline resolves, printed before the money is spent:
   // --model > --scout-model > the engine default (the bundled prompt pins no
   // model, so there is no frontmatter seat to show here).
@@ -355,7 +363,7 @@ function scoutRow(
     options.model ??
     options.scoutModel ??
     DEFAULT_SCOUT_MODEL;
-  return `${label}${model.padEnd(8)}diff-only, before the hunters (experimental)`;
+  return `${label}${model.padEnd(8)} diff-only, before the hunters (experimental)`;
 }
 
 export function scoutLabel(options: Pick<CliOptions, "scout">): string {
@@ -849,8 +857,9 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
   }
   push("run dir", ctx.runDir);
   push("hop budget", String(ctx.options.hopBudget));
-  push("summarizer", summarizerRow(ctx.summary, ctx.routePlan));
-  push("scout", scoutRow(ctx.options, ctx.routePlan));
+  const skipped = ctx.rereview?.skipDiscovery === true;
+  push("summarizer", summarizerRow(ctx.summary, ctx.routePlan, skipped));
+  push("scout", scoutRow(ctx.options, ctx.routePlan, skipped));
   if (ctx.rereview) {
     const last =
       ctx.rereview.lastHead === null
@@ -935,10 +944,26 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
     label = "";
   }
   lines.push(
-    ...row(label, summarizerRow(ctx.summary, ctx.routePlan), { styles, width }),
+    ...row(
+      label,
+      summarizerRow(
+        ctx.summary,
+        ctx.routePlan,
+        ctx.rereview?.skipDiscovery === true,
+      ),
+      { styles, width },
+    ),
   );
   lines.push(
-    ...row("", scoutRow(ctx.options, ctx.routePlan), { styles, width }),
+    ...row(
+      "",
+      scoutRow(
+        ctx.options,
+        ctx.routePlan,
+        ctx.rereview?.skipDiscovery === true,
+      ),
+      { styles, width },
+    ),
   );
   if (ctx.rereview) {
     lines.push(

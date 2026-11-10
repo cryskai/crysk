@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A re-review with nothing new to discover no longer prints a model on the plan's summarizer and
+  scout rows. Neither stage runs on that pass, so the rows read `not run this pass (nothing new to
+  review)` instead of the default `haiku`, which named a model the review's `models` did not use.
+  A model name longer than its column is also separated from the text after it, which read
+  `(effort high)always`.
+
 ### Removed
 
 - The `lifecycle` hunter is retired from the default review. Measured before the decision: on
