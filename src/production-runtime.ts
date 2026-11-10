@@ -1366,6 +1366,9 @@ export async function prepareProductionAdmissionContext(input: {
   // U4: the run's per-credential broker pool (tests inject one over a fake
   // store); created here when absent and carried in the authority options.
   readonly openCodeBrokerFor?: RunnerAuthorityOptions["openCodeBrokerFor"];
+  // False skips the missing-credential check: a local dry run authenticates
+  // nothing, so it is never refused for a credential (src/review/run.ts).
+  readonly checkCredentials?: boolean;
   // #182: see ProductionRuntimeOptions.freeModelProbe. U4: each metered
   // OpenCode route is asked about its own (provider, model) and binds free on a
   // true verdict, so a plan may mix free and metered routes, each billed by its
@@ -1452,9 +1455,10 @@ export async function prepareProductionAdmissionContext(input: {
   // S1 (missing credential): after the free check, which decides which routes
   // need a record, and before the variants check, which lists the model through
   // the provider and fails with no word about the key when there is none. Skipped
-  // when the caller injected an OpenCode broker: the routes then run on that
-  // broker, not on the auth file.
+  // on a dry run, and when the caller injected an OpenCode broker: the routes then
+  // run on that broker, not on the auth file.
   if (
+    input.checkCredentials !== false &&
     input.openCodeBrokerFor === undefined &&
     input.credentialBrokers?.opencode === undefined
   ) {

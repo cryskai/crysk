@@ -155,9 +155,10 @@ function describeSources(
 }
 
 // A run refused at admission because a route has no credential it may use. It stops
-// before any binding, probe or provider call, so it spent nothing: a CI run settles
-// its admission row as an unspent gate skip, with `ledgerReason`
-// (settleCredentialRefusal, pr/admission.ts). It names its record class and params,
+// before any binding or provider call (the OpenCode refusal follows only the free
+// model probe, which spends no tokens), so it spent nothing: a CI run settles its
+// admission row as an unspent gate skip, with `ledgerReason`
+// (settleClaudeCredentialRefusal, pr/admission.ts). It names its record class and params,
 // so cli.json carries the code and the route's fixes (classifyCliError,
 // cliErrorParams in ci/classify-error.ts). The CLI still prints it as the one line it
 // prints any CliError.

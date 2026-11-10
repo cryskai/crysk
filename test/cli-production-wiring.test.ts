@@ -913,6 +913,7 @@ describe("an OpenCode effort is checked against the model's variants before the 
       log: string;
       resolve: (
         entries: Array<string | { model: string; effort?: string }>,
+        extra?: { checkCredentials?: boolean },
       ) => ReturnType<typeof resolveProductionRoutePlanAtConfirm>;
     }) => Promise<void>,
     options: {
@@ -964,8 +965,9 @@ describe("an OpenCode effort is checked against the model's variants before the 
       await run({
         tmpDir,
         log,
-        resolve: (entries) =>
+        resolve: (entries, extra) =>
           resolveProductionRoutePlanAtConfirm({
+            ...extra,
             modelsConfigured: true,
             workspaceRoot: tmpDir,
             buildRoutePlan: async () =>
@@ -1144,6 +1146,18 @@ describe("an OpenCode effort is checked against the model's variants before the 
         },
         // An auth file holding other providers only: still no aiand record.
         { env: CI },
+      );
+    });
+
+    // A local --dry-run authenticates nothing (src/review/run.ts), so, like the
+    // Claude check, it is never refused for a credential.
+    test("a dry run with no record is admitted", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const result = await resolve([AIAND], { checkCredentials: false });
+          expect(result?.routePlan.steps.length).toBe(1);
+        },
+        { auth: null },
       );
     });
 

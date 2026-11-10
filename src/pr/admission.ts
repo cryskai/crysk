@@ -183,7 +183,8 @@ export async function settleCiGateSkip(
 
 // R003 (#494): a credential refusal at admission (CredentialRefusalError: no Claude
 // credential, or an OpenCode route with no auth record) stops a CI run after the
-// reservation and before any binding, probe or provider call, so it spent nothing:
+// reservation and before any binding or provider call (the OpenCode refusal follows
+// only the token-free free-model probe), so it spent nothing:
 // its row settles as gate-skipped, like the budget gate it follows, with the
 // refusal's own reason. Any other error is left for teardown, which settles it
 // `failed`. The caller rethrows the error unchanged. The name predates the OpenCode
