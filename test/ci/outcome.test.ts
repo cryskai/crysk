@@ -1917,16 +1917,114 @@ describe("parseCliRecord — the cli.json contract", () => {
         cls: { kind: "gotchas", reason: "magic" },
       }),
     ],
+    // The CLI writes the trigger's no-credential class (a Claude credential refusal),
+    // and only that one: the other trigger checks stay the trigger's.
     [
-      "a trigger class, which only the trigger writes",
+      "a trigger class the CLI never writes",
       text({
         v: 1,
         outcome: "error",
-        cls: { kind: "trigger", check: "no-credential" },
+        cls: { kind: "trigger", check: "removed-input" },
+      }),
+    ],
+    // The CLI writes the two missing-record credential classes (admission's OpenCode
+    // refusal), and no other credential class.
+    [
+      "a credential class the CLI never writes",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "credential", failureClass: "malformed_payload" },
       }),
     ],
   ])("refuses %s", (_label, value) => {
     expect(parseCliRecord(value)).toBeUndefined();
+  });
+});
+
+// Missing credential: admission's credential refusals reach cli.json with their class
+// and params, so the record names the code and the route's fixes, not
+// CRYSK-UNCLASSIFIED.
+describe("parseCliRecord — a credential refusal", () => {
+  const text = (value: unknown) => JSON.stringify(value);
+
+  test("an OpenCode route with no record parses with its params and renders the OpenCode fixes", () => {
+    const value: CliRecord = {
+      v: 1,
+      outcome: "error",
+      cls: { kind: "credential", failureClass: "missing_provider_record" },
+      params: {
+        backend: "opencode",
+        provider: "aiand",
+        model: "deepseek-ai/deepseek-v4.1-flash-1017",
+        step: "hunter-logic",
+        secret: "CRYSK_OPENCODE_AIAND_API_KEY",
+      },
+    };
+    const parsed = parseCliRecord(text(value));
+    expect(parsed).toEqual(value);
+    const rendered = renderError(
+      parsed?.cls ?? { kind: "unknown" },
+      parsed?.params ?? {},
+      "action",
+    );
+    expect(rendered.code).toBe("CRYSK-CRED-UNUSABLE");
+    expect(rendered.owner).toBe("config");
+    expect(rendered.what).toBe(
+      "The route aiand/deepseek-ai/deepseek-v4.1-flash-1017 has no usable credential record",
+    );
+    const summary = rendered.summary.join("\n");
+    expect(summary).toContain(
+      "Set aiand's secret and pass it in the crysk-secrets input:",
+    );
+    expect(summary).toContain(
+      "gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY",
+    );
+    expect(summary).not.toContain("CRYSK_CLAUDE");
+  });
+
+  test("openai with no ChatGPT login renders the OpenCode subscription fixes, not Claude's", () => {
+    const rendered = renderError(
+      { kind: "credential", failureClass: "missing_subscription_record" },
+      { backend: "opencode", provider: "openai", model: "gpt-5" },
+      "action",
+    );
+    expect(rendered.code).toBe("CRYSK-CRED-UNUSABLE");
+    const summary = rendered.summary.join("\n");
+    expect(summary).toContain("opencode auth login");
+    expect(summary).not.toContain("claude setup-token");
+  });
+
+  test("a Claude route with no credential parses and renders CRYSK-CRED-MISSING with the Claude fixes", () => {
+    const value: CliRecord = {
+      v: 1,
+      outcome: "error",
+      cls: { kind: "trigger", check: "no-credential" },
+      params: { backend: "claude" },
+    };
+    const parsed = parseCliRecord(text(value));
+    expect(parsed).toEqual(value);
+    const rendered = renderError(
+      parsed?.cls ?? { kind: "unknown" },
+      parsed?.params ?? {},
+      "action",
+    );
+    expect(rendered.code).toBe("CRYSK-CRED-MISSING");
+    expect(rendered.what).toBe(
+      "No credential for the claude route reached the action",
+    );
+    expect(rendered.summary.join("\n")).toContain(
+      "gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
+    );
+  });
+
+  test("an error record with no params still parses unchanged", () => {
+    const value: CliRecord = {
+      v: 1,
+      outcome: "error",
+      cls: { kind: "unknown" },
+    };
+    expect(parseCliRecord(text(value))).toEqual(value);
   });
 });
 

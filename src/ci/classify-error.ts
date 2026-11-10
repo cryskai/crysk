@@ -19,6 +19,12 @@
 // - OpenCodeSdkUnavailableError (src/transports/opencode-admission.ts) -> capability/
 //   sdk_unavailable: "is not installed"; the same code, the local text says reconcile.
 //
+// - CredentialRefusalError (src/security/claude-credential.ts) names its own class
+//   (CliError.cls): a Claude route with no credential -> trigger/no-credential
+//   (CRYSK-CRED-MISSING), an OpenCode route with no auth record -> credential/
+//   missing_provider_record or missing_subscription_record (CRYSK-CRED-UNUSABLE). Its
+//   params (cliErrorParams below) let the record name the route and its fixes.
+//
 // Not mapped, on purpose: ModelRoutingError and InvalidModelError (their message is
 // the fix, and no catalog text names it),
 // RouteAdmissionError and OpenCodeProductionGatedError (a readiness gate, which no
@@ -29,9 +35,10 @@
 // that runs before it.
 
 import { CliError, CliUsageError, recordClassOf } from "../errors";
+import { CredentialRefusalError } from "../security/claude-credential";
 import { OpenCodeVersionAdmissionError } from "../transport-registry";
 import { OpenCodeSdkUnavailableError } from "../transports/opencode-admission";
-import type { CliErrorClass } from "./outcome";
+import type { CliErrorClass, ErrorParams } from "./outcome";
 
 export function classifyCliError(error: unknown): CliErrorClass {
   // The class the throw site named wins over the instanceof mapping below. WHY: the
@@ -53,4 +60,11 @@ export function classifyCliError(error: unknown): CliErrorClass {
     return { kind: "capability", issue: "sdk_unavailable" };
   }
   return { kind: "unknown" };
+}
+
+// The params a throw site named for the record, or undefined. Only a credential
+// refusal names any today. Provider and model pass the record's own checks
+// (safeProviderName, safeModelName) in the writer.
+export function cliErrorParams(error: unknown): ErrorParams | undefined {
+  return error instanceof CredentialRefusalError ? error.params : undefined;
 }

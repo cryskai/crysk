@@ -24,6 +24,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import type { CliErrorClass, ErrorParams } from "#ci/outcome";
 import {
   claudeCredentialProjectionReady,
   defaultKeychainCredentialPresent,
@@ -153,10 +154,43 @@ function describeSources(
     : names;
 }
 
-// The refusal's own class, so a CI run can settle its admission row as an unspent
-// gate skip (settleClaudeCredentialRefusal, pr/admission.ts). No `cls`: the outcome
-// stays unclassified, and the CLI prints it as the one line it prints any CliError.
-export class ClaudeCredentialRefusalError extends CliError {}
+// A run refused at admission because a route has no credential it may use. It stops
+// before any binding or provider call (the OpenCode refusal follows only the free
+// model probe, which spends no tokens), so it spent nothing: a CI run settles its
+// admission row as an unspent gate skip, with `ledgerReason`
+// (settleClaudeCredentialRefusal, pr/admission.ts). It names its record class and params,
+// so cli.json carries the code and the route's fixes (classifyCliError,
+// cliErrorParams in ci/classify-error.ts). The CLI still prints it as the one line it
+// prints any CliError.
+export class CredentialRefusalError extends CliError {
+  readonly params: ErrorParams;
+  readonly ledgerReason: string;
+
+  constructor(
+    message: string,
+    cls: CliErrorClass,
+    params: ErrorParams,
+    ledgerReason: string,
+  ) {
+    super(message, { cls });
+    this.params = params;
+    this.ledgerReason = ledgerReason;
+  }
+}
+
+// The Claude refusal (claudeCredentialRefusal below): no listed Claude credential
+// reached the run, which is CRYSK-CRED-MISSING, the code the trigger records for a run
+// with no credential at all.
+export class ClaudeCredentialRefusalError extends CredentialRefusalError {
+  constructor(message: string) {
+    super(
+      message,
+      { kind: "trigger", check: "no-credential" },
+      { backend: "claude" },
+      "no Claude credential the run may use is set; refused before any provider spend",
+    );
+  }
+}
 
 // The admission refusal for a plan that has a Claude route and no listed credential
 // present, or undefined when the run can go ahead. A plan with no Claude route ignores

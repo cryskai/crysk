@@ -237,9 +237,18 @@ export function actionsRunUrl(
 // would hide a writer's bug, the same rule as parseRecordClass below. The config
 // classes are the ones a throw site names (T2d-1). The person layer is not one of
 // them: its catalog text names the repo file, so the record would send the reader
-// to the wrong file.
+// to the wrong file. The two credential classes are admission's refusals
+// (CredentialRefusalError, security/claude-credential.ts): a Claude route with no
+// credential (CRYSK-CRED-MISSING, the trigger's own class for it) and an OpenCode
+// route with no auth record (CRYSK-CRED-UNUSABLE, the class its first step would
+// have failed with).
 export type CliErrorClass =
   | { kind: "unknown" }
+  | { kind: "trigger"; check: "no-credential" }
+  | {
+      kind: "credential";
+      failureClass: "missing_provider_record" | "missing_subscription_record";
+    }
   | { kind: "capability"; issue: "sdk_unavailable" | "version_unsupported" }
   | {
       kind: "config-parse";
@@ -280,7 +289,8 @@ export interface CliRecord {
   head_sha?: string;
   // Only for outcome "error".
   cls?: CliErrorClass;
-  // Only for outcome "error", and the writer does not set it today.
+  // Only for outcome "error": the params the failing throw site named, when it named
+  // any (a credential refusal's backend, provider, model and secret).
   params?: ErrorParams;
   // Only for outcome "reviewed". The review was delivered, but the CLI's final status
   // write on head_sha failed, so the head's required check is still pending. The
@@ -422,6 +432,7 @@ const RECORD_PARAM_KEYS: readonly string[] = [
   "runId",
   "runUrl",
   "detail",
+  "model",
 ];
 const SHA_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
@@ -609,6 +620,20 @@ const CLI_HEAD_PATTERN = /^[0-9a-f]{40}$/;
 function parseCliClass(value: unknown): CliErrorClass | undefined {
   if (!isRecordObject(value)) return undefined;
   if (value.kind === "unknown") return { kind: "unknown" };
+  if (value.kind === "trigger") {
+    return value.check === "no-credential"
+      ? { kind: "trigger", check: "no-credential" }
+      : undefined;
+  }
+  if (value.kind === "credential") {
+    if (
+      value.failureClass === "missing_provider_record" ||
+      value.failureClass === "missing_subscription_record"
+    ) {
+      return { kind: "credential", failureClass: value.failureClass };
+    }
+    return undefined;
+  }
   if (value.kind === "capability") {
     if (
       value.issue === "sdk_unavailable" ||

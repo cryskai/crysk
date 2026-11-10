@@ -521,7 +521,9 @@ export async function resolvePipelineRoute(params: {
   return resolveProductionRoutePlanAtConfirm({
     modelsConfigured: params.modelsConfigured,
     workspaceRoot: params.workspaceRoot,
-    ...(params.claudeRun === undefined ? {} : { claudeRun: params.claudeRun }),
+    ...(params.claudeRun === undefined
+      ? { checkCredentials: false }
+      : { claudeRun: params.claudeRun }),
     buildRoutePlan: () =>
       buildCliRoutePlan({
         spec: params.spec,

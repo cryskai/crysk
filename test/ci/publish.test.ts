@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { classifyCliError } from "#ci/classify-error";
+import { classifyCliError, cliErrorParams } from "#ci/classify-error";
 import { writeFatalCliRecord } from "#ci/cli-record";
 import { chooseOpenCodeSecret, parseCryskSecrets } from "#ci/crysk-secrets";
 import {
@@ -44,6 +44,8 @@ import {
 import { COMMIT_STATUS_CONTEXT } from "#pr/preflight";
 import { CliError } from "../../src/errors";
 import type { TransportFailureCause } from "../../src/execution/contracts";
+import { OpenCodeCredentialRefusalError } from "../../src/review/route-preflight";
+import { ClaudeCredentialRefusalError } from "../../src/security/claude-credential";
 
 const REPO = "acme/widgets";
 const SHA = "c".repeat(40);
@@ -940,6 +942,102 @@ describe("decidePublication — the pure table", () => {
         expect(plan.status?.state).toBe("error");
         expect(plan.status?.description).toStartWith("CRYSK-GOTCHAS-MISSING");
         expect(plan.headSha).toBe(SHA);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    // Missing credential, end to end: admission's refusal is classified and its params
+    // written by the CLI's fatal writer, and the publisher renders the credential code
+    // with the route's fixes instead of CRYSK-UNCLASSIFIED.
+    test("an OpenCode route with no credential record written by the CLI renders CRYSK-CRED-UNUSABLE naming the route", () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "pr-hero-cred-e2e-"));
+      try {
+        const error = new OpenCodeCredentialRefusalError({
+          message: "models name OpenCode provider aiand (hunter-logic), but …",
+          failureClass: "missing_provider_record",
+          params: {
+            backend: "opencode",
+            provider: "aiand",
+            model: "deepseek-ai/deepseek-v4.1-flash-1017",
+            step: "hunter-logic",
+            secret: "CRYSK_OPENCODE_AIAND_API_KEY",
+          },
+        });
+        writeFatalCliRecord(
+          classifyCliError(error),
+          { CRYSK_OUTCOME_DIR: dir },
+          cliErrorParams(error),
+        );
+        const cliRecord = parseCliRecord(
+          readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8"),
+        );
+        expect(cliRecord?.params?.model).toBe(
+          "deepseek-ai/deepseek-v4.1-flash-1017",
+        );
+        const plan = decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord,
+        });
+        expect(plan.kind).toBe("remote");
+        if (plan.kind !== "remote") return;
+        expect(plan.rendered.code).toBe("CRYSK-CRED-UNUSABLE");
+        expect(plan.rendered.what).toBe(
+          "The route aiand/deepseek-ai/deepseek-v4.1-flash-1017 has no usable credential record",
+        );
+        expect(plan.rendered.summary.join("\n")).toContain(
+          "gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("a Claude credential refusal written by the CLI renders CRYSK-CRED-MISSING", () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "pr-hero-cred-e2e-"));
+      try {
+        const error = new ClaudeCredentialRefusalError("no Claude credential");
+        writeFatalCliRecord(
+          classifyCliError(error),
+          { CRYSK_OUTCOME_DIR: dir },
+          cliErrorParams(error),
+        );
+        const plan = decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord: parseCliRecord(
+            readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8"),
+          ),
+        });
+        expect(plan.kind).toBe("remote");
+        if (plan.kind !== "remote") return;
+        expect(plan.rendered.code).toBe("CRYSK-CRED-MISSING");
+        expect(plan.rendered.summary.join("\n")).toContain(
+          "gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    // A param the record refuses costs that detail, never the record.
+    test("a fatal record drops a param the record would refuse and keeps the rest", () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "pr-hero-cred-e2e-"));
+      try {
+        writeFatalCliRecord(
+          { kind: "credential", failureClass: "missing_provider_record" },
+          { CRYSK_OUTCOME_DIR: dir },
+          { backend: "opencode", provider: "../evil", model: "m\nx" },
+        );
+        expect(
+          parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
+        ).toEqual({
+          v: 1,
+          outcome: "error",
+          cls: { kind: "credential", failureClass: "missing_provider_record" },
+          params: { backend: "opencode" },
+        });
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

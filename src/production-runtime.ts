@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { opencodeSecretToken } from "#ci/crysk-secrets";
 import {
   createFreeModelProbe,
   createModelVariantsProbe,
@@ -70,10 +71,13 @@ import {
   validateRouteDrift,
 } from "./security/binding-policy";
 import {
+  lookupOpenCodeApiRecord,
+  lookupOpenCodeOAuthRecord,
   OPENCODE_OAUTH_PROVIDER,
   OpenCodeApiTokenBroker,
   OpenCodeAuthBroker,
   OpenCodeFreeBroker,
+  resolveOpenCodeAuthPath,
 } from "./security/credential-broker";
 import { authorizeWorkspaceCwd } from "./security/execution-authority";
 import { readOpenCodeSecretNames } from "./security/opencode-secret-manifest";
@@ -1018,20 +1022,7 @@ export function planOpenCodeCredentials(
   const credentials = new Map<string, OpenCodeRouteCredential>();
   for (const step of planRoutes(plan)) {
     if (step.route.backend !== "opencode") continue;
-    const base = credentialKindForRoute(
-      "opencode",
-      step.route.provider,
-      {},
-      false,
-      openCodeSecretNames,
-    );
-    const kind =
-      base === "provider_api_token" &&
-      freeVerdicts.get(
-        freeVerdictKey(step.route.provider, step.route.modelSnapshot),
-      ) === true
-        ? "provider_free"
-        : base;
+    const kind = openCodeRouteKind(step, openCodeSecretNames, freeVerdicts);
     credentials.set(JSON.stringify([step.route.provider, kind]), {
       provider: step.route.provider,
       kind,
@@ -1041,6 +1032,29 @@ export function planOpenCodeCredentials(
     (a, b) =>
       a.provider.localeCompare(b.provider) || a.kind.localeCompare(b.kind),
   );
+}
+
+// The kind one OpenCode route binds: planOpenCodeCredentials's rule, shared with
+// admission's credential check (openCodeCredentialRefusal) so the two cannot
+// disagree about which routes need a record.
+function openCodeRouteKind(
+  step: ResolvedStepRoute,
+  openCodeSecretNames: readonly string[] | undefined,
+  freeVerdicts: ReadonlyMap<string, boolean>,
+): CredentialKind {
+  const base = credentialKindForRoute(
+    "opencode",
+    step.route.provider,
+    {},
+    false,
+    openCodeSecretNames,
+  );
+  return base === "provider_api_token" &&
+    freeVerdicts.get(
+      freeVerdictKey(step.route.provider, step.route.modelSnapshot),
+    ) === true
+    ? "provider_free"
+    : base;
 }
 
 // The plan-wide credential, when there is exactly one. A single-credential plan
@@ -1176,6 +1190,167 @@ export async function openCodeVariantRefusal(
   return refused.length === 0 ? undefined : `models: ${refused.join("; ")}`;
 }
 
+// A plan refused because an OpenCode route has no credential record. `message`
+// is the refusal; `failureClass` and `params` let the CI record classify it
+// (CRYSK-CRED-UNUSABLE) and name the route's fixes. `params` describes the first
+// route refused; the message names every one.
+export interface OpenCodeCredentialRefusal {
+  readonly message: string;
+  readonly failureClass:
+    | "missing_provider_record"
+    | "missing_subscription_record";
+  readonly params: {
+    readonly backend: "opencode";
+    readonly provider: string;
+    readonly model: string;
+    readonly step: string;
+    readonly secret?: string;
+  };
+}
+
+// The auth file's text, "{}" when there is no file (no record at all), or
+// undefined when it exists and cannot be read. WHY a missing file is not an
+// unreadable one: a CI run whose crysk-secrets built no OpenCode record writes no
+// auth file (setup.ts, assembleOpenCodeAuth), and that is exactly the run this
+// check exists to stop.
+async function readOpenCodeAuthText(
+  authPath: string,
+): Promise<string | undefined> {
+  try {
+    return await Bun.file(authPath).text();
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? error.code
+        : undefined;
+    return code === "ENOENT" ? "{}" : undefined;
+  }
+}
+
+// The refusal for one route's missing record, in CI and locally. In CI it also names
+// the models input: setup builds the auth file only from the providers `models`
+// names, so a secret passed for a model given through the model input never lands.
+function missingRecordSentence(
+  provider: string,
+  kind: CredentialKind,
+  stepKeys: readonly string[],
+  inCi: boolean,
+): { readonly text: string; readonly secret?: string } {
+  const where = `models name OpenCode provider ${provider} (${stepKeys.join(", ")})`;
+  const oauth = kind === "opencode_chatgpt_oauth";
+  const record = oauth
+    ? `${provider} subscription record`
+    : `${provider} record`;
+  if (!inCi) {
+    return {
+      text: oauth
+        ? `${where}, but the OpenCode auth file has no ${record}: run \`opencode auth login\` and choose ChatGPT`
+        : `${where}, but the OpenCode auth file has no ${record}: run \`opencode auth login\` and add ${provider}'s API key`,
+    };
+  }
+  const token = opencodeSecretToken(provider);
+  if (token === undefined) {
+    return {
+      text: `${where}, but the OpenCode auth file has no ${record}, and no CRYSK_OPENCODE_* secret name can carry this provider id`,
+    };
+  }
+  const apiKey = `CRYSK_OPENCODE_${token}_API_KEY`;
+  if (oauth) {
+    const secret = `CRYSK_OPENCODE_${token}_OAUTH`;
+    return {
+      text: `${where}, but no ${secret} secret reached the run (the OpenCode auth file has no ${record}): set it, or ${apiKey} to bill per token, pass it in the crysk-secrets input, and name the model in the models input (the model input builds no OpenCode auth file)`,
+      secret,
+    };
+  }
+  return {
+    text: `${where}, but no ${apiKey} secret reached the run (the OpenCode auth file has no ${record}): set it, pass it in the crysk-secrets input, and name the model in the models input (the model input builds no OpenCode auth file)`,
+    secret: apiKey,
+  };
+}
+
+// Every OpenCode route that will need a credential record, fallbacks included
+// (admission binds every model a role may run), is checked against the auth file
+// the run's env points to, the file the route's broker reads when it runs. A route
+// whose kind is free needs none (OpenCodeFreeBroker runs on an empty tree). The
+// check asks the brokers' own lookups, so it refuses exactly what the first step on
+// that route would fail on (CRYSK-CRED-UNUSABLE, credential-broker.ts), only before
+// anything is spent. It does not depend on the route's effort: a model with no
+// effort used to pass admission and fail at its first hunter, one with an effort
+// failed listing its variants with no word about the key.
+//
+// Not refused here: an auth file that exists and cannot be read, or is not a JSON
+// object. The broker's own error names those when the route runs.
+export async function openCodeCredentialRefusal(
+  plan: ResolvedRoutePlan,
+  openCodeSecretNames: readonly string[] | undefined,
+  freeVerdicts: ReadonlyMap<string, boolean>,
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<OpenCodeCredentialRefusal | undefined> {
+  const needs = new Map<
+    string,
+    {
+      readonly step: ResolvedStepRoute;
+      readonly kind: CredentialKind;
+      readonly stepKeys: string[];
+    }
+  >();
+  for (const step of planRoutes(plan)) {
+    if (step.route.backend !== "opencode") continue;
+    const kind = openCodeRouteKind(step, openCodeSecretNames, freeVerdicts);
+    if (kind === "provider_free") continue;
+    const key = JSON.stringify([step.route.provider, kind]);
+    const found = needs.get(key);
+    if (found === undefined) {
+      needs.set(key, { step, kind, stepKeys: [step.stepKey] });
+    } else if (!found.stepKeys.includes(step.stepKey)) {
+      found.stepKeys.push(step.stepKey);
+    }
+  }
+  if (needs.size === 0) return undefined;
+  const text = await readOpenCodeAuthText(resolveOpenCodeAuthPath(env));
+  if (text === undefined) return undefined;
+  const reader = async () => text;
+  const inCi = env.GITHUB_ACTIONS === "true";
+  const refused: {
+    readonly sentence: string;
+    readonly refusal: Omit<OpenCodeCredentialRefusal, "message">;
+  }[] = [];
+  for (const { step, kind, stepKeys } of needs.values()) {
+    const provider = step.route.provider;
+    const lookup =
+      kind === "opencode_chatgpt_oauth"
+        ? await lookupOpenCodeOAuthRecord(reader)
+        : await lookupOpenCodeApiRecord(reader, provider);
+    if (lookup.ok) continue;
+    if (
+      lookup.failureClass !== "missing_provider_record" &&
+      lookup.failureClass !== "missing_subscription_record"
+    ) {
+      continue;
+    }
+    const sentence = missingRecordSentence(provider, kind, stepKeys, inCi);
+    refused.push({
+      sentence: sentence.text,
+      refusal: {
+        failureClass: lookup.failureClass,
+        params: {
+          backend: "opencode",
+          provider,
+          model: step.route.modelSnapshot,
+          step: stepKeys[0] ?? step.stepKey,
+          ...(sentence.secret === undefined ? {} : { secret: sentence.secret }),
+        },
+      },
+    });
+  }
+  const first = refused[0];
+  if (first === undefined) return undefined;
+  return {
+    ...first.refusal,
+    message: refused.map((r) => r.sentence).join("; "),
+  };
+}
+
 export async function prepareProductionAdmissionContext(input: {
   readonly workspaceRoot: string;
   readonly plan: ResolvedRoutePlan;
@@ -1193,6 +1368,9 @@ export async function prepareProductionAdmissionContext(input: {
   // U4: the run's per-credential broker pool (tests inject one over a fake
   // store); created here when absent and carried in the authority options.
   readonly openCodeBrokerFor?: RunnerAuthorityOptions["openCodeBrokerFor"];
+  // False skips the missing-credential check: a local dry run authenticates
+  // nothing, so it is never refused for a credential (src/review/run.ts).
+  readonly checkCredentials?: boolean;
   // #182: see ProductionRuntimeOptions.freeModelProbe. U4: each metered
   // OpenCode route is asked about its own (provider, model) and binds free on a
   // true verdict, so a plan may mix free and metered routes, each billed by its
@@ -1203,7 +1381,14 @@ export async function prepareProductionAdmissionContext(input: {
   // inject one; otherwise it is built from the authority's OpenCode binary,
   // and only when the plan sends a variant.
   readonly modelVariantsProbe?: ModelVariantsProbe;
-}): Promise<ProductionAdmissionContext | { readonly error: string }> {
+}): Promise<
+  | ProductionAdmissionContext
+  | {
+      readonly error: string;
+      // Set when the error is a route with no credential record (S1).
+      readonly credentialRefusal?: OpenCodeCredentialRefusal;
+    }
+> {
   // U3: the CRYSK_OPENCODE_* names are read ONCE, here, and travel in the
   // authority options below, which the runtime and the binding probe are built
   // from, so the server's kind and every binding's kind follow the same names.
@@ -1241,25 +1426,6 @@ export async function prepareProductionAdmissionContext(input: {
   if ("error" in preliminaryAuthority) {
     return preliminaryAuthority;
   }
-  // S7: before the free check, the bindings and the cost confirmation. The
-  // probe is built only when a route sends a variant, so a plan without one
-  // spawns nothing new.
-  const sendsVariant = planRoutes(input.plan).some(
-    (step) =>
-      step.route.backend === "opencode" &&
-      step.route.modelVariant !== undefined,
-  );
-  if (sendsVariant) {
-    const variantsProbe =
-      input.modelVariantsProbe ??
-      (preliminaryAuthority.openCodeBinaryPath === undefined
-        ? undefined
-        : createModelVariantsProbe({
-            binaryPath: preliminaryAuthority.openCodeBinaryPath,
-          }));
-    const refusal = await openCodeVariantRefusal(input.plan, variantsProbe);
-    if (refusal !== undefined) return { error: refusal };
-  }
   // When the caller supplied no probe but the plan names opencode routes and
   // the authority resolved a binary, probe for real: without this nothing in
   // src/ ever supplies a freeModelProbe on the CLI path, so real runs never
@@ -1287,6 +1453,45 @@ export async function prepareProductionAdmissionContext(input: {
       openCodeSecretNames,
       sharedFreeProbe,
     );
+  }
+  // S1 (missing credential): after the free check, which decides which routes
+  // need a record, and before the variants check, which lists the model through
+  // the provider and fails with no word about the key when there is none. Skipped
+  // on a dry run, and when the caller injected an OpenCode broker: the routes then
+  // run on that broker, not on the auth file.
+  if (
+    input.checkCredentials !== false &&
+    input.openCodeBrokerFor === undefined &&
+    input.credentialBrokers?.opencode === undefined
+  ) {
+    const credentialRefusal = await openCodeCredentialRefusal(
+      input.plan,
+      openCodeSecretNames,
+      freeVerdicts,
+      input.env ?? process.env,
+    );
+    if (credentialRefusal !== undefined) {
+      return { error: credentialRefusal.message, credentialRefusal };
+    }
+  }
+  // S7: after the credential check, before the bindings and the cost
+  // confirmation. The probe is built only when a route sends a variant, so a plan
+  // without one spawns nothing new.
+  const sendsVariant = planRoutes(input.plan).some(
+    (step) =>
+      step.route.backend === "opencode" &&
+      step.route.modelVariant !== undefined,
+  );
+  if (sendsVariant) {
+    const variantsProbe =
+      input.modelVariantsProbe ??
+      (preliminaryAuthority.openCodeBinaryPath === undefined
+        ? undefined
+        : createModelVariantsProbe({
+            binaryPath: preliminaryAuthority.openCodeBinaryPath,
+          }));
+    const refusal = await openCodeVariantRefusal(input.plan, variantsProbe);
+    if (refusal !== undefined) return { error: refusal };
   }
   const openCodeCredentials = planOpenCodeCredentials(
     input.plan,

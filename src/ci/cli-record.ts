@@ -43,6 +43,7 @@ import {
   CLI_RECORD_FILE,
   type CliErrorClass,
   type CliRecord,
+  type ErrorParams,
   type HunterFailureRecord,
   knownFailureCredential,
   knownTransportCause,
@@ -232,9 +233,14 @@ export function recordUnsettledStatus(
 // WHY no check that the record belongs to this job: the trigger clears cli.json at
 // job start (clearStaleMarkers in trigger.ts), so a record present here was written
 // by this job.
+//
+// `params` are the ones the throw site named (cliErrorParams, classify-error.ts). Only
+// the values the record accepts are written: a provider or model that fails its check,
+// or an empty string, is left out, so a bad value costs that detail, never the record.
 export function writeFatalCliRecord(
   cls: CliErrorClass,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  params?: ErrorParams,
 ): void {
   const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
@@ -245,7 +251,32 @@ export function writeFatalCliRecord(
     );
     return;
   }
-  writeCliRecord({ v: 1, outcome: "error", cls }, env);
+  const recorded = params === undefined ? undefined : recordParams(params);
+  writeCliRecord(
+    {
+      v: 1,
+      outcome: "error",
+      cls,
+      ...(recorded === undefined ? {} : { params: recorded }),
+    },
+    env,
+  );
+}
+
+// The string params a fatal record may carry. Provider and model go through the
+// record's own name checks; the others are names Crysk wrote (a backend, a step key,
+// a CRYSK_* secret), kept when they are one non-empty line.
+function recordParams(params: ErrorParams): ErrorParams | undefined {
+  const out: ErrorParams = {};
+  const provider = safeProviderName(params.provider);
+  if (provider !== undefined) out.provider = provider;
+  const model = safeModelName(params.model);
+  if (model !== undefined) out.model = model;
+  for (const key of ["backend", "step", "secret"] as const) {
+    const value = safeFailureDetail(params[key]);
+    if (value !== undefined) out[key] = value;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
 }
 
 // The record this job already wrote, or undefined when there is none, it cannot be

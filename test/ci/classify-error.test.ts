@@ -4,10 +4,13 @@
 // an owner from a message.
 
 import { describe, expect, test } from "bun:test";
-import { classifyCliError } from "#ci/classify-error";
+import { classifyCliError, cliErrorParams } from "#ci/classify-error";
+import { codeOf } from "#ci/outcome";
 import { parseGlobalConfig } from "#review/preflight";
 import { CliError, CliUsageError, withRecordClass } from "../../src/errors";
 import { InvalidModelError, ModelRoutingError } from "../../src/model/routing";
+import { OpenCodeCredentialRefusalError } from "../../src/review/route-preflight";
+import { ClaudeCredentialRefusalError } from "../../src/security/claude-credential";
 import {
   admitOpenCodeVersionPair,
   DefaultTransportRegistry,
@@ -94,6 +97,60 @@ describe("classifyCliError: the mapped classes", () => {
     expect(
       classifyCliError(new OpenCodeSdkUnavailableError("not installed")),
     ).toEqual({ kind: "capability", issue: "sdk_unavailable" });
+  });
+});
+
+// Missing credential: admission's credential refusals name their class and params,
+// so a run refused for a missing key is a credential error, not CRYSK-UNCLASSIFIED.
+describe("classifyCliError: admission's credential refusals", () => {
+  test("an OpenCode route with no record is credential/missing_provider_record, CRYSK-CRED-UNUSABLE", () => {
+    const params = {
+      backend: "opencode",
+      provider: "aiand",
+      model: "deepseek-ai/deepseek-v4.1-flash-1017",
+      step: "hunter-logic",
+      secret: "CRYSK_OPENCODE_AIAND_API_KEY",
+    } as const;
+    const error = new OpenCodeCredentialRefusalError({
+      message: "models name OpenCode provider aiand (hunter-logic), but …",
+      failureClass: "missing_provider_record",
+      params,
+    });
+    const cls = classifyCliError(error);
+    expect(cls).toEqual({
+      kind: "credential",
+      failureClass: "missing_provider_record",
+    });
+    expect(codeOf(cls)).toBe("CRYSK-CRED-UNUSABLE");
+    expect(cliErrorParams(error)).toEqual(params);
+  });
+
+  test("openai with no ChatGPT login is credential/missing_subscription_record", () => {
+    const error = new OpenCodeCredentialRefusalError({
+      message: "models name OpenCode provider openai (refuter), but …",
+      failureClass: "missing_subscription_record",
+      params: {
+        backend: "opencode",
+        provider: "openai",
+        model: "gpt-5",
+        step: "refuter",
+        secret: "CRYSK_OPENCODE_OPENAI_OAUTH",
+      },
+    });
+    expect(codeOf(classifyCliError(error))).toBe("CRYSK-CRED-UNUSABLE");
+  });
+
+  test("a Claude route with no credential is trigger/no-credential, CRYSK-CRED-MISSING", () => {
+    const error = new ClaudeCredentialRefusalError("no Claude credential");
+    const cls = classifyCliError(error);
+    expect(cls).toEqual({ kind: "trigger", check: "no-credential" });
+    expect(codeOf(cls)).toBe("CRYSK-CRED-MISSING");
+    expect(cliErrorParams(error)).toEqual({ backend: "claude" });
+  });
+
+  test("any other error names no params", () => {
+    expect(cliErrorParams(new CliError("x"))).toBeUndefined();
+    expect(cliErrorParams(new Error("x"))).toBeUndefined();
   });
 });
 

@@ -319,6 +319,12 @@ its own entry's effort, not the first model's:
   effort is sent no variant and runs at its default level.
 - **`--model`, the CI `model` input and the materiality judge take no effort.**
 
+Before that variants check, every OpenCode model the plan may run, fallbacks included, must have a record
+for its provider in the OpenCode auth file the run reads, unless the provider declares the model free. A
+model whose provider has none stops the review before anything spends, with or without an effort: in CI the
+refusal names the `CRYSK_OPENCODE_<PROVIDER>_API_KEY` secret that did not reach the run
+(`CRYSK-CRED-UNUSABLE`), and locally it says to run `opencode auth login`.
+
 What ran is recorded: `effort` in each attempt's request plan and in `pipeline.json`, next to
 `effortApplied` / `effort_applied`, which is `true` on the Claude CLI and on OpenCode only when a variant
 was sent (then `variant` names it). On an OpenCode step with no variant, `effort` still shows the prompt's
