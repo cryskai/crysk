@@ -334,6 +334,46 @@ function redactSessionString(
   );
 }
 
+// The session copy's string rules, for text that leaves the runner in a review
+// trace (src/ci/trace-bundle.ts): prompts, outputs, tool arguments and results.
+export function redactSessionText(value: string): string {
+  return redactSessionString(value, 0, { nodes: 0 });
+}
+
+// The session copy's key rules over a whole parsed document, with no node cap:
+// an OpenCode capture holds thousands of records, and redactEvidence, which
+// wrote it, kept values under names such as `apiToken` (its key rule is the
+// narrow shared one). Strings under a credential-like name go, numbers stay,
+// and every other string takes redactSessionText. A branch deeper than the
+// bound is replaced whole, never copied raw.
+export function redactSessionDocument(value: unknown, depth = 0): unknown {
+  if (depth > DOCUMENT_MAX_DEPTH) return "[REDACTED]";
+  if (typeof value === "string") return redactSessionText(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSessionDocument(item, depth + 1));
+  }
+  if (typeof value === "object" && value !== null) {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (SESSION_SECRET_KEY.test(key)) out[key] = "[REDACTED]";
+      else if (isSessionSecretName(key)) out[key] = credentialValue(item);
+      else out[key] = redactSessionDocument(item, depth + 1);
+    }
+    return out;
+  }
+  return typeof value === "number" || typeof value === "boolean" ? value : null;
+}
+
+const DOCUMENT_MAX_DEPTH = 64;
+
+function credentialValue(value: unknown): unknown {
+  try {
+    return redactStrings(value, 0, { nodes: 0 });
+  } catch {
+    return "[REDACTED]";
+  }
+}
+
 async function dropStaleTrace(dest: string): Promise<void> {
   await unlink(dest).catch(() => undefined);
 }
