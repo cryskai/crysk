@@ -1390,6 +1390,42 @@ describe("ClaudeCodeCliTransport toolInvocations from num_turns (#299)", () => {
     expect(await toolInvocationsFor(withTurns(1))).toBe(0);
   });
 
+  test("session_id on the same object leaves result, usage, and num_turns unchanged", async () => {
+    const fake = makeFakeProc({
+      stdoutBody: JSON.stringify({
+        result: "reviewed",
+        num_turns: 4,
+        session_id: "11111111-1111-4111-8111-111111111111",
+        total_cost_usd: 0.042,
+        usage: {
+          input_tokens: 120,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 300,
+          output_tokens: 45,
+        },
+      }),
+      exitCode: 0,
+    });
+    const transport = new ClaudeCodeCliTransport({
+      ...okPromptFns,
+      spawnFn: (() => fake.proc) as unknown as typeof Bun.spawn,
+      getPgid: (pid) => pid,
+      killFn: () => {},
+    });
+    const outcome = await transport.execute(makeRequest(), {
+      signal: new AbortController().signal,
+    });
+    expect(outcome.finalText).toBe("reviewed");
+    expect(outcome.toolInvocations).toBe(3);
+    expect(outcome.usage.completeness).toBe("complete");
+    expect(outcome.usage.tokens.inputUncached).toBe(120);
+    expect(outcome.usage.tokens.inputCacheRead).toBe(900);
+    expect(outcome.usage.tokens.inputCacheWrite).toBe(300);
+    expect(outcome.usage.tokens.outputVisible).toBe(45);
+    expect(outcome.usage.cashCostUsd).toBe(0);
+    expect(outcome.usage.notionalCostUsd).toBe(0.042);
+  });
+
   test("every turn after the first followed tool results", async () => {
     expect(await toolInvocationsFor(withTurns(2))).toBe(1);
     expect(await toolInvocationsFor(withTurns(17))).toBe(16);

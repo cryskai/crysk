@@ -138,6 +138,7 @@ import {
   recordDiversityHunterResult,
 } from "../diversity/pipeline-integration";
 import { writeJsonAtomically } from "../execution/atomic-write";
+import { claudeSessionTracePath } from "../execution/claude-session-trace";
 import {
   effortApplied,
   type FailureCredential,
@@ -1138,6 +1139,10 @@ interface StepMeta {
   attemptLogPath?: string;
   attemptEvidencePath?: string;
   settlementReceiptPath?: string;
+  // Claude CLI session transcripts for every attempt whose copy exists,
+  // relative to the run dir. Absent when none were copied, so a failed
+  // capture names no file and a pipeline.json from before traces still parses.
+  tracePaths?: string[];
   // D1-08 PR2 (§8): the step's normalized usage, attached by recordSettlement
   // — the single existing usage join site (D1-10c's own comment: a second
   // pass over `state.steps` "would be a parallel mechanism able to disagree
@@ -4633,6 +4638,14 @@ function recordSettlement(
     runDir,
     settlementReceiptPath(meta.outPath, meta.name, result.attempts),
   );
+  const tracePaths: string[] = [];
+  for (let attempt = 1; attempt <= result.attempts; attempt++) {
+    const absolute = claudeSessionTracePath(meta.outPath, meta.name, attempt);
+    if (existsSync(absolute)) {
+      tracePaths.push(path.relative(runDir, absolute));
+    }
+  }
+  if (tracePaths.length > 0) meta.tracePaths = tracePaths;
 }
 
 // A step that reached a terminal verdict WITHOUT a StepResult: the spec never
