@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { redactEvidenceText } from "../../src/security/evidence-redaction";
 import {
   looksLikeCredential,
   redactConfigValue,
@@ -195,5 +196,151 @@ describe("looksLikeCredential: a whole config value (F2, D4)", () => {
     expect(redactConfigValue(BASE64_KEY)).toBe("[REDACTED]");
     expect(redactConfigValue(`x ${GROQ_KEY}`)).toBe("x [REDACTED]");
     expect(redactConfigValue("unknown_key")).toBe("unknown_key");
+  });
+});
+
+// Audit R2 (odd/tasks/review-traces.md L25): shapes no redactor caught. Every
+// fake credential is assembled here at run time, never written out whole, so
+// secret scanning on push has nothing to match.
+const PEM_BODY = `MIIEow${"Qk9mN2xZ".repeat(8)}`;
+const PEM_KEY = [
+  `-----BEGIN RSA ${"PRIVATE"} KEY-----`,
+  PEM_BODY,
+  `${"Zz8yWq".repeat(6)}==`,
+  `-----END RSA ${"PRIVATE"} KEY-----`,
+].join("\n");
+const OPENSSH_KEY = [
+  `-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`,
+  PEM_BODY,
+  `-----END OPENSSH ${"PRIVATE"} KEY-----`,
+].join("\n");
+const AWS_KEY_ID = `${"AKIA"}Q7W2E9R4T6Y1U3I5`;
+const AWS_SESSION_KEY_ID = `${"ASIA"}Z8X7C6V5B4N3M2L1`;
+const AWS_SECRET = `wJalrXUtnFEMI/K7MDENG/${"bPxRfiCY"}9q8w7e6r5t`;
+const DB_PASSWORD = "Pw0rd-db-9f8e7d";
+const STRIPE_LIVE = `${"sk_"}live_${"4eC39HqLyjWDarjt"}T1zdp7dc`;
+const STRIPE_RESTRICTED = `${"rk_"}live_${"51HbX2eZvKYlo2C0"}aB9cD8eF`;
+const JWT = [
+  `${"eyJ"}hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9`,
+  `${"eyJ"}zdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ`,
+  "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+].join(".");
+const TOKEN_VALUE = `Zq81${"xR4vN7mB2kL9"}pQ3w`;
+
+describe("redactEvidenceText: secret shapes (audit R2)", () => {
+  test.each([
+    [
+      "a PEM private key block",
+      `key:\n${PEM_KEY}\ndone`,
+      "key:\n[REDACTED]\ndone",
+    ],
+    ["an OpenSSH private key block", OPENSSH_KEY, "[REDACTED]"],
+    [
+      "a PEM block cut before its END line",
+      `-----BEGIN ${"PRIVATE"} KEY-----\n${PEM_BODY}`,
+      "[REDACTED]",
+    ],
+    ["an AWS access key id", `id ${AWS_KEY_ID} used`, "id [REDACTED] used"],
+    ["an AWS temporary key id", `id ${AWS_SESSION_KEY_ID}`, "id [REDACTED]"],
+    [
+      "an AWS secret in an env file",
+      `AWS_SECRET_ACCESS_KEY=${AWS_SECRET}\nAWS_REGION=us-east-1`,
+      "AWS_SECRET_ACCESS_KEY=[REDACTED]\nAWS_REGION=us-east-1",
+    ],
+    [
+      "an AWS secret in the credentials file",
+      `aws_secret_access_key = ${AWS_SECRET}`,
+      "aws_secret_access_key = [REDACTED]",
+    ],
+    [
+      "a quoted client_secret",
+      `{"client_id": "app", "client_secret": "${TOKEN_VALUE}"}`,
+      '{"client_id": "app", "client_secret": "[REDACTED]"}',
+    ],
+    [
+      "a postgres URL password",
+      `postgres://app:${DB_PASSWORD}@db.internal:5432/app`,
+      "postgres://[REDACTED]@db.internal:5432/app",
+    ],
+    [
+      "a mysql URL password",
+      `mysql://root:${DB_PASSWORD}@localhost/shop`,
+      "mysql://[REDACTED]@localhost/shop",
+    ],
+    [
+      "a mongodb+srv URL password",
+      `uri: "mongodb+srv://svc:${DB_PASSWORD}@cluster0.example.net/db"`,
+      'uri: "mongodb+srv://[REDACTED]@cluster0.example.net/db"',
+    ],
+    [
+      "a redis URL with only a password",
+      `redis://:${DB_PASSWORD}@cache:6379`,
+      "redis://[REDACTED]@cache:6379",
+    ],
+    [
+      "an amqp URL password",
+      `amqp://guest:${DB_PASSWORD}@mq/vhost`,
+      "amqp://[REDACTED]@mq/vhost",
+    ],
+    ["a Stripe live secret key", `stripe ${STRIPE_LIVE}`, "stripe [REDACTED]"],
+    [
+      "a Stripe restricted key",
+      `stripe ${STRIPE_RESTRICTED}`,
+      "stripe [REDACTED]",
+    ],
+    ["an unlabeled JWT", `cached ${JWT} here`, "cached [REDACTED] here"],
+    [
+      "a doubly escaped api_key",
+      `{\\"api_key\\":\\"${TOKEN_VALUE}\\"}`,
+      '{\\"api_key\\":\\"[REDACTED]\\"}',
+    ],
+  ])("%s is redacted", (_name, input, expected) => {
+    expect(redactEvidenceText(input)).toBe(expected);
+  });
+
+  test.each([
+    "apiToken",
+    "github_token",
+    "authToken",
+    "npm_token",
+    "private_key",
+    "client_secret",
+    "x-api-key",
+    "SECRET_KEY_BASE",
+  ])("a quoted %s value is redacted and the JSON still parses", (name) => {
+    const out = redactEvidenceText(JSON.stringify({ [name]: TOKEN_VALUE }));
+    expect(JSON.parse(out)).toEqual({ [name]: "[REDACTED]" });
+  });
+
+  test.each([
+    ['"input_tokens": 1234, "cache_read_input_tokens": 99'],
+    ['"max_tokens": "4096"'],
+    ['"token_type": "Bearer"'],
+    ['"sessionId": "11111111-1111-4111-8111-111111111111"'],
+    ["const tokenCount = usage.total;"],
+    ["apiKeySource: environment"],
+    ["const privateKey = loadKey(path);"],
+    ["postgres://db.internal:5432/app"],
+    ["git+ssh://git@github.com/cryskai/crysk.git"],
+    [
+      "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\n-----END CERTIFICATE-----",
+    ],
+    ["author: Juan, sk_live_ is the Stripe prefix"],
+    ["the eyJ prefix starts a base64 JSON header"],
+    ["AWS_REGION=us-east-1 TOKEN_COUNT=12"],
+  ])("ordinary text is kept: %s", (text) => {
+    expect(redactEvidenceText(text)).toBe(text);
+  });
+
+  test.each([
+    PEM_KEY,
+    `AWS_SECRET_ACCESS_KEY=${AWS_SECRET}`,
+    `postgres://app:${DB_PASSWORD}@db/app`,
+    `"apiToken": "${TOKEN_VALUE}"`,
+    `{\\"api_key\\":\\"${TOKEN_VALUE}\\"}`,
+    `${JWT} ${STRIPE_LIVE} ${AWS_KEY_ID}`,
+  ])("redacting twice gives the same text (%#)", (text) => {
+    const once = redactEvidenceText(text);
+    expect(redactEvidenceText(once)).toBe(once);
   });
 });

@@ -1,7 +1,12 @@
 import { existsSync } from "node:fs";
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, open, unlink } from "node:fs/promises";
 import path from "node:path";
-import { redactEvidenceText } from "../security/evidence-redaction";
+import {
+  isSecretName,
+  nameParts,
+  redactEvidenceText,
+  redactSecretShapes,
+} from "../security/evidence-redaction";
 import { redactDiagnostic } from "../security/redact";
 import type { TransportRequest } from "./contracts";
 
@@ -92,9 +97,7 @@ export async function copyRetainedClaudeSession(
       await dropStaleTrace(dest);
       return source;
     }
-    const redacted = redactSessionJsonl(await Bun.file(source).text());
-    await mkdir(path.dirname(dest), { recursive: true });
-    await Bun.write(dest, redacted);
+    await copySessionJsonl(source, dest);
     return undefined;
   } catch {
     await dropStaleTrace(dest);
@@ -102,29 +105,129 @@ export async function copyRetainedClaudeSession(
   }
 }
 
-// Same key rule as redactEvidence. Embedded JSON is parsed before any text
-// pattern runs, so a regex cannot eat the quotes that the next parse needs.
+// A session file can be any size (a 61 MB one took about 526 MB to redact
+// whole), and several hunters copy at once. So the copy streams: one line at
+// a time, a line over MAX_LINE_BYTES becomes the omitted marker without being
+// held, and the copy stops at MAX_COPY_BYTES with the truncated marker.
+const MAX_LINE_BYTES = 4 * 1024 * 1024;
+const MAX_COPY_BYTES = 64 * 1024 * 1024;
+const OMITTED_LINE = JSON.stringify({ crysk: "session line omitted" });
+const TRUNCATED_LINE = `${JSON.stringify({ crysk: "session truncated" })}\n`;
+const NEWLINE = 0x0a;
+
+async function copySessionJsonl(source: string, dest: string): Promise<void> {
+  await mkdir(path.dirname(dest), { recursive: true });
+  const out = await open(dest, "w");
+  const reader = Bun.file(source).stream().getReader();
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const truncatedBytes = encoder.encode(TRUNCATED_LINE).byteLength;
+  let written = 0;
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  let overLimit = false;
+
+  // False once the cap is reached: the truncated marker is written instead.
+  const emit = async (line: string, newline: boolean): Promise<boolean> => {
+    const bytes = encoder.encode(newline ? `${line}\n` : line);
+    if (written + bytes.byteLength + truncatedBytes > MAX_COPY_BYTES) {
+      await out.write(TRUNCATED_LINE);
+      return false;
+    }
+    await out.write(bytes);
+    written += bytes.byteLength;
+    return true;
+  };
+  const finishLine = (): string => {
+    const line = overLimit
+      ? OMITTED_LINE
+      : redactSessionLine(decoder.decode(Buffer.concat(pending)));
+    pending = [];
+    pendingBytes = 0;
+    overLimit = false;
+    return line;
+  };
+  const hold = (bytes: Uint8Array): void => {
+    if (overLimit || bytes.byteLength === 0) return;
+    if (pendingBytes + bytes.byteLength > MAX_LINE_BYTES) {
+      overLimit = true;
+      pending = [];
+      pendingBytes = 0;
+      return;
+    }
+    pending.push(bytes);
+    pendingBytes += bytes.byteLength;
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      let start = 0;
+      for (
+        let at = value.indexOf(NEWLINE);
+        at !== -1;
+        at = value.indexOf(NEWLINE, start)
+      ) {
+        hold(value.subarray(start, at));
+        start = at + 1;
+        if (!(await emit(finishLine(), true))) return;
+      }
+      hold(value.subarray(start));
+    }
+    if (pendingBytes > 0 || overLimit) await emit(finishLine(), false);
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    await out.close();
+  }
+}
+
+// The key rule of redactEvidence, kept whole: a match loses its value
+// whatever its type.
 const SESSION_SECRET_KEY =
   /authorization|cookie|password|secret|api.?key|access.?token|refresh.?token|^token$|^key$/i;
+// Wider names for the session copy only. A config file a hunter Reads holds
+// `apiToken`, `github_token`, `private_key`, `session`; OpenCode captures and
+// code windows keep the narrower shared rule. `sessionId` (the CLI's own UUID
+// on every line) and `author` are not credentials.
+const SESSION_SECRET_WORDS = new Set([
+  "auth",
+  "oauth",
+  "cookie",
+  "cookies",
+  "credential",
+  "credentials",
+]);
+function isSessionSecretName(name: string): boolean {
+  if (isSecretName(name)) return true;
+  const parts = nameParts(name);
+  return (
+    parts.some((part) => SESSION_SECRET_WORDS.has(part)) ||
+    parts.at(-1) === "session"
+  );
+}
 const MAX_DEPTH = 12;
 const MAX_NODES = 20_000;
+
+function redactSessionLine(line: string): string {
+  if (line.length === 0) return line;
+  try {
+    return JSON.stringify(
+      redactSessionValue(JSON.parse(line), 0, { nodes: 0 }),
+    );
+  } catch {
+    return OMITTED_LINE;
+  }
+}
 
 // One JSON object per line. A line that cannot be redacted is omitted, not copied raw.
 export function redactSessionJsonl(text: string): string {
   const trailingNewline = text.endsWith("\n");
   const lines = text.split("\n");
   if (trailingNewline) lines.pop();
-  const redacted = lines.map((line) => {
-    if (line.length === 0) return line;
-    try {
-      return JSON.stringify(
-        redactSessionValue(JSON.parse(line), 0, { nodes: 0 }),
-      );
-    } catch {
-      return JSON.stringify({ crysk: "session line omitted" });
-    }
-  });
-  return redacted.join("\n") + (trailingNewline ? "\n" : "");
+  return (
+    lines.map(redactSessionLine).join("\n") + (trailingNewline ? "\n" : "")
+  );
 }
 
 function redactSessionValue(
@@ -140,19 +243,55 @@ function redactSessionValue(
   if (Array.isArray(value)) {
     return value.map((item) => redactSessionValue(item, depth + 1, budget));
   }
-  if (typeof value === "object" && value !== null) {
-    const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) {
-      throw new Error("non-JSON session value");
-    }
+  if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      out[key] = SESSION_SECRET_KEY.test(key)
-        ? "[REDACTED]"
-        : redactSessionValue(item, depth + 1, budget);
+      if (SESSION_SECRET_KEY.test(key)) out[key] = "[REDACTED]";
+      else if (isSessionSecretName(key))
+        out[key] = redactStrings(item, depth + 1, budget);
+      else out[key] = redactSessionValue(item, depth + 1, budget);
     }
     return out;
   }
+  return redactScalar(value);
+}
+
+// Under a credential name every string goes; numbers, booleans and null stay,
+// so a count is never mistaken for a secret.
+function redactStrings(
+  value: unknown,
+  depth: number,
+  budget: { nodes: number },
+): unknown {
+  if (++budget.nodes > MAX_NODES || depth > MAX_DEPTH) {
+    throw new Error("session redaction limit");
+  }
+  if (typeof value === "string") return "[REDACTED]";
+  if (Array.isArray(value)) {
+    return value.map((item) => redactStrings(item, depth + 1, budget));
+  }
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = redactStrings(item, depth + 1, budget);
+    }
+    return out;
+  }
+  return redactScalar(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new Error("non-JSON session value");
+  }
+  return true;
+}
+
+function redactScalar(value: unknown): unknown {
   if (
     value === null ||
     typeof value === "boolean" ||
@@ -163,6 +302,12 @@ function redactSessionValue(
   throw new Error("non-JSON session value");
 }
 
+// A string that holds JSON (a config file a hunter Read) is redacted twice
+// over: the quote-safe text patterns run on the raw string first, where a key
+// still sits next to its value, then the parse redacts every key and string
+// value. Text patterns that can eat a quote run only on strings that are not
+// JSON, so the parse is never broken by a regex. If the parse fails anyway,
+// the string goes through every text pattern instead.
 function redactSessionString(
   value: string,
   depth: number,
@@ -174,7 +319,9 @@ function redactSessionString(
     (trimmed.startsWith("[") && trimmed.endsWith("]"));
   if (wrapped) {
     try {
-      const inner = JSON.parse(trimmed) as unknown;
+      const inner = JSON.parse(
+        redactSecretShapes(trimmed, isSessionSecretName, true),
+      ) as unknown;
       if (typeof inner === "object" && inner !== null) {
         return JSON.stringify(redactSessionValue(inner, depth + 1, budget));
       }
@@ -182,7 +329,9 @@ function redactSessionString(
       // Text that only looks like JSON. The text patterns run on it below.
     }
   }
-  return redactDiagnostic(redactEvidenceText(value));
+  return redactDiagnostic(
+    redactEvidenceText(redactSecretShapes(value, isSessionSecretName, true)),
+  );
 }
 
 async function dropStaleTrace(dest: string): Promise<void> {

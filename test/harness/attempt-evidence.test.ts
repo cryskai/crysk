@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { StepSpec } from "#review/step-runner";
 import * as atomicWrite from "../../src/execution/atomic-write";
@@ -364,6 +364,61 @@ test("persistAttemptEvidence redacts a secret-looking value inside a record's da
   const rawCaptureText = (await readFile(captureFile)).toString("utf8");
   expect(rawCaptureText).not.toContain("SYNTHETIC_UNREDACTED_SECRET_COOKIE");
   expect(rawCaptureText).toContain("[REDACTED HEADER]");
+});
+// Audit R2 (odd/tasks/review-traces.md L25): the shapes the shared redactor
+// gained reach OpenCode captures and the attempt log too. Fake credentials are
+// assembled at run time.
+test("an OpenCode capture and the attempt log lose PEM keys, URL passwords and quoted tokens", async () => {
+  const pemBody = `MIIEow${"Qk9mN2xZ".repeat(8)}`;
+  const dbPassword = `Pw0rd-${"db"}-9f8e7d`;
+  const apiToken = `Zq81${"xR4vN7mB2kL9"}pQ3w`;
+  const text = [
+    `-----BEGIN ${"PRIVATE"} KEY-----`,
+    pemBody,
+    `-----END ${"PRIVATE"} KEY-----`,
+    `postgres://app:${dbPassword}@db/app`,
+    `{"apiToken": "${apiToken}"}`,
+  ].join("\n");
+  const redactedJson = JSON.stringify({
+    schemaVersion: 1,
+    sessionId: "s",
+    attempt: 1,
+    records: [
+      {
+        seq: 1,
+        observedMs: 1,
+        kind: "event",
+        data: { type: "message.part.updated", text },
+      },
+    ],
+  });
+  const x = await setup(undefined, {
+    stderrTail: text,
+    diagnosticEvidence: {
+      schema: "pr-hero.opencode-observations.v1",
+      status: "complete",
+      redactedJson,
+    },
+  });
+  try {
+    await x.harness.run(x.step);
+    const e = await waitForEvidence(x.step);
+    const capture = await readFile(
+      path.join(x.dir, e.capture.relativePath),
+      "utf8",
+    );
+    const log = await readFile(
+      attemptLogPath(x.step.outPath, "hunter", 1),
+      "utf8",
+    );
+    for (const secret of [pemBody, dbPassword, apiToken]) {
+      expect(capture).not.toContain(secret);
+      expect(log).not.toContain(secret);
+    }
+    expect(capture).toContain("postgres://[REDACTED]@db/app");
+  } finally {
+    await rm(x.dir, { recursive: true, force: true });
+  }
 });
 test("persistAttemptEvidence drops a well-schemed but non-wrapper capture with a specific reason", async () => {
   const redactedJson = JSON.stringify({ not: "a capture wrapper at all" });
