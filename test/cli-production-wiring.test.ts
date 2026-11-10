@@ -1100,7 +1100,7 @@ describe("an OpenCode effort is checked against the model's variants before the 
     const AIAND = "opencode:aiand/deepseek-ai/deepseek-v4.1-flash-1017";
     const CI = { GITHUB_ACTIONS: "true" };
     const AIAND_REFUSAL =
-      "models name OpenCode provider aiand (hunter-logic), but no CRYSK_OPENCODE_AIAND_API_KEY secret reached the run (the OpenCode auth file has no aiand record): set it and pass it in the crysk-secrets input";
+      "models name OpenCode provider aiand (hunter-logic), but no CRYSK_OPENCODE_AIAND_API_KEY secret reached the run (the OpenCode auth file has no aiand record): set it, pass it in the crysk-secrets input, and name the model in the models input (the model input builds no OpenCode auth file)";
 
     async function refusedWith(promise: Promise<unknown>): Promise<unknown> {
       try {
@@ -1191,7 +1191,7 @@ describe("an OpenCode effort is checked against the model's variants before the 
           expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
           const refusal = error as OpenCodeCredentialRefusalError;
           expect(refusal.message).toBe(
-            "models name OpenCode provider openai (hunter-logic), but no CRYSK_OPENCODE_OPENAI_OAUTH secret reached the run (the OpenCode auth file has no openai subscription record): set it, or CRYSK_OPENCODE_OPENAI_API_KEY to bill per token, and pass it in the crysk-secrets input",
+            "models name OpenCode provider openai (hunter-logic), but no CRYSK_OPENCODE_OPENAI_OAUTH secret reached the run (the OpenCode auth file has no openai subscription record): set it, or CRYSK_OPENCODE_OPENAI_API_KEY to bill per token, pass it in the crysk-secrets input, and name the model in the models input (the model input builds no OpenCode auth file)",
           );
           expect(refusal.cls).toEqual({
             kind: "credential",

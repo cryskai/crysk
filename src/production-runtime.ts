@@ -1227,7 +1227,9 @@ async function readOpenCodeAuthText(
   }
 }
 
-// The refusal for one route's missing record, in CI and locally.
+// The refusal for one route's missing record, in CI and locally. In CI it also names
+// the models input: setup builds the auth file only from the providers `models`
+// names, so a secret passed for a model given through the model input never lands.
 function missingRecordSentence(
   provider: string,
   kind: CredentialKind,
@@ -1256,12 +1258,12 @@ function missingRecordSentence(
   if (oauth) {
     const secret = `CRYSK_OPENCODE_${token}_OAUTH`;
     return {
-      text: `${where}, but no ${secret} secret reached the run (the OpenCode auth file has no ${record}): set it, or ${apiKey} to bill per token, and pass it in the crysk-secrets input`,
+      text: `${where}, but no ${secret} secret reached the run (the OpenCode auth file has no ${record}): set it, or ${apiKey} to bill per token, pass it in the crysk-secrets input, and name the model in the models input (the model input builds no OpenCode auth file)`,
       secret,
     };
   }
   return {
-    text: `${where}, but no ${apiKey} secret reached the run (the OpenCode auth file has no ${record}): set it and pass it in the crysk-secrets input`,
+    text: `${where}, but no ${apiKey} secret reached the run (the OpenCode auth file has no ${record}): set it, pass it in the crysk-secrets input, and name the model in the models input (the model input builds no OpenCode auth file)`,
     secret: apiKey,
   };
 }
