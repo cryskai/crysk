@@ -695,7 +695,9 @@ The platform decides whether a run's trace may carry it: every token exchange re
 the step outputs it as `trace-content` (`true` only when the platform sent exactly `true`; anything else,
 or nothing, is `false`). The trace step reads the value from the same exchange as its run token. With
 `false` the trace carries metadata only: no content attribute, no status message, no transcript, and no
-attribute that is more than one word. Today the platform answers `true` for a `full` repository and `false`
+attribute that is more than one word. Each finding keeps only the fields the findings upload keeps for a
+`metadata_only` repository (never its `symbol`, `dedupe_key`, `hop_trail` or `proof_refs`), and the
+refuted, merged and root-cause records become their counts. Today the platform answers `true` for a `full` repository and `false`
 for a `metadata_only` one, and strips content again on its side. Every content string passes the engine's
 secret redaction on the runner before it is sent; the OpenCode capture is also redacted by key, so a value
 under a credential-like name (`apiToken`) never leaves.

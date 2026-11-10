@@ -754,7 +754,9 @@ const METADATA_ONLY_FINDING_FIELDS = [
   "hops_used",
 ] as const;
 
-function metadataOnlyFinding(finding: unknown): Record<string, unknown> {
+// Also the trace step's reduction of findings.json in a metadata trace
+// (src/ci/trace-bundle.ts), so both uploads keep the same fields.
+export function metadataOnlyFinding(finding: unknown): Record<string, unknown> {
   const kept: Record<string, unknown> = {};
   if (typeof finding !== "object" || finding === null) return kept;
   for (const field of METADATA_ONLY_FINDING_FIELDS) {

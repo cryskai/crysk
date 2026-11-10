@@ -682,6 +682,85 @@ describe("buildTraceBundle: trace_content false", () => {
   });
 });
 
+describe("buildTraceBundle: findings in a metadata trace", () => {
+  // Single words, so the word rule alone would let them through: each can
+  // quote the customer's code, and platform-report.ts keeps them on the runner
+  // for a metadata_only repository (METADATA_ONLY_FINDING_FIELDS).
+  const SYMBOL = "PLANTED_SYMBOL_monthlyCosts";
+  const DEDUPE = "src/secret.ts:PLANTED_DEDUPE:15";
+  const HOP = "src/secret.ts:PLANTED_HOP";
+  const PROOF = "src/secret.ts:PLANTED_PROOF";
+  function run(): TraceRunInput {
+    const base = reviewedRun();
+    return {
+      ...base,
+      findings: {
+        schema_version: "1.1.0",
+        findings: [
+          {
+            id: "F001",
+            path: "src/secret.ts",
+            line: 42,
+            tier: "blocking",
+            refuter_verdict: "corroborated",
+            symbol: SYMBOL,
+            dedupe_key: DEDUPE,
+            hop_trail: [HOP],
+            proof_refs: [PROOF],
+          },
+        ],
+        debug: {
+          refuted: [{ id: "F009", symbol: SYMBOL }],
+          deduped: [{ kept: "F001", dedupe_key: DEDUPE }],
+          root_causes: {
+            clusters: [{ ids: ["F001"] }],
+            distinct_root_causes: 1,
+          },
+        },
+      },
+    };
+  }
+
+  test("each finding keeps only the report step's metadata fields", () => {
+    const bundle = buildTraceBundle(run(), false);
+    const serialized = JSON.stringify(bundle);
+    for (const planted of [SYMBOL, DEDUPE, HOP, PROOF]) {
+      expect(serialized).not.toContain(planted);
+    }
+    const root = named(bundle, "invoke_workflow crysk.review");
+    expect(attr(root, "crysk.findings.findings.0.id")).toBe("F001");
+    expect(attr(root, "crysk.findings.findings.0.path")).toBe("src/secret.ts");
+    expect(attr(root, "crysk.findings.findings.0.tier")).toBe("blocking");
+    expect(attr(root, "crysk.findings.findings.0.refuter_verdict")).toBe(
+      "corroborated",
+    );
+  });
+
+  test("the debug records become counts", () => {
+    const root = named(
+      buildTraceBundle(run(), false),
+      "invoke_workflow crysk.review",
+    );
+    expect(attr(root, "crysk.findings.debug.refuted")).toBe(1);
+    expect(attr(root, "crysk.findings.debug.deduped")).toBe(1);
+    expect(attr(root, "crysk.findings.debug.root_causes.clusters")).toBe(1);
+    expect(
+      attr(root, "crysk.findings.debug.root_causes.distinct_root_causes"),
+    ).toBe(1);
+  });
+
+  test("with content, the findings go whole", () => {
+    const root = named(
+      buildTraceBundle(run(), true),
+      "invoke_workflow crysk.review",
+    );
+    expect(attr(root, "crysk.findings.findings.0.symbol")).toBe(SYMBOL);
+    expect(attr(root, "crysk.findings.debug.deduped.0.dedupe_key")).toBe(
+      DEDUPE,
+    );
+  });
+});
+
 describe("buildTraceBundle: a hunters-failed run", () => {
   const bundle = buildTraceBundle(huntersFailedRun(), true);
   const root = named(bundle, "invoke_workflow crysk.review");
@@ -895,6 +974,30 @@ describe("encodeTrace: the size cap", () => {
     expect(new TextDecoder().decode(result.body)).toBe(
       JSON.stringify(result.bundle),
     );
+  });
+
+  test("an encoding that throws counts as over the cap, and the metadata still goes", () => {
+    // JSON.stringify throws a RangeError past the engine's string limit; a
+    // bundle that cannot be encoded must lose its transcripts, not the trace.
+    const strict = (bytes: Uint8Array) => {
+      if (new TextDecoder().decode(bytes).includes("bbbb")) {
+        throw new RangeError("Invalid string length");
+      }
+      return bytes;
+    };
+    const result = encodeTrace(
+      run(),
+      true,
+      {
+        compressed: Number.MAX_SAFE_INTEGER,
+        decompressed: Number.MAX_SAFE_INTEGER,
+      },
+      strict,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.droppedTranscripts).toBe(1);
+    expect(result.bundle.truncated).toBe(true);
   });
 
   test("a bundle whose metadata alone is over a cap is not sent", () => {

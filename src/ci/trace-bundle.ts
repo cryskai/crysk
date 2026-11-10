@@ -36,6 +36,7 @@ import {
   redactSessionDocument,
   redactSessionText,
 } from "../execution/claude-session-trace";
+import { metadataOnlyFinding } from "./platform-report";
 import {
   type ChatMessage,
   type Conversation,
@@ -454,9 +455,42 @@ function rootAttributes(run: TraceRunInput, content: boolean): Attributes {
     }
     attrs.flatten("crysk.pipeline", rest);
   }
-  if (isRecord(run.findings)) attrs.flatten("crysk.findings", run.findings);
+  if (isRecord(run.findings)) {
+    attrs.flatten(
+      "crysk.findings",
+      content ? run.findings : metadataFindings(run.findings),
+    );
+  }
   if (isRecord(run.cli)) attrs.flatten("crysk.cli", run.cli);
   return attrs;
+}
+
+// findings.json for a metadata trace. A single word can still quote the code (a
+// symbol, a dedupe key, a hop), so each finding keeps only the fields the
+// report step sends for a metadata_only repository, and the debug records
+// (refuted and merged findings, root-cause clusters) become their counts.
+function metadataFindings(
+  findings: Record<string, unknown>,
+): Record<string, unknown> {
+  const doc: Record<string, unknown> = { ...findings };
+  if (Array.isArray(doc.findings)) {
+    doc.findings = doc.findings.map(metadataOnlyFinding);
+  }
+  if (doc.debug !== undefined) doc.debug = countsOf(doc.debug);
+  return doc;
+}
+
+// Arrays become their length; numbers and booleans stay; text goes.
+function countsOf(value: unknown): unknown {
+  if (Array.isArray(value)) return value.length;
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const counted = countsOf(item);
+    if (counted !== undefined) out[key] = counted;
+  }
+  return out;
 }
 
 export function buildTraceBundle(
@@ -840,16 +874,23 @@ export function encodeTrace(
   );
   let jsonBytes = 0;
   let compressedBytes = 0;
+  // An encoding that throws (JSON.stringify's RangeError past the runtime's
+  // string limit, a gzip out of memory) is over the cap like any other.
   const fits = (candidate: TraceBundle): Uint8Array | undefined => {
-    const json = new TextEncoder().encode(JSON.stringify(candidate));
-    jsonBytes = json.byteLength;
-    if (jsonBytes > limits.decompressed) {
+    try {
+      const json = new TextEncoder().encode(JSON.stringify(candidate));
+      jsonBytes = json.byteLength;
+      if (jsonBytes > limits.decompressed) {
+        compressedBytes = Number.POSITIVE_INFINITY;
+        return undefined;
+      }
+      const body = gzip(json);
+      compressedBytes = body.byteLength;
+      return compressedBytes <= limits.compressed ? body : undefined;
+    } catch {
       compressedBytes = Number.POSITIVE_INFINITY;
       return undefined;
     }
-    const body = gzip(json);
-    compressedBytes = body.byteLength;
-    return compressedBytes <= limits.compressed ? body : undefined;
   };
 
   let dropped = 0;
