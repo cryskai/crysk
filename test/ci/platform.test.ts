@@ -767,6 +767,11 @@ describe("action.yml platform wiring", () => {
       ),
     );
     expect(step.env?.CRYSK_JOB_STATUS).toBe(expression("job.status"));
+    // The refresh that runs only on a cancel: a second, documented signal.
+    expect(step.env?.CRYSK_CANCEL_REFRESH).toBe(
+      expression("steps.platform-settle.outcome"),
+    );
+    expect(step.env?.CRYSK_ACTION_PATH).toBe(expression("github.action_path"));
     expect(step.env?.CRYSK_RUN_DIR).toBe(
       expression("steps.run-crysk.outputs.run_dir"),
     );

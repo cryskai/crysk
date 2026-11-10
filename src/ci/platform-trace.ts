@@ -227,6 +227,19 @@ interface OutcomeFacts {
   startedAtMs?: number;
 }
 
+// A cancelled job: job.status says so, or the cancelled-run refresh ran (it
+// runs only on a cancel). The second signal is there because the job context's
+// value inside a composite action is not documented.
+function wasCancelled(
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  const refresh = env.CRYSK_CANCEL_REFRESH ?? "";
+  return (
+    env.CRYSK_JOB_STATUS === "cancelled" ||
+    (refresh !== "" && refresh !== "skipped")
+  );
+}
+
 // The outcome from cli.json (a killed CLI that left `reviewing`, or none, is an
 // error), and the code the publisher renders from the same records.
 export function readOutcome(
@@ -238,7 +251,7 @@ export function readOutcome(
   const startedAtMs =
     dir === "" ? undefined : (mtimeMs(startedFile) ?? mtimeMs(triggerFile));
   const timing = startedAtMs === undefined ? {} : { startedAtMs };
-  if (env.CRYSK_JOB_STATUS === "cancelled") {
+  if (wasCancelled(env)) {
     const cli =
       dir === ""
         ? undefined
@@ -285,18 +298,26 @@ export function readOutcome(
   return { outcome, code, ...(cli === undefined ? {} : { cli }), ...timing };
 }
 
-// The engine that wrote the run's records. A run with none (a refusal before
-// the review started) names no version: reading package.json from here would
-// derive a path from import.meta, which only src/assets.ts may do, and
-// src/assets.ts is not builtins-only.
-function engineVersion(...docs: unknown[]): string | undefined {
+// The engine that wrote the run's records, else the action's own package.json
+// (CRYSK_ACTION_PATH, the step's github.action_path): a refusal before the review
+// wrote anything still names its engine. Never derived from import.meta, which
+// only src/assets.ts may do.
+function engineVersion(
+  env: Readonly<Record<string, string | undefined>>,
+  ...docs: unknown[]
+): string | undefined {
   for (const doc of docs) {
     if (isRecord(doc) && isRecord(doc.engine)) {
       const version = doc.engine.version;
       if (typeof version === "string" && version !== "") return version;
     }
   }
-  return undefined;
+  const actionPath = env.CRYSK_ACTION_PATH ?? "";
+  if (actionPath === "") return undefined;
+  const pkg = readJson(path.join(actionPath, "package.json"));
+  return isRecord(pkg) && typeof pkg.version === "string" && pkg.version !== ""
+    ? pkg.version
+    : undefined;
 }
 
 export function readTraceRun(
@@ -319,7 +340,7 @@ export function readTraceRun(
     isRecord(findings) ? findings.head_sha : undefined,
     env.TRIGGER_HEAD_SHA,
   ].find((sha): sha is string => typeof sha === "string" && SHA.test(sha));
-  const version = engineVersion(findings, pipeline);
+  const version = engineVersion(env, findings, pipeline);
   return {
     outcome: facts.outcome,
     code: facts.code,

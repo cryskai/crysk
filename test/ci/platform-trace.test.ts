@@ -346,6 +346,48 @@ describe("runTraceStep: which run directory", () => {
     expect(body.code).toBe("CRYSK-CANCELLED");
   });
 
+  // The job context's status inside a composite action is not documented, so
+  // the step also reads the cancelled-run refresh, which runs only on a cancel.
+  test("a cancelled-run refresh that ran marks the run cancelled, whatever job.status says", async () => {
+    triggerRecord();
+    cliRecord({ v: 1, outcome: "reviewing", head_sha: HEAD });
+    const r = await run(
+      [202],
+      env({
+        CRYSK_JOB_STATUS: "",
+        CRYSK_CANCEL_REFRESH: "success",
+        CRYSK_RUN_DIR: "",
+      }),
+    );
+    expect(r.received[0]?.body.code).toBe("CRYSK-CANCELLED");
+  });
+
+  test("a skipped cancelled-run refresh is no cancel", async () => {
+    triggerRecord();
+    cliRecord({ v: 1, outcome: "reviewed", head_sha: HEAD });
+    const r = await run(
+      [202],
+      env({ CRYSK_CANCEL_REFRESH: "skipped", CRYSK_RUN_DIR: "" }),
+    );
+    expect(r.received[0]?.body.outcome).toBe("reviewed");
+    expect(r.received[0]?.body.code).toBeNull();
+  });
+
+  test("a run with no records names the action's own engine version", async () => {
+    triggerRecord();
+    cliRecord({ v: 1, outcome: "error", cls: { kind: "unknown" } });
+    const actionPath = path.join(root, "action");
+    write(path.join(actionPath, "package.json"), { version: "7.7.7" });
+    const r = await run(
+      [202],
+      env({ CRYSK_RUN_DIR: "", CRYSK_ACTION_PATH: actionPath }),
+    );
+    expect(spansOf(r.received[0]?.body ?? {})[0]?.attributes).toContainEqual({
+      key: "crysk.engine.version",
+      value: { stringValue: "7.7.7" },
+    });
+  });
+
   test("a skipped review has no code", async () => {
     triggerRecord();
     cliRecord({ v: 1, outcome: "skipped", skip: "size" });

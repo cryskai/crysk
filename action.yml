@@ -631,8 +631,13 @@ runs:
         CRYSK_TRACE_CONTENT: ${{ steps.platform-settle.outputs.trace-content || steps.platform-publish.outputs.trace-content || steps.platform.outputs.trace-content }}
         CRYSK_RUN_DIR: ${{ steps.run-crysk.outputs.run_dir }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
-        # `cancelled` names a cancelled job, whose records stop mid-run.
+        # `cancelled` names a cancelled job, whose records stop mid-run. The
+        # cancelled-run refresh runs only on a cancel, so its outcome is a second
+        # signal: what job.status reads inside a composite action is not documented.
         CRYSK_JOB_STATUS: ${{ job.status }}
+        CRYSK_CANCEL_REFRESH: ${{ steps.platform-settle.outcome }}
+        # The engine version of a run that wrote no records, from package.json.
+        CRYSK_ACTION_PATH: ${{ github.action_path }}
         TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
         TRIGGER_HEAD_SHA: ${{ steps.trigger.outputs.head_sha }}
       run: bun "${{ github.action_path }}/src/ci/platform-trace.ts"
