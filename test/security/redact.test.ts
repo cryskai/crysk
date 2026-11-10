@@ -668,3 +668,32 @@ describe("redactSessionText: a key after an encoded or escaped prefix", () => {
     expect(redactSessionText(text)).toBe(text);
   });
 });
+
+// A line of unclosed expressions after secret names (`token=${{ ` again and
+// again) once cost a scan to the end of the line from every start. Redacting
+// stays linear: 4 MiB, the largest string a capture accepts, takes a few
+// hundred milliseconds, where the quadratic scan took minutes. The bound
+// leaves room for a slow runner and still fails on any per-start rescan; each
+// repeat is redacted as it would be alone.
+describe("redaction stays linear on unclosed expressions", () => {
+  const MIB = 1024 * 1024;
+  test.each([
+    ["redactEvidenceText", redactEvidenceText, "token=${{ "],
+    ["redactEvidenceText", redactEvidenceText, "a=${{ "],
+    ["redactSessionText", redactSessionText, "token=${{ "],
+    ["redactSessionText", redactSessionText, "password: ${{ "],
+  ])("%s on a 4 MiB line of %p", (_name, redact, unit) => {
+    const count = Math.floor((4 * MIB) / unit.length);
+    const started = performance.now();
+    const out = redact(unit.repeat(count));
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(2_000);
+    expect(out).toBe(redact(unit).repeat(count));
+  });
+
+  test("an unclosed expression after a secret name is hidden, not kept", () => {
+    expect(redactEvidenceText("token=${{ a token=${{ b")).toBe(
+      "token=[REDACTED] a token=[REDACTED] b",
+    );
+  });
+});

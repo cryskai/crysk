@@ -94,7 +94,9 @@ export function isNonSecretValue(value: string, name = ""): boolean {
 
 // A GitHub Actions expression is one value even though it holds spaces, so
 // `token: ${{ github.token }}` is read whole and kept, not cut at `${{`.
-export const EXPRESSION_VALUE = String.raw`\$\{\{[^\r\n]*?\}\}(?=[\s,;&"'\\]|$)`;
+// Its body never holds another `${{` and is at most 512 characters, so a line
+// of unclosed `token=${{ ` is scanned once, not to its end from every start.
+export const EXPRESSION_VALUE = String.raw`\$\{\{(?:[^$}\r\n]|\$(?!\{\{)|\}(?!\})){0,512}\}\}(?=[\s,;&"'\\]|$)`;
 
 // Every pattern below stops at quotes and backslashes, so it can run on JSON
 // text without breaking the parse that follows. Each one starts only where a
