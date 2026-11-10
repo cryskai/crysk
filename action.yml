@@ -610,11 +610,14 @@ runs:
     # (prompts, outputs, tool calls), and only an exact `true` lets it.
     #
     # WHY it cannot turn the job red: a failed upload is a `::warning::` and the
-    # step exits 0; one retry on a 503. Builtins only, like the report: it runs
-    # even when nothing installed. A standalone run has no run token, so it
-    # never reaches this step and sends nothing.
+    # step exits 0; one retry on a 503. continue-on-error covers what the step
+    # cannot catch, the runner killing it (out of memory on a huge trace).
+    # Builtins only, like the report: it runs even when nothing installed. A
+    # standalone run has no run token, so it never reaches this step and sends
+    # nothing.
     - name: Upload the Crysk trace
       id: trace
+      continue-on-error: true
       if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
       shell: bash
       env:

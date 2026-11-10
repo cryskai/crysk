@@ -678,7 +678,8 @@ still in Development, so the engine pins that version and records it as `crysk.g
   reasoning tokens apart), `gen_ai.usage.cost` (list price in USD: the notional cost on a subscription, the
   cash cost on a per-token key) and the attempt's evidence and settlement as `crysk.attempt.*`;
 - an `execute_tool <tool>` span per tool call the model made, read from the Claude CLI session transcript
-  or the OpenCode capture, with `gen_ai.tool.name`, the call id and its timing.
+  or the OpenCode capture, with `gen_ai.tool.name`, the call id and its timing. Only a trace with content
+  has them (see below): a metadata trace never reads the transcripts.
 
 Every span has its start and end time, from the attempt's settlement record and the transcript. The body is
 `{ schema: "crysk.trace.v1", outcome, code, content, truncated, otlp, transcripts }`, gzip-compressed, posted
@@ -695,18 +696,27 @@ The platform decides whether a run's trace may carry it: every token exchange re
 the step outputs it as `trace-content` (`true` only when the platform sent exactly `true`; anything else,
 or nothing, is `false`). The trace step reads the value from the same exchange as its run token. With
 `false` the trace carries metadata only: no content attribute, no status message, no transcript, and no
-attribute that is more than one word. Each finding keeps only the fields the findings upload keeps for a
+attribute that is more than one word. The step then reads no transcript, capture, prompt or output file at
+all, only the evidence, so a metadata trace has no `execute_tool` spans and takes its response model from
+the evidence. Each finding keeps only the fields the findings upload keeps for a
 `metadata_only` repository (never its `symbol`, `dedupe_key`, `hop_trail` or `proof_refs`), and the
 refuted, merged and root-cause records become their counts. Today the platform answers `true` for a `full` repository and `false`
-for a `metadata_only` one, and strips content again on its side. Every content string passes the engine's
-secret redaction on the runner before it is sent; the OpenCode capture is also redacted by key, so a value
-under a credential-like name (`apiToken`) never leaves.
+for a `metadata_only` one, and strips content again on its side. Every string in the OTLP document, a
+single word as much as a prompt (a bare key is one word), passes the engine's secret redaction on the
+runner before it is sent, and so do span names. The Claude session transcripts are the copy the CLI already
+redacted; the OpenCode capture is redacted again by key, so a value under a credential-like name
+(`apiToken`) never leaves.
 
 **Size.** The platform accepts at most 25 MB compressed and 200 MB uncompressed. A larger trace drops the
 transcripts, the largest first, then the content, and sets `truncated: true`; the metadata always stays. A
-trace too large even then is not sent, with a `::warning::`.
+trace too large even then is not sent, with a `::warning::`. The step serializes and compresses the OTLP
+document and each transcript once, as separate pieces of one gzip stream, so both sizes of any choice of
+transcripts are exact and nothing is encoded twice; content whose text alone passes 200 MB is not built
+past that point. Eight 30 MB Claude sessions peaked at about 1.5 GB of memory with content, 0.1 GB
+without.
 
-The trace never fails the job. An HTTP 503 (the platform could not store it) is retried once; any other
+The trace never fails the job; the step is also `continue-on-error`, so even the runner killing it cannot
+turn the job red. An HTTP 503 (the platform could not store it) is retried once; any other
 failure, a 401, 400, 413, 5xx or a network error, prints a `::warning::` naming the status and the API's
 message, never the token, and the step exits 0. A repeat of the same run attempt is answered as already
 recorded and is not an error.

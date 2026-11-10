@@ -132,9 +132,15 @@ const TRANSCRIPT = /^trace\.(.+)\.attempt(\d+)\.jsonl$/;
 // Every step the run directory holds files for: pipeline.json's steps, and any
 // step whose evidence or transcript exists without a pipeline row (a run that
 // stopped before it wrote pipeline.json).
+//
+// Without `content` only the evidence is read. The transcripts (up to 65 MiB
+// each), the captures, the prompts and the outputs are content, and reading
+// them for a metadata trace cost memory for nothing but the tool spans, which
+// a metadata trace therefore does not have.
 export function readRunSteps(
   runDir: string,
   pipeline: unknown,
+  content: boolean,
 ): TraceStepInput[] {
   const stepsDir = path.join(runDir, "steps");
   let names: string[] = [];
@@ -155,6 +161,7 @@ export function readRunSteps(
     const file = path.join(stepsDir, name);
     const capture = CAPTURE.exec(name);
     if (capture?.[1] !== undefined) {
+      if (!content) continue;
       const text = readText(file, MAX_TRANSCRIPT_BYTES);
       if (text !== undefined) {
         attemptOf(capture[1], Number(capture[2])).openCodeCapture = text;
@@ -170,7 +177,7 @@ export function readRunSteps(
       continue;
     }
     const transcript = TRANSCRIPT.exec(name);
-    if (transcript?.[1] !== undefined) {
+    if (transcript?.[1] !== undefined && content) {
       const text = readText(file, MAX_TRANSCRIPT_BYTES);
       if (text !== undefined) {
         attemptOf(transcript[1], Number(transcript[2])).sessionJsonl = text;
@@ -188,6 +195,8 @@ export function readRunSteps(
     ]),
   ];
   return allNames.map((name) => {
+    const attempts = [...(steps.get(name)?.values() ?? [])];
+    if (!content) return { name, attempts };
     const meta = metas.find((item) => item.name === name);
     // pipeline.json names absolute paths of the runner that wrote them; the
     // files sit in steps/ under the same basename.
@@ -215,7 +224,7 @@ export function readRunSteps(
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
       ...(promptBody === undefined ? {} : { promptBody }),
       ...(output === undefined ? {} : { output }),
-      attempts: [...(steps.get(name)?.values() ?? [])],
+      attempts,
     };
   });
 }
@@ -251,6 +260,8 @@ export function readOutcome(
   const startedAtMs =
     dir === "" ? undefined : (mtimeMs(startedFile) ?? mtimeMs(triggerFile));
   const timing = startedAtMs === undefined ? {} : { startedAtMs };
+  // A cancel after the CLI wrote a terminal outcome (the job was cancelled
+  // during the steps after the review) keeps that outcome: the review ran.
   if (wasCancelled(env)) {
     const cli =
       dir === ""
@@ -258,12 +269,14 @@ export function readOutcome(
         : parseCliRecord(
             readText(path.join(dir, CLI_RECORD_FILE), MAX_FILE_BYTES) ?? "",
           );
-    return {
-      outcome: "error",
-      code: "CRYSK-CANCELLED",
-      ...(cli === undefined ? {} : { cli }),
-      ...timing,
-    };
+    if (cli === undefined || !OUTCOMES.has(cli.outcome)) {
+      return {
+        outcome: "error",
+        code: "CRYSK-CANCELLED",
+        ...(cli === undefined ? {} : { cli }),
+        ...timing,
+      };
+    }
   }
   if (dir === "") return { outcome: "error", code: null };
   const record = parseTriggerRecord(
@@ -323,6 +336,7 @@ function engineVersion(
 export function readTraceRun(
   env: Readonly<Record<string, string | undefined>>,
   now: number,
+  content: boolean,
 ): TraceRunInput {
   const facts = readOutcome(env);
   const runDir = locateRunDir(env);
@@ -347,7 +361,7 @@ export function readTraceRun(
     ...(facts.cli === undefined ? {} : { cli: facts.cli }),
     ...(pipeline === undefined ? {} : { pipeline }),
     ...(findings === undefined ? {} : { findings }),
-    steps: runDir === undefined ? [] : readRunSteps(runDir, pipeline),
+    steps: runDir === undefined ? [] : readRunSteps(runDir, pipeline, content),
     ...(Number.isInteger(pr) && pr > 0 ? { prNumber: pr } : {}),
     ...(head === undefined ? {} : { headSha: head }),
     ...(version === undefined ? {} : { engineVersion: version }),
@@ -450,7 +464,7 @@ export async function runTraceStep(deps: TraceStepDeps): Promise<number> {
       return 0;
     }
     const content = deps.env.CRYSK_TRACE_CONTENT === "true";
-    const run = readTraceRun(deps.env, (deps.now ?? Date.now)());
+    const run = readTraceRun(deps.env, (deps.now ?? Date.now)(), content);
     const encoded = encodeTrace(run, content);
     if (!encoded.ok) {
       warn(

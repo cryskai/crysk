@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { parseCliRecord, parseTriggerRecord } from "../../src/ci/outcome";
-import { runTraceStep } from "../../src/ci/platform-trace";
+import { readRunSteps, runTraceStep } from "../../src/ci/platform-trace";
 
 const RUN_TOKEN = "run_token_secret";
 const HEAD = "067297acd7e7aac125a156bf597f4d05d255659e";
@@ -262,6 +262,51 @@ describe("runTraceStep: the upload", () => {
     }
   });
 
+  // B2: a metadata trace carries nothing from a transcript, so reading one (up
+  // to 65 MiB each) only cost memory. Nor are the prompt, body or output read.
+  test("trace content false: no transcript, capture, prompt, body or output is read", () => {
+    reviewedRunDir();
+    write(path.join(runDir, "steps", "hunter-logic.body.md"), PROMPT);
+    write(
+      path.join(runDir, "steps", "evidence.hunter-logic.attempt1.capture.json"),
+      { records: [] },
+    );
+    const pipeline = JSON.parse(
+      readFileSync(path.join(runDir, "pipeline.json"), "utf8"),
+    );
+    const steps = readRunSteps(runDir, pipeline, false);
+    expect(steps.map((step) => Object.keys(step).sort())).toEqual([
+      ["attempts", "name"],
+    ]);
+    expect(
+      steps[0]?.attempts.map((attempt) => Object.keys(attempt).sort()),
+    ).toEqual([["attempt", "evidence"]]);
+  });
+
+  test("trace content false: a transcript's tool call leaves no span", async () => {
+    triggerRecord();
+    cliRecord({ v: 1, outcome: "reviewed", head_sha: HEAD });
+    reviewedRunDir();
+    write(
+      path.join(runDir, "steps", "trace.hunter-logic.attempt1.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        timestamp: at(2),
+        message: {
+          id: "msg_1",
+          content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }],
+        },
+      })}\n`,
+    );
+    const r = await run([202], env({ CRYSK_TRACE_CONTENT: "false" }));
+    const names = spansOf(r.received[0]?.body ?? {}).map((span) => span.name);
+    expect(names).toEqual([
+      "invoke_workflow crysk.review",
+      "invoke_agent hunter-logic",
+      "chat sonnet",
+    ]);
+  });
+
   test("with no run token nothing is sent, and the step still exits 0", async () => {
     triggerRecord();
     cliRecord({ v: 1, outcome: "reviewed", head_sha: HEAD });
@@ -360,6 +405,22 @@ describe("runTraceStep: which run directory", () => {
       }),
     );
     expect(r.received[0]?.body.code).toBe("CRYSK-CANCELLED");
+  });
+
+  // A3: the CLI finished and wrote its outcome; the cancel came after it.
+  test("a job cancelled after the CLI wrote a terminal outcome keeps that outcome", async () => {
+    triggerRecord();
+    cliRecord({ v: 1, outcome: "reviewed", head_sha: HEAD });
+    const r = await run(
+      [202],
+      env({
+        CRYSK_JOB_STATUS: "cancelled",
+        CRYSK_CANCEL_REFRESH: "success",
+        CRYSK_RUN_DIR: "",
+      }),
+    );
+    expect(r.received[0]?.body.outcome).toBe("reviewed");
+    expect(r.received[0]?.body.code).toBeNull();
   });
 
   test("a skipped cancelled-run refresh is no cancel", async () => {
