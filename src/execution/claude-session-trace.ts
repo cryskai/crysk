@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { redactEvidence } from "../security/evidence-redaction";
+import { redactDiagnostic } from "../security/redact";
 import type { TransportRequest } from "./contracts";
 
 // The CLI's own session id (`--session-id` requires a UUID). Anything else is
@@ -139,13 +140,14 @@ function redactNestedJson(value: unknown, depth = 0): unknown {
     const wrapped =
       (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
       (trimmed.startsWith("[") && trimmed.endsWith("]"));
-    if (!wrapped) return value;
+    if (!wrapped) return redactDiagnostic(value);
     try {
       const inner = JSON.parse(trimmed) as unknown;
-      if (typeof inner !== "object" || inner === null) return value;
+      if (typeof inner !== "object" || inner === null)
+        return redactDiagnostic(value);
       return JSON.stringify(redactNestedJson(redactEvidence(inner), depth + 1));
     } catch {
-      return value;
+      return redactDiagnostic(value);
     }
   }
   if (Array.isArray(value)) {

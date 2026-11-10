@@ -205,6 +205,22 @@ describe("Claude session trace", () => {
     expect(JSON.parse(line.content)).toEqual({ password: "[REDACTED]" });
   });
 
+  test("a Google API key in the transcript is redacted", async () => {
+    const key = "AIza12345678901234567890123456789012345";
+    const transcript = `${JSON.stringify({ role: "assistant", text: `key ${key}` })}\n`;
+    const { tracePath } = await reviewWithSession({
+      sessionFile: "written",
+      credential: "projected",
+      transcript,
+    });
+    const copy = await Bun.file(tracePath).text();
+    expect(copy).not.toContain(key);
+    expect(JSON.parse(copy.trim())).toEqual({
+      role: "assistant",
+      text: "key [REDACTED]",
+    });
+  });
+
   test("a missing session file still finishes the attempt and warns", async () => {
     const { result, tracePath } = await reviewWithSession({
       sessionFile: "missing",
