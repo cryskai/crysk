@@ -677,11 +677,20 @@ still in Development, so the engine pins that version and records it as `crysk.g
   including the cache, `gen_ai.usage.output_tokens` including reasoning, the cache read and creation and the
   reasoning tokens apart), `gen_ai.usage.cost` (list price in USD: the notional cost on a subscription, the
   cash cost on a per-token key) and the attempt's evidence and settlement as `crysk.attempt.*`;
+- for an OpenCode attempt, whose capture records each model turn, an `attempt <step>#<n>` span instead,
+  carrying the attempt's status, evidence and total usage as `crysk.*` attributes only, and under it one
+  `chat <model>` span per turn with that turn's own times, response model, finish reason, token usage and
+  cost, and `crysk.turn.number`. Only the turns are generations, so a backend counts the attempt's cost once
+  and can attribute time and money to single turns. The first turn carries the prompt, each turn its own
+  answer;
 - an `execute_tool <tool>` span per tool call the model made, read from the Claude CLI session transcript
-  or the OpenCode capture, with `gen_ai.tool.name`, the call id, its timing and whether it failed. A
-  metadata trace has them too, without the arguments and result (see below).
+  or the OpenCode capture, with `gen_ai.tool.name`, the call id, its timing and whether it failed, under
+  the turn that made it. A metadata trace has them too, without the arguments and result (see below).
 
-Every span has its start and end time, from the attempt's settlement record and the transcript. The body is
+Every span has its start and end time, from the attempt's settlement record and the transcript. An attempt
+still running when the job was cancelled has settled nothing, so its `chat` span comes from the request plan
+it froze at spawn (`steps/evidence.<step>.attempt<n>.request.json`): its route's model and provider, from the
+file's time to the trace step, with `crysk.attempt.status` `unsettled`. The body is
 `{ schema: "crysk.trace.v1", outcome, code, content, truncated, otlp, transcripts }`, gzip-compressed, posted
 to `https://api.crysk.dev/runs/trace` with the newest run token (the cancelled-run refresh's, else the
 publish refresh's, else the first exchange's). When the run published no run directory (every hunter

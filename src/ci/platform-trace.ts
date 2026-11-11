@@ -42,6 +42,7 @@ import {
 import { PLATFORM_API_URL } from "./platform";
 import { decidePublication } from "./publish";
 import {
+  type AttemptStart,
   encodeTrace,
   type TraceAttemptInput,
   type TraceOutcome,
@@ -134,6 +135,7 @@ export function locateRunDir(
 const EVIDENCE = /^evidence\.(.+)\.attempt(\d+)\.json$/;
 const CAPTURE = /^evidence\.(.+)\.attempt(\d+)\.capture\.json$/;
 const TRANSCRIPT = /^trace\.(.+)\.attempt(\d+)\.jsonl$/;
+const REQUEST = /^evidence\.(.+)\.attempt(\d+)\.request\.json$/;
 
 // Every step the run directory holds files for: pipeline.json's steps, and any
 // step whose evidence or transcript exists without a pipeline row (a run that
@@ -182,6 +184,16 @@ export function readRunSteps(
       const text = readText(file, MAX_TRANSCRIPT_BYTES);
       if (text !== undefined) {
         attemptOf(capture[1], Number(capture[2])).openCodeCapture = text;
+      }
+      continue;
+    }
+    // #511: the plan an attempt freezes at spawn, the one file a hunter still
+    // running at a cancel has written.
+    const request = REQUEST.exec(name);
+    if (request?.[1] !== undefined) {
+      const started = attemptStart(file);
+      if (started !== undefined) {
+        attemptOf(request[1], Number(request[2])).started = started;
       }
       continue;
     }
@@ -250,6 +262,24 @@ export function readRunSteps(
       attempts,
     };
   });
+}
+
+// What a frozen request plan says of its attempt: its route's model and
+// provider, and the file's time as the spawn's.
+function attemptStart(file: string): AttemptStart | undefined {
+  const plan = readJson(file);
+  if (!isRecord(plan)) return undefined;
+  const route = isRecord(plan.route) ? plan.route : {};
+  const started: AttemptStart = {};
+  const atMs = mtimeMs(file);
+  if (atMs !== undefined) started.atMs = atMs;
+  if (typeof route.modelSnapshot === "string" && route.modelSnapshot !== "") {
+    started.model = route.modelSnapshot;
+  }
+  if (typeof route.provider === "string" && route.provider !== "") {
+    started.provider = route.provider;
+  }
+  return started;
 }
 
 // An OpenCode capture's metadata: its conversation without content. The text

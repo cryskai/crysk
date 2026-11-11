@@ -457,13 +457,16 @@ describe("buildTraceBundle: a reviewed run", () => {
   const chat = named(bundle, "chat sonnet");
   const read = named(bundle, "execute_tool Read");
 
-  test("one root, a step per pipeline step, a chat per attempt, a tool span per call", () => {
+  // A Claude attempt is one chat span; an OpenCode attempt is an attempt span
+  // with a chat span per model turn (#511).
+  test("one root, a step per pipeline step, a chat per attempt or turn, a tool span per call", () => {
     expect(all.map((span) => span.name)).toEqual([
       "invoke_workflow crysk.review",
       "invoke_agent hunter-reliability",
       "chat sonnet",
       "execute_tool Read",
       "invoke_agent refuter-F001",
+      "attempt refuter-F001#1",
       "chat opencode:openai/gpt-5",
       "execute_tool grep",
     ]);
@@ -482,6 +485,7 @@ describe("buildTraceBundle: a reviewed run", () => {
       "chat",
       "execute_tool",
       "invoke_agent",
+      undefined,
       "chat",
       "execute_tool",
     ]);
@@ -1477,5 +1481,310 @@ describe("contract: a built bundle passes the platform's traceBundleSchema", () 
       const { code } = buildTraceBundle(run, false);
       expect(code === null || CRYSK_CODE.test(code)).toBe(true);
     }
+  });
+});
+
+// #511: an OpenCode attempt is many model turns, one assistant message each,
+// and each message records its own times, tokens and cost.
+describe("buildTraceBundle: an OpenCode attempt's turns", () => {
+  const PROMPT = "PLANTED-PROMPT find the race";
+  const turn = (
+    id: string,
+    startS: number,
+    endS: number | undefined,
+    tokens: { input: number; output: number; reasoning: number; read: number },
+    cost: number,
+    finish: string | undefined,
+    parts: unknown[],
+  ) => ({
+    info: {
+      id,
+      role: "assistant",
+      modelID: "deepseek-v4.1-flash",
+      providerID: "aiand",
+      time: {
+        created: T0 + startS * 1000,
+        ...(endS === undefined ? {} : { completed: T0 + endS * 1000 }),
+      },
+      tokens: {
+        total: 0,
+        input: tokens.input,
+        output: tokens.output,
+        reasoning: tokens.reasoning,
+        cache: { read: tokens.read, write: 0 },
+      },
+      cost,
+      ...(finish === undefined ? {} : { finish }),
+    },
+    parts,
+  });
+  const tool = (id: string, name: string, startS: number, endS: number) => ({
+    id: `p-${id}`,
+    type: "tool",
+    tool: name,
+    callID: id,
+    state: {
+      status: "completed",
+      input: { pattern: id },
+      output: TOOL_RESULT,
+      time: { start: T0 + startS * 1000, end: T0 + endS * 1000 },
+    },
+  });
+  const capture = JSON.stringify({
+    schemaVersion: 1,
+    sessionId: "ses_turns",
+    attempt: 1,
+    records: [
+      {
+        seq: 1,
+        observedMs: T0 + 30_000,
+        kind: "readback",
+        data: {
+          messages: [
+            {
+              info: { id: "u1", role: "user" },
+              parts: [{ id: "pu", type: "text", text: PROMPT }],
+            },
+            turn(
+              "a1",
+              1,
+              4,
+              { input: 100, output: 10, reasoning: 5, read: 1000 },
+              0.01,
+              "tool-calls",
+              [
+                { id: "r1", type: "reasoning", text: THINKING },
+                tool("c1", "read", 3, 3.5),
+              ],
+            ),
+            turn(
+              "a2",
+              4,
+              9,
+              { input: 200, output: 20, reasoning: 7, read: 2000 },
+              0.02,
+              "tool-calls",
+              [tool("c2", "grep", 8, 8.5), tool("c3", "glob", 8.6, 9)],
+            ),
+            turn(
+              "a3",
+              9,
+              12,
+              { input: 300, output: 30, reasoning: 0, read: 3000 },
+              0.04,
+              "stop",
+              [{ id: "t3", type: "text", text: ANSWER }],
+            ),
+          ],
+        },
+      },
+    ],
+  });
+  const run = (content: boolean): TraceBundle =>
+    buildTraceBundle(
+      {
+        outcome: "reviewed",
+        code: null,
+        steps: [
+          {
+            name: "hunter-logic",
+            systemPrompt: SYSTEM_PROMPT,
+            attempts: [
+              {
+                attempt: 1,
+                evidence: {
+                  ...evidence(
+                    "hunter-logic",
+                    1,
+                    "opencode:aiand/deepseek-v4.1-flash",
+                    "success",
+                    0,
+                    13,
+                  ),
+                  outcome: {
+                    completion: "success",
+                    usage: usage({ billingMode: "metered", cashCostUsd: 0.07 }),
+                  },
+                },
+                openCodeCapture: capture,
+              },
+            ],
+          },
+        ],
+        headSha: HEAD,
+        startedAtMs: T0,
+        endedAtMs: T0 + 20_000,
+      },
+      content,
+    );
+  const bundle = run(true);
+  const all = spans(bundle);
+  const agent = named(bundle, "invoke_agent hunter-logic");
+  const attempt = named(bundle, "attempt hunter-logic#1");
+  const turns = all.filter(
+    (span) => attr(span, "gen_ai.operation.name") === "chat",
+  );
+
+  test("one chat span per turn, under one attempt span, under the agent", () => {
+    expect(all.map((span) => span.name)).toEqual([
+      "invoke_workflow crysk.review",
+      "invoke_agent hunter-logic",
+      "attempt hunter-logic#1",
+      "chat opencode:aiand/deepseek-v4.1-flash",
+      "execute_tool read",
+      "chat opencode:aiand/deepseek-v4.1-flash",
+      "execute_tool grep",
+      "execute_tool glob",
+      "chat opencode:aiand/deepseek-v4.1-flash",
+    ]);
+    expect(attempt.parentSpanId).toBe(agent.spanId);
+    expect(turns).toHaveLength(3);
+    for (const span of turns) expect(span.parentSpanId).toBe(attempt.spanId);
+    expect(new Set(all.map((span) => span.spanId)).size).toBe(all.length);
+  });
+
+  test("each tool call sits under the turn that made it", () => {
+    expect(named(bundle, "execute_tool read").parentSpanId).toBe(
+      turns[0]?.spanId,
+    );
+    expect(named(bundle, "execute_tool grep").parentSpanId).toBe(
+      turns[1]?.spanId,
+    );
+    expect(named(bundle, "execute_tool glob").parentSpanId).toBe(
+      turns[1]?.spanId,
+    );
+  });
+
+  test("each turn has its own times, model, finish reason and inclusive usage", () => {
+    expect(
+      turns.map((span) => [span.startTimeUnixNano, span.endTimeUnixNano]),
+    ).toEqual([
+      [nanos(1), nanos(4)],
+      [nanos(4), nanos(9)],
+      [nanos(9), nanos(12)],
+    ]);
+    expect(turns.map((span) => attr(span, "gen_ai.response.model"))).toEqual([
+      "deepseek-v4.1-flash",
+      "deepseek-v4.1-flash",
+      "deepseek-v4.1-flash",
+    ]);
+    expect(turns.map((span) => attr(span, "gen_ai.request.model"))).toEqual([
+      "opencode:aiand/deepseek-v4.1-flash",
+      "opencode:aiand/deepseek-v4.1-flash",
+      "opencode:aiand/deepseek-v4.1-flash",
+    ]);
+    expect(
+      turns.map((span) => attr(span, "gen_ai.response.finish_reasons")),
+    ).toEqual([["tool-calls"], ["tool-calls"], ["stop"]]);
+    expect(
+      turns.map((span) => attr(span, "gen_ai.usage.input_tokens")),
+    ).toEqual([1100, 2200, 3300]);
+    expect(
+      turns.map((span) => attr(span, "gen_ai.usage.output_tokens")),
+    ).toEqual([15, 27, 30]);
+    expect(
+      turns.map((span) => attr(span, "gen_ai.usage.cache_read.input_tokens")),
+    ).toEqual([1000, 2000, 3000]);
+    expect(
+      turns.map((span) => attr(span, "gen_ai.usage.reasoning.output_tokens")),
+    ).toEqual([5, 7, 0]);
+    expect(turns.map((span) => attr(span, "gen_ai.usage.cost"))).toEqual([
+      0.01, 0.02, 0.04,
+    ]);
+    expect(turns.map((span) => attr(span, "crysk.turn.number"))).toEqual([
+      1, 2, 3,
+    ]);
+    expect(turns.map((span) => attr(span, "crysk.attempt.number"))).toEqual([
+      1, 1, 1,
+    ]);
+  });
+
+  test("the attempt span is no generation: no operation, model or gen_ai usage", () => {
+    for (const key of [
+      "gen_ai.operation.name",
+      "gen_ai.request.model",
+      "gen_ai.response.model",
+      "gen_ai.usage.input_tokens",
+      "gen_ai.usage.output_tokens",
+      "gen_ai.usage.cost",
+    ]) {
+      expect(attr(attempt, key)).toBeUndefined();
+    }
+    expect(attr(attempt, "crysk.attempt.number")).toBe(1);
+    expect(attr(attempt, "crysk.attempt.status")).toBe("success");
+    expect(attr(attempt, "crysk.usage.cash_cost_usd")).toBe(0.07);
+    expect(attempt.startTimeUnixNano).toBe(nanos(0));
+    expect(attempt.endTimeUnixNano).toBe(nanos(13));
+  });
+
+  test("content: the first turn holds the prompt, each turn only its own answer", () => {
+    expect(
+      JSON.parse(String(attr(turns[0], "gen_ai.system_instructions"))),
+    ).toEqual([{ type: "text", content: SYSTEM_PROMPT }]);
+    expect(JSON.parse(String(attr(turns[0], "gen_ai.input.messages")))).toEqual(
+      [{ role: "user", parts: [{ type: "text", content: PROMPT }] }],
+    );
+    for (const span of turns.slice(1)) {
+      expect(attr(span, "gen_ai.input.messages")).toBeUndefined();
+      expect(attr(span, "gen_ai.system_instructions")).toBeUndefined();
+    }
+    expect(
+      JSON.parse(String(attr(turns[2], "gen_ai.output.messages"))),
+    ).toEqual([
+      {
+        role: "assistant",
+        finish_reason: "stop",
+        parts: [{ type: "text", content: ANSWER }],
+      },
+    ]);
+    expect(
+      JSON.parse(String(attr(turns[1], "gen_ai.output.messages")))[0].parts,
+    ).toHaveLength(2);
+    expect(attr(attempt, "gen_ai.output.messages")).toBeUndefined();
+  });
+
+  test("a metadata trace has the same spans, times and usage", () => {
+    const shape = (candidate: TraceBundle) =>
+      spans(candidate).map((span) => ({
+        id: span.spanId,
+        parent: span.parentSpanId,
+        name: span.name,
+        start: span.startTimeUnixNano,
+        end: span.endTimeUnixNano,
+        input: attr(span, "gen_ai.usage.input_tokens"),
+        cost: attr(span, "gen_ai.usage.cost"),
+      }));
+    expect(shape(run(false))).toEqual(shape(bundle));
+  });
+
+  test("a turn still running has no completed time: it ends at its last tool", () => {
+    const open = JSON.parse(capture);
+    const last = open.records[0].data.messages[3];
+    delete last.info.time.completed;
+    delete last.info.finish;
+    last.parts = [tool("c4", "read", 10, 11)];
+    const cut = buildTraceBundle(
+      {
+        outcome: "error",
+        code: "CRYSK-CANCELLED",
+        steps: [
+          {
+            name: "hunter-logic",
+            attempts: [{ attempt: 1, openCodeCapture: JSON.stringify(open) }],
+          },
+        ],
+        startedAtMs: T0,
+        endedAtMs: T0 + 20_000,
+      },
+      false,
+    );
+    const lastTurn = spans(cut)
+      .filter((span) => attr(span, "gen_ai.operation.name") === "chat")
+      .at(-1);
+    expect([lastTurn?.startTimeUnixNano, lastTurn?.endTimeUnixNano]).toEqual([
+      nanos(9),
+      nanos(11),
+    ]);
+    expect(lastTurn?.status.code).toBe(0);
   });
 });
