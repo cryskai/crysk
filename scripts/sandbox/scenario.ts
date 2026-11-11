@@ -24,7 +24,7 @@ import {
   ownBlockingUndecided,
 } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
-import { FINDING_MARKER_PREFIX, gateStatusOf } from "./markers";
+import { cryskCodeText, FINDING_MARKER_PREFIX, gateStatusOf } from "./markers";
 import {
   COMMENT_RUN_CLOCK_SKEW_MS,
   type CommentFact,
@@ -302,12 +302,12 @@ export function isFreeModelFlake(result: ScenarioResult): boolean {
 }
 
 // The hunters-failed flake belongs to this phase only when this run posted the
-// PRH-HUNTERS-FAILED outcome on the observed head. A failed review step is not enough:
+// CRYSK-HUNTERS-FAILED outcome on the observed head. A failed review step is not enough:
 // a later phase whose step fails for another reason posts no outcome of its own, and
 // the path it reads is an earlier phase's outcome, which is no flake of this phase.
 // The code family is observe.ts's own (isHuntersFailed), so a run rendered with its
-// shared hunter cause (PRH-MODEL-UNAVAILABLE, a hunter-route PRH-CRED-UNUSABLE) is the
-// same flake as PRH-HUNTERS-FAILED, exactly as classifyPath reads it. Any outcome
+// shared hunter cause (CRYSK-MODEL-UNAVAILABLE, a hunter-route CRYSK-CRED-UNUSABLE) is the
+// same flake as CRYSK-HUNTERS-FAILED, exactly as classifyPath reads it. Any outcome
 // of this run with that code counts, not only the first one on the head, because an
 // earlier phase's outcome may still sit on the PR above it. A phase with no trigger
 // has no window, so its outcome counts (postedByThisRun reads it as this run's).
@@ -791,9 +791,14 @@ async function statusOf(
     }[];
   }>(deps, ["api", `repos/${SANDBOX_REPO}/commits/${sha}/status`]);
   const latest = gateStatusOf(combined.statuses);
-  return latest === undefined
-    ? undefined
-    : { state: latest.state, description: latest.description };
+  return latest === undefined ? undefined : statusFact(latest);
+}
+
+// The gate row as the checks read it: a PRH-* code that opens the description (a ref
+// from before the code rename) is read as its CRYSK-* name, so every reader downstream
+// matches CRYSK-* alone.
+function statusFact(row: { state: string; description: string }): StatusFact {
+  return { state: row.state, description: cryskCodeText(row.description) };
 }
 
 // The newer head of a rerun phase: the head the scenario pushed last, its status
@@ -1426,10 +1431,7 @@ async function collect(
     prUrl: pr.url,
     headSha,
     run: runFact,
-    status:
-      latest === undefined
-        ? undefined
-        : { state: latest.state, description: latest.description },
+    status: latest === undefined ? undefined : statusFact(latest),
     statusCreatedAt: latest?.created_at,
     comments,
     artifacts,

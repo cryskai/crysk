@@ -21,7 +21,7 @@ export interface PrheroLayout {
   dir: string;
   // Compiled binaries resolve optional packages from this directory, not
   // from the embedded filesystem. `upgrade --reconcile` installs the
-  // OpenCode SDK here when routing needs it.
+  // OpenCode SDK here when a configured model runs on OpenCode.
   nodeModulesDir: string;
   reposDir: string;
   // C5: two config files live in this dir and NEITHER of them is called

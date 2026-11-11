@@ -36,7 +36,7 @@ const NEW = "c".repeat(40);
 function obs(overrides: Partial<Observation> = {}): Observation {
   return {
     prNumber: 7,
-    prUrl: "https://github.com/juanmaagd/pr-hero-sandbox/pull/7",
+    prUrl: "https://github.com/cryskai/crysk-sandbox/pull/7",
     headSha: NEW,
     run: {
       id: 42,
@@ -88,14 +88,14 @@ describe("evaluateCheck: each kind passes and fails on its own fact", () => {
   test("outcome with a lead passes only when that code's comment carries the lead", () => {
     const owned = obs({
       comments: [
-        { ...outcome("PRH-GOTCHAS-MISSING"), lead: "Your configuration:" },
+        { ...outcome("CRYSK-GOTCHAS-MISSING"), lead: "Your configuration:" },
       ],
     });
     expect(
       evaluateCheck(
         {
           kind: "outcome",
-          code: "PRH-GOTCHAS-MISSING",
+          code: "CRYSK-GOTCHAS-MISSING",
           lead: "Your configuration:",
         },
         owned,
@@ -104,24 +104,24 @@ describe("evaluateCheck: each kind passes and fails on its own fact", () => {
     const wrongOwner = evaluateCheck(
       {
         kind: "outcome",
-        code: "PRH-GOTCHAS-MISSING",
+        code: "CRYSK-GOTCHAS-MISSING",
         lead: "pr-hero defect:",
       },
       owned,
     );
     expect(wrongOwner.pass).toBe(false);
     expect(wrongOwner.label).toBe(
-      "outcome comment with code PRH-GOTCHAS-MISSING, owner lead pr-hero defect:",
+      "outcome comment with code CRYSK-GOTCHAS-MISSING, owner lead pr-hero defect:",
     );
     expect(wrongOwner.detail).toBe("got Your configuration:");
   });
 
   test("outcome with a lead fails on a code-less or lead-less comment", () => {
-    const bare = obs({ comments: [outcome("PRH-GOTCHAS-MISSING")] });
+    const bare = obs({ comments: [outcome("CRYSK-GOTCHAS-MISSING")] });
     const result = evaluateCheck(
       {
         kind: "outcome",
-        code: "PRH-GOTCHAS-MISSING",
+        code: "CRYSK-GOTCHAS-MISSING",
         lead: "Your configuration:",
       },
       bare,
@@ -131,13 +131,13 @@ describe("evaluateCheck: each kind passes and fails on its own fact", () => {
   });
 
   test("outcome and no-outcome read the outcome comments", () => {
-    const withCode = obs({ comments: [outcome("PRH-CRED-MISSING")] });
+    const withCode = obs({ comments: [outcome("CRYSK-CRED-MISSING")] });
     expect(
-      evaluateCheck({ kind: "outcome", code: "PRH-CRED-MISSING" }, withCode)
+      evaluateCheck({ kind: "outcome", code: "CRYSK-CRED-MISSING" }, withCode)
         .pass,
     ).toBe(true);
     expect(
-      evaluateCheck({ kind: "outcome", code: "PRH-ROUTING-INVALID" }, withCode)
+      evaluateCheck({ kind: "outcome", code: "CRYSK-INPUT-REMOVED" }, withCode)
         .pass,
     ).toBe(false);
     expect(evaluateCheck({ kind: "no-outcome" }, withCode).pass).toBe(false);
@@ -145,15 +145,15 @@ describe("evaluateCheck: each kind passes and fails on its own fact", () => {
   });
 
   test("status matches the state and, when given, the description prefix", () => {
-    const err = obs({ status: errorStatus("PRH-CRED-MISSING") });
+    const err = obs({ status: errorStatus("CRYSK-CRED-MISSING") });
     const check = {
       kind: "status" as const,
       state: "error",
-      descriptionStartsWith: "PRH-CRED-MISSING",
+      descriptionStartsWith: "CRYSK-CRED-MISSING",
     };
     expect(evaluateCheck(check, err).pass).toBe(true);
     expect(
-      evaluateCheck(check, obs({ status: errorStatus("PRH-ROUTING-INVALID") }))
+      evaluateCheck(check, obs({ status: errorStatus("CRYSK-INPUT-REMOVED") }))
         .pass,
     ).toBe(false);
     expect(evaluateCheck(check, obs({ status: undefined })).detail).toBe(
@@ -298,35 +298,35 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
         conclusion: "success",
         steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
       },
-      status: errorStatus("PRH-CRED-MISSING"),
-      comments: [outcome("PRH-CRED-MISSING")],
+      status: errorStatus("CRYSK-CRED-MISSING"),
+      comments: [outcome("CRYSK-CRED-MISSING")],
     }),
     // A review ran with a success status and a report: the credential gate did not fire.
     fail: obs(),
   },
   "bad-routing/0": {
     pass: obs({
-      status: errorStatus("PRH-ROUTING-INVALID"),
-      comments: [outcome("PRH-ROUTING-INVALID")],
+      status: errorStatus("CRYSK-INPUT-REMOVED"),
+      comments: [outcome("CRYSK-INPUT-REMOVED")],
     }),
     fail: obs({
-      status: errorStatus("PRH-CRED-MISSING"),
-      comments: [outcome("PRH-CRED-MISSING")],
+      status: errorStatus("CRYSK-CRED-MISSING"),
+      comments: [outcome("CRYSK-CRED-MISSING")],
     }),
   },
   // T2d-1 (S2): the owner lead is the one the reader sees. A pr-hero lead on the same
   // code is the wrong owner, and must fail the check.
   "bad-gotchas/0": {
     pass: obs({
-      status: errorStatus("PRH-GOTCHAS-MISSING"),
+      status: errorStatus("CRYSK-GOTCHAS-MISSING"),
       comments: [
-        { ...outcome("PRH-GOTCHAS-MISSING"), lead: "Your configuration:" },
+        { ...outcome("CRYSK-GOTCHAS-MISSING"), lead: "Your configuration:" },
       ],
     }),
     fail: obs({
-      status: errorStatus("PRH-GOTCHAS-MISSING"),
+      status: errorStatus("CRYSK-GOTCHAS-MISSING"),
       comments: [
-        { ...outcome("PRH-GOTCHAS-MISSING"), lead: "pr-hero defect:" },
+        { ...outcome("CRYSK-GOTCHAS-MISSING"), lead: "pr-hero defect:" },
       ],
     }),
   },
@@ -348,9 +348,9 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     fail: obs({
       status: {
         state: "error",
-        description: "PRH-HUNTERS-FAILED: every hunter failed",
+        description: "CRYSK-HUNTERS-FAILED: every hunter failed",
       },
-      comments: [outcome("PRH-HUNTERS-FAILED")],
+      comments: [outcome("CRYSK-HUNTERS-FAILED")],
     }),
   },
   // SB3 stale-tmp: the review runs as if the stale records were not there.
@@ -364,16 +364,16 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
         conclusion: "failure",
         steps: [{ name: RUN_STEP_NAME, conclusion: "failure" }],
       },
-      status: errorStatus("PRH-CONFIG-PARSE"),
-      comments: [outcome("PRH-CONFIG-PARSE")],
+      status: errorStatus("CRYSK-CONFIG-PARSE"),
+      comments: [outcome("CRYSK-CONFIG-PARSE")],
     }),
   },
   // SB3 rerun-after-push: the first push's run may hunters-fail, as a precondition.
   "rerun-after-push/0": {
     pass: obs(),
     fail: obs({
-      status: errorStatus("PRH-CRED-MISSING"),
-      comments: [outcome("PRH-CRED-MISSING")],
+      status: errorStatus("CRYSK-CRED-MISSING"),
+      comments: [outcome("CRYSK-CRED-MISSING")],
     }),
   },
   "rerun-after-push/1": {
@@ -393,16 +393,16 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     pass: obs({
       newerHead: {
         sha: NEW,
-        before: { state: "error", description: "PRH-HUNTERS-FAILED: x" },
-        after: { state: "error", description: "PRH-HUNTERS-FAILED: x" },
+        before: { state: "error", description: "CRYSK-HUNTERS-FAILED: x" },
+        after: { state: "error", description: "CRYSK-HUNTERS-FAILED: x" },
       },
     }),
     fail: obs({
       status: { state: "pending", description: "pr-hero reviewing" },
       newerHead: {
         sha: NEW,
-        before: { state: "error", description: "PRH-HUNTERS-FAILED: x" },
-        after: { state: "error", description: "PRH-HUNTERS-FAILED: x" },
+        before: { state: "error", description: "CRYSK-HUNTERS-FAILED: x" },
+        after: { state: "error", description: "CRYSK-HUNTERS-FAILED: x" },
       },
     }),
   },
@@ -478,10 +478,10 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
   },
   "cleanup/0": {
     pass: obs({
-      status: errorStatus("PRH-CRED-MISSING"),
-      comments: [outcome("PRH-CRED-MISSING")],
+      status: errorStatus("CRYSK-CRED-MISSING"),
+      comments: [outcome("CRYSK-CRED-MISSING")],
     }),
-    fail: obs({ status: errorStatus("PRH-CRED-MISSING"), comments: [] }),
+    fail: obs({ status: errorStatus("CRYSK-CRED-MISSING"), comments: [] }),
   },
   "cleanup/1": {
     pass: obs(),
@@ -489,7 +489,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     // and the status is success while an outcome comment still exists (S7).
     fail: obs({
       comments: [
-        outcome("PRH-CRED-MISSING"),
+        outcome("CRYSK-CRED-MISSING"),
         { source: "issue", kind: "report", head: NEW },
       ],
     }),
@@ -499,9 +499,9 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     fail: obs({
       status: {
         state: "error",
-        description: "PRH-CRED-MISSING: no credential",
+        description: "CRYSK-CRED-MISSING: no credential",
       },
-      comments: [outcome("PRH-CRED-MISSING")],
+      comments: [outcome("CRYSK-CRED-MISSING")],
     }),
   },
   "comment-trigger/1": {
@@ -533,9 +533,9 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     fail: obs({
       status: {
         state: "error",
-        description: "PRH-CRED-MISSING: no credential",
+        description: "CRYSK-CRED-MISSING: no credential",
       },
-      comments: [outcome("PRH-CRED-MISSING")],
+      comments: [outcome("CRYSK-CRED-MISSING")],
     }),
   },
   "near-miss/1": {
@@ -565,7 +565,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       },
       triggeredAt: Date.parse("2026-10-16T14:31:00Z"),
       reactions: ["confused"],
-      comments: [outcome("PRH-CRED-MISSING")],
+      comments: [outcome("CRYSK-CRED-MISSING")],
     }),
   },
   // S8: a red gate on a reviewed head, then the override that turns it green.
@@ -638,9 +638,9 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     fail: obs({
       status: {
         state: "error",
-        description: "PRH-HUNTERS-FAILED: every hunter failed",
+        description: "CRYSK-HUNTERS-FAILED: every hunter failed",
       },
-      comments: [outcome("PRH-HUNTERS-FAILED")],
+      comments: [outcome("CRYSK-HUNTERS-FAILED")],
     }),
   },
   "same-head-rereview/1": {
@@ -671,9 +671,9 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     fail: obs({
       status: {
         state: "error",
-        description: "PRH-HUNTERS-FAILED: every hunter failed",
+        description: "CRYSK-HUNTERS-FAILED: every hunter failed",
       },
-      comments: [outcome("PRH-HUNTERS-FAILED")],
+      comments: [outcome("CRYSK-HUNTERS-FAILED")],
     }),
   },
   "rereview-fresh-finding/1": {
@@ -980,9 +980,9 @@ describe("comment-trigger: phase 1 accepts a flake, and the cleanup check is con
     const huntersFailed = obs({
       status: {
         state: "error",
-        description: "PRH-HUNTERS-FAILED: every hunter failed",
+        description: "CRYSK-HUNTERS-FAILED: every hunter failed",
       },
-      comments: [outcome("PRH-HUNTERS-FAILED")],
+      comments: [outcome("CRYSK-HUNTERS-FAILED")],
     });
     expect(evaluateChecks(first.checks, obs()).every((r) => r.pass)).toBe(true);
     expect(
@@ -992,8 +992,8 @@ describe("comment-trigger: phase 1 accepts a flake, and the cleanup check is con
       evaluateChecks(
         first.checks,
         obs({
-          status: errorStatus("PRH-CRED-MISSING"),
-          comments: [outcome("PRH-CRED-MISSING")],
+          status: errorStatus("CRYSK-CRED-MISSING"),
+          comments: [outcome("CRYSK-CRED-MISSING")],
         }),
       ).some((r) => !r.pass),
     ).toBe(true);
@@ -1007,7 +1007,7 @@ describe("comment-trigger: phase 1 accepts a flake, and the cleanup check is con
     expect(
       evaluateChecks(
         cleanup,
-        obs({ comments: [outcome("PRH-HUNTERS-FAILED")] }),
+        obs({ comments: [outcome("CRYSK-HUNTERS-FAILED")] }),
       ).some((r) => !r.pass),
     ).toBe(true);
   });
@@ -1300,7 +1300,7 @@ describe("no-own-outcome: this run posted no outcome comment (T2e)", () => {
   const earlier = {
     source: "issue" as const,
     kind: "outcome" as const,
-    code: "PRH-HUNTERS-FAILED",
+    code: "CRYSK-HUNTERS-FAILED",
     createdAt: "2026-10-16T14:20:00Z",
   };
 
@@ -1312,12 +1312,12 @@ describe("no-own-outcome: this run posted no outcome comment (T2e)", () => {
   test("an outcome this run posted after its trigger fails, and names its code", () => {
     const own = {
       ...earlier,
-      code: "PRH-CRED-MISSING",
+      code: "CRYSK-CRED-MISSING",
       createdAt: "2026-10-16T14:31:05Z",
     };
     const result = evaluateCheck(check, nearMissRun([earlier, own]));
     expect(result.pass).toBe(false);
-    expect(result.detail).toBe("this run posted PRH-CRED-MISSING");
+    expect(result.detail).toBe("this run posted CRYSK-CRED-MISSING");
   });
 
   test("its label says this run posted no outcome comment", () => {

@@ -1,17 +1,42 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
 import { resolveProductionRoutePlanAtConfirm } from "../src/cli";
+import { CliError } from "../src/errors";
 import type { ExactBindingCapabilityReport } from "../src/execution/contracts";
 import {
   d1_11EvidenceFromExactBinding,
+  planOpenCodeCredentials,
   prepareProductionAdmissionContext,
   productionFallbackRegistry,
-  soleOpenCodeCredential,
+  soleOpenCodeCredentialOf,
 } from "../src/production-runtime";
-import { OpenCodeAuthBroker } from "../src/security/credential-broker";
+import {
+  enforceProviderCapabilityGate,
+  OpenCodeCredentialRefusalError,
+} from "../src/review/route-preflight";
+import {
+  ClaudeCredentialRefusalError,
+  resolveRunClaudeCredential,
+} from "../src/security/claude-credential";
+import {
+  OpenCodeApiTokenBroker,
+  OpenCodeAuthBroker,
+  resolveOpenCodeAuthPath,
+} from "../src/security/credential-broker";
+import {
+  openCodeSecretManifestPath,
+  serializeOpenCodeSecretManifest,
+} from "../src/security/opencode-secret-manifest";
 import {
   admitRoutePlan,
   type DefaultTransportRegistry,
@@ -60,6 +85,26 @@ function fixtureDeps(
   };
 }
 
+// The OpenCode auth file admission's credential check reads (missing credential,
+// openCodeCredentialRefusal): a record for every provider these tests name, of the
+// kind its route binds, in a data home inside the test's own dir, so the
+// developer's real auth file is never read.
+const FIXTURE_AUTH = {
+  openai: { type: "oauth", refresh: "r", access: "a", expires: 0 },
+  zai: { type: "api", key: "k" },
+};
+
+async function writeAuthFixture(
+  dir: string,
+  auth: Record<string, unknown> = FIXTURE_AUTH,
+): Promise<string> {
+  const dataHome = path.join(dir, "xdg-auth");
+  const authFile = resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome });
+  await mkdir(path.dirname(authFile), { recursive: true });
+  await writeFile(authFile, JSON.stringify(auth));
+  return dataHome;
+}
+
 describe("CLI production wiring (verify C1/C3)", () => {
   test("prepareProductionAdmissionContext admits OpenCode with D1-11 evidence", async () => {
     const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-prod-"));
@@ -73,23 +118,13 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
       });
@@ -125,17 +160,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
       const injected = {
@@ -146,7 +171,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
         credentialBrokers: { opencode: injected },
@@ -182,23 +207,13 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
       const admission = await prepareProductionAdmissionContext({
         workspaceRoot: tmpDir,
         plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
       });
@@ -255,17 +270,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
     const zaiStep = resolveStepRoute({
       stepKey: "refuter",
       role: "refuter",
-      cliModel: "zai/glm-5",
-      routingConfig: {
-        mappings: {
-          "zai/glm-5": {
-            backend: "opencode",
-            provider: "zai",
-            modelFamily: "glm-5",
-            modelSnapshot: "glm-5",
-          },
-        },
-      },
+      cliModel: "opencode:zai/glm-5",
     });
     const registry = productionFallbackRegistry({
       mode: "production",
@@ -278,32 +283,25 @@ describe("CLI production wiring (verify C1/C3)", () => {
     expect(registry.openCodeCredentialBroker).toBeUndefined();
   });
 
-  test("the fallback registry refuses a mixed-provider plan", () => {
+  // U4 (S9): a plan on two OpenCode credentials used to be refused here. It
+  // now builds a registry with no plan-wide default: there is no one answer,
+  // and every binding forwards its own broker and kind on acquire().
+  test("the fallback registry has no default credential for a two-provider plan", () => {
     const step = (stepKey: string, logical: string, provider: string) =>
       resolveStepRoute({
         stepKey,
         role: stepKey === "refuter" ? "refuter" : "hunter",
-        cliModel: logical,
-        routingConfig: {
-          mappings: {
-            [logical]: {
-              backend: "opencode",
-              provider,
-              modelFamily: logical.split("/")[1],
-              modelSnapshot: logical.split("/")[1],
-            },
-          },
-        },
+        cliModel: `opencode:${provider}/${logical.split("/")[1]}`,
       });
-    expect(() =>
-      productionFallbackRegistry({
-        mode: "production",
-        plan: createResolvedRoutePlan([
-          step("hunter-reliability", "openai/gpt-4o", "openai"),
-          step("refuter", "zai/glm-5", "zai"),
-        ]),
-      }),
-    ).toThrow(/one credential/);
+    const registry = productionFallbackRegistry({
+      mode: "production",
+      plan: createResolvedRoutePlan([
+        step("hunter-reliability", "openai/gpt-4o", "openai"),
+        step("refuter", "zai/glm-5", "zai"),
+      ]),
+    }) as DefaultTransportRegistry;
+    expect(registry.openCodeCredentialKind).toBeUndefined();
+    expect(registry.openCodeCredentialBroker).toBeUndefined();
   });
 
   test("resolveProductionRoutePlanAtConfirm wires mixed Claude/OpenCode production admission", async () => {
@@ -323,24 +321,14 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const openStep = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([claudeStep, openStep]);
       const routed = await resolveProductionRoutePlanAtConfirm({
-        routingConfigured: true,
+        modelsConfigured: true,
         workspaceRoot: tmpDir,
         buildRoutePlan: async () => plan,
-        env: { PATH: tmpDir },
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
         loadSdk: mockLoadSdk,
         authorityDeps: fixtureDeps(tmpDir, claude, opencode),
       });
@@ -358,6 +346,179 @@ describe("CLI production wiring (verify C1/C3)", () => {
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  // S5: the credential chosen at run start reaches admission, and a plan with a Claude
+  // route and no listed credential present is refused before anything is admitted.
+  describe("the run's Claude credential at admission (S5)", () => {
+    const refused = resolveRunClaudeCredential({
+      credentials: { claude: ["api_key"] },
+      env: { PATH: "/nowhere", CLAUDE_CODE_OAUTH_TOKEN: "oauth" },
+      loginPresent: false,
+    });
+
+    test("a plan with a Claude route and no listed credential is refused, naming the order", async () => {
+      let built = false;
+      const plan = createResolvedRoutePlan([
+        resolveStepRoute({
+          stepKey: "hunter-reliability",
+          role: "hunter",
+          cliModel: "sonnet",
+        }),
+      ]);
+      await expect(
+        resolveProductionRoutePlanAtConfirm({
+          modelsConfigured: true,
+          workspaceRoot: "/nowhere",
+          buildRoutePlan: async () => {
+            built = true;
+            return plan;
+          },
+          claudeRun: refused,
+        }),
+      ).rejects.toThrow(
+        /credentials\.claude is \[api_key\], and none of those is set.*subscription is set but not listed/,
+      );
+      expect(built).toBe(true);
+    });
+
+    test("the legacy no-plan path is always Claude, so it is refused too", async () => {
+      await expect(
+        resolveProductionRoutePlanAtConfirm({
+          modelsConfigured: false,
+          workspaceRoot: "/nowhere",
+          buildRoutePlan: async () => {
+            throw new Error("raw model id the CLI resolves itself");
+          },
+          claudeRun: refused,
+        }),
+      ).rejects.toThrow(/no Claude credential this run may use is set/);
+    });
+
+    // R003 (#494): plan.ts settles the CI row as gate-skipped by this class. It names
+    // CRYSK-CRED-MISSING's class, so cli.json says the credential is missing.
+    test("the refusal is a ClaudeCredentialRefusalError, a CliError classified as a missing credential", async () => {
+      const error = await resolveProductionRoutePlanAtConfirm({
+        modelsConfigured: false,
+        workspaceRoot: "/nowhere",
+        buildRoutePlan: async () => {
+          throw new Error("raw model id the CLI resolves itself");
+        },
+        claudeRun: refused,
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ClaudeCredentialRefusalError);
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).cls).toEqual({
+        kind: "trigger",
+        check: "no-credential",
+      });
+      expect((error as ClaudeCredentialRefusalError).params).toEqual({
+        backend: "claude",
+      });
+    });
+
+    test("a plan with no Claude route ignores Claude credentials", async () => {
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-route-"));
+      try {
+        const claude = await writeExecutable(
+          tmpDir,
+          "claude",
+          "#!/bin/sh\necho ok\n",
+        );
+        const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+        const plan = createResolvedRoutePlan([
+          resolveStepRoute({
+            stepKey: "hunter-reliability",
+            role: "hunter",
+            cliModel: "opencode:openai/gpt-4o",
+          }),
+        ]);
+        const routed = await resolveProductionRoutePlanAtConfirm({
+          modelsConfigured: true,
+          workspaceRoot: tmpDir,
+          buildRoutePlan: async () => plan,
+          loadSdk: mockLoadSdk,
+          authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+          claudeRun: resolveRunClaudeCredential({
+            credentials: { claude: ["api_key"] },
+            env: {
+              PATH: tmpDir,
+              XDG_DATA_HOME: await writeAuthFixture(tmpDir),
+            },
+            loginPresent: false,
+          }),
+        });
+        expect(routed?.routePlan).toBe(plan);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    // The legacy no-plan path's capability gate checks Claude auth from an env: the run
+    // env (its binary lookup too), never the process env, so a CRYSK_* credential the
+    // run chose is the one it sees under the CLI's name.
+    test("the legacy capability gate reads the run env, not the process env", async () => {
+      const childEnv = {
+        PATH: "/nonexistent-u2",
+        ANTHROPIC_API_KEY: "sk-test",
+      };
+      await expect(
+        enforceProviderCapabilityGate({
+          routePlan: undefined,
+          workspaceRoot: "/nowhere",
+          runnerAuthority: {
+            runnerOptions: {
+              binaryPath: "/nonexistent-u2/claude",
+              workspaceRoot: "/nowhere",
+              executableAllowlist: [],
+              childEnv,
+            },
+          },
+        }),
+      ).rejects.toThrow(/provider capability gate failed/);
+    });
+
+    test("the chosen credential and its run env become the admission's authority options", async () => {
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-route-"));
+      try {
+        const claude = await writeExecutable(
+          tmpDir,
+          "claude",
+          "#!/bin/sh\necho ok\n",
+        );
+        const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+        const plan = createResolvedRoutePlan([
+          resolveStepRoute({
+            stepKey: "hunter-reliability",
+            role: "hunter",
+            cliModel: "sonnet",
+          }),
+        ]);
+        const claudeRun = resolveRunClaudeCredential({
+          credentials: { claude: ["api_key", "subscription"] },
+          env: {
+            PATH: tmpDir,
+            ANTHROPIC_API_KEY: "sk-test",
+            CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+          },
+          loginPresent: false,
+        });
+        const routed = await resolveProductionRoutePlanAtConfirm({
+          modelsConfigured: true,
+          workspaceRoot: tmpDir,
+          buildRoutePlan: async () => plan,
+          loadSdk: mockLoadSdk,
+          authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+          claudeRun,
+        });
+        const options = routed?.productionAdmission.authorityOptions;
+        expect(options?.env === claudeRun.env).toBe(true);
+        expect(options?.claudeCredential).toBe("api_key");
+        expect(options?.env?.CLAUDE_CODE_OAUTH_TOKEN === undefined).toBe(true);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 
   test("d1_11EvidenceFromExactBinding keeps subscription pricing non-blocking", () => {
@@ -393,12 +554,13 @@ describe("CLI production wiring (verify C1/C3)", () => {
     expect(d1_11EvidenceFromExactBinding(report).pricingReady).toBe(true);
   });
 
-  // #133. The OpenCode server is ONE per backend and outlives every step, so
-  // its credential is a whole-plan fact. Two things must hold here, and the
-  // second is what made the api-token route reachable at all:
-  //  1. A plan naming two OpenCode providers is refused BY NAME. Serving it
-  //     would run one provider's steps under the other's credential.
-  //  2. The default broker matches the plan's provider. An unconditional
+  // #133, revised by U4 (S9). Each OpenCode route runs on its own credential
+  // (provider + kind) through its own server. Two things must hold here, and
+  // the second is what made the api-token route reachable at all:
+  //  1. A plan naming two OpenCode providers is admitted with no plan-wide
+  //     broker, each binding on its own (test/opencode-multi-credential.test.ts
+  //     drives it end to end). It used to be refused by name.
+  //  2. For a one-credential plan, the default broker matches its provider. An unconditional
   //     `new OpenCodeAuthBroker()` resolved the right KIND at the authority
   //     and then handed it a broker that refuses that kind — a failure that
   //     would only surface at projection time, mid-run.
@@ -407,17 +569,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       return resolveStepRoute({
         stepKey,
         role: stepKey === "refuter" ? "refuter" : "hunter",
-        cliModel: logical,
-        routingConfig: {
-          mappings: {
-            [logical]: {
-              backend: "opencode",
-              provider,
-              modelFamily: logical.split("/")[1],
-              modelSnapshot: logical.split("/")[1],
-            },
-          },
-        },
+        cliModel: `opencode:${provider}/${logical.split("/")[1]}`,
       });
     }
 
@@ -433,7 +585,10 @@ describe("CLI production wiring (verify C1/C3)", () => {
         return await prepareProductionAdmissionContext({
           workspaceRoot: tmpDir,
           plan,
-          env: { PATH: tmpDir },
+          env: {
+            PATH: tmpDir,
+            XDG_DATA_HOME: await writeAuthFixture(tmpDir),
+          },
           loadSdk: mockLoadSdk,
           authorityDeps: fixtureDeps(tmpDir, claude, opencode),
         });
@@ -442,18 +597,20 @@ describe("CLI production wiring (verify C1/C3)", () => {
       }
     }
 
-    test("a two-provider plan is refused by name", async () => {
+    test("a two-provider plan is admitted with no plan-wide broker", async () => {
       const plan = createResolvedRoutePlan([
         openCodeStep("hunter-reliability", "openai/gpt-4o", "openai"),
         openCodeStep("refuter", "zai/glm-5", "zai"),
       ]);
       const admission = await admit(plan);
-      if (!("error" in admission)) {
-        throw new Error("expected a refusal");
-      }
-      expect(admission.error).toContain("openai");
-      expect(admission.error).toContain("zai");
-      expect(admission.error).toContain("one credential");
+      if ("error" in admission) throw new Error(admission.error);
+      expect(
+        admission.authorityOptions.credentialBrokers?.opencode,
+      ).toBeUndefined();
+      expect(admission.authorityOptions.openCodeBrokerFor).toBeDefined();
+      expect(
+        (admission.registry as DefaultTransportRegistry).openCodeCredentialKind,
+      ).toBeUndefined();
     });
 
     test("a single-provider plan resolves the sole credential", () => {
@@ -461,7 +618,9 @@ describe("CLI production wiring (verify C1/C3)", () => {
         openCodeStep("hunter-reliability", "zai/glm-5", "zai"),
         openCodeStep("refuter", "zai/glm-5", "zai"),
       ]);
-      expect(soleOpenCodeCredential(plan)).toEqual({
+      expect(
+        soleOpenCodeCredentialOf(planOpenCodeCredentials(plan, undefined)),
+      ).toEqual({
         kind: "provider_api_token",
         provider: "zai",
       });
@@ -477,7 +636,9 @@ describe("CLI production wiring (verify C1/C3)", () => {
           cliModel: "sonnet",
         }),
       ]);
-      expect(soleOpenCodeCredential(plan)).toEqual({
+      expect(
+        soleOpenCodeCredentialOf(planOpenCodeCredentials(plan, undefined)),
+      ).toEqual({
         kind: "opencode_chatgpt_oauth",
         provider: "openai",
       });
@@ -497,6 +658,79 @@ describe("CLI production wiring (verify C1/C3)", () => {
       expect(
         (oauth.registry as DefaultTransportRegistry).openCodeCredentialBroker,
       ).toBe(oauth.authorityOptions.credentialBrokers?.opencode);
+    });
+
+    // U3 (S8, L12 "Building auth.json"): the kind follows which CRYSK_* secret
+    // the setup step built the auth file from, named in its manifest. Without a
+    // manifest the provider literal stands, so the old opencode-auth input and
+    // a local store keep their answer.
+    test("the sole credential follows the CRYSK_* secret names", () => {
+      const plan = createResolvedRoutePlan([
+        openCodeStep("refuter", "openai/gpt-4o", "openai"),
+      ]);
+      const sole = (names: readonly string[] | undefined) =>
+        soleOpenCodeCredentialOf(planOpenCodeCredentials(plan, names));
+      expect(sole(["CRYSK_OPENCODE_OPENAI_API_KEY"])).toEqual({
+        kind: "provider_api_token",
+        provider: "openai",
+      });
+      expect(
+        sole(["CRYSK_OPENCODE_OPENAI_API_KEY", "CRYSK_OPENCODE_OPENAI_OAUTH"]),
+      ).toEqual({ kind: "opencode_chatgpt_oauth", provider: "openai" });
+      expect(sole(undefined)).toEqual({
+        kind: "opencode_chatgpt_oauth",
+        provider: "openai",
+      });
+    });
+
+    test("admission reads the setup step's manifest: openai on an API key binds the API-token broker", async () => {
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-cred-"));
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+      const dataHome = path.join(tmpDir, "xdg-data");
+      const authPath = resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome });
+      await mkdir(path.dirname(authPath), { recursive: true });
+      await writeFile(
+        authPath,
+        JSON.stringify({ openai: { type: "api", key: "k" } }),
+      );
+      await writeFile(
+        openCodeSecretManifestPath(authPath),
+        serializeOpenCodeSecretManifest([
+          {
+            provider: "openai",
+            secret: "CRYSK_OPENCODE_OPENAI_API_KEY",
+            kind: "api_key",
+          },
+        ]),
+      );
+      try {
+        const admission = await prepareProductionAdmissionContext({
+          workspaceRoot: tmpDir,
+          plan: createResolvedRoutePlan([
+            openCodeStep("refuter", "openai/gpt-4o", "openai"),
+          ]),
+          env: { PATH: tmpDir, XDG_DATA_HOME: dataHome },
+          loadSdk: mockLoadSdk,
+          authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+        });
+        if ("error" in admission) throw new Error(admission.error);
+        expect(admission.authorityOptions.openCodeSecretNames).toEqual([
+          "CRYSK_OPENCODE_OPENAI_API_KEY",
+        ]);
+        const broker = admission.authorityOptions.credentialBrokers?.opencode;
+        expect(broker).toBeInstanceOf(OpenCodeApiTokenBroker);
+        expect(
+          (admission.registry as DefaultTransportRegistry)
+            .openCodeCredentialBroker,
+        ).toBe(broker);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
     });
 
     // SCOPE NOTE, updated by #137 and again on 2026-09-02, asserted rather
@@ -539,6 +773,462 @@ describe("CLI production wiring (verify C1/C3)", () => {
       // pricing prerequisite is met, and it can only have been met by the
       // transport, since no bundled table carries this model on any clock.
       expect(admission.evidence.get("opencode")?.pricingReady).toBe(true);
+    });
+  });
+});
+
+// odd/tasks/role-model-routing.md S4 (E-d): every model of a role's list is
+// admitted before the cost confirmation, so an OpenCode model listed only as
+// a fallback gets its executable resolved here, and a fallback that cannot
+// run fails here, before anything spends.
+describe("fallback models at the pre-confirm admission", () => {
+  function claudeThenOpenCode() {
+    return createResolvedRoutePlan([
+      resolveStepRoute({
+        stepKey: "hunter-reliability",
+        role: "hunter",
+        modelRole: "hunter.reliability",
+        models: {
+          "hunter.reliability": [
+            "claude:sonnet-latest",
+            "opencode:openai/gpt-4o",
+          ],
+        },
+      }),
+    ]);
+  }
+
+  test("an OpenCode model listed only as a fallback gets its executable resolved", async () => {
+    const tmpDir = await realpath(
+      await mkdtemp(path.join(tmpdir(), "pr-hero-cli-fallback-")),
+    );
+    try {
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+      const plan = claudeThenOpenCode();
+      const admission = await prepareProductionAdmissionContext({
+        workspaceRoot: tmpDir,
+        plan,
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
+        loadSdk: mockLoadSdk,
+        authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+      });
+      if ("error" in admission) {
+        throw new Error(admission.error);
+      }
+      expect(admission.authorityOptions.executableAllowlists?.opencode).toEqual(
+        [{ absolutePath: opencode.canonicalPath, sha256: opencode.sha256 }],
+      );
+      expect(admission.evidence.get("opencode")?.sdkAvailable).toBe(true);
+      await expect(
+        admitRoutePlan(plan, admission.registry, {
+          mode: "production",
+          evidence: admission.evidence,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a fallback whose executable cannot be found fails admission", async () => {
+    const tmpDir = await realpath(
+      await mkdtemp(path.join(tmpdir(), "pr-hero-cli-fallback-")),
+    );
+    try {
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      // No opencode binary anywhere this admission may look.
+      const missing = { canonicalPath: path.join(tmpDir, "no-opencode") };
+      const admission = await prepareProductionAdmissionContext({
+        workspaceRoot: tmpDir,
+        plan: claudeThenOpenCode(),
+        env: { PATH: tmpDir, XDG_DATA_HOME: await writeAuthFixture(tmpDir) },
+        loadSdk: mockLoadSdk,
+        authorityDeps: {
+          ...fixtureDeps(tmpDir, claude, missing),
+          existsFn: (p: string) =>
+            p.startsWith(tmpDir) && path.basename(p) !== "opencode",
+        },
+      });
+      expect("error" in admission ? admission.error : "admitted").toMatch(
+        /opencode/i,
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// odd/tasks/role-model-routing.md S7 (E-g, E2; L34): OpenCode accepts a
+// variant a model does not have, without an error, and runs it at the default
+// level. So an OpenCode entry's effort is checked against the variants
+// `opencode models <provider> --verbose` lists for the model, at the
+// pre-confirm admission every review path runs before its cost confirmation,
+// and refused by name. The fixture binary prints a listing in the shape
+// OpenCode 1.19 prints (`<provider>/<id>` then the model's JSON) and logs
+// each invocation, so a plan with no variant can be shown to list nothing.
+describe("an OpenCode effort is checked against the model's variants before the confirmation (S7)", () => {
+  const LISTING = [
+    "openai/gpt-5",
+    JSON.stringify(
+      {
+        id: "gpt-5",
+        status: "active",
+        variants: { none: {}, low: {}, high: {} },
+      },
+      null,
+      2,
+    ),
+    "openai/gpt-5-nano",
+    JSON.stringify({ id: "gpt-5-nano", status: "active", variants: {} }),
+  ].join("\n");
+  // A model the `opencode` provider declares free (model/free-discovery.ts).
+  const FREE_LISTING = [
+    "opencode/free-model",
+    JSON.stringify({
+      id: "free-model",
+      status: "active",
+      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    }),
+  ].join("\n");
+  // The OpenCode auth file the run's env points to: the openai login the
+  // OAuth route needs and a deepseek API key, so these tests reach the
+  // variants check (the credential check runs before it).
+  const AUTH = {
+    openai: { type: "oauth", refresh: "r", access: "a", expires: 0 },
+    deepseek: { type: "api", key: "k" },
+  };
+
+  async function withFixture(
+    run: (ctx: {
+      tmpDir: string;
+      log: string;
+      resolve: (
+        entries: Array<string | { model: string; effort?: string }>,
+        extra?: { checkCredentials?: boolean },
+      ) => ReturnType<typeof resolveProductionRoutePlanAtConfirm>;
+    }) => Promise<void>,
+    options: {
+      // The auth file's content (an object, or raw text), or null for no file.
+      readonly auth?: Record<string, unknown> | string | null;
+      readonly env?: Record<string, string>;
+    } = {},
+  ): Promise<void> {
+    const tmpDir = await realpath(
+      await mkdtemp(path.join(tmpdir(), "pr-hero-cli-variants-")),
+    );
+    try {
+      const log = path.join(tmpDir, "opencode.log");
+      const listing = path.join(tmpDir, "listing.txt");
+      await writeFile(listing, `${LISTING}\n`);
+      const freeListing = path.join(tmpDir, "free-listing.txt");
+      await writeFile(freeListing, `${FREE_LISTING}\n`);
+      // XDG_DATA_HOME is pinned to the fixture, so the developer's own
+      // OpenCode auth file is never read.
+      const xdg = path.join(tmpDir, "xdg");
+      const auth = options.auth === undefined ? AUTH : options.auth;
+      if (auth !== null) {
+        const authFile = resolveOpenCodeAuthPath({ XDG_DATA_HOME: xdg });
+        await mkdir(path.dirname(authFile), { recursive: true });
+        await writeFile(
+          authFile,
+          typeof auth === "string" ? auth : JSON.stringify(auth),
+        );
+      }
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      const opencode = await writeExecutable(
+        tmpDir,
+        "opencode",
+        [
+          "#!/bin/sh",
+          `echo "$*" >> "${log}"`,
+          'if [ "$1" = "--version" ]; then echo "1.18.30"; exit 0; fi',
+          `if [ "$1" = "models" ] && [ "$2" = "openai" ]; then cat "${listing}"; exit 0; fi`,
+          `if [ "$1" = "models" ] && [ "$2" = "opencode" ]; then cat "${freeListing}"; exit 0; fi`,
+          'if [ "$1" = "models" ]; then echo "Provider not found: $2" >&2; exit 1; fi',
+          "exit 0",
+          "",
+        ].join("\n"),
+      );
+      await run({
+        tmpDir,
+        log,
+        resolve: (entries, extra) =>
+          resolveProductionRoutePlanAtConfirm({
+            ...extra,
+            modelsConfigured: true,
+            workspaceRoot: tmpDir,
+            buildRoutePlan: async () =>
+              createResolvedRoutePlan([
+                resolveStepRoute({
+                  stepKey: "hunter-logic",
+                  role: "hunter",
+                  modelRole: "hunter.logic",
+                  models: { "hunter.logic": entries },
+                }),
+              ]),
+            env: { PATH: tmpDir, XDG_DATA_HOME: xdg, ...options.env },
+            loadSdk: mockLoadSdk,
+            authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+          }),
+      });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  async function refusal(
+    promise: Promise<unknown>,
+  ): Promise<string | undefined> {
+    try {
+      await promise;
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  test("an unknown variant is refused by name, with the model's variants", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([{ model: "opencode:openai/gpt-5", effort: "turbo" }]),
+        ),
+      ).toBe(
+        'production admission failed: models: effort "turbo" for opencode:openai/gpt-5 is not one of its OpenCode variants (none, low, high), and OpenCode would run it at the model\'s default level without an error: write one of those, or remove the effort (hunter-logic)',
+      );
+    });
+  });
+
+  test("a fallback's variant is checked too", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([
+            "claude:sonnet-latest",
+            { model: "opencode:openai/gpt-5", effort: "max" },
+          ]),
+        ),
+      ).toContain('effort "max" for opencode:openai/gpt-5 is not one');
+    });
+  });
+
+  test("an effort on a model with no variants is refused", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([{ model: "opencode:openai/gpt-5-nano", effort: "high" }]),
+        ),
+      ).toBe(
+        'production admission failed: models: effort "high" for opencode:openai/gpt-5-nano cannot apply: OpenCode lists no variants for this model, so it would run at its default level: remove the effort (hunter-logic)',
+      );
+    });
+  });
+
+  test("a model the listing does not have cannot be checked, and is refused", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([{ model: "opencode:openai/gpt-9", effort: "high" }]),
+        ),
+      ).toBe(
+        'production admission failed: models: effort "high" for opencode:openai/gpt-9 could not be checked against its OpenCode variants (openai/gpt-9 is not in opencode models openai); OpenCode runs a variant the model does not have at its default level without an error, so the review does not start on an unchecked one: fix that, or remove the effort (hunter-logic)',
+      );
+    });
+  });
+
+  test("a listing that fails is refused, naming the command", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([
+            { model: "opencode:deepseek/deepseek-chat", effort: "max" },
+          ]),
+        ),
+      ).toContain(
+        'effort "max" for opencode:deepseek/deepseek-chat could not be checked against its OpenCode variants (opencode models deepseek exited 1)',
+      );
+    });
+  });
+
+  test("a variant the model lists is admitted and stays on the route", async () => {
+    await withFixture(async ({ resolve, log }) => {
+      const routed = await resolve([
+        { model: "opencode:openai/gpt-5", effort: "high" },
+      ]);
+      expect(routed?.routePlan.steps[0]?.route.modelVariant).toBe("high");
+      // One listing, the free check's argv.
+      const calls = (await Bun.file(log).text())
+        .split("\n")
+        .filter((line) => line.startsWith("models"));
+      expect(calls).toEqual(["models openai --verbose --refresh"]);
+    });
+  });
+
+  test("a plan that sends no variant lists nothing (D1)", async () => {
+    await withFixture(async ({ resolve, log }) => {
+      const routed = await resolve(["opencode:openai/gpt-5"]);
+      expect(routed?.routePlan.steps[0]?.route).not.toHaveProperty(
+        "modelVariant",
+      );
+      const text = (await Bun.file(log).exists())
+        ? await Bun.file(log).text()
+        : "";
+      expect(text.split("\n").filter((l) => l.startsWith("models"))).toEqual(
+        [],
+      );
+    });
+  });
+
+  // Missing credential: a model whose provider has no record in the run's
+  // OpenCode auth file is refused before the variants check, by name, as the
+  // credential failure its first step would hit (CRYSK-CRED-UNUSABLE), with or
+  // without an effort, fallbacks included. A free model needs no record.
+  describe("an OpenCode route with no credential record is refused at admission", () => {
+    const AIAND = "opencode:aiand/deepseek-ai/deepseek-v4.1-flash-1017";
+    const CI = { GITHUB_ACTIONS: "true" };
+    const AIAND_REFUSAL =
+      "models name OpenCode provider aiand (hunter-logic), but no CRYSK_OPENCODE_AIAND_API_KEY secret reached the run (the OpenCode auth file has no aiand record): set it, pass it in the crysk-secrets input, and name the model in the models input (the model input builds no OpenCode auth file)";
+
+    async function refusedWith(promise: Promise<unknown>): Promise<unknown> {
+      try {
+        await promise;
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    }
+
+    test("a model with an effort and no record names the provider and its secret, not the listing", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(
+            resolve([{ model: AIAND, effort: "xhigh" }]),
+          );
+          expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
+          expect(error).toBeInstanceOf(CliError);
+          const refusal = error as OpenCodeCredentialRefusalError;
+          expect(refusal.message).toBe(AIAND_REFUSAL);
+          expect(refusal.cls).toEqual({
+            kind: "credential",
+            failureClass: "missing_provider_record",
+          });
+          expect(refusal.params).toEqual({
+            backend: "opencode",
+            provider: "aiand",
+            model: "deepseek-ai/deepseek-v4.1-flash-1017",
+            step: "hunter-logic",
+            secret: "CRYSK_OPENCODE_AIAND_API_KEY",
+          });
+        },
+        { auth: null, env: CI },
+      );
+    });
+
+    test("the same model with no effort is refused at admission too", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(resolve([AIAND]));
+          expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
+          expect((error as Error).message).toBe(AIAND_REFUSAL);
+        },
+        // An auth file holding other providers only: still no aiand record.
+        { env: CI },
+      );
+    });
+
+    // A local --dry-run authenticates nothing (src/review/run.ts), so, like the
+    // Claude check, it is never refused for a credential.
+    test("a dry run with no record is admitted", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const result = await resolve([AIAND], { checkCredentials: false });
+          expect(result?.routePlan.steps.length).toBe(1);
+        },
+        { auth: null },
+      );
+    });
+
+    test("a fallback with no record refuses the whole run", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(
+            resolve(["claude:sonnet-latest", AIAND]),
+          );
+          expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
+          expect((error as Error).message).toBe(AIAND_REFUSAL);
+        },
+        { auth: null, env: CI },
+      );
+    });
+
+    test("a free model with no record is admitted", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const routed = await resolve(["opencode:opencode/free-model"]);
+          expect(routed?.routePlan.steps[0]?.route.provider).toBe("opencode");
+        },
+        { auth: null, env: CI },
+      );
+    });
+
+    test("openai on its ChatGPT login names the _OAUTH secret and the _API_KEY alternative", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(resolve(["opencode:openai/gpt-5"]));
+          expect(error).toBeInstanceOf(OpenCodeCredentialRefusalError);
+          const refusal = error as OpenCodeCredentialRefusalError;
+          expect(refusal.message).toBe(
+            "models name OpenCode provider openai (hunter-logic), but no CRYSK_OPENCODE_OPENAI_OAUTH secret reached the run (the OpenCode auth file has no openai subscription record): set it, or CRYSK_OPENCODE_OPENAI_API_KEY to bill per token, pass it in the crysk-secrets input, and name the model in the models input (the model input builds no OpenCode auth file)",
+          );
+          expect(refusal.cls).toEqual({
+            kind: "credential",
+            failureClass: "missing_subscription_record",
+          });
+        },
+        { auth: { deepseek: { type: "api", key: "k" } }, env: CI },
+      );
+    });
+
+    test("outside CI the refusal names opencode auth login", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          const error = await refusedWith(resolve([AIAND]));
+          expect((error as Error).message).toBe(
+            "models name OpenCode provider aiand (hunter-logic), but the OpenCode auth file has no aiand record: run `opencode auth login` and add aiand's API key",
+          );
+        },
+        { auth: null },
+      );
+    });
+
+    test("an auth file that is not JSON is left to the broker's own error", async () => {
+      await withFixture(
+        async ({ resolve }) => {
+          // Not refused here: the run goes on to the variants check, whose
+          // listing of aiand fails as before.
+          const error = await refusedWith(
+            resolve([{ model: AIAND, effort: "xhigh" }]),
+          );
+          expect(error).not.toBeInstanceOf(OpenCodeCredentialRefusalError);
+          expect((error as Error).message).toContain(
+            "(opencode models aiand exited 1)",
+          );
+        },
+        { auth: "not json", env: CI },
+      );
     });
   });
 });

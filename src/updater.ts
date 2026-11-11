@@ -26,7 +26,7 @@ import { LEGACY_HOME_DIR_NAME, resolveHomeDir } from "./brand-paths";
 import { loadGlobalConfigLayer } from "./config/config";
 import { runDoctor } from "./doctor";
 import { prheroLayout } from "./home-preflight";
-import { type RoutingConfig, routingNeedsOpenCodeSdk } from "./model/routing";
+import { type ModelsConfig, modelsNeedOpenCode } from "./model/model-name";
 import {
   readInstalledOpenCodeSdkVersion,
   SUPPORTED_OPENCODE_SDK_VERSION,
@@ -54,7 +54,7 @@ export function detectInstallMethod(
 ): InstallMethod {
   const home = options.home ?? os.homedir();
   const execPath = options.execPath ?? process.execPath;
-  const version = options.version ?? "0.4.0";
+  const version = options.version ?? "0.5.0";
   const exists = options.exists ?? existsSync;
 
   const isSource =
@@ -656,11 +656,14 @@ export function spawnOpenCodeSdkInstaller(
   });
 }
 
-async function readReconcileRouting(
+// The person file's `models`, the only layer that may hold them. A person
+// file that no longer parses (a removed `routing` key) throws here, and the
+// reconcile step records that message instead of crashing.
+async function readReconcileModels(
   home: string,
-): Promise<RoutingConfig | undefined> {
+): Promise<ModelsConfig | undefined> {
   const loaded = await loadGlobalConfigLayer(home);
-  return loaded.layer?.routing;
+  return loaded.layer?.models;
 }
 
 async function ensureOpenCodeSdkInstalled(options: {
@@ -670,8 +673,8 @@ async function ensureOpenCodeSdkInstalled(options: {
   which?: (bin: string) => string | null;
   spawnInstaller?: (argv: readonly string[]) => Promise<OpenCodeSdkSpawnResult>;
 }): Promise<void> {
-  const routing = await readReconcileRouting(options.home);
-  if (!routingNeedsOpenCodeSdk(routing)) return;
+  const models = await readReconcileModels(options.home);
+  if (!modelsNeedOpenCode(models)) return;
   // Install and the version check share this home. The no-arg reader uses
   // os.homedir(), which is a different tree whenever reconcile was given one.
   const nodeModulesDir = prheroLayout(options.home).nodeModulesDir;

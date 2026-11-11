@@ -10,6 +10,7 @@ import {
 import { existsSync } from "node:fs";
 import {
   chmod,
+  mkdir,
   mkdtemp,
   readFile,
   realpath,
@@ -26,7 +27,6 @@ import {
 import {
   computeRouteFingerprint,
   createResolvedRoutePlan,
-  type RoutingConfig,
   resolveStepRoute,
 } from "#model/routing";
 import { buildStepArgv } from "#review/step-runner";
@@ -60,8 +60,13 @@ import {
   CredentialProjectionError,
   OpenCodeApiTokenBroker,
   OpenCodeAuthBroker,
+  resolveOpenCodeAuthPath,
 } from "../src/security/credential-broker";
 import { authorizeWorkspaceCwd } from "../src/security/execution-authority";
+import {
+  openCodeSecretManifestPath,
+  serializeOpenCodeSecretManifest,
+} from "../src/security/opencode-secret-manifest";
 import {
   admitRoutePlan,
   type D1_11ReadinessEvidence,
@@ -272,7 +277,6 @@ describe("production runtime PR1", () => {
       const baseRoute = {
         backend: "claude-code" as const,
         provider: "anthropic",
-        gateway: "direct" as const,
         modelFamily: "sonnet",
         modelSnapshot: "sonnet",
       };
@@ -565,21 +569,10 @@ describe("production runtime PR1", () => {
     });
 
     test("OpenCode without D1-11 evidence fails before runner is returned", async () => {
-      const routingConfig: RoutingConfig = {
-        mappings: {
-          "openai/gpt-4o": {
-            backend: "opencode",
-            provider: "openai",
-            modelFamily: "gpt-4o",
-            modelSnapshot: "gpt-4o",
-          },
-        },
-      };
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig,
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
       const opencodeFixture = await writeOpenCodeFixture(tmpDir);
@@ -650,7 +643,8 @@ describe("production runtime PR1", () => {
     // and none needs to name which provider's stamp it is anchored on.
     async function bindingReportForBilling(
       billing: ProviderCapabilityReport["billing"],
-      routingConfig?: RoutingConfig,
+      // The model the one step runs, as a full model name. Absent: `sonnet`.
+      model?: string,
       // #161: optional so every pre-existing caller below (which does not
       // care about the credential kind) stays byte-identical — no env means
       // no key means the pre-#161 subscription kind, same as always.
@@ -660,7 +654,7 @@ describe("production runtime PR1", () => {
       // depending on whether THIS host's Keychain default resolves.
       credentialBrokers?: { readonly "claude-code": CredentialBroker },
     ) {
-      // No routingConfig resolves through the alias fallback in
+      // No model resolves `sonnet` through the alias conversion in
       // model/routing.ts, which pins provider "anthropic" -- the catalogue's
       // own provider. That is what keeps every arm below meaning what it meant
       // before the provider gate existed.
@@ -672,8 +666,7 @@ describe("production runtime PR1", () => {
       const step = resolveStepRoute({
         stepKey: "hunter-reliability",
         role: "hunter",
-        cliModel: "sonnet",
-        ...(routingConfig === undefined ? {} : { routingConfig }),
+        cliModel: model ?? "sonnet",
       });
       const plan = createResolvedRoutePlan([step]);
       const registry = new DefaultTransportRegistry();
@@ -842,14 +835,7 @@ describe("production runtime PR1", () => {
       // fallback, and it is refused anyway. A bare alias would have been
       // refused for a second reason (no version to look up), which is why the
       // pin is load-bearing here rather than incidental.
-      const PINNED_SNAPSHOT_ROUTE: RoutingConfig = {
-        default: {
-          backend: "claude-code",
-          provider: "anthropic",
-          modelFamily: "claude-sonnet-5",
-          modelSnapshot: "claude-sonnet-5",
-        },
-      };
+      const PINNED_SNAPSHOT_ROUTE = "claude:claude-sonnet-5";
 
       test("a formerly-catalogued model no longer rescues a transport that reports no cost", async () => {
         const report = await bindingReportForBilling(
@@ -937,17 +923,7 @@ describe("production runtime PR1", () => {
         const step = resolveStepRoute({
           stepKey: "hunter-reliability",
           role: "hunter",
-          cliModel: "openai/gpt-4o",
-          routingConfig: {
-            mappings: {
-              "openai/gpt-4o": {
-                backend: "opencode",
-                provider: "openai",
-                modelFamily: "gpt-4o",
-                modelSnapshot: "gpt-4o",
-              },
-            },
-          },
+          cliModel: "opencode:openai/gpt-4o",
         });
         const registry = new DefaultTransportRegistry();
         registry.register("opencode", transport);
@@ -1098,17 +1074,7 @@ describe("production runtime PR1", () => {
         const openStep = resolveStepRoute({
           stepKey: "hunter-reliability",
           role: "hunter",
-          cliModel: "openai/gpt-4o",
-          routingConfig: {
-            mappings: {
-              "openai/gpt-4o": {
-                backend: "opencode",
-                provider: "openai",
-                modelFamily: "gpt-4o",
-                modelSnapshot: "gpt-4o",
-              },
-            },
-          },
+          cliModel: "opencode:openai/gpt-4o",
         });
         const claudeStep = resolveStepRoute({
           stepKey: "refuter",
@@ -1279,6 +1245,131 @@ describe("production runtime PR1", () => {
           else process.env.ANTHROPIC_API_KEY = priorKey;
         }
       });
+
+      // S5: the run env (one Claude credential, chosen at run start) is what the
+      // child sees, not the process's own environment. With the subscription chosen
+      // and the key stripped from the run env, a degraded Keychain projection has no
+      // key to fall back on: the attempt runs on no credential instead of switching
+      // to the key mid-run, and nothing reserves against the spend ledger.
+      test("S5: the harness child env is the run env, so a degraded projection never reaches a key the run did not choose", async () => {
+        const degradingBroker: CredentialBroker = {
+          async project() {
+            throw new CredentialProjectionError("missing_subscription_record");
+          },
+        };
+        const seen: Array<{ apiKey: boolean; oauth: boolean }> = [];
+        const base = createMockTransport("claude-code", []);
+        const transport: ProviderTransport = {
+          ...base,
+          execute: async (request) => {
+            seen.push({
+              apiKey: request.isolation.env.ANTHROPIC_API_KEY !== undefined,
+              oauth:
+                request.isolation.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined,
+            });
+            return {
+              completion: "success" as const,
+              protocolIntegrity: "verified" as const,
+              finalText: '{"findings":[]}',
+              usage: METERED_ZERO,
+              stderrTail: "",
+            };
+          },
+        };
+        const priorKey = process.env.ANTHROPIC_API_KEY;
+        process.env.ANTHROPIC_API_KEY = "sk-ambient-s5-test";
+        try {
+          const step = resolveStepRoute({
+            stepKey: "hunter-reliability",
+            role: "hunter",
+            cliModel: "sonnet",
+          });
+          const registry = new DefaultTransportRegistry();
+          registry.register("claude-code", transport);
+          const runtime = await createProductionRuntime({
+            workspaceRoot: tmpDir,
+            plan: createResolvedRoutePlan([step]),
+            binaryPath: claudeFixture.canonicalPath,
+            executableAllowlists: claudeAllowlist(claudeFixture),
+            registry,
+            mode: "conformance",
+            credentialBrokers: { "claude-code": degradingBroker },
+            env: { PATH: process.env.PATH, CLAUDE_CODE_OAUTH_TOKEN: "oauth" },
+            claudeCredential: "subscription",
+          });
+          const result = await runtime.runner.run(
+            makeStep(tmpDir, {
+              name: "hunter-reliability",
+              routeKey: step.routeFingerprint,
+              route: step.route,
+            }),
+          );
+          expect(seen).toEqual([{ apiKey: false, oauth: true }]);
+          expect(result.reservations).toBeUndefined();
+          expect(result.stderrTail).not.toContain(
+            "ambient credential bills metered",
+          );
+        } finally {
+          if (priorKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+          else process.env.ANTHROPIC_API_KEY = priorKey;
+        }
+      });
+
+      test("S5: an API key chosen at run start binds metered with no Keychain broker, even when one is supplied", async () => {
+        const broker: CredentialBroker = {
+          async project() {
+            throw new Error("an API-key run must never project the Keychain");
+          },
+        };
+        const seen: Array<{ apiKey: boolean; oauth: boolean }> = [];
+        const base = createMockTransport("claude-code", []);
+        const transport: ProviderTransport = {
+          ...base,
+          execute: async (request) => {
+            seen.push({
+              apiKey: request.isolation.env.ANTHROPIC_API_KEY !== undefined,
+              oauth:
+                request.isolation.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined,
+            });
+            return {
+              completion: "success" as const,
+              protocolIntegrity: "verified" as const,
+              finalText: '{"findings":[]}',
+              usage: METERED_ZERO,
+              stderrTail: "",
+            };
+          },
+        };
+        const step = resolveStepRoute({
+          stepKey: "hunter-reliability",
+          role: "hunter",
+          cliModel: "sonnet",
+        });
+        const registry = new DefaultTransportRegistry();
+        registry.register("claude-code", transport);
+        const runtime = await createProductionRuntime({
+          workspaceRoot: tmpDir,
+          plan: createResolvedRoutePlan([step]),
+          binaryPath: claudeFixture.canonicalPath,
+          executableAllowlists: claudeAllowlist(claudeFixture),
+          registry,
+          mode: "conformance",
+          credentialBrokers: { "claude-code": broker },
+          env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: "sk-chosen" },
+          claudeCredential: "api_key",
+        });
+        const binding = [...runtime.bindings.values()][0];
+        expect(binding?.credential.kind).toBe("provider_api_token");
+        expect(binding?.credential.broker).toBeUndefined();
+        await runtime.runner.run(
+          makeStep(tmpDir, {
+            name: "hunter-reliability",
+            routeKey: step.routeFingerprint,
+            route: step.route,
+          }),
+        );
+        expect(seen).toEqual([{ apiKey: true, oauth: false }]);
+      });
     });
 
     // #133. The credential KIND is what decides how a route bills, and it is
@@ -1310,21 +1401,10 @@ describe("production runtime PR1", () => {
         const logical = options?.logical ?? UNPRICED_ZAI_MODEL;
         const model = logical.split("/")[1];
         const opencodeFixture = await writeOpenCodeFixture(tmpDir);
-        const routingConfig: RoutingConfig = {
-          mappings: {
-            [logical]: {
-              backend: "opencode",
-              provider,
-              modelFamily: model,
-              modelSnapshot: model,
-            },
-          },
-        };
         const step = resolveStepRoute({
           stepKey: "hunter-reliability",
           role: "hunter",
-          cliModel: logical,
-          routingConfig,
+          cliModel: `opencode:${provider}/${model}`,
         });
         const plan = createResolvedRoutePlan([step]);
         const registry = new DefaultTransportRegistry();
@@ -1394,21 +1474,10 @@ describe("production runtime PR1", () => {
       // FrozenRuntimeBinding.capabilities() true.
       test("the effective mode only ever upgrades", async () => {
         const opencodeFixture = await writeOpenCodeFixture(tmpDir);
-        const routingConfig: RoutingConfig = {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        };
         const step = resolveStepRoute({
           stepKey: "hunter-reliability",
           role: "hunter",
-          cliModel: "openai/gpt-4o",
-          routingConfig,
+          cliModel: "opencode:openai/gpt-4o",
         });
         const plan = createResolvedRoutePlan([step]);
         const registry = new DefaultTransportRegistry();
@@ -1454,40 +1523,15 @@ describe("production runtime PR1", () => {
       // route is refused before anything launches.
       test("a plan mixing an OAuth provider and an API-token provider is refused per binding", async () => {
         const opencodeFixture = await writeOpenCodeFixture(tmpDir);
-        const routingConfig: RoutingConfig = {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-            // #137: `glm-5-turbo`, not `glm-5`. The bundled zai table now
-            // prices `glm-5`, and this arm needs the metered binding to be
-            // refused for PRICING so `pricing_table_missing` is still what
-            // proves the per-binding gate ran. `glm-5-turbo` is routable in
-            // OpenCode and absent from z.ai's published table, so it stays
-            // unpriceable on any clock -- which matters here because this
-            // probe reads the wall clock and has no `now` seam.
-            [UNPRICED_ZAI_MODEL]: {
-              backend: "opencode",
-              provider: "zai",
-              modelFamily: UNPRICED_ZAI_MODEL.split("/")[1],
-              modelSnapshot: UNPRICED_ZAI_MODEL.split("/")[1],
-            },
-          },
-        };
         const oauthStep = resolveStepRoute({
           stepKey: "hunter-reliability",
           role: "hunter",
-          cliModel: "openai/gpt-4o",
-          routingConfig,
+          cliModel: "opencode:openai/gpt-4o",
         });
         const tokenStep = resolveStepRoute({
           stepKey: "refuter",
           role: "refuter",
-          cliModel: UNPRICED_ZAI_MODEL,
-          routingConfig,
+          cliModel: `opencode:${UNPRICED_ZAI_MODEL}`,
         });
         const plan = createResolvedRoutePlan([oauthStep, tokenStep]);
         const registry = new DefaultTransportRegistry();
@@ -1557,22 +1601,10 @@ describe("production runtime PR1", () => {
 
       test("an uncatalogued metered model is admitted on the OpenCode transport's own cost reporting", async () => {
         const opencodeFixture = await writeOpenCodeFixture(tmpDir);
-        const model = UNPRICED_ZAI_MODEL.split("/")[1];
-        const routingConfig: RoutingConfig = {
-          mappings: {
-            [UNPRICED_ZAI_MODEL]: {
-              backend: "opencode",
-              provider: "zai",
-              modelFamily: model,
-              modelSnapshot: model,
-            },
-          },
-        };
         const step = resolveStepRoute({
           stepKey: "hunter-reliability",
           role: "hunter",
-          cliModel: UNPRICED_ZAI_MODEL,
-          routingConfig,
+          cliModel: `opencode:${UNPRICED_ZAI_MODEL}`,
         });
         const plan = createResolvedRoutePlan([step]);
         // No `registry.register("opencode", ...)`: the registry's own factory
@@ -1624,20 +1656,12 @@ describe("production runtime PR1", () => {
         // being that no table is consulted at all any more. Before #197 this
         // exact route was REFUSED (`pricing_table_missing`, blocking); the
         // CLI's `total_cost_usd` is what admits it now.
-        const routingConfig: RoutingConfig = {
-          default: {
-            backend: "claude-code",
-            provider: "anthropic",
-            modelFamily: "claude-sonnet-5",
-            modelSnapshot: "claude-sonnet-4-1",
-          },
-        };
         const report = await bindingReportForBilling(
           {
             mode: "metered",
             pricingReady: claudeBilling.billing.pricingReady,
           },
-          routingConfig,
+          "claude:claude-sonnet-4-1",
         );
 
         expect(report.billing.pricingApplicability).toBe("required");
@@ -1765,21 +1789,10 @@ describe("production runtime PR1", () => {
         opencodeFixture: { canonicalPath: string; sha256: string },
         openCodeClient: ReturnType<typeof meteredZeroClient>["client"],
       ) {
-        const model = UNPRICED_ZAI_MODEL.split("/")[1];
         const step = resolveStepRoute({
           stepKey: "hunter-reliability",
           role: "hunter",
-          cliModel: UNPRICED_ZAI_MODEL,
-          routingConfig: {
-            mappings: {
-              [UNPRICED_ZAI_MODEL]: {
-                backend: "opencode",
-                provider: "zai",
-                modelFamily: model,
-                modelSnapshot: model,
-              },
-            },
-          },
+          cliModel: `opencode:${UNPRICED_ZAI_MODEL}`,
         });
         // THE construction under test: no `credentialKind`. Every test, every
         // doctor probe and every caller of the public
@@ -1982,43 +1995,97 @@ describe("production runtime PR1", () => {
     // transport's capabilities() spawns a process or loads @opencode-ai/sdk.
     test("collectDoctorExactBindingReports probes an OpenCode route without the production D1-11 gate when no SDK loader is injected", async () => {
       await writeOpenCodeFixture(tmpDir);
-      const routingConfig: RoutingConfig = {
-        mappings: [
-          {
-            logical: "opus",
-            backend: "opencode",
-            provider: "openai",
-            modelFamily: "gpt-4o",
-            modelSnapshot: "gpt-4o",
-          },
-        ],
-      };
-
       const reports = await collectDoctorExactBindingReports({
         workspaceRoot: tmpDir,
-        routingConfig,
+        models: { refuter: ["opencode:openai/gpt-4o"] },
         env: { PATH: tmpDir },
       });
 
-      expect(reports.length).toBe(2);
+      // The doctor plan's two default Claude steps, plus one per model
+      // `models` names (production-runtime.ts buildDoctorRoutePlan).
+      expect(reports.length).toBe(3);
       expect([...reports].map((report) => report.backend).sort()).toEqual([
+        "claude-code",
         "claude-code",
         "opencode",
       ]);
     });
 
-    test("mixed Claude/OpenCode conformance admits with evidence and dispatches by routeKey", async () => {
-      const routingConfig: RoutingConfig = {
-        mappings: {
-          "openai/gpt-4o": {
-            backend: "opencode",
+    // U3: the doctor binds an OpenCode model the way a review would, so it
+    // reads the setup step's CRYSK_* manifest too: openai on an API key is the
+    // metered kind there, not the subscription the provider literal assumes.
+    test("collectDoctorExactBindingReports binds an OpenCode route to the CRYSK_* secret behind it", async () => {
+      await writeOpenCodeFixture(tmpDir);
+      const dataHome = path.join(tmpDir, "xdg-data");
+      const manifest = openCodeSecretManifestPath(
+        resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome }),
+      );
+      await mkdir(path.dirname(manifest), { recursive: true });
+      await writeFile(
+        manifest,
+        serializeOpenCodeSecretManifest([
+          {
             provider: "openai",
-            modelFamily: "gpt-4o",
-            modelSnapshot: "gpt-4o",
-            modelVariant: "high",
+            secret: "CRYSK_OPENCODE_OPENAI_API_KEY",
+            kind: "api_key",
           },
+        ]),
+      );
+      const reports = await collectDoctorExactBindingReports({
+        workspaceRoot: tmpDir,
+        models: { refuter: ["opencode:openai/gpt-4o"] },
+        env: { PATH: tmpDir, XDG_DATA_HOME: dataHome },
+      });
+      const opencode = reports.find((report) => report.backend === "opencode");
+      expect(opencode?.billing.mode).toBe("metered");
+    });
+
+    // U4: the doctor always bound each configured model on its own, so two
+    // OpenCode providers report two bindings, each with its own kind and
+    // billing. Pinned because U4 rewrote the credential code it shares.
+    test("collectDoctorExactBindingReports reports two OpenCode providers, each by its own credential", async () => {
+      await writeOpenCodeFixture(tmpDir);
+      const dataHome = path.join(tmpDir, "xdg-data");
+      const manifest = openCodeSecretManifestPath(
+        resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome }),
+      );
+      await mkdir(path.dirname(manifest), { recursive: true });
+      await writeFile(
+        manifest,
+        serializeOpenCodeSecretManifest([
+          {
+            provider: "openai",
+            secret: "CRYSK_OPENCODE_OPENAI_OAUTH",
+            kind: "oauth",
+          },
+          {
+            provider: "deepseek",
+            secret: "CRYSK_OPENCODE_DEEPSEEK_API_KEY",
+            kind: "api_key",
+          },
+        ]),
+      );
+      const reports = await collectDoctorExactBindingReports({
+        workspaceRoot: tmpDir,
+        models: {
+          refuter: [
+            "opencode:openai/gpt-4o",
+            "opencode:deepseek/deepseek-chat",
+          ],
         },
-      };
+        env: { PATH: tmpDir, XDG_DATA_HOME: dataHome },
+      });
+      const opencode = reports
+        .filter((report) => report.backend === "opencode")
+        .map((report) => [report.auth.kind, report.billing.mode])
+        .sort();
+      expect(opencode).toEqual([
+        ["opencode_chatgpt_oauth", "subscription"],
+        ["provider_api_token", "metered"],
+      ]);
+    });
+
+    test("mixed Claude/OpenCode conformance admits with evidence and dispatches by routeKey", async () => {
       const claudeStep = resolveStepRoute({
         stepKey: "hunter-reliability",
         role: "hunter",
@@ -2027,8 +2094,9 @@ describe("production runtime PR1", () => {
       const openStep = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig,
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const plan = createResolvedRoutePlan([claudeStep, openStep]);
       const opencodeFixture = await writeOpenCodeFixture(tmpDir);
@@ -2103,36 +2171,17 @@ describe("production runtime PR1", () => {
       expect(openRequests[0].route.provider).toBe("openai");
     });
 
-    test("resolveBinding matches gateway when routeKey is omitted", async () => {
-      const routingConfig: RoutingConfig = {
-        mappings: {
-          sonnet: {
-            backend: "claude-code",
-            provider: "anthropic",
-            gateway: "direct",
-            modelFamily: "sonnet",
-            modelSnapshot: "sonnet",
-          },
-          haiku: {
-            backend: "claude-code",
-            provider: "anthropic",
-            gateway: "configured",
-            modelFamily: "haiku",
-            modelSnapshot: "haiku",
-          },
-        },
-      };
+    // The gateway is gone: two Claude routes now differ by their model alone.
+    test("resolveBinding matches the route when routeKey is omitted", async () => {
       const directStep = resolveStepRoute({
         stepKey: "hunter-reliability",
         role: "hunter",
         cliModel: "sonnet",
-        routingConfig,
       });
       const configuredStep = resolveStepRoute({
         stepKey: "hunter-resilience",
         role: "hunter",
         cliModel: "haiku",
-        routingConfig,
       });
       const plan = createResolvedRoutePlan([directStep, configuredStep]);
       const registry = new DefaultTransportRegistry();
@@ -2155,8 +2204,8 @@ describe("production runtime PR1", () => {
         ...makeStep(tmpDir, { route: configuredStep.route }),
         routeKey: undefined,
       });
-      expect(directBinding?.route.gateway).toBe("direct");
-      expect(configuredBinding?.route.gateway).toBe("configured");
+      expect(directBinding?.route.modelSnapshot).toBe("sonnet");
+      expect(configuredBinding?.route.modelSnapshot).toBe("haiku");
     });
 
     test("bindings sharing a credential coarsen to one bucket id across models", async () => {

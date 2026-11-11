@@ -6,6 +6,10 @@ import {
   LEGACY_WORKFLOW_RELATIVE_PATH,
   WORKFLOW_RELATIVE_PATH,
 } from "./brand-paths";
+import {
+  claudeCredentialPresence,
+  defaultClaudeLoginPresent,
+} from "./security/claude-credential";
 import { resolveOpenCodeAuthPath } from "./security/credential-broker";
 
 export type SystemTool = "git" | "claude" | "gh" | "codegraph";
@@ -28,6 +32,10 @@ export interface CheckSystemToolsOptions {
   exists?: (path: string) => boolean;
   env?: Record<string, string | undefined>;
   home?: string;
+  // Injectable so the Keychain half of the Claude login check is testable off macOS.
+  platform?: NodeJS.Platform;
+  // Whether the Keychain item exists; tests inject it so none asks the real Keychain.
+  keychainProbe?: () => boolean;
 }
 
 export interface InstallSystemToolOptions {
@@ -103,6 +111,7 @@ export async function checkSystemTools(
   const exists = options.exists ?? existsSync;
   const env = options.env ?? process.env;
   const home = options.home ?? os.homedir();
+  const platform = options.platform ?? process.platform;
 
   // 1. git
   const gitBin = await which("git");
@@ -134,26 +143,33 @@ export async function checkSystemTools(
     const res = await exec([claudeBin, "--version"]);
     const version = res.stdout.trim().replace(/^claude-code\//, "");
 
-    // Check auth mechanisms
-    const hasToken =
-      Boolean(
-        env.CLAUDE_CODE_OAUTH_TOKEN &&
-          env.CLAUDE_CODE_OAUTH_TOKEN.trim().length > 0,
-      ) ||
-      Boolean(env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.trim().length > 0);
-
-    const hasSessionFile =
-      exists(path.join(home, ".claude.json")) ||
-      exists(path.join(home, ".claude", "session.json"));
-
-    const authOk = hasToken || hasSessionFile;
+    // The rule a run applies (U2, security/claude-credential.ts): a Claude
+    // credential variable (CRYSK_CLAUDE_* first, then the CLI's own names), or
+    // the machine's own login. `~/.claude.json` and `~/.claude/session.json` do
+    // not count: every Claude user has the first, API-key users included. The
+    // login half is defaultClaudeLoginPresent itself, over the injected `exists`,
+    // `home`, `platform` and `keychainProbe`: the CLI's OAuth store, or on macOS
+    // the Keychain item (R001, #494), so the doctor says what the run will choose.
+    const loginPresent = defaultClaudeLoginPresent(
+      { HOME: home },
+      {
+        platform,
+        existsFn: exists,
+        ...(options.keychainProbe === undefined
+          ? {}
+          : { keychainProbe: options.keychainProbe }),
+      },
+    );
+    const presence = claudeCredentialPresence(env, loginPresent);
+    const authOk =
+      presence.subscription !== undefined || presence.api_key !== undefined;
     claudeStatus = {
       installed: true,
       version: version.length > 0 ? version : undefined,
       authOk,
       hint: authOk
         ? undefined
-        : "Run 'claude' in your terminal to complete login or set ANTHROPIC_API_KEY",
+        : "Run 'claude' in your terminal to log in, or set CRYSK_CLAUDE_OAUTH_TOKEN (from 'claude setup-token') or CRYSK_CLAUDE_API_KEY",
     };
   }
 
@@ -273,8 +289,9 @@ export async function installSystemTool(
 // can happen in — see spec.md §4.1's two scenarios:
 //   - Inside GitHub Actions: are the required secrets present? Presence
 //     only, NEVER a value, a prefix, or a length — see CLAUDE.md's "Never
-//     leak secrets into generated output" rule. Review auth is Anthropic
-//     env OR the OpenCode auth file at resolveOpenCodeAuthPath().
+//     leak secrets into generated output" rule. Review auth is a Claude
+//     credential by U2's rule (CRYSK_CLAUDE_* first) OR the OpenCode auth
+//     file at resolveOpenCodeAuthPath().
 //   - In a local repo: is a pr-hero workflow configured at all?
 // Deliberately does NOT verify the workflow file is git-committed (spec's
 // "present and committed" local scenario) — that needs a git call, and the
@@ -304,27 +321,37 @@ export function checkCiConfiguration(
   if (options.isCi) {
     const exists = options.exists ?? existsSync;
     const hasGithubToken = Boolean(env.GITHUB_TOKEN?.trim());
+    // U2's rule, the one a run chooses by: CRYSK_CLAUDE_* first (what the action's
+    // crysk-secrets input carries, U5), then the CLI's names; a whitespace-only value
+    // is absent and ANTHROPIC_AUTH_TOKEN never counts. No login: a hosted runner has none.
+    const presence = claudeCredentialPresence(env, false);
     const hasClaudeAuth =
-      Boolean(env.ANTHROPIC_API_KEY?.trim()) ||
-      Boolean(env.CLAUDE_CODE_OAUTH_TOKEN?.trim());
+      presence.subscription !== undefined || presence.api_key !== undefined;
     const hasOpenCodeAuth = exists(resolveOpenCodeAuthPath(env));
     const hasReviewAuth = hasClaudeAuth || hasOpenCodeAuth;
 
     const missing: string[] = [];
     if (!hasGithubToken) missing.push("GITHUB_TOKEN");
-    if (!hasReviewAuth) missing.push("ANTHROPIC_API_KEY");
+    if (!hasReviewAuth) {
+      missing.push("CRYSK_CLAUDE_OAUTH_TOKEN (or CRYSK_CLAUDE_API_KEY)");
+    }
 
     if (missing.length === 0) {
       return {
         configured: true,
         message:
-          "Required CI secrets are present (GITHUB_TOKEN, Anthropic/Claude or OpenCode auth)",
+          "Required CI secrets are present (GITHUB_TOKEN, a CRYSK_CLAUDE_* credential or OpenCode auth)",
       };
     }
     return {
       configured: false,
       message: `Missing required CI secret(s): ${missing.join(", ")}`,
-      hint: "Configure the missing secret(s) as repository secrets and pass them in the workflow's `with:` block — never echo their values.",
+      hint:
+        "Set the missing secret(s) as repository secrets (`claude setup-token`, then " +
+        "`gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass each in the Crysk action's " +
+        // Spliced so the GitHub expression is not read as a template placeholder.
+        "`crysk-secrets` input as a `NAME=$" +
+        "{{ secrets.NAME }}` line — never echo their values.",
     };
   }
 

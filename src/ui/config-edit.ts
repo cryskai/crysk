@@ -10,6 +10,9 @@ import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
 import { bold, box, cyan, dim, sanitizeText, yellow } from "./primitives";
 import type { KeyReader } from "./select";
 
+const SUMMARY_MODEL_GONE =
+  'summary.model is gone: set the summary model per person, under models in ~/.crysk/config.json, e.g. "models": {"summary": ["claude:haiku-latest"]}';
+
 export interface ConfigEntry {
   key: string;
   value: string;
@@ -462,16 +465,9 @@ export async function setConfigValue(input: {
         enabled: b,
       };
     } else if (input.key === "summary.model") {
-      if (typeof input.value !== "string" || input.value.trim().length === 0) {
-        throw new Error("summary.model must be a non-empty string");
-      }
-      currentRepo.summary = {
-        ...(typeof currentRepo.summary === "object" &&
-        currentRepo.summary !== null
-          ? (currentRepo.summary as Record<string, unknown>)
-          : {}),
-        model: input.value.trim(),
-      };
+      // Gone (L6 item 1): writing it would plant the very key the parser now
+      // refuses. Say where the summary model lives instead.
+      throw new Error(SUMMARY_MODEL_GONE);
     } else if (input.key === "default_base") {
       if (typeof input.value !== "string" || input.value.trim().length === 0) {
         throw new Error("default_base must be a non-empty string");
@@ -629,16 +625,9 @@ export async function setConfigValue(input: {
         enabled: b,
       };
     } else if (input.key === "summary.model") {
-      if (typeof input.value !== "string" || input.value.trim().length === 0) {
-        throw new Error("summary.model must be a non-empty string");
-      }
-      currentPerson.summary = {
-        ...(typeof currentPerson.summary === "object" &&
-        currentPerson.summary !== null
-          ? (currentPerson.summary as Record<string, unknown>)
-          : {}),
-        model: input.value.trim(),
-      };
+      // Gone (L6 item 1): writing it would plant the very key the parser now
+      // refuses. Say where the summary model lives instead.
+      throw new Error(SUMMARY_MODEL_GONE);
     } else if (input.key === "agents_dir") {
       currentPerson.agents_dir = input.value.trim();
     } else if (input.key === "scout") {

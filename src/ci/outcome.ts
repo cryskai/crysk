@@ -30,31 +30,32 @@ import type { CredentialProjectionFailureClass } from "../security/credential-br
 
 export type Owner = "config" | "provider" | "pr-hero" | "unclassified";
 export type OutcomeContext = "action" | "local";
-// An owner is fixed, or depends on the context (PRH-RUNTIME-UNAVAILABLE).
+// An owner is fixed, or depends on the context (CRYSK-RUNTIME-UNAVAILABLE).
 type OwnerRule = Owner | Readonly<Record<OutcomeContext, Owner>>;
 
 type CapabilityIssue =
   | "binary_unresolved"
   | "sdk_unavailable"
   | "version_unsupported";
-type RouteReason =
-  | "unmapped"
-  | "ambiguous"
-  | "spend-disabled"
-  | "multiple-opencode-providers";
 
 export type ErrorClass =
   | {
       kind: "trigger";
-      check: "no-credential" | "routing-missing" | "pr-unresolved";
+      check: "no-credential" | "removed-input" | "pr-unresolved";
     }
   | {
       kind: "config-parse";
-      source: "routing" | "repo-config" | "person-config" | "extra-hunters";
+      // `models-input` and `credentials-input`: the setup step's reading of the
+      // `models` and `credentials` inputs (D1), never the CLI's.
+      source:
+        | "models-input"
+        | "credentials-input"
+        | "repo-config"
+        | "person-config"
+        | "extra-hunters";
     }
   | { kind: "prompt-set" }
   | { kind: "gotchas"; reason: "empty" | "placeholder" }
-  | { kind: "route"; reason: RouteReason }
   | {
       kind: "credential";
       failureClass: CredentialProjectionFailureClass | "env-absent";
@@ -71,30 +72,28 @@ export type ErrorClass =
 type GithubClass = Extract<ErrorClass, { kind: "github" }>;
 
 export const ERROR_CODES = [
-  "PRH-CRED-MISSING",
-  "PRH-CRED-UNUSABLE",
-  "PRH-CRED-REJECTED",
-  "PRH-ROUTING-MISSING",
-  "PRH-ROUTING-INVALID",
-  "PRH-ROUTE-UNRESOLVABLE",
-  "PRH-MODEL-UNAVAILABLE",
-  "PRH-PROMPTSET-INVALID",
-  "PRH-GOTCHAS-MISSING",
-  "PRH-CONFIG-INVALID",
-  "PRH-TOKEN-PERMISSION",
-  "PRH-GITHUB-TOKEN-INVALID",
-  "PRH-GITHUB-UNAVAILABLE",
-  "PRH-PR-UNRESOLVED",
-  "PRH-STATUS-WRITE-FAILED",
-  "PRH-RUNTIME-UNAVAILABLE",
-  "PRH-INSTALL-FAILED",
-  "PRH-PROVIDER-LIMITED",
-  "PRH-PROVIDER-UNAVAILABLE",
-  "PRH-PROVIDER-REFUSED",
-  "PRH-ENGINE-DEFECT",
-  "PRH-HUNTERS-FAILED",
-  "PRH-UNCLASSIFIED",
-  "PRH-CANCELLED",
+  "CRYSK-CRED-MISSING",
+  "CRYSK-INPUT-REMOVED",
+  "CRYSK-CRED-UNUSABLE",
+  "CRYSK-CRED-REJECTED",
+  "CRYSK-MODEL-UNAVAILABLE",
+  "CRYSK-PROMPTSET-INVALID",
+  "CRYSK-GOTCHAS-MISSING",
+  "CRYSK-CONFIG-INVALID",
+  "CRYSK-TOKEN-PERMISSION",
+  "CRYSK-GITHUB-TOKEN-INVALID",
+  "CRYSK-GITHUB-UNAVAILABLE",
+  "CRYSK-PR-UNRESOLVED",
+  "CRYSK-STATUS-WRITE-FAILED",
+  "CRYSK-RUNTIME-UNAVAILABLE",
+  "CRYSK-INSTALL-FAILED",
+  "CRYSK-PROVIDER-LIMITED",
+  "CRYSK-PROVIDER-UNAVAILABLE",
+  "CRYSK-PROVIDER-REFUSED",
+  "CRYSK-ENGINE-DEFECT",
+  "CRYSK-HUNTERS-FAILED",
+  "CRYSK-UNCLASSIFIED",
+  "CRYSK-CANCELLED",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -103,14 +102,14 @@ interface CatalogVariant {
   // Replaces the entry's `what` for this sub-class.
   readonly what?: string;
   // Replaces `what` when no model is given, so the sentence never names a placeholder
-  // (PRH-MODEL-UNAVAILABLE's every_hunter variant). Filled like `what`.
+  // (CRYSK-MODEL-UNAVAILABLE's every_hunter variant). Filled like `what`.
   readonly whatWithoutModel?: string;
   // Replaces the entry's owner for this sub-class.
   readonly owner?: OwnerRule;
   readonly why: string;
   // A list of fix lines, or a function of the params when the steps depend on
-  // them (the backend: missing_subscription_record, and PRH-CRED-MISSING's
-  // routing variable).
+  // them (the backend: missing_subscription_record, and CRYSK-CRED-MISSING's
+  // route).
   readonly fixes:
     | readonly string[]
     | ((params: ErrorParams) => readonly string[]);
@@ -134,7 +133,7 @@ export interface CatalogEntry {
   // placeholder ("The this step step failed"). Filled like `what`.
   readonly whatWithoutStep?: string;
   // "default" is always present. Keys "action" / "local" select by context
-  // (PRH-RUNTIME-UNAVAILABLE); other keys are the failure's sub-class
+  // (CRYSK-RUNTIME-UNAVAILABLE); other keys are the failure's sub-class
   // (credential failureClass, route reason, GitHub status family), chosen by
   // renderError or by the caller through renderCode.
   readonly variants: Readonly<Record<string, CatalogVariant>>;
@@ -150,7 +149,7 @@ export interface ErrorParams {
   runId?: string;
   runUrl?: string;
   detail?: string;
-  // The model a provider does not serve, when the record names it (PRH-MODEL-UNAVAILABLE).
+  // The model a provider does not serve, when the record names it (CRYSK-MODEL-UNAVAILABLE).
   model?: string;
 }
 
@@ -175,6 +174,7 @@ export interface TriggerRecord {
     | "denied"
     | "unverifiable"
     | "no-credentials"
+    | "removed-inputs"
     | "override";
   cls?: ErrorClass;
   params: ErrorParams;
@@ -194,7 +194,7 @@ export interface TriggerRecord {
 }
 
 // The record the setup step writes to `setup.json` in the outcome directory when a
-// routing or OpenCode auth input is malformed (odd/tasks/agent-first-ci.md, A1).
+// models or OpenCode auth input is malformed (odd/tasks/agent-first-ci.md, A1).
 // The publisher reads it back, so the failure is named instead of reported as a
 // generic install failure. `detail` is a fixed phrase per failure site that names
 // the input which is wrong; it never carries that input's content.
@@ -213,6 +213,12 @@ export const CLI_RECORD_FILE = "cli.json";
 // SB3: the created_at GitHub returned for the CLI's own pending status, written once the
 // pending landed. The cancel settle overwrites only the pending with exactly this time.
 export const PENDING_AT_FILE = "pending-at";
+
+// The run directory the CLI created, written by recordRunDir (src/ci/cli-record.ts)
+// as soon as it exists. The run step's `run_dir` output is empty when every hunter
+// failed, on a fatal error and on a cancelled job, and the trace step
+// (src/ci/platform-trace.ts) still needs the files of exactly those runs.
+export const RUN_DIR_FILE = "run-dir";
 
 // The URL of this run's attempt, or undefined outside GitHub Actions. The CLI's pending names
 // it as its target_url, and the cancel settle compares a pending with it (SB3 follow-up), so
@@ -237,14 +243,22 @@ export function actionsRunUrl(
 // would hide a writer's bug, the same rule as parseRecordClass below. The config
 // classes are the ones a throw site names (T2d-1). The person layer is not one of
 // them: its catalog text names the repo file, so the record would send the reader
-// to the wrong file.
+// to the wrong file. The two credential classes are admission's refusals
+// (CredentialRefusalError, security/claude-credential.ts): a Claude route with no
+// credential (CRYSK-CRED-MISSING, the trigger's own class for it) and an OpenCode
+// route with no auth record (CRYSK-CRED-UNUSABLE, the class its first step would
+// have failed with).
 export type CliErrorClass =
   | { kind: "unknown" }
-  | { kind: "route"; reason: "unmapped" | "ambiguous" | "spend-disabled" }
+  | { kind: "trigger"; check: "no-credential" }
+  | {
+      kind: "credential";
+      failureClass: "missing_provider_record" | "missing_subscription_record";
+    }
   | { kind: "capability"; issue: "sdk_unavailable" | "version_unsupported" }
   | {
       kind: "config-parse";
-      source: "routing" | "repo-config" | "extra-hunters";
+      source: "repo-config" | "extra-hunters";
     }
   | { kind: "prompt-set" }
   | { kind: "gotchas"; reason: "empty" | "placeholder" }
@@ -281,7 +295,8 @@ export interface CliRecord {
   head_sha?: string;
   // Only for outcome "error".
   cls?: CliErrorClass;
-  // Only for outcome "error", and the writer does not set it today.
+  // Only for outcome "error": the params the failing throw site named, when it named
+  // any (a credential refusal's backend, provider, model and secret).
   params?: ErrorParams;
   // Only for outcome "reviewed". The review was delivered, but the CLI's final status
   // write on head_sha failed, so the head's required check is still pending. The
@@ -405,6 +420,7 @@ const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
   "denied",
   "unverifiable",
   "no-credentials",
+  "removed-inputs",
   "override",
 ];
 // A GitHub login, with the bound and characters of the trigger's check (GITHUB_LOGIN in
@@ -422,6 +438,7 @@ const RECORD_PARAM_KEYS: readonly string[] = [
   "runId",
   "runUrl",
   "detail",
+  "model",
 ];
 const SHA_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
@@ -453,8 +470,11 @@ function parseRecordParams(value: unknown): ErrorParams | undefined {
 // a writer's bug, the same rule as parseRecordClass below.
 function parseSetupClass(value: unknown): ErrorClass | undefined {
   if (!isRecordObject(value)) return undefined;
-  if (value.kind === "config-parse" && value.source === "routing") {
-    return { kind: "config-parse", source: "routing" };
+  if (
+    value.kind === "config-parse" &&
+    (value.source === "models-input" || value.source === "credentials-input")
+  ) {
+    return { kind: "config-parse", source: value.source };
   }
   if (
     value.kind === "credential" &&
@@ -606,13 +626,17 @@ const CLI_HEAD_PATTERN = /^[0-9a-f]{40}$/;
 function parseCliClass(value: unknown): CliErrorClass | undefined {
   if (!isRecordObject(value)) return undefined;
   if (value.kind === "unknown") return { kind: "unknown" };
-  if (value.kind === "route") {
+  if (value.kind === "trigger") {
+    return value.check === "no-credential"
+      ? { kind: "trigger", check: "no-credential" }
+      : undefined;
+  }
+  if (value.kind === "credential") {
     if (
-      value.reason === "unmapped" ||
-      value.reason === "ambiguous" ||
-      value.reason === "spend-disabled"
+      value.failureClass === "missing_provider_record" ||
+      value.failureClass === "missing_subscription_record"
     ) {
-      return { kind: "route", reason: value.reason };
+      return { kind: "credential", failureClass: value.failureClass };
     }
     return undefined;
   }
@@ -625,11 +649,7 @@ function parseCliClass(value: unknown): CliErrorClass | undefined {
     }
   }
   if (value.kind === "config-parse") {
-    if (
-      value.source === "routing" ||
-      value.source === "repo-config" ||
-      value.source === "extra-hunters"
-    ) {
+    if (value.source === "repo-config" || value.source === "extra-hunters") {
       return { kind: "config-parse", source: value.source };
     }
     return undefined;
@@ -795,51 +815,38 @@ export function codeOf(cls: ErrorClass): ErrorCode {
     case "trigger":
       switch (cls.check) {
         case "no-credential":
-          return "PRH-CRED-MISSING";
-        case "routing-missing":
-          return "PRH-ROUTING-MISSING";
+          return "CRYSK-CRED-MISSING";
+        case "removed-input":
+          return "CRYSK-INPUT-REMOVED";
         case "pr-unresolved":
-          return "PRH-PR-UNRESOLVED";
+          return "CRYSK-PR-UNRESOLVED";
         default:
-          return unmapped(cls.check, "PRH-UNCLASSIFIED");
+          return unmapped(cls.check, "CRYSK-UNCLASSIFIED");
       }
     case "config-parse":
       switch (cls.source) {
-        case "routing":
-          return "PRH-ROUTING-INVALID";
+        case "models-input":
+        case "credentials-input":
         case "repo-config":
         case "person-config":
-          return "PRH-CONFIG-INVALID";
+          return "CRYSK-CONFIG-INVALID";
         case "extra-hunters":
-          return "PRH-PROMPTSET-INVALID";
+          return "CRYSK-PROMPTSET-INVALID";
         default:
-          return unmapped(cls.source, "PRH-UNCLASSIFIED");
+          return unmapped(cls.source, "CRYSK-UNCLASSIFIED");
       }
     case "prompt-set":
-      return "PRH-PROMPTSET-INVALID";
-    // `reason` is captured in a local: it is a discriminant shared by the
-    // gotchas and route members, so narrowing on `cls.reason` in the inner
-    // default would collapse `cls` itself to never.
+      return "CRYSK-PROMPTSET-INVALID";
+    // `reason` is captured in a local, so narrowing on `cls.reason` in the inner
+    // default does not collapse `cls` itself to never.
     case "gotchas": {
       const reason = cls.reason;
       switch (reason) {
         case "empty":
         case "placeholder":
-          return "PRH-GOTCHAS-MISSING";
+          return "CRYSK-GOTCHAS-MISSING";
         default:
-          return unmapped(reason, "PRH-UNCLASSIFIED");
-      }
-    }
-    case "route": {
-      const reason = cls.reason;
-      switch (reason) {
-        case "unmapped":
-        case "ambiguous":
-        case "spend-disabled":
-        case "multiple-opencode-providers":
-          return "PRH-ROUTE-UNRESOLVABLE";
-        default:
-          return unmapped(reason, "PRH-UNCLASSIFIED");
+          return unmapped(reason, "CRYSK-UNCLASSIFIED");
       }
     }
     case "credential":
@@ -849,34 +856,34 @@ export function codeOf(cls: ErrorClass): ErrorCode {
         case "malformed_payload":
         case "source_read_failed":
         case "env-absent":
-          return "PRH-CRED-UNUSABLE";
+          return "CRYSK-CRED-UNUSABLE";
         case "unsupported_kind":
         case "projection_layout_invalid":
-          return "PRH-ENGINE-DEFECT";
+          return "CRYSK-ENGINE-DEFECT";
         default:
-          return unmapped(cls.failureClass, "PRH-UNCLASSIFIED");
+          return unmapped(cls.failureClass, "CRYSK-UNCLASSIFIED");
       }
     case "capability":
       switch (cls.issue) {
         case "binary_unresolved":
         case "sdk_unavailable":
         case "version_unsupported":
-          return "PRH-RUNTIME-UNAVAILABLE";
+          return "CRYSK-RUNTIME-UNAVAILABLE";
         default:
-          return unmapped(cls.issue, "PRH-UNCLASSIFIED");
+          return unmapped(cls.issue, "CRYSK-UNCLASSIFIED");
       }
     case "transport":
       return transportCode(cls.cause);
     case "github":
       return githubCode(cls);
     case "install":
-      return "PRH-INSTALL-FAILED";
+      return "CRYSK-INSTALL-FAILED";
     case "invariant":
-      return "PRH-ENGINE-DEFECT";
+      return "CRYSK-ENGINE-DEFECT";
     case "unknown":
-      return "PRH-UNCLASSIFIED";
+      return "CRYSK-UNCLASSIFIED";
     default:
-      return unmapped(cls, "PRH-UNCLASSIFIED");
+      return unmapped(cls, "CRYSK-UNCLASSIFIED");
   }
 }
 
@@ -885,14 +892,15 @@ export function codeOf(cls: ErrorClass): ErrorCode {
 // 403 without the flag is a permission problem. A 429 is always a rate limit.
 // A status outside the mapped families is unclassified, never an outage.
 function githubCode(cls: GithubClass): ErrorCode {
-  if (cls.status === 401) return "PRH-GITHUB-TOKEN-INVALID";
+  if (cls.status === 401) return "CRYSK-GITHUB-TOKEN-INVALID";
   if (cls.status === 403) {
     return cls.rateLimited === true
-      ? "PRH-GITHUB-UNAVAILABLE"
-      : "PRH-TOKEN-PERMISSION";
+      ? "CRYSK-GITHUB-UNAVAILABLE"
+      : "CRYSK-TOKEN-PERMISSION";
   }
-  if (cls.status === 429 || cls.status >= 500) return "PRH-GITHUB-UNAVAILABLE";
-  return "PRH-UNCLASSIFIED";
+  if (cls.status === 429 || cls.status >= 500)
+    return "CRYSK-GITHUB-UNAVAILABLE";
+  return "CRYSK-UNCLASSIFIED";
 }
 
 function transportCode(
@@ -900,26 +908,26 @@ function transportCode(
 ): ErrorCode {
   switch (cause) {
     case "auth_invalid":
-      return "PRH-CRED-REJECTED";
+      return "CRYSK-CRED-REJECTED";
     case "quota_exhausted":
     case "rate_limit":
-      return "PRH-PROVIDER-LIMITED";
+      return "CRYSK-PROVIDER-LIMITED";
     case "network_transient":
     case "remote_abort_unconfirmed":
-      return "PRH-PROVIDER-UNAVAILABLE";
+      return "CRYSK-PROVIDER-UNAVAILABLE";
     case "safety_refusal":
-      return "PRH-PROVIDER-REFUSED";
+      return "CRYSK-PROVIDER-REFUSED";
     case "provider_configuration_invalid":
     case "model_unavailable":
-      return "PRH-MODEL-UNAVAILABLE";
+      return "CRYSK-MODEL-UNAVAILABLE";
     case "missing_provider_record":
-      return "PRH-CRED-UNUSABLE";
+      return "CRYSK-CRED-UNUSABLE";
     case "protocol_truncation":
     case "protocol_mismatch":
     case "protocol_overflow":
     case "output_limit_exceeded":
     case "context_window_exceeded":
-      return "PRH-ENGINE-DEFECT";
+      return "CRYSK-ENGINE-DEFECT";
     // WHY runtime_unavailable is unclassified, not an engine defect: one cause
     // covers failures with different owners. OpenCodeSdkTransport raises it
     // from classifyFailure for a provider refusal the provider marked not
@@ -932,9 +940,9 @@ function transportCode(
     // this contract exists to prevent.
     case "runtime_unavailable":
     case "legacy_terminal":
-      return "PRH-UNCLASSIFIED";
+      return "CRYSK-UNCLASSIFIED";
     default:
-      return unmapped(cause, "PRH-UNCLASSIFIED");
+      return unmapped(cause, "CRYSK-UNCLASSIFIED");
   }
 }
 
@@ -943,7 +951,7 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
     case "trigger":
       switch (cls.check) {
         case "no-credential":
-        case "routing-missing":
+        case "removed-input":
         case "pr-unresolved":
           return "config";
         default:
@@ -951,7 +959,8 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
       }
     case "config-parse":
       switch (cls.source) {
-        case "routing":
+        case "models-input":
+        case "credentials-input":
         case "repo-config":
         case "person-config":
         case "extra-hunters":
@@ -961,7 +970,6 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
       }
     case "prompt-set":
     case "gotchas":
-    case "route":
       return "config";
     case "credential":
       switch (cls.failureClass) {
@@ -1005,10 +1013,10 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
 
 function githubOwner(cls: GithubClass): Owner {
   switch (githubCode(cls)) {
-    case "PRH-TOKEN-PERMISSION":
-    case "PRH-GITHUB-TOKEN-INVALID":
+    case "CRYSK-TOKEN-PERMISSION":
+    case "CRYSK-GITHUB-TOKEN-INVALID":
       return "config";
-    case "PRH-GITHUB-UNAVAILABLE":
+    case "CRYSK-GITHUB-UNAVAILABLE":
       return "provider";
     default:
       return "unclassified";
@@ -1107,14 +1115,6 @@ const CAPABILITY_PHRASE: Record<CapabilityIssue, string> = {
   version_unsupported: "an unsupported OpenCode version is installed",
 };
 
-const ROUTE_PHRASE: Record<RouteReason, string> = {
-  unmapped: "no mapping covers this route",
-  ambiguous: "more than one mapping matches this route",
-  "spend-disabled": "spend is turned off for this route",
-  "multiple-opencode-providers":
-    "more than one OpenCode provider is configured",
-};
-
 const TRANSPORT_PHRASE: Record<
   TransportFailureCause | "legacy_terminal",
   string
@@ -1142,46 +1142,125 @@ const DOCS_BASE =
   "https://github.com/cryskai/crysk/blob/v0/docs/github-actions.md#";
 
 const ENGINE_DEFECT_ISSUE =
-  'gh issue create -R cryskai/crysk --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"';
+  'gh issue create -R cryskai/crysk --title "CRYSK-ENGINE-DEFECT {detail}" --body "{runUrl}"';
 const RERUN_FAILED = "$ gh run rerun {runId} --failed";
 const REVIEW_AGAIN = '$ gh pr comment {pr} --body "/crysk review"';
 // A workflow set up before the rename filters only `/pr-hero`, and the
 // floating action tag still delivers this text to it.
 const LEGACY_REVIEW_NOTE =
   "On a workflow set up before the rename, comment `/pr-hero review` instead.";
-const OPENCODE_STORE =
-  "$ gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json";
+// The OpenCode secrets (S8): one per provider, <PROVIDER> being the provider id
+// uppercased with `-` and `.` as `_` (opencodeSecretToken in crysk-secrets.ts,
+// which this module cannot import: see the builtins-only guard).
+const OPENCODE_API_KEY_SECRET =
+  "$ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY";
+const OPENCODE_PROVIDER_TOKEN_NOTE =
+  "<PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).";
+const OPENAI_OAUTH_SECRET =
+  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH";
 const CRED_STORE_WHY =
   "the credential store does not hold what this route needs";
 // missing_subscription_record is raised for a Claude keychain record and for an
 // OpenAI OAuth record alike, so each route's fix names the login it really uses.
 const CLAUDE_SUBSCRIPTION_FIXES = [
-  "Log in again with `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`:",
-  "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+  "Log in again with `claude setup-token`, then set `CRYSK_CLAUDE_OAUTH_TOKEN`:",
+  "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
 ];
 const OPENCODE_SUBSCRIPTION_FIXES = [
-  "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:",
+  "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then set its record, base64 on one line (on macOS, drop -w0):",
   "$ opencode auth login",
-  OPENCODE_STORE,
-  "Or rename the provider in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
+  OPENAI_OAUTH_SECRET,
+  "Or bill per token with an OpenAI API key instead:",
+  "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
 ];
 // Only the OpenCode route stores a ChatGPT login; any other backend, or none, is
 // the Claude route.
 function isOpencodeRoute(params: ErrorParams): boolean {
   return params.backend?.trim() === "opencode";
 }
+// A refused `crysk-secrets` input (src/ci/crysk-secrets.ts, U1) records
+// malformed_payload with a detail that names a CRYSK_* secret or a line of the
+// input, never a value. Its fix is that secret, not the OpenCode auth store.
+function isCryskSecretsDetail(params: ErrorParams): boolean {
+  const detail = params.detail?.trim() ?? "";
+  return (
+    detail.startsWith("CRYSK_") ||
+    /^line \d+ of the crysk-secrets input /.test(detail)
+  );
+}
+const CRYSK_SECRETS_FIXES = [
+  "Re-set the CRYSK_* secret the message names. An _OAUTH secret is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
+  OPENAI_OAUTH_SECRET,
+  "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
+];
+// U5: the platform's stub forwards OpenCode API keys through provider slots,
+// `CRYSK_OPENCODE_<TOKEN>_API_KEY`, the token coming from the dispatch. A slot
+// that arrived with a key and no token (src/ci/crysk-secrets.ts refuses it) is the
+// platform's slot list, not the secret: re-setting the secret would fail again.
+// The text is parseCryskSecrets's, matched here for the same reason as below.
+const EMPTY_SLOT_DETAIL =
+  "CRYSK_OPENCODE__API_KEY has a value but no provider: an unused OpenCode slot must be empty";
+// Setup joins one refusal per line with "; ", so several unused slots that
+// carry a value arrive as that refusal repeated; every part must be it.
+function isEmptySlotDetail(detail: string): boolean {
+  const parts = detail.trim().split(/; (?=CRYSK_OPENCODE__API_KEY )/);
+  return parts.every((part) => part.trim() === EMPTY_SLOT_DETAIL);
+}
+const EMPTY_SLOT_FIXES = [
+  "The Crysk platform passed an OpenCode key through a provider slot with no provider name, so Crysk cannot tell whose key it is. The platform's provider slots for this run are empty while a key was forwarded:",
+  "Open the repository's model settings on the Crysk platform, save the OpenCode provider whose key this is again so its slot names the provider, then re-run the workflow:",
+  "$ gh run rerun {runId}",
+  "In a workflow you wrote yourself, name the provider in the line: CRYSK_OPENCODE_<PROVIDER>_API_KEY, and leave an unused slot as CRYSK_OPENCODE__API_KEY= with nothing after it.",
+];
+// U3: an _OAUTH secret for a provider other than openai is refused, since
+// only openai's subscription record can be projected. Re-setting it would fail
+// again, so the fix is that provider's _API_KEY, which the detail names.
+// The text is chooseOpenCodeSecret's (crysk-secrets.ts), matched here rather
+// than imported because this module imports no repo module but ../brand (the
+// builtins-only guard in test/ci/outcome.test.ts). test/ci/publish.test.ts
+// renders that function's own text, so a change on either side fails it.
+const UNSUPPORTED_OAUTH_DETAIL_RE =
+  /^CRYSK_OPENCODE_[A-Z0-9_]+_OAUTH is an OpenCode subscription record, which Crysk reads only for openai for now; set (CRYSK_OPENCODE_[A-Z0-9_]+_API_KEY) instead$/;
+// Setup joins one refusal per provider with "; ". The fix applies only when
+// every part is such a refusal, and then names each provider's _API_KEY.
+function unsupportedOAuthApiKeyNames(detail: string): string[] | undefined {
+  const names: string[] = [];
+  for (const part of detail.split(/; (?=CRYSK_OPENCODE_[A-Z0-9_]+_OAUTH )/)) {
+    const name = UNSUPPORTED_OAUTH_DETAIL_RE.exec(part.trim())?.[1];
+    if (name === undefined) return undefined;
+    names.push(name);
+  }
+  return names.length === 0 ? undefined : names;
+}
+function cryskSecretsFixes(params: ErrorParams): string[] {
+  if (isEmptySlotDetail(params.detail ?? "")) return [...EMPTY_SLOT_FIXES];
+  const apiKeys = unsupportedOAuthApiKeyNames(params.detail ?? "");
+  if (apiKeys === undefined) return CRYSK_SECRETS_FIXES;
+  return [
+    "Only openai reads an _OAUTH secret for now. Remove that _OAUTH secret from the crysk-secrets input and set this provider's API key instead:",
+    ...apiKeys.map((apiKey) => `$ gh secret set ${apiKey}`),
+    "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
+  ];
+}
+function cryskSecretsAnnotationFix(params: ErrorParams): string {
+  if (isEmptySlotDetail(params.detail ?? "")) {
+    return "the Crysk platform forwarded an OpenCode key in a slot with no provider: save that OpenCode provider again in the platform's model settings, then re-run";
+  }
+  return unsupportedOAuthApiKeyNames(params.detail ?? "") === undefined
+    ? "re-set the CRYSK_* secret it names (an _OAUTH secret is base64 -w0 of the provider's OpenCode record)"
+    : "remove that _OAUTH secret from the crysk-secrets input and set the provider's _API_KEY secret instead (only openai reads an _OAUTH secret for now)";
+}
 const MODEL_NOT_SERVED: CatalogVariant = {
-  why: "the routing names a model this provider does not offer",
+  why: "the configured models name a model this provider does not offer",
   fixes: [
-    "Fix the `modelSnapshot` for this step in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
+    "Set a model this provider serves for this step's role in `models` (on the Crysk platform, the model settings).",
     "List the models this provider serves:",
     "$ opencode models {provider}",
   ],
   annotationFix:
-    "fix the `modelSnapshot` for {step} in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename) to a model that {provider} serves",
+    "set a model that {provider} serves for {step}'s role in `models` (the Crysk platform's model settings)",
 };
 
-const ROUTE_WHY = "every agent needs exactly one backend, provider and model";
 const PROVIDER_REFUSED_WHY = "the provider's safety system declined this input";
 const UNCLASSIFIED_FIXES = [
   "Re-run the failed jobs:",
@@ -1194,44 +1273,58 @@ const UNCLASSIFIED_FIX =
 // The GitHub Actions expression is spliced in from two literals so the source
 // never holds a `${` pair that reads as a template placeholder here.
 const GITHUB_TOKEN_INPUT = "github-token: $" + "{{ secrets.GITHUB_TOKEN }}";
-// The `with:` line that hands the Claude secret to the action, spliced the same way.
-const CLAUDE_TOKEN_INPUT =
-  "claude-token: $" + "{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}";
-// The `with:` line that hands the OpenCode auth store to the action, spliced the same way.
-const OPENCODE_AUTH_INPUT =
-  "opencode-auth: $" + "{{ secrets.OPENCODE_AUTH_JSON }}";
-// The `with:` line for the Claude API key, the alternative to the OAuth token.
-const ANTHROPIC_API_KEY_INPUT =
-  "anthropic-api-key: $" + "{{ secrets.ANTHROPIC_API_KEY }}";
-// The fix for a missing credential, by route. A Claude route names only the Claude
-// secrets. An OpenCode route leads with the OpenCode secret, and names the Claude
-// token only as the route it does not use (odd/tasks/agent-first-ci.md, A5).
+// The fix for a missing credential, by route (S8, U5): the CRYSK_* secrets, passed
+// in the crysk-secrets input. A Claude route names only the Claude secrets. An
+// OpenCode route leads with the OpenCode secrets, and names the Claude token only
+// as the route it does not use (odd/tasks/agent-first-ci.md, A5).
 const CLAUDE_CREDENTIAL_FIXES = [
   "Set one credential for the route you use:",
-  "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
-  "$ gh secret set ANTHROPIC_API_KEY",
-  "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${CLAUDE_TOKEN_INPUT}\` or \`${ANTHROPIC_API_KEY_INPUT}\`: a secret the workflow does not pass never reaches Crysk.`,
+  "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
+  "$ gh secret set CRYSK_CLAUDE_API_KEY",
+  `If the secret is already set, check that the workflow passes it to the action in the \`crysk-secrets\` input, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_CLAUDE_OAUTH_TOKEN")}\`: a secret the workflow does not pass never reaches Crysk.`,
   "Dependabot PRs read Dependabot secrets, so set this one too:",
-  "$ gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN",
+  "$ gh secret set --app dependabot CRYSK_CLAUDE_OAUTH_TOKEN",
   "Then re-run the workflow:",
   "$ gh run rerun {runId}",
 ] as const;
-// A workflow scaffolded before the rename to Crysk passes only
-// vars.PRHERO_ROUTING to the action, so a fix that names CRYSK_ROUTING alone
-// would send its owner to set a variable nothing reads.
-const LEGACY_ROUTING_NOTE =
-  "A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.";
 const OPENCODE_CREDENTIAL_FIXES = [
-  "Set the OpenCode credential for the route you use:",
-  "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${OPENCODE_AUTH_INPUT}\`: a secret the workflow does not pass never reaches Crysk.`,
-  "An OpenCode route also needs the routing variable:",
-  "$ gh variable set CRYSK_ROUTING --body '<routing-object-json>'",
-  LEGACY_ROUTING_NOTE,
+  "Set the OpenCode credential of each provider your models use:",
+  OPENCODE_API_KEY_SECRET,
+  OPENCODE_PROVIDER_TOKEN_NOTE,
+  "For an OpenAI subscription, set its record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
+  OPENAI_OAUTH_SECRET,
+  `If the secret is already set, check that the workflow passes it to the action in the \`crysk-secrets\` input, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_OPENCODE_DEEPSEEK_API_KEY")}\`: a secret the workflow does not pass never reaches Crysk.`,
   "Dependabot PRs read Dependabot secrets, so set this one too:",
-  "$ gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-  "A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.",
+  "$ gh secret set --app dependabot CRYSK_OPENCODE_<PROVIDER>_API_KEY",
+  "A Claude route uses `CRYSK_CLAUDE_OAUTH_TOKEN` instead, from `claude setup-token`.",
+  "Then re-run the workflow:",
+  "$ gh run rerun {runId}",
+] as const;
+
+// The `models` and `credentials` inputs as a workflow writes them (D1), spliced like
+// the inputs above. The scaffolded workflow (src/ci/setup.ts) writes these lines, so
+// a fix that quotes them cannot disagree with the file the person has.
+export const MODELS_INPUT_LINE = "models: $" + "{{ vars.CRYSK_MODELS }}";
+export const CREDENTIALS_INPUT_LINE =
+  "credentials: $" + "{{ vars.CRYSK_CREDENTIALS }}";
+// One line of the crysk-secrets input as a workflow writes it, spliced like the
+// inputs above. `{name}` is not a catalog placeholder here: the caller passes a name.
+function cryskSecretsLine(name: string): string {
+  return `${name}=$` + `{{ secrets.${name} }}`;
+}
+// The old inputs and the CRYSK_* secret or setting that replaces each (U5, S2, S8).
+// The trigger names only the inputs the workflow passed (the record's detail); the
+// fix lists every replacement, so it reads the same whichever ones they are.
+const REMOVED_INPUT_FIXES = [
+  "Set the CRYSK_* secret that replaces each old credential input:",
+  "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
+  "$ gh secret set CRYSK_CLAUDE_API_KEY",
+  "$ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY",
+  "claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. An OpenAI subscription is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
+  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+  `In the workflow, delete the old lines under \`with:\` and pass the secrets in one \`crysk-secrets: |\` block, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_CLAUDE_OAUTH_TOKEN")}\`.`,
+  `The routing input becomes the \`models\` input: set your models per role in the CRYSK_MODELS variable, and pass it as \`${MODELS_INPUT_LINE}\` (a repository connected to the Crysk platform takes them from its model settings instead).`,
+  '$ gh variable set CRYSK_MODELS --body \'{"default": ["claude:sonnet-latest"]}\'',
   "Then re-run the workflow:",
   "$ gh run rerun {runId}",
 ] as const;
@@ -1260,18 +1353,6 @@ const CREDENTIAL_UNUSABLE_ENV: CatalogVariant = {
   annotationFix: "set the {secret} secret with `gh secret set {secret}`",
 };
 
-// Two UnmappedRouteError throw sites (src/model/routing.ts) share this variant: a
-// model with no mapping at all, and a mapping that names no modelSnapshot. "Add or
-// complete" covers both; "add a modelSnapshot" alone was false for the first.
-const ROUTE_UNMAPPED: CatalogVariant = {
-  why: ROUTE_WHY,
-  fixes: [
-    "Add or complete this model's route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename), with an explicit `modelSnapshot`.",
-  ],
-  annotationFix:
-    "add or complete this model's route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename), with an explicit `modelSnapshot`",
-};
-
 const RUNTIME_LOCAL: CatalogVariant = {
   why: "a required tool is missing from your environment",
   fixes: ["Reconcile the crysk install:", "$ crysk upgrade --reconcile"],
@@ -1284,12 +1365,12 @@ const GITHUB_SERVER: CatalogVariant = {
   annotationFix: "re-run the workflow once GitHub is serving requests again",
 };
 
-// WHY no class maps to PRH-STATUS-WRITE-FAILED, PRH-HUNTERS-FAILED or
-// PRH-CANCELLED: each is a condition the caller observes directly (a status
+// WHY no class maps to CRYSK-STATUS-WRITE-FAILED, CRYSK-HUNTERS-FAILED or
+// CRYSK-CANCELLED: each is a condition the caller observes directly (a status
 // write, the hunter set, a superseded run), so the caller requests the code
 // through renderCode. The class-to-code table cannot see those conditions.
 export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
-  "PRH-CRED-MISSING": {
+  "CRYSK-CRED-MISSING": {
     level: "error",
     owner: "config",
     what: "No credential for the {backend} route reached the action",
@@ -1301,11 +1382,21 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           : CLAUDE_CREDENTIAL_FIXES,
       (params) =>
         params.backend?.trim() === "opencode"
-          ? "set the OPENCODE_AUTH_JSON secret: `gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json`"
-          : "set a Claude credential: `claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN`",
+          ? "set the provider's CRYSK_OPENCODE_<PROVIDER>_API_KEY secret (`gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY`) and pass it in the crysk-secrets input"
+          : "set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input",
     ),
   },
-  "PRH-CRED-UNUSABLE": {
+  "CRYSK-INPUT-REMOVED": {
+    level: "error",
+    owner: "config",
+    what: "The workflow passes inputs Crysk no longer reads: {detail}",
+    variants: single(
+      "Crysk now takes its credentials only from the CRYSK_* secrets in the crysk-secrets input, and its models only from `models`, so a review would run without the credential or models the workflow names",
+      REMOVED_INPUT_FIXES,
+      "delete the {detail} input lines from the workflow and pass the CRYSK_* secrets in the crysk-secrets input instead (a routing input becomes the models input, from `vars.CRYSK_MODELS`)",
+    ),
+  },
+  "CRYSK-CRED-UNUSABLE": {
     level: "error",
     owner: "config",
     what: "The {backend}/{provider} route for {step} has no usable credential ({detail})",
@@ -1320,12 +1411,12 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "The {backend}/{provider} route for {step} has no usable credential ({detail})",
         why: CRED_STORE_WHY,
         fixes: [
-          "Add {provider} to the OpenCode store, then re-set the secret:",
-          "$ opencode auth login",
-          OPENCODE_STORE,
+          "Set {provider}'s secret and pass it in the crysk-secrets input:",
+          OPENCODE_API_KEY_SECRET,
+          OPENCODE_PROVIDER_TOKEN_NOTE,
         ],
         annotationFix:
-          "add {provider} to the OpenCode store with `opencode auth login`, then set OPENCODE_AUTH_JSON again",
+          "set {provider}'s CRYSK_OPENCODE_<PROVIDER>_API_KEY secret and pass it in the crysk-secrets input",
       },
       missing_subscription_record: {
         why: CRED_STORE_WHY,
@@ -1335,71 +1426,75 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
             : CLAUDE_SUBSCRIPTION_FIXES,
         annotationFix: (params) =>
           isOpencodeRoute(params)
-            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then re-set OPENCODE_AUTH_JSON, or rename the provider in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)"
-            : "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
+            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then set CRYSK_OPENCODE_OPENAI_OAUTH from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY to bill per token"
+            : "log in again with `claude setup-token` and set `CRYSK_CLAUDE_OAUTH_TOKEN` (`gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`)",
       },
       malformed_payload: {
         // WHY no route in the sentence: this class is raised for the OpenCode auth
         // store and for a Claude keychain payload alike, and {detail} names which.
         what: "The credential store is not usable: {detail}",
         why: CRED_STORE_WHY,
-        fixes: [
-          "Check that the store is a JSON object:",
-          "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
-          "Then re-set the secret:",
-          OPENCODE_STORE,
-        ],
-        annotationFix:
-          "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
+        fixes: (params) =>
+          isCryskSecretsDetail(params)
+            ? cryskSecretsFixes(params)
+            : [
+                "Check that the store is a JSON object:",
+                "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
+                "In CI the action builds this file from the CRYSK_OPENCODE_* secrets: re-set the one for this provider.",
+                OPENCODE_API_KEY_SECRET,
+              ],
+        annotationFix: (params) =>
+          isCryskSecretsDetail(params)
+            ? cryskSecretsAnnotationFix(params)
+            : "make the OpenCode auth store a JSON object (in CI, re-set the provider's CRYSK_OPENCODE_* secret)",
       },
       source_read_failed: CREDENTIAL_UNUSABLE_ENV,
       "env-absent": CREDENTIAL_UNUSABLE_ENV,
       default: CREDENTIAL_UNUSABLE_ENV,
     },
   },
-  "PRH-CRED-REJECTED": {
+  "CRYSK-CRED-REJECTED": {
     level: "error",
     owner: "config",
     what: "provider {provider} rejected the credential in {secret}",
     variants: {
-      // The rejected secret is a per-token credential (ANTHROPIC_API_KEY or
-      // ANTHROPIC_AUTH_TOKEN): the CLI prefers it to the OAuth token, so
-      // setting CLAUDE_CODE_OAUTH_TOKEN alone leaves the next run rejected the same way.
+      // The rejected secret is a per-token credential. Since S5 the run used it because it
+      // was the first present credential in `credentials.claude`, so the way to the
+      // subscription is that order (with the OAuth secret set), never deleting the key.
+      // The alternative names the secret both ways: the old name the workflow passes
+      // today, and its CRYSK_* name (S8).
       api_key: {
-        why: "the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN",
+        why: "the key is invalid, expired or revoked, and it is the Claude credential this run chose from credentials.claude",
         fixes: [
-          // Prose between the two commands keeps them in separate code blocks: they are
-          // alternatives, and one copied block would set the new key and then delete it.
           "Create a new key in the Claude Console and set it:",
           "$ gh secret set {secret}",
-          "Or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set):",
-          "$ gh secret delete {secret}",
+          "Or run on the subscription: set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order).",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "create a new key and run `gh secret set {secret}`, or delete the {secret} secret so the OAuth token is used (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while the key is set)",
+          "create a new key and run `gh secret set {secret}`, or set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order)",
       },
       oauth: {
         why: "it is expired, revoked, or a short-lived /login session token",
         fixes: [
-          "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+          "$ claude setup-token && gh secret set {secret}",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
+          "log in again with `claude setup-token` and set `{secret}` (`gh secret set {secret}`)",
       },
       default: {
         why: "it is expired, revoked, or a short-lived /login session token",
         fixes: [
-          "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+          "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
           "Or, for an API key, create a new key in the Claude Console and set it:",
-          "$ gh secret set ANTHROPIC_API_KEY",
-          "Or, for OpenCode, re-export the auth store and re-set the secret:",
-          OPENCODE_STORE,
+          "$ gh secret set CRYSK_CLAUDE_API_KEY",
+          "Or, for OpenCode, set the provider's key again:",
+          OPENCODE_API_KEY_SECRET,
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
@@ -1409,71 +1504,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-ROUTING-MISSING": {
-    level: "error",
-    owner: "config",
-    what: "OpenCode auth is set but the routing variable is empty, so the default Claude route is used",
-    variants: single(
-      "the run would fail later at the Claude credential check",
-      [
-        '$ gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"',
-        "On a machine set up before the rename the config is ~/.prhero/config.json: use that path in the command.",
-        LEGACY_ROUTING_NOTE,
-      ],
-      `set CRYSK_ROUTING from your routing config: \`gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"\` (~/.prhero/config.json on a machine set up before the rename; PRHERO_ROUTING on a workflow set up before the rename)`,
-    ),
-  },
-  "PRH-ROUTING-INVALID": {
-    level: "error",
-    owner: "config",
-    what: "The routing variable is invalid: {detail}",
-    variants: single(
-      "Crysk cannot tell which backend and model each agent should use",
-      [
-        "Edit the JSON, then set it again:",
-        '$ gh variable set CRYSK_ROUTING --body "$(jq -c . routing.json)"',
-        LEGACY_ROUTING_NOTE,
-      ],
-      "fix the routing JSON ({detail}), then set it again with `gh variable set CRYSK_ROUTING` (PRHERO_ROUTING on a workflow set up before the rename)",
-    ),
-  },
-  "PRH-ROUTE-UNRESOLVABLE": {
-    level: "error",
-    owner: "config",
-    what: "Model routing for {step} has no usable route: {detail}",
-    variants: {
-      unmapped: ROUTE_UNMAPPED,
-      ambiguous: {
-        why: ROUTE_WHY,
-        fixes: [
-          "Remove the duplicate mapping for this route from CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
-        ],
-        annotationFix:
-          "remove the duplicate mapping for this route from CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)",
-      },
-      "spend-disabled": {
-        why: ROUTE_WHY,
-        fixes: [
-          "Enable spend for this route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
-        ],
-        annotationFix:
-          "enable spend for this route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)",
-      },
-      "multiple-opencode-providers": {
-        why: ROUTE_WHY,
-        fixes: [
-          "Keep one OpenCode provider per review in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
-        ],
-        annotationFix:
-          "keep one OpenCode provider per review in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)",
-      },
-      default: ROUTE_UNMAPPED,
-    },
-  },
   // WHY provider-owned: the provider refused the model, so the lead reads
   // "Provider <name>:". provider_configuration_invalid shares this code and keeps
   // its own owner (config) through its variant, so its rendering is unchanged.
-  "PRH-MODEL-UNAVAILABLE": {
+  "CRYSK-MODEL-UNAVAILABLE": {
     level: "error",
     owner: "provider",
     what: "Provider {provider} does not serve the model configured for {step}",
@@ -1490,7 +1524,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       provider_configuration_invalid: { ...MODEL_NOT_SERVED, owner: "config" },
     },
   },
-  "PRH-PROMPTSET-INVALID": {
+  "CRYSK-PROMPTSET-INVALID": {
     level: "error",
     owner: "config",
     what: "The prompt set is invalid: {detail}",
@@ -1503,7 +1537,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "fix the agent file or `agents_dir` ({detail}), then check it with `crysk review --pr {pr} --dry-run`",
     ),
   },
-  "PRH-GOTCHAS-MISSING": {
+  "CRYSK-GOTCHAS-MISSING": {
     level: "error",
     owner: "config",
     what: "the review instructions file (REVIEW.md or .crysk/gotchas.md) is empty or still the scaffold",
@@ -1515,17 +1549,48 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "write real rules into REVIEW.md or .crysk/gotchas.md (remove the scaffold marker line if present) and commit it to the base branch, or delete the file",
     ),
   },
-  "PRH-CONFIG-INVALID": {
+  "CRYSK-CONFIG-INVALID": {
     level: "error",
     owner: "config",
     what: ".crysk/config.json is invalid: {detail}",
-    variants: single(
-      "Crysk refuses to guess repository settings",
-      ["Fix the file, then check it:", "$ crysk review --pr {pr} --dry-run"],
-      "fix `.crysk/config.json` ({detail}), then check it with `crysk review --pr {pr} --dry-run`",
-    ),
+    variants: {
+      ...single(
+        "Crysk refuses to guess repository settings",
+        ["Fix the file, then check it:", "$ crysk review --pr {pr} --dry-run"],
+        "fix `.crysk/config.json` ({detail}), then check it with `crysk review --pr {pr} --dry-run`",
+      ),
+      // The setup step's reading of the `models` input, which the workflow fills from
+      // vars.CRYSK_MODELS (D1). The detail names the input, never its content.
+      "models-input": {
+        what: "The models input is invalid: {detail}",
+        why: "Crysk refuses to guess which model each role should use",
+        fixes: [
+          "Fix the models per role, a JSON object from role to model list, and set the variable again:",
+          '$ gh variable set CRYSK_MODELS --body "$(jq -c . models.json)"',
+          `The workflow passes it as \`${MODELS_INPUT_LINE}\`.`,
+          "Then re-run the workflow:",
+          "$ gh run rerun {runId}",
+        ],
+        annotationFix:
+          "fix the models JSON ({detail}) and set it again with `gh variable set CRYSK_MODELS`, the variable the workflow passes as `vars.CRYSK_MODELS`",
+      },
+      // The `credentials` input, beside it, from vars.CRYSK_CREDENTIALS (D1).
+      "credentials-input": {
+        what: "The credentials input is invalid: {detail}",
+        why: "Crysk refuses to guess which Claude credential to use",
+        fixes: [
+          'Fix the Claude credential order, a JSON object such as {"claude": ["subscription", "api_key"]}, and set the variable again:',
+          '$ gh variable set CRYSK_CREDENTIALS --body "$(jq -c . credentials.json)"',
+          `The workflow passes it as \`${CREDENTIALS_INPUT_LINE}\`.`,
+          "Then re-run the workflow:",
+          "$ gh run rerun {runId}",
+        ],
+        annotationFix:
+          "fix the credentials JSON ({detail}) and set it again with `gh variable set CRYSK_CREDENTIALS`, the variable the workflow passes as `vars.CRYSK_CREDENTIALS`",
+      },
+    },
   },
-  "PRH-TOKEN-PERMISSION": {
+  "CRYSK-TOKEN-PERMISSION": {
     level: "error",
     owner: "config",
     what: "The workflow token lacks `{scope}: write`",
@@ -1551,7 +1616,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-GITHUB-TOKEN-INVALID": {
+  "CRYSK-GITHUB-TOKEN-INVALID": {
     level: "error",
     owner: "config",
     what: "The github-token input is invalid",
@@ -1561,7 +1626,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       `set \`${GITHUB_TOKEN_INPUT}\` on the action step`,
     ),
   },
-  "PRH-GITHUB-UNAVAILABLE": {
+  "CRYSK-GITHUB-UNAVAILABLE": {
     level: "error",
     owner: "provider",
     providerName: "GitHub",
@@ -1581,7 +1646,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       default: GITHUB_SERVER,
     },
   },
-  "PRH-PR-UNRESOLVED": {
+  "CRYSK-PR-UNRESOLVED": {
     level: "error",
     owner: "config",
     what: "Crysk could not determine the pull request number or head",
@@ -1603,7 +1668,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-STATUS-WRITE-FAILED": {
+  "CRYSK-STATUS-WRITE-FAILED": {
     level: "error",
     owner: "unclassified",
     providerName: "GitHub",
@@ -1637,7 +1702,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-RUNTIME-UNAVAILABLE": {
+  "CRYSK-RUNTIME-UNAVAILABLE": {
     level: "error",
     owner: { action: "pr-hero", local: "config" },
     what: "a runtime Crysk depends on is unusable: {detail}",
@@ -1646,7 +1711,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         why: "the action installs this runtime itself, so this is a Crysk defect",
         fixes: [
           "Report it with this run:",
-          '$ gh issue create -R cryskai/crysk --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"',
+          '$ gh issue create -R cryskai/crysk --title "CRYSK-RUNTIME-UNAVAILABLE" --body "{runUrl}"',
         ],
         annotationFix: "report it at cryskai/crysk with this run's URL",
       },
@@ -1654,7 +1719,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       default: RUNTIME_LOCAL,
     },
   },
-  "PRH-INSTALL-FAILED": {
+  "CRYSK-INSTALL-FAILED": {
     level: "error",
     owner: "unclassified",
     what: "The {step} step failed",
@@ -1669,7 +1734,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "re-run only the failed jobs with `gh run rerun {runId} --failed`",
     ),
   },
-  "PRH-PROVIDER-LIMITED": {
+  "CRYSK-PROVIDER-LIMITED": {
     level: "error",
     owner: "provider",
     what: "rate limit or quota reached",
@@ -1684,40 +1749,39 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         ...PROVIDER_LIMITED,
         what: "{detail} (rate limit or quota reached)",
       },
-      // The credit balance or spend limit of the account behind ANTHROPIC_API_KEY (the CLI
-      // prefers that key over the subscription token, so it is the credential in use).
-      // Waiting does not help: the fix is to top up, or to stop using the key.
+      // The credit balance or spend limit of the account behind ANTHROPIC_API_KEY (the
+      // credential this run chose from credentials.claude, S5). Waiting does not help:
+      // the fix is to top up, or to move the run to the subscription through that order.
       api_key: {
-        what: "{detail}: the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit",
+        what: "{detail}: the Anthropic account behind the API key has no credit left or reached its spend limit",
         why: "the provider refuses every request until the account has credit again, so a retry would fail the same way",
         fixes: [
-          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN:",
-          "$ gh secret delete ANTHROPIC_API_KEY",
+          "Add credit to the Anthropic account behind the API key (Claude Console → Plans & Billing), or run on the subscription: set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order).",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the ANTHROPIC_API_KEY secret so the review uses CLAUDE_CODE_OAUTH_TOKEN",
+          "add credit to the Anthropic account behind the API key (Claude Console → Plans & Billing), or set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order)",
       },
       // The Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached a usage window. The
       // provider's own sentence carries the reset time, so the what quotes it.
       subscription: {
-        what: "{detail}: the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit",
+        what: "{detail}: the Claude subscription reached its usage limit",
         why: "the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way",
         fixes: [
           "Re-run after the limit resets (the reset time is in the sentence above):",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
-          "Or set ANTHROPIC_API_KEY to bill per token:",
-          "$ gh secret set ANTHROPIC_API_KEY",
+          "Or bill per token: set CRYSK_CLAUDE_API_KEY and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):",
+          "$ gh secret set CRYSK_CLAUDE_API_KEY",
         ],
         annotationFix:
-          "re-run after the limit resets, or set ANTHROPIC_API_KEY to bill per token",
+          "re-run after the limit resets, or set CRYSK_CLAUDE_API_KEY and put api_key first in `credentials.claude` to bill per token",
       },
     },
   },
-  "PRH-PROVIDER-UNAVAILABLE": {
+  "CRYSK-PROVIDER-UNAVAILABLE": {
     level: "error",
     owner: "provider",
     what: "unreachable",
@@ -1727,7 +1791,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "re-run the workflow with `gh run rerun {runId}`",
     ),
   },
-  "PRH-PROVIDER-REFUSED": {
+  "CRYSK-PROVIDER-REFUSED": {
     level: "error",
     owner: "provider",
     what: "the request was refused",
@@ -1742,7 +1806,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "ask for a new review once, and report it if the provider refuses again",
     ),
   },
-  "PRH-ENGINE-DEFECT": {
+  "CRYSK-ENGINE-DEFECT": {
     level: "error",
     owner: "pr-hero",
     what: "Crysk hit an internal error ({detail}) in {step}",
@@ -1752,7 +1816,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "report it at cryskai/crysk with this run's URL",
     ),
   },
-  "PRH-HUNTERS-FAILED": {
+  "CRYSK-HUNTERS-FAILED": {
     level: "error",
     owner: "unclassified",
     // WHY a lead of its own: the caller requests this code for a condition it
@@ -1784,7 +1848,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-UNCLASSIFIED": {
+  "CRYSK-UNCLASSIFIED": {
     level: "error",
     owner: "unclassified",
     what: "Crysk stopped at {step} and could not tell why",
@@ -1802,11 +1866,11 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-CANCELLED": {
+  "CRYSK-CANCELLED": {
     level: "notice",
     owner: "unclassified",
     lead: "Not reviewed:",
-    headline: "PRH-CANCELLED: not reviewed",
+    headline: "CRYSK-CANCELLED: not reviewed",
     what: "The review was cancelled or superseded by a newer push",
     variants: single(
       "a newer run replaces this one, so this result would describe an outdated head",
@@ -1839,7 +1903,7 @@ export function renderError(
 // have (the secret, the backend, the step) and would ship a placeholder to the PR. A cause
 // is rendered only when its message is complete with the params the path has: provider,
 // model, pr, runId, runUrl, step and detail. Every other cause, or a missing param, keeps the
-// caller's generic PRH-HUNTERS-FAILED.
+// caller's generic CRYSK-HUNTERS-FAILED.
 export function renderHunterCause(
   cause: TransportFailureCause,
   params: ErrorParams,
@@ -1858,8 +1922,8 @@ export function renderHunterCause(
       return undefined;
     }
     return renderCode(
-      "PRH-CRED-REJECTED",
-      { ...params, secret: shared.credential },
+      "CRYSK-CRED-REJECTED",
+      { ...params, secret: secretNameOf(shared.credential, ctx) },
       ctx,
     );
   }
@@ -1869,7 +1933,7 @@ export function renderHunterCause(
   // stands.
   if (cause === "quota_exhausted") {
     if (shared.detail === undefined) {
-      return renderCode("PRH-PROVIDER-LIMITED", params, ctx);
+      return renderCode("CRYSK-PROVIDER-LIMITED", params, ctx);
     }
     const quoted = { ...params, detail: shared.detail };
     const variant =
@@ -1878,13 +1942,13 @@ export function renderHunterCause(
         : shared.credential === "CLAUDE_CODE_OAUTH_TOKEN"
           ? "subscription"
           : "every_hunter";
-    return renderCode("PRH-PROVIDER-LIMITED", quoted, ctx, variant);
+    return renderCode("CRYSK-PROVIDER-LIMITED", quoted, ctx, variant);
   }
   // The provider's 404 names the model, so the every_hunter wording keeps it. Its fixes name
   // the provider, so the provider must be known; the model is optional (whatWithoutModel).
   if (cause === "model_unavailable") {
     if (isBlank(params.provider)) return undefined;
-    return renderCode("PRH-MODEL-UNAVAILABLE", params, ctx, "every_hunter");
+    return renderCode("CRYSK-MODEL-UNAVAILABLE", params, ctx, "every_hunter");
   }
   // The credential sentence and its fixes name both the route's provider and model.
   if (cause === "missing_provider_record") {
@@ -1892,6 +1956,25 @@ export function renderHunterCause(
     return renderError({ kind: "transport", cause }, params, ctx);
   }
   return undefined;
+}
+
+// The secret a rejected credential came from, as the reader sets it. A hunter
+// records the Claude CLI's own variable (FailureCredential); in the action that
+// variable was filled from the CRYSK_* secret the workflow passes in the
+// crysk-secrets input (S8, U5), so `gh secret set` must name that secret. A local
+// run exports the CLI's variable itself, so it keeps that name.
+const CRYSK_SECRET_OF_CREDENTIAL: Readonly<
+  Partial<Record<FailureCredential, string>>
+> = {
+  ANTHROPIC_API_KEY: "CRYSK_CLAUDE_API_KEY",
+  CLAUDE_CODE_OAUTH_TOKEN: "CRYSK_CLAUDE_OAUTH_TOKEN",
+};
+function secretNameOf(
+  credential: FailureCredential,
+  ctx: OutcomeContext,
+): string {
+  if (ctx !== "action") return credential;
+  return CRYSK_SECRET_OF_CREDENTIAL[credential] ?? credential;
 }
 
 // For a code the caller requests directly. `variant` picks the sub-class, which
@@ -1956,25 +2039,31 @@ function paramVariant(
   params: ErrorParams,
   variant: string | undefined,
 ): string | undefined {
-  if (code === "PRH-TOKEN-PERMISSION" && isBlank(params.scope)) {
+  if (code === "CRYSK-TOKEN-PERMISSION" && isBlank(params.scope)) {
     return "no-scope";
   }
   // The credential in the secret picks the fix: a rejected API key and a rejected OAuth
-  // token are replaced differently, and the CLI uses the key ahead of the token.
-  if (code === "PRH-CRED-REJECTED" && variant === undefined) {
+  // token are replaced differently.
+  if (code === "CRYSK-CRED-REJECTED" && variant === undefined) {
     if (
       params.secret === "ANTHROPIC_API_KEY" ||
-      params.secret === "ANTHROPIC_AUTH_TOKEN"
+      params.secret === "ANTHROPIC_AUTH_TOKEN" ||
+      params.secret === "CRYSK_CLAUDE_API_KEY"
     ) {
       return "api_key";
     }
-    if (params.secret === "CLAUDE_CODE_OAUTH_TOKEN") return "oauth";
+    if (
+      params.secret === "CLAUDE_CODE_OAUTH_TOKEN" ||
+      params.secret === "CRYSK_CLAUDE_OAUTH_TOKEN"
+    ) {
+      return "oauth";
+    }
   }
   // A caller that names a variant keeps it, so the default wording stays
   // reachable with a detail present.
   if (
     variant === undefined &&
-    code === "PRH-PR-UNRESOLVED" &&
+    code === "CRYSK-PR-UNRESOLVED" &&
     !isBlank(params.detail)
   ) {
     return "malformed-input";
@@ -2003,12 +2092,14 @@ function variantOf(cls: ErrorClass): string | undefined {
   switch (cls.kind) {
     case "credential":
       return cls.failureClass;
-    case "route":
-      return cls.reason;
+    // Only the models and credentials inputs have a variant of their own
+    // (CRYSK-CONFIG-INVALID); the other sources find none and render their code's default.
+    case "config-parse":
+      return cls.source;
     case "github":
       return githubVariant(cls);
     // The transport cause picks its own sub-class where the code shares one:
-    // PRH-MODEL-UNAVAILABLE serves provider_configuration_invalid (config) and
+    // CRYSK-MODEL-UNAVAILABLE serves provider_configuration_invalid (config) and
     // model_unavailable (provider). Other codes have no such variant and fall
     // back to their default.
     case "transport":
@@ -2025,7 +2116,7 @@ function githubVariant(cls: GithubClass): string | undefined {
     return "rate_limit";
   }
   if (cls.status >= 500) return "server";
-  return githubCode(cls) === "PRH-UNCLASSIFIED" ? "github" : undefined;
+  return githubCode(cls) === "CRYSK-UNCLASSIFIED" ? "github" : undefined;
 }
 
 function classDetail(cls: ErrorClass): string | undefined {
@@ -2036,8 +2127,6 @@ function classDetail(cls: ErrorClass): string | undefined {
       return CREDENTIAL_PHRASE[cls.failureClass];
     case "transport":
       return TRANSPORT_PHRASE[cls.cause];
-    case "route":
-      return ROUTE_PHRASE[cls.reason];
     case "github":
       return String(cls.status);
     default:
@@ -2167,15 +2256,17 @@ function escapeCommandData(text: string): string {
 // keeps a lookalike marker from matching.
 export const OUTCOME_MARKER_PREFIX = `${MARKER_OPEN}outcome `;
 
-// The PRH-* code an outcome comment names, or null. renderError's summary opens with
+// The CRYSK-* code an outcome comment names, or null. renderError's summary opens with
 // `### <headline>`, and a headline is the bare code or the code then a colon and a sentence
-// (`PRH-CANCELLED: not reviewed`), so the code is the token at the start of that heading. The
+// (`CRYSK-CANCELLED: not reviewed`), so the code is the token at the start of that heading. The
 // token must be a catalogued code: a heading that merely looks like one reads as no code.
+// WHY PRH-* too: the codes were PRH-* before the rename, and comments already posted keep
+// them. An old code reads as the CRYSK-* code it became; a code removed since reads as none.
 export function parseOutcomeCode(body: string): ErrorCode | null {
   if (matchMarkerPrefix(body, OUTCOME_MARKER_PREFIX) === undefined) return null;
-  const heading = /^### (PRH-[A-Z0-9-]+)(?=[:\s]|$)/m.exec(body);
-  const code = heading?.[1];
-  if (code === undefined) return null;
+  const heading = /^### (?:CRYSK|PRH)-([A-Z0-9-]+)(?=[:\s]|$)/m.exec(body);
+  if (heading === null) return null;
+  const code = `CRYSK-${heading[1]}`;
   return (ERROR_CODES as readonly string[]).includes(code)
     ? (code as ErrorCode)
     : null;

@@ -172,7 +172,7 @@ describe("runDoctorCommand — config-load resilience (W3)", () => {
   });
 });
 
-describe("runDoctorCommand — OpenCode routing needs a resolvable SDK", () => {
+describe("runDoctorCommand — an OpenCode model needs a resolvable SDK", () => {
   const degradedProbe = async () => ({
     overall: "degraded" as const,
     exitCode: 0 as const,
@@ -186,12 +186,10 @@ describe("runDoctorCommand — OpenCode routing needs a resolvable SDK", () => {
     ],
   });
 
-  test("OpenCode routing with no installed SDK blocks even when the probe row is degraded", async () => {
+  test("an OpenCode model with no installed SDK blocks even when the probe row is degraded", async () => {
     const home = await tmpHome(
       JSON.stringify({
-        routing: {
-          default: { backend: "opencode", provider: "opencode" },
-        },
+        models: { default: ["opencode:opencode/big-pickle"] },
       }),
     );
     const repo = await tmpRoot();
@@ -220,12 +218,10 @@ describe("runDoctorCommand — OpenCode routing needs a resolvable SDK", () => {
     }
   });
 
-  test("Claude-only routing does not add an OpenCode SDK row", async () => {
+  test("Claude-only models do not add an OpenCode SDK row", async () => {
     const home = await tmpHome(
       JSON.stringify({
-        routing: {
-          default: { backend: "claude-code", provider: "anthropic" },
-        },
+        models: { default: ["claude:sonnet-latest"] },
       }),
     );
     const repo = await tmpRoot();

@@ -75,7 +75,7 @@ describe("deadlines", () => {
     expect(real.TRANSFER_TIMEOUT_MS).toBe(300_000);
     expect(real.ghTimeoutMs(["pr", "list"])).toBe(120_000);
     expect(
-      real.ghTimeoutMs(["repo", "clone", "juanmaagd/pr-hero-sandbox", "/x"]),
+      real.ghTimeoutMs(["repo", "clone", "cryskai/crysk-sandbox", "/x"]),
     ).toBe(300_000);
     expect(real.gitTimeoutMs(["push", "origin", "main"])).toBe(300_000);
     expect(real.gitTimeoutMs(["commit", "-m", "x"])).toBe(120_000);

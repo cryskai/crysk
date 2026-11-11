@@ -20,7 +20,7 @@ import { FakeGithub } from "./world";
 // is the only kind that counts as a scenario PR.
 const SAME_REPO = {
   isCrossRepository: false,
-  headRepositoryOwner: { login: "juanmaagd" },
+  headRepositoryOwner: { login: "cryskai" },
 };
 const OPEN = [
   {
@@ -164,7 +164,7 @@ describe("clean: a run still going on the head is cancelled before its PR closes
   });
 });
 
-describe("scenario PRs: only same-repo PRs owned by juanmaagd count", () => {
+describe("scenario PRs: only same-repo PRs owned by cryskai count", () => {
   test("a fork PR on a sandbox/ branch is neither listed nor closed", async () => {
     const fork = [
       {
@@ -180,7 +180,7 @@ describe("scenario PRs: only same-repo PRs owned by juanmaagd count", () => {
         headRefName: "sandbox/w",
         url: "https://x/12",
         isCrossRepository: true,
-        headRepositoryOwner: { login: "juanmaagd" },
+        headRepositoryOwner: { login: "cryskai" },
       },
     ];
     const h = harness({

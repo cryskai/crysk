@@ -48,6 +48,7 @@ import {
 import { publishFinalCommitStatus } from "#pr/status";
 import { log } from "#ui/primitives";
 import { canonicalStatusText, STATUS_CONTEXT } from "../brand";
+import { CredentialRefusalError } from "../security/claude-credential";
 
 // ROADMAP Pillar 3 (GitHub Actions CI). The mechanical glue behind a gate
 // skip in CI mode: every DECISION (what to say, which marker, what the
@@ -178,6 +179,23 @@ export async function settleCiGateSkip(
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<void> {
   await settleCiAdmissionLedger(state, "gate-skipped", reason, options);
+}
+
+// R003 (#494): a credential refusal at admission (CredentialRefusalError: no Claude
+// credential, or an OpenCode route with no auth record) stops a CI run after the
+// reservation and before any binding or provider call (the OpenCode refusal follows
+// only the token-free free-model probe), so it spent nothing:
+// its row settles as gate-skipped, like the budget gate it follows, with the
+// refusal's own reason. Any other error is left for teardown, which settles it
+// `failed`. The caller rethrows the error unchanged. The name predates the OpenCode
+// refusal and is kept: an architecture test pins its call site.
+export async function settleClaudeCredentialRefusal(
+  state: CiAdmissionLedgerState | null,
+  error: unknown,
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<void> {
+  if (!(error instanceof CredentialRefusalError)) return;
+  await settleCiGateSkip(state, error.ledgerReason, options);
 }
 
 export async function reserveCiAdmissionLedger(input: {

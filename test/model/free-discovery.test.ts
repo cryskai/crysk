@@ -108,3 +108,45 @@ describe("countFreeRouteSteps", () => {
     expect(result).toEqual({ free: 0, total: 1 });
   });
 });
+
+// E-f leftover (U3's kind-follows-secret rule): the count asks the same question
+// admission does (credentialKindForRoute over the run's CRYSK_OPENCODE_* names),
+// so an OpenAI model on an API key is probed and can count free, while one on the
+// subscription record never is.
+describe("countFreeRouteSteps follows the run's OpenCode secret names", () => {
+  test("openai on CRYSK_OPENCODE_OPENAI_API_KEY is probed, and a free verdict counts", async () => {
+    const { probe, calls } = recordingProbe({ "gpt-5": true });
+    const result = await countFreeRouteSteps({
+      steps: [oauthStep],
+      probe,
+      openCodeSecretNames: ["CRYSK_OPENCODE_OPENAI_API_KEY"],
+    });
+    expect(result).toEqual({ free: 1, total: 1 });
+    expect(calls).toEqual(["openai/gpt-5"]);
+  });
+
+  test("openai on CRYSK_OPENCODE_OPENAI_OAUTH is the subscription: never probed, never free", async () => {
+    const { probe, calls } = recordingProbe({ "gpt-5": true });
+    const result = await countFreeRouteSteps({
+      steps: [oauthStep],
+      probe,
+      openCodeSecretNames: [
+        "CRYSK_OPENCODE_OPENAI_API_KEY",
+        "CRYSK_OPENCODE_OPENAI_OAUTH",
+      ],
+    });
+    expect(result).toEqual({ free: 0, total: 1 });
+    expect(calls).toEqual([]);
+  });
+
+  test("names that say nothing about a provider keep the provider literal", async () => {
+    const { probe, calls } = recordingProbe({ "gpt-5": true, "free-a": true });
+    const result = await countFreeRouteSteps({
+      steps: [oauthStep, opencodeStep("free-a")],
+      probe,
+      openCodeSecretNames: ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"],
+    });
+    expect(result).toEqual({ free: 1, total: 2 });
+    expect(calls).toEqual(["opencode/free-a"]);
+  });
+});

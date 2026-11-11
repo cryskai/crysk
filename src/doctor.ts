@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { type ModelsConfig, modelsNeedOpenCode } from "#model/model-name";
 import {
   exactBindingCapabilityIssues,
   type ProviderCapabilityReport,
 } from "#model/provider-capabilities";
-import { type RoutingConfig, routingNeedsOpenCodeSdk } from "#model/routing";
 import {
   agentFilePath,
   GOTCHAS_PLACEHOLDER_MARKER,
@@ -161,10 +161,10 @@ function pushProviderIssues(
 }
 
 export function openCodeRoutingSdkCheck(input: {
-  routing: RoutingConfig | undefined;
+  models: ModelsConfig | undefined;
   sdkVersion: string | undefined;
 }): DoctorCheckItem | undefined {
-  if (!routingNeedsOpenCodeSdk(input.routing)) return undefined;
+  if (!modelsNeedOpenCode(input.models)) return undefined;
   const version =
     typeof input.sdkVersion === "string" ? input.sdkVersion.trim() : "";
   if (version === SUPPORTED_OPENCODE_SDK_VERSION) return undefined;

@@ -77,8 +77,25 @@ export const SKIP_MARKERS = {
 
 export type SkipReason = keyof typeof SKIP_MARKERS;
 
-// A PRH code as it appears in an outcome body's heading and a status description.
-export const PRH_CODE = /PRH-[A-Z]+(?:-[A-Z]+)*/;
+// A Crysk code as it appears in an outcome body's heading and a status description.
+// A ref from before the code rename (fd28303) writes PRH-* where this tree writes
+// CRYSK-*, and the sandbox reads it as the CRYSK-* code it became (F1 decision 1), so
+// a run against an older --ref still reads its codes. Readers go through
+// cryskCodeOf and cryskCodeText, so everything downstream matches CRYSK-* alone.
+const CODE = /\b(CRYSK|PRH)-([A-Z]+(?:-[A-Z]+)*)/;
+const LEADING_LEGACY_CODE = /^PRH-(?=[A-Z]+(?:-[A-Z]+)*\b)/;
+
+// The first code in `text`, under its CRYSK-* name.
+export function cryskCodeOf(text: string): string | undefined {
+  const match = CODE.exec(text);
+  return match === null ? undefined : `CRYSK-${match[2]}`;
+}
+
+// `text` with a leading PRH-* code renamed to CRYSK-*: a status description opens
+// with its code, and nothing else in it changes.
+export function cryskCodeText(text: string): string {
+  return text.replace(LEADING_LEGACY_CODE, "CRYSK-");
+}
 
 // The workflow the sandbox scaffolds, and the step that runs the action. A
 // composite action is one step to the jobs API, so the classifier reads this step.

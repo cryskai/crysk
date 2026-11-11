@@ -8,7 +8,11 @@ import {
   redactEvidenceText,
 } from "../security/evidence-redaction";
 import { writeJsonAtomically } from "./atomic-write";
-import type { TransportOutcome, TransportRequest } from "./contracts";
+import {
+  effortApplied,
+  type TransportOutcome,
+  type TransportRequest,
+} from "./contracts";
 import type { SettlementReceipt } from "./settlement";
 import { attemptEvidencePath } from "./step-artifacts";
 
@@ -378,12 +382,13 @@ export async function freezeAttemptEvidenceIdentity(
       // #299: the effort the engine REQUESTED, and whether this backend
       // could apply it. The CLI's implicit default (medium on the 5.5
       // family) is what the artifacts could not show before. OpenCode has
-      // no `--effort`, so there the level is intent only, and
-      // `effortApplied: false` keeps a reader from taking it as a fact
-      // about the run. Additive, and deliberately NOT in `identity` or the
+      // no `--effort`: there the level is intent only, and an effort reaches
+      // it only as the variant a `models` entry sets (S7, `route.modelVariant`
+      // above), so `effortApplied` is true only then (effortApplied,
+      // contracts.ts). Additive, and deliberately NOT in `identity` or the
       // route fingerprint: those are compared across runs by the lab.
       effort: request.effort,
-      effortApplied: request.route.backend === "claude-code",
+      effortApplied: effortApplied(request.route),
       ...frozen,
     };
     await mkdir(path.dirname(file), { recursive: true });

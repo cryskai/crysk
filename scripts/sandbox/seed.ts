@@ -27,27 +27,25 @@ export const MUTE_BUGGY =
   "export function isMuted(volume: number): boolean {\n  // Muted means the volume is zero.\n  return Boolean((volume = 0));\n}\n";
 export const MUTE_COMMIT_MESSAGE = "feat: add a mute check";
 
-// The secret the scaffold wires to the action's `opencode-auth` input
-// (src/ci/setup.ts, the `opencode-auth:` line of the Run pr-hero step), and the
-// variable it wires to `routing` (the `routing:` line of the same step).
-export const OPENCODE_AUTH_SECRET = "OPENCODE_AUTH_JSON";
-// An empty OpenCode auth store. The free broker projects an empty tree, so `{}`
-// is the minimum that passes the trigger's credential check (src/ci/trigger.ts).
-export const OPENCODE_AUTH_VALUE = "{}";
-// The legacy name on purpose: the scaffold reads CRYSK_ROUTING first and this one
-// as its fallback, and nothing here ever sets CRYSK_ROUTING, so the fallback is
-// what decides. The sandbox repo's variable and the rails' delete allow-list
-// keep one name; moving both is a later slice with the rest of the rename.
-export const ROUTING_VARIABLE = "PRHERO_ROUTING";
-// The subscription token the claude route runs on. The scaffold wires it to the
-// action's `claude-token` input (src/ci/setup.ts). init checks its presence only.
-export const CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN";
+// The scaffold hands the action its credentials in the `crysk-secrets` input, one
+// CRYSK_* secret per line (src/ci/setup.ts, the Run Crysk step), and its models in
+// the `models` input from this variable. The sandbox reviews on the Claude
+// subscription only: the action's credential check counts only a CRYSK_* secret, and
+// the Claude steps of every route (the whole stack on claude, the materiality judge on
+// opencode) run on it. init checks the token's presence only; it never sets a secret.
+export const CLAUDE_TOKEN_SECRET = "CRYSK_CLAUDE_OAUTH_TOKEN";
+// The pay-as-you-go key. The sandbox's "$0 cash" guarantee rests on it being absent:
+// with it set, a credentials order that lists api_key bills per token.
+export const API_KEY_SECRET = "CRYSK_CLAUDE_API_KEY";
+// The variable the scaffold passes as the `models` input. It holds the models object
+// alone, not the whole config (`crysk ci init` prints `jq -c .models`). The rails'
+// write allow-list names it as a literal.
+export const MODELS_VARIABLE = "CRYSK_MODELS";
 
 // The route a sandbox runs its reviews on, chosen by `init --route`. `claude` (the
-// default) leaves PRHERO_ROUTING unset, so the workflow runs the engine's default
-// stack on the CLAUDE_CODE_OAUTH_TOKEN subscription: sonnet hunters, opus refuter,
-// haiku summarizer, which is the production stack. `opencode:<snapshot>` routes every
-// role to one OpenCode model, the free route the sandbox ran on before.
+// default) leaves CRYSK_MODELS unset, so every role runs the engine's default Claude
+// models on the CRYSK_CLAUDE_OAUTH_TOKEN subscription, which is the production stack.
+// `opencode:<snapshot>` routes every role but the judge to one free OpenCode model.
 export type Route =
   | { kind: "claude" }
   | { kind: "opencode"; modelSnapshot: string };
@@ -55,26 +53,18 @@ export const DEFAULT_ROUTE: Route = { kind: "claude" };
 
 const MODEL_SNAPSHOT_SHAPE = /^[A-Za-z0-9.-]+$/;
 
-// The routing object for an OpenCode model, not the whole config (docs/github-actions.md,
-// the PRHERO_ROUTING row). A `default` route covers every role: the sonnet hunters,
-// the opus refuter and the haiku summarizer. `modelSnapshot` is required: a model
-// that is not a catalog alias throws UnmappedRouteError on an OpenCode backend
-// without one. The snapshot is validated because it is written into the routing JSON
-// the workflow reads.
-export function routingValueFor(modelSnapshot: string): string {
+// The models object for a free OpenCode model (docs/configuration.md, `models`). The
+// `default` list covers every role a list does not name; the materiality judge never
+// inherits it and stays on Claude (L6 item 5). The model is OpenCode's own free
+// provider, `opencode`, which needs no CRYSK_OPENCODE_* secret. The snapshot is
+// validated because it is written into the JSON the workflow reads.
+export function modelsValueFor(modelSnapshot: string): string {
   if (!MODEL_SNAPSHOT_SHAPE.test(modelSnapshot)) {
     throw new Error(
       `model snapshot ${JSON.stringify(modelSnapshot)} is not valid (letters, digits, . and -)`,
     );
   }
-  return JSON.stringify({
-    default: {
-      backend: "opencode",
-      provider: "opencode",
-      gateway: "configured",
-      modelSnapshot,
-    },
-  });
+  return JSON.stringify({ default: [`opencode:opencode/${modelSnapshot}`] });
 }
 
 // The value of `init --route`: `claude`, or `opencode:<snapshot>`.

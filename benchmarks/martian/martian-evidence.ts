@@ -75,13 +75,15 @@ export async function freezeBenchmarkIdentity(input: {
       source: await readFile(path.join(input.agentsDir, name), "utf8"),
     })),
   );
+  // The model each prompt runs on, from the flags or its frontmatter. The
+  // config's `models` is not read here, so a benchmark that routes a role
+  // elsewhere through `models` records the Claude identity (L47).
   const routes = prompts.map((p) =>
     resolveModelRoute(
       input.model ??
         (p.name.includes("refuter") ? input.refuterModel : input.hunterModel) ??
         parseAgentSource(p.source).model ??
         "sonnet",
-      loaded.effective.routing,
     ),
   );
   const runtime: BenchmarkIdentity["runtime"] = [];

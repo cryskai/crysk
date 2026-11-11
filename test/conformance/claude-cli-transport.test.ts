@@ -172,40 +172,59 @@ describe("ClaudeCodeCliTransport §5.2 cancellation and terminal proof", () => {
     expect(signals).toHaveLength(0);
   });
 
-  test("direct routes pass executionModel (alias) to --model, not route snapshot", async () => {
-    const fake = makeFakeProc({
-      stdoutBody: JSON.stringify({ result: "ok" }),
-      exitCode: 0,
-    });
-    let spawnArgs: string[] | undefined;
-    const spawnFn = ((args: string[]) => {
-      spawnArgs = args;
-      return fake.proc;
-    }) as unknown as typeof Bun.spawn;
-    const transport = new ClaudeCodeCliTransport({
-      ...okPromptFns,
-      spawnFn,
-      getPgid: (pid) => pid,
-    });
+  // odd/tasks/role-model-routing.md E-c: `--model` is the ROUTE's model. A
+  // `-latest` name sends its CLI alias; a pinned name sends its full id, even
+  // when the step's own prompt alias (executionModel) says something else. It
+  // used to send the prompt alias, so a model configured for a role never
+  // reached the CLI.
+  for (const [name, route, expected] of [
+    [
+      "claude:sonnet-latest",
+      {
+        backend: "claude-code",
+        provider: "anthropic",
+        modelFamily: "sonnet",
+        modelSnapshot: "sonnet",
+      },
+      "sonnet",
+    ],
+    [
+      "claude:claude-opus-5-5",
+      {
+        backend: "claude-code",
+        provider: "anthropic",
+        modelFamily: "claude-opus-5-5",
+        modelSnapshot: "claude-opus-5-5",
+      },
+      "claude-opus-5-5",
+    ],
+  ] as const) {
+    test(`${name} reaches --model as ${expected}, whatever the step's alias`, async () => {
+      const fake = makeFakeProc({
+        stdoutBody: JSON.stringify({ result: "ok" }),
+        exitCode: 0,
+      });
+      let spawnArgs: string[] | undefined;
+      const spawnFn = ((args: string[]) => {
+        spawnArgs = args;
+        return fake.proc;
+      }) as unknown as typeof Bun.spawn;
+      const transport = new ClaudeCodeCliTransport({
+        ...okPromptFns,
+        spawnFn,
+        getPgid: (pid) => pid,
+      });
 
-    await transport.execute(
-      makeRequest({
-        executionModel: "sonnet",
-        route: {
-          backend: "claude-code",
-          provider: "anthropic",
-          gateway: "direct",
-          modelFamily: "sonnet",
-          modelSnapshot: "sonnet",
-        },
-      }),
-      { signal: new AbortController().signal },
-    );
+      await transport.execute(makeRequest({ executionModel: "haiku", route }), {
+        signal: new AbortController().signal,
+      });
 
-    const modelIndex = spawnArgs?.indexOf("--model") ?? -1;
-    expect(modelIndex).toBeGreaterThanOrEqual(0);
-    expect(spawnArgs?.[modelIndex + 1]).toBe("sonnet");
-  });
+      const modelIndex = spawnArgs?.indexOf("--model") ?? -1;
+      expect(modelIndex).toBeGreaterThanOrEqual(0);
+      expect(spawnArgs?.[modelIndex + 1]).toBe(expected);
+      expect(spawnArgs?.filter((a) => a === "--model")).toHaveLength(1);
+    });
+  }
 
   // The engine owns the effort and ALWAYS passes it (#299). The CLI's implicit
   // default is `high` except on the 5.5 family, where it is `medium`, so an
@@ -1371,6 +1390,42 @@ describe("ClaudeCodeCliTransport toolInvocations from num_turns (#299)", () => {
     expect(await toolInvocationsFor(withTurns(1))).toBe(0);
   });
 
+  test("session_id on the same object leaves result, usage, and num_turns unchanged", async () => {
+    const fake = makeFakeProc({
+      stdoutBody: JSON.stringify({
+        result: "reviewed",
+        num_turns: 4,
+        session_id: "11111111-1111-4111-8111-111111111111",
+        total_cost_usd: 0.042,
+        usage: {
+          input_tokens: 120,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 300,
+          output_tokens: 45,
+        },
+      }),
+      exitCode: 0,
+    });
+    const transport = new ClaudeCodeCliTransport({
+      ...okPromptFns,
+      spawnFn: (() => fake.proc) as unknown as typeof Bun.spawn,
+      getPgid: (pid) => pid,
+      killFn: () => {},
+    });
+    const outcome = await transport.execute(makeRequest(), {
+      signal: new AbortController().signal,
+    });
+    expect(outcome.finalText).toBe("reviewed");
+    expect(outcome.toolInvocations).toBe(3);
+    expect(outcome.usage.completeness).toBe("complete");
+    expect(outcome.usage.tokens.inputUncached).toBe(120);
+    expect(outcome.usage.tokens.inputCacheRead).toBe(900);
+    expect(outcome.usage.tokens.inputCacheWrite).toBe(300);
+    expect(outcome.usage.tokens.outputVisible).toBe(45);
+    expect(outcome.usage.cashCostUsd).toBe(0);
+    expect(outcome.usage.notionalCostUsd).toBe(0.042);
+  });
+
   test("every turn after the first followed tool results", async () => {
     expect(await toolInvocationsFor(withTurns(2))).toBe(1);
     expect(await toolInvocationsFor(withTurns(17))).toBe(16);
@@ -1494,6 +1549,22 @@ describe("ClaudeCodeCliTransport prompt delivery and isolation argv (#314)", () 
     expect(
       args.filter((a) => a === "--exclude-dynamic-system-prompt-sections"),
     ).toHaveLength(1);
+  });
+
+  test("each spawn names its own session with a fresh UUID", async () => {
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const first = await captureSpawn(makeRequest());
+    const second = await captureSpawn(makeRequest());
+    const sessionOf = (args: string[]): string | undefined => {
+      const at = args.indexOf("--session-id");
+      return at === -1 ? undefined : args[at + 1];
+    };
+    expect(sessionOf(first.args)).toMatch(uuid);
+    expect(sessionOf(second.args)).toMatch(uuid);
+    expect(sessionOf(first.args)).not.toBe(sessionOf(second.args));
+    expect(first.args.filter((a) => a === "--session-id")).toHaveLength(1);
+    expect(first.args).not.toContain("--resume");
   });
 
   test("without an MCP config no MCP flag is emitted, and the rest still are", async () => {

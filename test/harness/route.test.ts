@@ -99,7 +99,6 @@ describe("Task 2.1 RED: Harness Route Integration", () => {
     const customRoute: ResolvedModelRoute = {
       backend: "claude-code",
       provider: "anthropic",
-      gateway: "openrouter",
       modelFamily: "sonnet",
       modelSnapshot: "claude-sonnet-5-20250219",
       modelVariant: "thinking",
@@ -125,7 +124,6 @@ describe("Task 2.1 RED: Harness Route Integration", () => {
     expect(result.status).toBe("ok");
     expect(recordedRequests).toHaveLength(1);
     expect(recordedRequests[0].route).toEqual(customRoute);
-    expect(recordedRequests[0].route.gateway).toBe("openrouter");
     expect(recordedRequests[0].route.modelVariant).toBe("thinking");
     expect(recordedRequests[0].route.modelSnapshot).toBe(
       "claude-sonnet-5-20250219",

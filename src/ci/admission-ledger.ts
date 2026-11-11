@@ -97,6 +97,10 @@ const TERMINAL_BUDGET_STATUSES: ReadonlySet<AdmissionAttemptStatus> = new Set([
 // - `"gate-skipped"` also comes from recordCiConfigErrorSkip (pr/ci-admission-gate.ts),
 //   called from the pre-reservation catch in pr/review-pr.ts when gotchas or the
 //   prompt set is misconfigured. It runs before any reservation or provider call.
+// - `"gate-skipped"` also comes from settleClaudeCredentialRefusal (pr/admission.ts),
+//   called from pr/plan.ts on a credential refusal (no listed Claude credential, or
+//   an OpenCode route with no auth record): after the budget gate and before any
+//   binding or provider call.
 // - `"yielded"`: written only by yieldToInFlightReview (pr/ci-admission-gate.ts:380),
 //   whose sole caller is pr/review-pr.ts:359, again before the `"provider-started"`
 //   settle at pr/review-pr.ts:516.

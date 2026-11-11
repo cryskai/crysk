@@ -2,9 +2,13 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { isEffort } from "#model/catalog";
 import { CLAUDE_CAPABILITY_STATICS } from "#model/provider-capabilities";
-import { spawnModelForClaudeCli } from "#model/routing";
+import { claudeCliModel } from "#model/routing";
 import type { BucketScope } from "../execution/bucket-id";
 import { deriveBucketId } from "../execution/bucket-id";
+import {
+  newClaudeSessionId,
+  retainClaudeSession,
+} from "../execution/claude-session-trace";
 import type {
   FailureCredential,
   ObservedModel,
@@ -745,7 +749,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       "--permission-mode",
       "bypassPermissions",
       "--model",
-      spawnModelForClaudeCli(request.route, request.executionModel),
+      claudeCliModel(request.route),
       "--effort",
       request.effort,
       // Moves the per-machine sections (cwd, env info, git status) out of the
@@ -757,6 +761,13 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       // isolation is unchanged.
       "--exclude-dynamic-system-prompt-sections",
     );
+
+    // The engine names the session so its transcript can be found however
+    // the attempt ends, including a timeout, a kill or a cancel that leaves no
+    // result to read the id from. `-p` never resumes, so a fresh id per spawn
+    // cannot collide.
+    const claudeSessionId = newClaudeSessionId();
+    args.push("--session-id", claudeSessionId);
 
     const start = performance.now();
 
@@ -821,6 +832,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
     }
 
     ACTIVE_CHILD_PROCS.add(proc);
+    retainClaudeSession(request, claudeSessionId);
 
     let cascadePromise: Promise<CascadeResult> | undefined;
     let provenPgid: number | undefined;
@@ -969,6 +981,10 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
               ...(escalatedToKill ? { signal: "SIGKILL" } : {}),
             };
 
+      // The result's `session_id` is not read for the transcript: the id passed
+      // as `--session-id` is the one retained at spawn, and it wins if the two
+      // ever differ, because only it exists on every way an attempt ends.
+      //
       // The CLI exits 0 when the API rejected the request, with the provider's message in
       // `result`. That message is not the agent's answer: it fails the attempt with its
       // typed cause, is never handed to the draft parser (which would spend a format retry
@@ -1292,6 +1308,9 @@ function oneLine(words: string, room: number): string {
 
 // The secret the child ran on. The per-token variables (the list envBillsMetered reads) win
 // over CLAUDE_CODE_OAUTH_TOKEN, and a whitespace-only value is no credential (the same trim).
+// Since S5 a review run's child holds exactly one of them (the credential chosen at run
+// start, security/claude-credential.ts), so the precedence below only decides for callers
+// that build their own env.
 //
 // The precedence is observed, not assumed. With CLI 2.1.312 and both an API key and an
 // OAuth login present, the CLI prints "claude.ai connectors are disabled because

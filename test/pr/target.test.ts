@@ -10,6 +10,7 @@ import {
 import { parseArgs } from "#review/preflight";
 import { loadRunConfig } from "#review/run";
 import { DEFAULT_SIZE_GATE } from "#review/size-gate";
+import { resolveRunClaudeCredential } from "../../src/security/claude-credential";
 
 const MONSTER_FILE = {
   path: "a.ts",
@@ -153,5 +154,53 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
 
   test("a non-CI run resolves no CI limits at all", async () => {
     expect(await limitsFor([], false)).toBeUndefined();
+  });
+
+  // S5: the ceiling and the size limits follow the credential the run chose, not
+  // the presence of a key. Both Claude secrets set is the billing change the docs
+  // name: the default order picks the subscription.
+  async function step2With(
+    claude: readonly ("subscription" | "api_key")[] | undefined,
+  ) {
+    const repo = path.join(dir, "repo");
+    const { options } = parseArgs(["review", "--pr", "1", "--ci"]);
+    const { loaded, config } = await loadRunConfig({
+      root: repo,
+      home: path.join(dir, "home"),
+      configFlag: undefined,
+      options,
+    });
+    return resolvePrPromptSetAndBudget({
+      options,
+      loaded,
+      config,
+      isCi: true,
+      operatorRoot: repo,
+      claudeRun: resolveRunClaudeCredential({
+        credentials: claude === undefined ? undefined : { claude },
+        env: { ANTHROPIC_API_KEY: "sk-test", CLAUDE_CODE_OAUTH_TOKEN: "oauth" },
+        loginPresent: false,
+      }),
+    });
+  }
+
+  test("S5: both Claude credentials, default order: the subscription is chosen, no metered ceiling", async () => {
+    // The process still holds a key: the run env, not the process env, decides.
+    process.env.ANTHROPIC_API_KEY = "sk-ambient";
+    const step2 = await step2With(undefined);
+    expect(step2.ciBudgetCeiling).toEqual({
+      budgetUsd: undefined,
+      source: "unlimited-subscription",
+    });
+    expect(step2.ciSizeLimits?.defaultedOff).toEqual(["lines"]);
+  });
+
+  test("S5: both Claude credentials, credentials.claude [api_key, subscription]: the key keeps the $10 ceiling", async () => {
+    const step2 = await step2With(["api_key", "subscription"]);
+    expect(step2.ciBudgetCeiling).toEqual({
+      budgetUsd: 10,
+      source: "default-metered",
+    });
+    expect(step2.ciSizeLimits?.defaultedOff).toEqual([]);
   });
 });

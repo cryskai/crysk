@@ -64,6 +64,7 @@ import {
   legacyWorktreePath,
   prWorktreePath,
 } from "../home-preflight";
+import type { RunClaudeCredential } from "../security/claude-credential";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
 
 export interface ResolvedPrRunOptions {
@@ -160,12 +161,20 @@ export async function resolvePrPromptSetAndBudget(params: {
   config: LoadedRunConfig["config"];
   isCi: boolean;
   operatorRoot: string;
+  // S5: the run's Claude credential, chosen once at run start (reviewPr). Its env
+  // holds only the chosen credential, so the ceiling follows the choice: the
+  // subscription has no metered ceiling, the API key keeps it. Absent (tests that
+  // pin the older wiring) reads the process env as before.
+  claudeRun?: RunClaudeCredential;
 }): Promise<ResolvedPrPromptSet> {
   // File presence, not envBillsMetered: that predicate stamps Claude
   // usage and must stay Anthropic-env-only.
-  const billingMode = deriveCiBillingMode(process.env, {
-    openCodeAuthPresent: existsSync(resolveOpenCodeAuthPath()),
-  });
+  const billingMode = deriveCiBillingMode(
+    params.claudeRun?.env ?? process.env,
+    {
+      openCodeAuthPresent: existsSync(resolveOpenCodeAuthPath()),
+    },
+  );
   // Issue #156: resolve the ceiling ONCE, here, and use this same value at
   // the budget gate far below (src/pr/review-pr.ts's plan/confirm stage).
   // Resolving twice invites the announcement and the gate drifting apart.

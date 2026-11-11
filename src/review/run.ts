@@ -21,7 +21,8 @@ import {
   loadEffectiveConfig,
   notionalCostInput,
 } from "#config/config";
-import type { ResolvedRoutePlan, RoutingConfig } from "#model/routing";
+import type { ModelsConfig } from "#model/model-name";
+import type { ResolvedRoutePlan } from "#model/routing";
 import type { CiMode } from "#pr/preflight";
 import {
   type FindingsDocument,
@@ -90,6 +91,7 @@ import {
   type ProductionRuntime,
 } from "../production-runtime";
 import type { RunnerAuthorityResolution } from "../runner-authority";
+import type { RunClaudeCredential } from "../security/claude-credential";
 
 // The codegraph server, and ONLY the codegraph server. Written per run and
 // handed to every step together with the runner's --strict-mcp-config: an
@@ -129,12 +131,19 @@ export async function loadRunConfig(params: {
   home: string;
   configFlag: string | undefined;
   options: Pick<CliOptions, "summary" | "model" | "scout" | "post">;
+  // Where config warnings go. Defaults to stderr, beside every other
+  // `warning:` line a run prints.
+  warn?: (line: string) => void;
 }): Promise<LoadedRunConfig> {
   const loaded = await loadEffectiveConfig({
     root: params.root,
     home: params.home,
     configFlag: params.configFlag,
   });
+  const warn =
+    params.warn ??
+    ((line: string) => process.stderr.write(`warning: ${line}\n`));
+  for (const line of loaded.warnings) warn(line);
   const config = loaded.effective;
   const summary = resolveSummary(params.options, config);
   const scout = resolveScout(params.options, config);
@@ -360,7 +369,11 @@ export async function writeRunFindings(params: {
     pr: params.pr,
     base_sha: params.baseSha,
     head_sha: params.headSha,
-    model: envelopeModel(params.options, params.agentFiles),
+    model: envelopeModel(
+      params.options,
+      params.agentFiles,
+      params.result.routePlan,
+    ),
     iteration: 0,
     prompt_set: params.promptSet,
     engine: params.engine,
@@ -487,27 +500,36 @@ export async function writeMcpConfig(
 // wraps — `resolveProductionRoute` reads as a near-duplicate of that name at
 // a glance, which is exactly the confusion a shared wrapper should not add.
 export async function resolvePipelineRoute(params: {
-  routingConfigured: boolean;
+  modelsConfigured: boolean;
   workspaceRoot: string;
   spec: ReviewSpec;
   options: CliOptions;
   agentFiles: Map<string, ParsedAgent>;
-  routingConfig: RoutingConfig | undefined;
+  models: ModelsConfig | undefined;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
   scoutEnabled?: boolean;
   consolidateEnabled?: boolean;
   materialityEnabled?: boolean;
+  // S5: the run's Claude credential, chosen once at run start. Required (undefined
+  // spelled out) so tsc keeps every caller handing it over: dropping it would compile
+  // and silently admit on the process env. A dry run passes undefined: it
+  // authenticates nothing (like the capability gate it skips), so it is never
+  // refused for a credential and admits on the process env.
+  claudeRun: RunClaudeCredential | undefined;
 }): Promise<ProductionRoutePlanResult | undefined> {
   return resolveProductionRoutePlanAtConfirm({
-    routingConfigured: params.routingConfigured,
+    modelsConfigured: params.modelsConfigured,
     workspaceRoot: params.workspaceRoot,
+    ...(params.claudeRun === undefined
+      ? { checkCredentials: false }
+      : { claudeRun: params.claudeRun }),
     buildRoutePlan: () =>
       buildCliRoutePlan({
         spec: params.spec,
         options: params.options,
         agentFiles: params.agentFiles,
-        routingConfig: params.routingConfig,
+        models: params.models,
         summary: params.summary,
         summarizerEnabled: params.summarizerEnabled,
         scoutEnabled: params.scoutEnabled,

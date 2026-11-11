@@ -34,6 +34,46 @@ const OPTIONS = {
   timeoutMs: 60_000,
 };
 
+// F1 decision 1: an action ref from before the code rename writes PRH-* codes. The
+// sandbox reads them as CRYSK-*, so the outcome and status checks, the S7 invariant
+// and the hunters-failed flake gate still hold against such a ref.
+describe("run: an action ref that writes PRH-* codes", () => {
+  test("no-credential exits 0: the PRH-CRED-MISSING outcome and status read as CRYSK-CRED-MISSING, with no S7 violation", async () => {
+    const world = new FakeGithub({ ref: REF, legacyCodes: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["no-credential"], OPTIONS)).toBe(0);
+    const comments = [...world.comments.values()].flat();
+    expect(comments.some((c) => c.body.includes("PRH-CRED-MISSING"))).toBe(
+      true,
+    );
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}no-credential: outcome comment with code CRYSK-CRED-MISSING/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(h.logs.some((l) => l.includes("S7 violation"))).toBe(false);
+  });
+
+  test("a PRH-HUNTERS-FAILED run is the flake and is re-run once", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      plantedFinding: true,
+      legacyCodes: true,
+      runOutcomes: ["hunters-failed"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
+    expect(world.prs.size).toBe(2);
+    expect(
+      h.logs.some((l) =>
+        /^review-free\s+hunters-failed\s+ok\s+1\s+\S+$/.test(l),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("run: the scenarios against the fake repository", () => {
   test("review-free exits 0, closes its PR and branch, and the table names each expectation", async () => {
     const world = new FakeGithub({ ref: REF, plantedFinding: true });
@@ -60,13 +100,13 @@ describe("run: the scenarios against the fake repository", () => {
     expect(branch).toMatch(/^sandbox\/review-free-\d{8}T\d{6}Z$/);
   });
 
-  test("no-credential exits 0: the PRH-CRED-MISSING outcome, the error status, and no report", async () => {
+  test("no-credential exits 0: the CRYSK-CRED-MISSING outcome, the error status, and no report", async () => {
     const world = new FakeGithub({ ref: REF });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["no-credential"], OPTIONS)).toBe(0);
     expect(
       h.logs.some((l) =>
-        /PASS {2}no-credential: outcome comment with code PRH-CRED-MISSING/.test(
+        /PASS {2}no-credential: outcome comment with code CRYSK-CRED-MISSING/.test(
           l,
         ),
       ),
@@ -78,13 +118,13 @@ describe("run: the scenarios against the fake repository", () => {
     ).toBe(true);
   });
 
-  test("bad-routing exits 0: a malformed routing input is PRH-ROUTING-INVALID", async () => {
+  test("bad-routing exits 0: a routing input with a value is CRYSK-INPUT-REMOVED", async () => {
     const world = new FakeGithub({ ref: REF });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["bad-routing"], OPTIONS)).toBe(0);
     expect(
       h.logs.some((l) =>
-        /PASS {2}bad-routing: outcome comment with code PRH-ROUTING-INVALID/.test(
+        /PASS {2}bad-routing: outcome comment with code CRYSK-INPUT-REMOVED/.test(
           l,
         ),
       ),
@@ -93,13 +133,13 @@ describe("run: the scenarios against the fake repository", () => {
 
   // T2d-1 (S2): the scenario branch commits the scaffold gotchas file, the fake
   // reads it the way the CLI's gate does, and the outcome names the config owner.
-  test("bad-gotchas exits 0: a scaffold gotchas file is PRH-GOTCHAS-MISSING, owned by your configuration", async () => {
+  test("bad-gotchas exits 0: a scaffold gotchas file is CRYSK-GOTCHAS-MISSING, owned by your configuration", async () => {
     const world = new FakeGithub({ ref: REF });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["bad-gotchas"], OPTIONS)).toBe(0);
     expect(
       h.logs.some((l) =>
-        /PASS {2}bad-gotchas: outcome comment with code PRH-GOTCHAS-MISSING, owner lead Your configuration:/.test(
+        /PASS {2}bad-gotchas: outcome comment with code CRYSK-GOTCHAS-MISSING, owner lead Your configuration:/.test(
           l,
         ),
       ),
@@ -222,7 +262,7 @@ describe("run: the scenarios against the fake repository", () => {
     expect(
       h.logs.includes("  PASS  comment-trigger: [2] no outcome comment"),
     ).toBe(true);
-    // The publisher's cleanup removed the PRH-HUNTERS-FAILED comment of phase 1.
+    // The publisher's cleanup removed the CRYSK-HUNTERS-FAILED comment of phase 1.
     const pr = [...world.prs.values()][0];
     const left = world.comments.get(pr?.number ?? -1) ?? [];
     expect(left.some((c) => c.body.startsWith("<!-- pr-hero-outcome"))).toBe(
@@ -257,7 +297,7 @@ describe("run: the scenarios against the fake repository", () => {
     expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
     expect(
       h.logs.includes(
-        "  FAIL  comment-trigger: [2] no outcome comment (got PRH-HUNTERS-FAILED)",
+        "  FAIL  comment-trigger: [2] no outcome comment (got CRYSK-HUNTERS-FAILED)",
       ),
     ).toBe(true);
   });
@@ -302,7 +342,7 @@ describe("run: the scenarios against the fake repository", () => {
   });
 
   // The fake posts an outcome comment and an error status together. These tests take
-  // the comment away, so the head's status alone carries PRH-HUNTERS-FAILED (the
+  // the comment away, so the head's status alone carries CRYSK-HUNTERS-FAILED (the
   // publisher's status write lands before its comment POST, so a failed POST leaves
   // exactly this), and stamp the status with the created_at the test picks: a time
   // after any trigger the fake hands out for this run's post, or one long before it.
@@ -356,11 +396,11 @@ describe("run: the scenarios against the fake repository", () => {
   const LONG_ROUTE = `opencode/${"m".repeat(96)}`;
   const SHARED_CAUSES = [
     {
-      code: "PRH-MODEL-UNAVAILABLE",
+      code: "CRYSK-MODEL-UNAVAILABLE",
       sentence: "Provider opencode: the model is not available.",
     },
     {
-      code: "PRH-CRED-UNUSABLE",
+      code: "CRYSK-CRED-UNUSABLE",
       sentence: `The route ${LONG_ROUTE} has no usable credential record`,
     },
   ];
@@ -388,12 +428,12 @@ describe("run: the scenarios against the fake repository", () => {
     });
   }
 
-  test("the credential preflight's PRH-CRED-UNUSABLE is no hunters-failed flake: no re-run, exit 1", async () => {
+  test("the credential preflight's CRYSK-CRED-UNUSABLE is no hunters-failed flake: no re-run, exit 1", async () => {
     const world = new FakeGithub({
       ref: REF,
       runOutcomes: ["hunters-failed", "hunters-failed"],
       huntersFailedAs: {
-        code: "PRH-CRED-UNUSABLE",
+        code: "CRYSK-CRED-UNUSABLE",
         sentence:
           "The claude/opencode route for this step has no usable credential.",
       },
@@ -574,7 +614,7 @@ describe("run: the scenarios against the fake repository", () => {
     expect(
       h.logs.some((l) =>
         l.includes(
-          "FAIL  review-free: path is reviewed (got error:PRH-CRED-MISSING)",
+          "FAIL  review-free: path is reviewed (got error:CRYSK-CRED-MISSING)",
         ),
       ),
     ).toBe(true);

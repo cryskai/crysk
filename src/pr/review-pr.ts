@@ -22,6 +22,7 @@ import path from "node:path";
 import {
   cliHeadField,
   hunterFailureRecords,
+  recordRunDir,
   writeCliRecord,
 } from "#ci/cli-record";
 import { planCiExcludedSkip, planCiSizeSkip } from "#ci/gates";
@@ -121,6 +122,7 @@ import { acquirePidLock } from "../home";
 import { worktreeLockPath } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
+import { resolveRunClaudeCredential } from "../security/claude-credential";
 import { writeGateRecord } from "./gate-record";
 
 // The CLI's record for a pipeline whose every hunter failed (cli.json,
@@ -142,7 +144,7 @@ export function recordPipelineOutcome(
 ): void {
   if (result?.sessionFailed !== true) return;
   // WHY the causes ride on the record: the publisher names the provider and the model
-  // when every hunter failed on the provider's side (PRH-MODEL-UNAVAILABLE). A run with
+  // when every hunter failed on the provider's side (CRYSK-MODEL-UNAVAILABLE). A run with
   // no failed hunter list keeps the record as it was before the field existed.
   const failures = result.hunterFailures ?? [];
   writeCliRecord(
@@ -279,6 +281,13 @@ export async function reviewPr(
   const step1 = await resolvePrRunOptions(options, prArg);
   options = step1.options;
   const { operatorRoot, prNumber, home, isCi, loaded, config, summary } = step1;
+  // S5: the Claude credential this run uses, chosen once, here, from
+  // `credentials.claude` and what is set. The CI ceiling, the admission, every
+  // runner and binding, and the child read its env, which holds that one
+  // credential and no other.
+  const claudeRun = resolveRunClaudeCredential({
+    credentials: config.credentials,
+  });
   // S4 + T3 S7: the run's one posture. Every gate, skip, status, comment and
   // summary below takes these values; nothing re-resolves them. Both key on the
   // explicit --ci flag, never on `isCi` (which also folds in the CI/GITHUB_ACTIONS
@@ -301,6 +310,7 @@ export async function reviewPr(
       config,
       isCi,
       operatorRoot,
+      claudeRun,
     });
     await validateGotchas(step2.gotchasPath);
   } catch (error) {
@@ -644,6 +654,9 @@ export async function reviewPr(
       prNumber,
       headSha,
     );
+    // Action mode only: the trace step reads the run's files from here when
+    // the run step publishes no run_dir (src/ci/cli-record.ts recordRunDir).
+    recordRunDir(runDir);
     // diff.patch is the EFFECTIVE diff — exactly what the hunters read (see
     // filterDiffByIgnoreRules); diff.raw.patch preserves the unfiltered
     // bytes, and only when the filter actually dropped something.
@@ -699,6 +712,7 @@ export async function reviewPr(
       ciMode,
       statusContext,
       ciBudgetCeiling,
+      claudeRun,
       ciAdmissionLedger,
       skipDiscovery,
       hunterCount,

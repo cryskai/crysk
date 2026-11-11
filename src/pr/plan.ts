@@ -27,11 +27,12 @@ import {
   countFreeRouteSteps,
   type FreeRouteBilling,
 } from "#model/free-discovery";
-import type { ResolvedRoutePlan } from "#model/routing";
+import { planRoutes, type ResolvedRoutePlan } from "#model/routing";
 import {
   type CiAdmissionLedgerState,
   publishCiSkip,
   settleCiGateSkip,
+  settleClaudeCredentialRefusal,
 } from "#pr/admission";
 import { ghRepoWebUrl } from "#pr/pr";
 import {
@@ -71,6 +72,7 @@ import {
   type RunnerAuthorityResolution,
   resolveRunnerAuthority,
 } from "../runner-authority";
+import type { RunClaudeCredential } from "../security/claude-credential";
 
 export type PrPlanAndConfirmResult =
   | { exitCode: number }
@@ -128,6 +130,8 @@ export async function resolvePrPlanAndConfirm(params: {
   // run, pr-hero/local otherwise (resolveCiPosture). Passed down, never re-derived.
   statusContext: CommitStatusContext;
   ciBudgetCeiling: { budgetUsd: number | undefined };
+  // S5: the run's Claude credential, chosen once at run start (reviewPr).
+  claudeRun: RunClaudeCredential;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
   hunterCount: number;
@@ -204,12 +208,12 @@ export async function resolvePrPlanAndConfirm(params: {
     }
   }
   const productionRoute = await resolvePipelineRoute({
-    routingConfigured: params.config.routing !== undefined,
+    modelsConfigured: params.config.models !== undefined,
     workspaceRoot: params.worktreePath,
     spec: params.spec,
     options: params.options,
     agentFiles: params.agentFiles,
-    routingConfig: params.config.routing,
+    models: params.config.models,
     summary: params.summary,
     summarizerEnabled: params.summary.enabled && !params.skipDiscovery,
     scoutEnabled: params.options.scout && !params.skipDiscovery,
@@ -218,6 +222,10 @@ export async function resolvePrPlanAndConfirm(params: {
     // re-review that hunts nothing new.
     materialityEnabled:
       resolveMaterialityGate(params.config) && !params.skipDiscovery,
+    claudeRun: params.claudeRun,
+  }).catch(async (error: unknown) => {
+    await settleClaudeCredentialRefusal(params.ciAdmissionLedger, error);
+    throw error;
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
@@ -227,11 +235,19 @@ export async function resolvePrPlanAndConfirm(params: {
     routePlan === undefined || productionAdmission === undefined
       ? undefined
       : await countFreeRouteSteps({
-          steps: routePlan.steps,
+          steps: planRoutes(routePlan),
           probe: productionAdmission.freeModelProbe,
+          // The CRYSK_OPENCODE_* names admission bound each route's kind with,
+          // so the card counts free exactly the routes admission probed (U3).
+          openCodeSecretNames:
+            productionAdmission.authorityOptions.openCodeSecretNames,
         });
   const runnerAuthority = await resolveRunnerAuthority({
     workspaceRoot: params.worktreePath,
+    env: params.claudeRun.env,
+    ...(params.claudeRun.kind === undefined
+      ? {}
+      : { claudeCredential: params.claudeRun.kind }),
   });
   await enforceCapabilityGate({
     routePlan,

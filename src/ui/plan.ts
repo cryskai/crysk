@@ -152,7 +152,7 @@ function configTags(
     flagged.summary
       ? undefined
       : configTag("summary.enabled", s.summary.enabled),
-    flagged.model ? undefined : configTag("summary.model", s.summary.model),
+    flagged.model ? undefined : configTag("models", s.models),
     configTag("max_verification_steps", s.max_verification_steps),
   ].filter((tag): tag is string => tag !== undefined);
 }
@@ -300,20 +300,43 @@ function agentRow(
           (s.role === "refuter" || s.stepKey === "refuter")),
     );
     if (stepRoute) {
-      const formatted = formatStepRoute(stepRoute, model);
+      const formatted = formatStepRoute(stepRoute);
       return `${agent.key.padEnd(12)} ${formatted.padEnd(8)} ${fires}`;
     }
   }
   return `${agent.key.padEnd(12)} ${model.padEnd(8)} ${fires}`;
 }
 
-function summarizerRow(summary: SummarySettings): string {
-  const model = summary.model ?? DEFAULT_SUMMARY_MODEL;
-  return (
-    `summarizer`.padEnd(12) +
-    `${model}`.padEnd(8) +
-    (summary.enabled ? "always" : "disabled")
-  );
+// The model a step will run, as the plan resolved it (`models`, `--model`, the
+// prompt), or undefined with no plan or no such step. A row that guessed from
+// the prompt's default would name `haiku` while `models.summary` runs another.
+function plannedModel(
+  routePlan: ResolvedRoutePlan | undefined,
+  stepKey: string,
+): string | undefined {
+  const step = routePlan?.steps.find((s) => s.stepKey === stepKey);
+  return step === undefined ? undefined : formatStepRoute(step);
+}
+
+// What a stage left out of a re-review with nothing new to discover says in
+// place of a model: the plan omits its step, so no model would be the one run.
+const NOT_RUN_THIS_PASS = `${"-".padEnd(8)}not run this pass (nothing new to review)`;
+
+// `skipped` is a re-review that skips discovery, which runs no summarizer. It
+// is passed rather than read off a missing step: a plan with no route plan at
+// all is the older path, where the default model is what runs.
+function summarizerRow(
+  summary: SummarySettings,
+  routePlan?: ResolvedRoutePlan,
+  skipped = false,
+): string {
+  const label = "summarizer".padEnd(12);
+  if (summary.enabled && skipped) return `${label}${NOT_RUN_THIS_PASS}`;
+  const model =
+    plannedModel(routePlan, "summarizer") ??
+    summary.model ??
+    DEFAULT_SUMMARY_MODEL;
+  return `${label}${model.padEnd(8)} ${summary.enabled ? "always" : "disabled"}`;
 }
 
 export function summarizerLabel(summary: SummarySettings): string {
@@ -326,14 +349,21 @@ export function summarizerLabel(summary: SummarySettings): string {
 // only appears when it is on is a stage nobody notices arriving.
 function scoutRow(
   options: Pick<CliOptions, "scout" | "scoutModel" | "model">,
+  routePlan?: ResolvedRoutePlan,
+  skipped = false,
 ): string {
   const label = "scout".padEnd(12);
   if (!options.scout) return `${label}${"-".padEnd(8)}disabled`;
+  if (skipped) return `${label}${NOT_RUN_THIS_PASS}`;
   // The same chain the pipeline resolves, printed before the money is spent:
   // --model > --scout-model > the engine default (the bundled prompt pins no
   // model, so there is no frontmatter seat to show here).
-  const model = options.model ?? options.scoutModel ?? DEFAULT_SCOUT_MODEL;
-  return `${label}${model.padEnd(8)}diff-only, before the hunters (experimental)`;
+  const model =
+    plannedModel(routePlan, "scout") ??
+    options.model ??
+    options.scoutModel ??
+    DEFAULT_SCOUT_MODEL;
+  return `${label}${model.padEnd(8)} diff-only, before the hunters (experimental)`;
 }
 
 export function scoutLabel(options: Pick<CliOptions, "scout">): string {
@@ -540,20 +570,7 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
   push("agents dir", ctx.agentsDir);
   if (ctx.routePlan) {
     for (const step of ctx.routePlan.steps) {
-      const rawModel =
-        step.role === "hunter"
-          ? (ctx.options.model ??
-            ctx.spec.agents.find(
-              (a) =>
-                a.key === step.stepKey || `hunter-${a.key}` === step.stepKey,
-            )?.model ??
-            ctx.agentFiles.get(step.stepKey.replace(/^hunter-/, ""))?.model)
-          : step.role === "refuter"
-            ? (ctx.options.model ??
-              ctx.spec.agents.find((a) => a.role === "refuter")?.model ??
-              ctx.agentFiles.get(step.stepKey)?.model)
-            : undefined;
-      push(`route ${step.stepKey}`, formatStepRoute(step, rawModel));
+      push(`route ${step.stepKey}`, formatStepRoute(step));
     }
   }
   if (ctx.configProvenance) {
@@ -561,8 +578,8 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
   }
   push("run dir", ctx.runDir);
   push("hop budget", String(ctx.options.hopBudget));
-  push("summarizer", summarizerRow(ctx.summary));
-  push("scout", scoutRow(ctx.options));
+  push("summarizer", summarizerRow(ctx.summary, ctx.routePlan));
+  push("scout", scoutRow(ctx.options, ctx.routePlan));
   push(
     "parity",
     ctx.config.parity_trigger_paths.length === 0
@@ -614,8 +631,12 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
   }
-  lines.push(...row(label, summarizerRow(ctx.summary), { styles, width }));
-  lines.push(...row("", scoutRow(ctx.options), { styles, width }));
+  lines.push(
+    ...row(label, summarizerRow(ctx.summary, ctx.routePlan), { styles, width }),
+  );
+  lines.push(
+    ...row("", scoutRow(ctx.options, ctx.routePlan), { styles, width }),
+  );
   label = "";
   lines.push(
     "",
@@ -826,20 +847,7 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
   push("agents dir", ctx.agentsDir);
   if (ctx.routePlan) {
     for (const step of ctx.routePlan.steps) {
-      const rawModel =
-        step.role === "hunter"
-          ? (ctx.options.model ??
-            ctx.spec.agents.find(
-              (a) =>
-                a.key === step.stepKey || `hunter-${a.key}` === step.stepKey,
-            )?.model ??
-            ctx.agentFiles.get(step.stepKey.replace(/^hunter-/, ""))?.model)
-          : step.role === "refuter"
-            ? (ctx.options.model ??
-              ctx.spec.agents.find((a) => a.role === "refuter")?.model ??
-              ctx.agentFiles.get(step.stepKey)?.model)
-            : undefined;
-      push(`route ${step.stepKey}`, formatStepRoute(step, rawModel));
+      push(`route ${step.stepKey}`, formatStepRoute(step));
     }
   }
   if (ctx.configProvenance) {
@@ -849,8 +857,9 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
   }
   push("run dir", ctx.runDir);
   push("hop budget", String(ctx.options.hopBudget));
-  push("summarizer", summarizerRow(ctx.summary));
-  push("scout", scoutRow(ctx.options));
+  const skipped = ctx.rereview?.skipDiscovery === true;
+  push("summarizer", summarizerRow(ctx.summary, ctx.routePlan, skipped));
+  push("scout", scoutRow(ctx.options, ctx.routePlan, skipped));
   if (ctx.rereview) {
     const last =
       ctx.rereview.lastHead === null
@@ -934,8 +943,28 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
   }
-  lines.push(...row(label, summarizerRow(ctx.summary), { styles, width }));
-  lines.push(...row("", scoutRow(ctx.options), { styles, width }));
+  lines.push(
+    ...row(
+      label,
+      summarizerRow(
+        ctx.summary,
+        ctx.routePlan,
+        ctx.rereview?.skipDiscovery === true,
+      ),
+      { styles, width },
+    ),
+  );
+  lines.push(
+    ...row(
+      "",
+      scoutRow(
+        ctx.options,
+        ctx.routePlan,
+        ctx.rereview?.skipDiscovery === true,
+      ),
+      { styles, width },
+    ),
+  );
   if (ctx.rereview) {
     lines.push(
       ...row(

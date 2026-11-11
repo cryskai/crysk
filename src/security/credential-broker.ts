@@ -386,49 +386,64 @@ export class OpenCodeAuthBroker implements CredentialBroker {
       );
     }
 
-    let raw: string;
-    try {
-      raw = await this.readerFn();
-    } catch {
-      throw new CredentialProjectionError("source_read_failed");
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new CredentialProjectionError("malformed_payload");
-    }
-
-    if (typeof parsed !== "object" || parsed === null) {
-      throw new CredentialProjectionError("malformed_payload");
-    }
-
-    const record = (parsed as Record<string, unknown>).openai;
-    if (typeof record !== "object" || record === null) {
-      throw new CredentialProjectionError("missing_subscription_record");
-    }
-    // This kind promises ChatGPT OAuth specifically. An `openai` entry holding
-    // a pay-as-you-go API key is a different credential on different billing,
-    // and projecting it here would make the capability report's
-    // `billing.mode: "subscription"` a lie rather than a claim.
-    //
-    // #133 note: this lock is also what makes credentialKindForRoute's
-    // provider-keyed decision safe. That function does NOT read the store, so
-    // an `openai` entry holding an API key still resolves to this OAuth kind —
-    // and lands here, refused, rather than being silently routed metered. A
-    // bounded, stated limit, not a bug: the failure is loud and the fix is to
-    // name that provider differently in the routing config.
-    if ((record as Record<string, unknown>).type !== "oauth") {
-      throw new CredentialProjectionError("missing_subscription_record");
+    const lookup = await lookupOpenCodeOAuthRecord(this.readerFn);
+    if (!lookup.ok) {
+      throw new CredentialProjectionError(lookup.failureClass);
     }
 
     return buildOpenCodeProjection(
       input.kind,
       OPENCODE_OAUTH_PROVIDER,
-      record as OpenCodeProviderRecord,
+      lookup.record,
     );
   }
+}
+
+// The read+parse+validate sequence for the `openai` ChatGPT OAuth record, the
+// OAuth broker's own (above) and admission's credential check
+// (openCodeCredentialRefusal, production-runtime.ts). One copy, so admission
+// asks exactly what the broker will ask when the route runs.
+export async function lookupOpenCodeOAuthRecord(
+  readerFn: () => Promise<string>,
+): Promise<OpenCodeRecordLookup> {
+  let raw: string;
+  try {
+    raw = await readerFn();
+  } catch {
+    return { ok: false, failureClass: "source_read_failed" };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, failureClass: "malformed_payload" };
+  }
+
+  if (typeof parsed !== "object" || parsed === null) {
+    return { ok: false, failureClass: "malformed_payload" };
+  }
+
+  const record = (parsed as Record<string, unknown>).openai;
+  if (typeof record !== "object" || record === null) {
+    return { ok: false, failureClass: "missing_subscription_record" };
+  }
+  // This kind promises ChatGPT OAuth specifically. An `openai` entry holding
+  // a pay-as-you-go API key is a different credential on different billing,
+  // and projecting it here would make the capability report's
+  // `billing.mode: "subscription"` a lie rather than a claim.
+  //
+  // #133 note: this lock is also what makes credentialKindForRoute's
+  // provider-keyed decision safe. That function does NOT read the store, so
+  // an `openai` entry holding an API key still resolves to this OAuth kind —
+  // and lands here, refused, rather than being silently routed metered. A
+  // bounded, stated limit, not a bug: the failure is loud and the fix is to
+  // name that provider differently in the model name (`opencode:<provider>/...`).
+  if ((record as Record<string, unknown>).type !== "oauth") {
+    return { ok: false, failureClass: "missing_subscription_record" };
+  }
+
+  return { ok: true, record: record as OpenCodeProviderRecord };
 }
 
 // ONE builder for both OpenCode brokers. A third copy of the create+lstat+hash
@@ -526,7 +541,7 @@ function buildOpenCodeProjection(
 // traversal, a prototype key, or anything requiring escaping.
 const OPENCODE_PROVIDER_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 
-type OpenCodeApiRecordLookup =
+export type OpenCodeRecordLookup =
   | { readonly ok: true; readonly record: OpenCodeProviderRecord }
   | {
       readonly ok: false;
@@ -541,11 +556,12 @@ type OpenCodeApiRecordLookup =
 // hash sequence: a third hand-maintained copy is exactly the drift that
 // comment warns about, and here it would additionally let the two callers'
 // validation silently diverge (e.g. one broker accepting a record shape the
-// other refuses).
-async function lookupOpenCodeApiRecord(
+// other refuses). Admission's credential check (openCodeCredentialRefusal,
+// production-runtime.ts) is the third caller, for the same reason.
+export async function lookupOpenCodeApiRecord(
   readerFn: () => Promise<string>,
   provider: string,
-): Promise<OpenCodeApiRecordLookup> {
+): Promise<OpenCodeRecordLookup> {
   let raw: string;
   try {
     raw = await readerFn();

@@ -18,6 +18,7 @@
 // Here the exhaustive list IS the product — a key missing from the listing
 // would read as "pr-hero has no such setting".
 
+import { modelEntry } from "#model/model-name";
 import type {
   ConfigSource,
   ConfigSources,
@@ -108,34 +109,38 @@ function priorsCell(
   );
 }
 
-function routingCell(
-  routing: LocalConfig["routing"],
+// One cell for the whole object, one `role=model,model` entry per role, in
+// the order the file wrote them: the list order is the fallback order. An
+// entry with an effort reads `model (effort <level>)` (S7); without one it is
+// the bare name, whichever form the file used.
+function modelsCell(
+  models: LocalConfig["models"],
   source: ConfigSource,
 ): ConfigCell {
-  if (source === "default" || routing === undefined) {
-    return { value: UNSET, source };
-  }
-  const mappingsCount = routing.mappings
-    ? Array.isArray(routing.mappings)
-      ? routing.mappings.length
-      : Object.keys(routing.mappings).length
-    : 0;
-  if (mappingsCount === 0 && routing.default) {
-    return {
-      value: "default route",
-      source,
-    };
-  }
-  if (mappingsCount > 0 && routing.default) {
-    return {
-      value: `${mappingsCount} mapping${mappingsCount === 1 ? "" : "s"} (+ default)`,
-      source,
-    };
-  }
-  return {
-    value: `${mappingsCount} mapping${mappingsCount === 1 ? "" : "s"}`,
+  return listCell(
+    Object.entries(models ?? {}).map(
+      ([role, list]) =>
+        `${role}=${list
+          .map((entry) => {
+            const { name, effort } = modelEntry(entry);
+            return effort === undefined ? name : `${name} (effort ${effort})`;
+          })
+          .join(",")}`,
+    ),
     source,
-  };
+  );
+}
+
+function credentialsCell(
+  credentials: LocalConfig["credentials"],
+  source: ConfigSource,
+): ConfigCell {
+  return listCell(
+    credentials?.claude === undefined
+      ? []
+      : [`claude=${credentials.claude.join(",")}`],
+    source,
+  );
 }
 
 // One row per key, and the two Records below are what stops a key from
@@ -161,7 +166,8 @@ export function configRows(
       effective.suspicion_priors,
       sources.suspicion_priors,
     ),
-    routing: routingCell(effective.routing, sources.routing),
+    models: modelsCell(effective.models, sources.models),
+    credentials: credentialsCell(effective.credentials, sources.credentials),
     max_verification_steps: cell(
       effective.max_verification_steps?.toString(),
       sources.max_verification_steps,
@@ -226,7 +232,6 @@ export function configRows(
       effective.summary?.enabled?.toString(),
       sources.summary.enabled,
     ),
-    model: cell(effective.summary?.model, sources.summary.model),
   };
   // Object.entries over an object literal keeps declaration order, which is
   // the same guarantee CONFIG_DIRECTION already leans on for its derived key

@@ -14,7 +14,7 @@ import { runSmoke } from "./smoke";
 export const USAGE = `usage: bun scripts/sandbox.ts <command> [options]
 
   init --ref <ref> [--route claude|opencode:<modelSnapshot>]
-                          idempotent: repo, seeded main, pinned workflow, secrets, routing (default route: claude)
+                          idempotent: repo, seeded main, pinned workflow, token check, CRYSK_MODELS (default route: claude)
   run <scenario...> --ref <ref> [--keep] [--no-retry]
                           run scenarios in order, one PR each; a free-model flake is re-run once; exit 1 on any failed expectation or S7 check
   smoke --ref <ref> [--keep] [--no-retry]
@@ -24,7 +24,7 @@ export const USAGE = `usage: bun scripts/sandbox.ts <command> [options]
 
 scenarios: ${scenarioNames().join(", ")}
 <ref> is a tag or branch of cryskai/crysk, pinned into the sandbox workflow.
---route claude runs reviews on the subscription token (CLAUDE_CODE_OAUTH_TOKEN); opencode:<modelSnapshot> runs them on one OpenCode model.
+--route claude runs reviews on the subscription token (CRYSK_CLAUDE_OAUTH_TOKEN, needed on every route); opencode:<modelSnapshot> runs them on one free OpenCode model.
 Only ${SANDBOX_REPO} is ever touched.`;
 
 export type ParsedArgs =

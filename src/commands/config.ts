@@ -95,5 +95,8 @@ export async function configCommand(options: CliOptions): Promise<number> {
     width: terminalWidth(),
   });
   process.stdout.write(`${lines.join("\n")}\n`);
+  for (const warning of loaded.warnings) {
+    process.stderr.write(`warning: ${warning}\n`);
+  }
   return 0;
 }

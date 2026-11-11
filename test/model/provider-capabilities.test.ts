@@ -14,6 +14,7 @@ import {
   credentialKindBillsMetered,
   credentialKindForRoute,
 } from "../../src/runner-authority";
+import { claudeCredentialPresence } from "../../src/security/claude-credential";
 import { ClaudeCodeCliTransport } from "../../src/transports/claude-code-cli";
 
 const GREEN_BINARY = {
@@ -145,15 +146,37 @@ describe("produceClaudeCapabilityReport", () => {
     });
     expect(tokenReport.auth.probe).toBe("passed");
 
-    const sessionReport = await produceClaudeCapabilityReport({
-      ...greenOptions(),
-      authProbe: undefined,
-      env: { PATH: "/bin" },
-      home: "/home/user",
-      existsFn: (p) => p === "/home/user/.claude.json",
-      keychainProbe: () => false,
-    });
-    expect(sessionReport.auth.probe).toBe("passed");
+    // E-f leftover (U2's rule): `~/.claude.json` and `~/.claude/session.json` are
+    // no credential (every Claude user has the first, API-key users included).
+    for (const file of [".claude.json", ".claude/session.json"]) {
+      const sessionReport = await produceClaudeCapabilityReport({
+        ...greenOptions(),
+        platform: "linux",
+        authProbe: undefined,
+        env: { PATH: "/bin" },
+        home: "/home/user",
+        existsFn: (p) => p === `/home/user/${file}`,
+        keychainProbe: () => false,
+      });
+      expect(sessionReport.auth.probe, file).toBe("failed");
+    }
+
+    // The CRYSK_* secrets count, ANTHROPIC_AUTH_TOKEN alone does not.
+    for (const [name, probe] of [
+      ["CRYSK_CLAUDE_OAUTH_TOKEN", "passed"],
+      ["CRYSK_CLAUDE_API_KEY", "passed"],
+      ["ANTHROPIC_AUTH_TOKEN", "failed"],
+    ] as const) {
+      const envReport = await produceClaudeCapabilityReport({
+        ...greenOptions(),
+        platform: "linux",
+        authProbe: undefined,
+        env: { PATH: "/bin", [name]: "value" },
+        home: "/home/user",
+        keychainProbe: () => false,
+      });
+      expect(envReport.auth.probe, name).toBe(probe);
+    }
 
     // §6.1's Linux-style credentials file is a valid session signal.
     const fileReport = await produceClaudeCapabilityReport({
@@ -471,5 +494,58 @@ describe("transport/producer parity (§11)", () => {
       env: { PATH: "/bin", ANTHROPIC_API_KEY: "sk-test" },
     });
     expect(fromTransport.billing.mode).toBe(fromProducer.billing.mode);
+  });
+});
+
+// The default auth probe applies U2's rule, claudeCredentialPresence. It keeps a
+// copy because src/security/claude-credential.ts imports this module (a value
+// import back would be a cycle, test/architecture/cycles.test.ts); this pins the
+// copy to the rule over every combination of the variables and the login.
+describe("the default auth probe agrees with claudeCredentialPresence", () => {
+  const NAMES = [
+    "CRYSK_CLAUDE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CRYSK_CLAUDE_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+  ];
+  const cases: Array<[number, boolean]> = [];
+  for (let mask = 0; mask < 2 ** NAMES.length; mask++) {
+    for (const login of [false, true]) cases.push([mask, login]);
+  }
+  test.each(cases)("variables %i, login %p", async (mask, login) => {
+    const env: Record<string, string> = { PATH: "/bin" };
+    NAMES.forEach((name, i) => {
+      if (mask & (1 << i)) env[name] = i % 2 === 0 ? "value" : " value ";
+    });
+    const report = await produceClaudeCapabilityReport({
+      ...greenOptions(),
+      platform: "linux",
+      authProbe: undefined,
+      env,
+      home: "/home/user",
+      existsFn: (p) =>
+        p === "/bin/claude" ||
+        (login && p === "/home/user/.claude/.credentials.json"),
+      keychainProbe: () => false,
+    });
+    const presence = claudeCredentialPresence(env, login);
+    expect(report.auth.probe).toBe(
+      presence.subscription !== undefined || presence.api_key !== undefined
+        ? "passed"
+        : "failed",
+    );
+  });
+
+  test("a whitespace-only variable is no credential, as in the rule", async () => {
+    const report = await produceClaudeCapabilityReport({
+      ...greenOptions(),
+      platform: "linux",
+      authProbe: undefined,
+      env: { PATH: "/bin", CRYSK_CLAUDE_API_KEY: "   " },
+      home: "/home/user",
+      keychainProbe: () => false,
+    });
+    expect(report.auth.probe).toBe("failed");
   });
 });

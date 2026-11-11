@@ -5,16 +5,12 @@
 //
 // Each mapping is justified by the throw site and by the catalog text of its code
 // (src/ci/outcome.ts ERROR_CATALOG):
-// - UnmappedRouteError (src/model/routing.ts) -> route/unmapped: "No route mapping
-//   found" and "supplies no modelSnapshot"; PRH-ROUTE-UNRESOLVABLE's unmapped text
-//   asks for a modelSnapshot in CRYSK_ROUTING.
-// - AmbiguousMappingError (src/model/routing.ts) -> route/ambiguous: "found N
-//   duplicate mappings"; its text asks to remove the duplicate.
-// - UnauthorizedRouteError (src/model/routing.ts) -> route/spend-disabled: every
-//   throw says "Spend is disabled"; its text asks to enable spend.
+// - No route class: the alias-keyed routing and its codes were removed
+//   (odd/tasks/role-model-routing.md S2, E-f F0). A model is now a name that parses
+//   or a usage error that says how to write it.
 // - OpenCodeVersionAdmissionError (src/transport-registry.ts) with reason "version"
 //   -> capability/version_unsupported: the pinned version-pair checks
-//   (admitOpenCodeVersionPair, loadOpenCodeSdk); PRH-RUNTIME-UNAVAILABLE calls the
+//   (admitOpenCodeVersionPair, loadOpenCodeSdk); CRYSK-RUNTIME-UNAVAILABLE calls the
 //   action-installed runtime a pr-hero defect, which the pinned version is.
 // - The same class with reason "identity" -> unknown: the observed identity is missing
 //   in production, or the declared versions contradict it (transport-registry.ts). That
@@ -23,7 +19,14 @@
 // - OpenCodeSdkUnavailableError (src/transports/opencode-admission.ts) -> capability/
 //   sdk_unavailable: "is not installed"; the same code, the local text says reconcile.
 //
-// Not mapped, on purpose: ModelRoutingError (its own throws name no route fault),
+// - CredentialRefusalError (src/security/claude-credential.ts) names its own class
+//   (CliError.cls): a Claude route with no credential -> trigger/no-credential
+//   (CRYSK-CRED-MISSING), an OpenCode route with no auth record -> credential/
+//   missing_provider_record or missing_subscription_record (CRYSK-CRED-UNUSABLE). Its
+//   params (cliErrorParams below) let the record name the route and its fixes.
+//
+// Not mapped, on purpose: ModelRoutingError and InvalidModelError (their message is
+// the fix, and no catalog text names it),
 // RouteAdmissionError and OpenCodeProductionGatedError (a readiness gate, which no
 // capability issue names), CliError and everything else.
 //
@@ -32,14 +35,10 @@
 // that runs before it.
 
 import { CliError, CliUsageError, recordClassOf } from "../errors";
-import {
-  AmbiguousMappingError,
-  UnauthorizedRouteError,
-  UnmappedRouteError,
-} from "../model/routing";
+import { CredentialRefusalError } from "../security/claude-credential";
 import { OpenCodeVersionAdmissionError } from "../transport-registry";
 import { OpenCodeSdkUnavailableError } from "../transports/opencode-admission";
-import type { CliErrorClass } from "./outcome";
+import type { CliErrorClass, ErrorParams } from "./outcome";
 
 export function classifyCliError(error: unknown): CliErrorClass {
   // The class the throw site named wins over the instanceof mapping below. WHY: the
@@ -52,15 +51,6 @@ export function classifyCliError(error: unknown): CliErrorClass {
   ) {
     return error.cls;
   }
-  if (error instanceof UnmappedRouteError) {
-    return { kind: "route", reason: "unmapped" };
-  }
-  if (error instanceof AmbiguousMappingError) {
-    return { kind: "route", reason: "ambiguous" };
-  }
-  if (error instanceof UnauthorizedRouteError) {
-    return { kind: "route", reason: "spend-disabled" };
-  }
   if (error instanceof OpenCodeVersionAdmissionError) {
     return error.reason === "identity"
       ? { kind: "unknown" }
@@ -70,4 +60,11 @@ export function classifyCliError(error: unknown): CliErrorClass {
     return { kind: "capability", issue: "sdk_unavailable" };
   }
   return { kind: "unknown" };
+}
+
+// The params a throw site named for the record, or undefined. Only a credential
+// refusal names any today. Provider and model pass the record's own checks
+// (safeProviderName, safeModelName) in the writer.
+export function cliErrorParams(error: unknown): ErrorParams | undefined {
+  return error instanceof CredentialRefusalError ? error.params : undefined;
 }

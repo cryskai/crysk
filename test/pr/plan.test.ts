@@ -104,6 +104,14 @@ describe("resolvePrPlanAndConfirm prices the plan line by the admitted route", (
     expect(render).toBeGreaterThan(handoff);
   });
 
+  // The count follows the CRYSK_OPENCODE_* names admission bound the kinds with
+  // (U3), never the provider literal alone.
+  test("the free-route count gets the secret names admission read", () => {
+    expect(body).toMatch(
+      /await countFreeRouteSteps\(\{[\s\S]*?openCodeSecretNames:\s*productionAdmission\.authorityOptions\.openCodeSecretNames,?\s*\}\)/,
+    );
+  });
+
   test("countFreeRouteSteps is imported from the free-discovery module", () => {
     expect(code).toMatch(
       /import \{[^}]*\bcountFreeRouteSteps\b[^}]*\} from "#model\/free-discovery";/,

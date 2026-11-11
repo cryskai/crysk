@@ -1,5 +1,11 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
+import {
+  MAX_OPENCODE_PROVIDER_SLOTS,
+  OPENCODE_OAUTH_SECRET_PROVIDER,
+  opencodeSecretToken,
+} from "#ci/crysk-secrets";
 import {
   budgetInput,
   type CiSetupChoices,
@@ -12,10 +18,12 @@ import {
 import {
   appendIgnorePatterns,
   ignorePatternsError,
+  OPENCODE_PROVIDERS_VARIABLE,
+  openCodeProvidersOfModels,
   runCiSetup,
   writeRepoReviewConfig,
 } from "#ci/setup";
-import { resolveOptionalRepoRoot } from "#config/config";
+import { loadGlobalConfigLayer, resolveOptionalRepoRoot } from "#config/config";
 import {
   type CliOptions,
   GOTCHAS_PLACEHOLDER_MARKER,
@@ -154,11 +162,117 @@ export interface CiSetupDeps {
   // A person at a terminal gets the questions; anyone else gets flags or defaults.
   interactive: boolean;
   prompter: SetupPrompter;
+  // Whose personal config (~/.crysk/config.json) supplies the models and
+  // credentials the printed variable commands carry. Tests pass a scratch home.
+  home: string;
 }
 
 function defaultCiSetupDeps(): CiSetupDeps {
   const gh = defaultGhPreflightDeps();
-  return { gh, interactive: gh.interactive, prompter: terminalPrompter() };
+  return {
+    gh,
+    interactive: gh.interactive,
+    prompter: terminalPrompter(),
+    home: homedir(),
+  };
+}
+
+// E-f F4 (odd/tasks/role-model-routing.md, D1, D2): what the scaffolded workflow
+// reads from repository variables, taken from the person's own config, so the
+// review in CI runs the models it runs locally. Only commands are printed: setting
+// a variable or a secret is the person's call, on their repository.
+interface WorkflowVariables {
+  // The personal config file, as the commands print it (`~/.crysk/config.json`).
+  readonly configLabel: string;
+  readonly hasModels: boolean;
+  readonly hasCredentials: boolean;
+  // The OpenCode providers the models name, as secret tokens (DEEPSEEK), sorted.
+  readonly openCodeTokens: readonly string[];
+}
+
+type WorkflowVariablesRead =
+  | { readonly ok: true; readonly variables: WorkflowVariables }
+  | { readonly ok: false; readonly problem: string };
+
+async function readWorkflowVariables(
+  home: string,
+): Promise<WorkflowVariablesRead> {
+  const { filePath, layer } = await loadGlobalConfigLayer(home);
+  const configLabel = filePath.startsWith(`${home}${path.sep}`)
+    ? `~/${path.relative(home, filePath)}`
+    : filePath;
+  // The judge is skipped and every fallback counts, the providers the setup step
+  // builds the auth file for (openCodeProvidersOfModels).
+  const providers = openCodeProvidersOfModels(layer?.models);
+  const unnamed = providers.filter(
+    (provider) => opencodeSecretToken(provider) === undefined,
+  );
+  if (unnamed.length > 0) {
+    return {
+      ok: false,
+      problem: `The models in ${configLabel} name the OpenCode provider ${unnamed.map((p) => JSON.stringify(p)).join(", ")}, which no CRYSK_OPENCODE_* secret name can carry. Nothing was written.`,
+    };
+  }
+  const openCodeTokens = [
+    ...new Set(
+      providers.map((provider) => opencodeSecretToken(provider) as string),
+    ),
+  ].sort();
+  if (openCodeTokens.length > MAX_OPENCODE_PROVIDER_SLOTS) {
+    return {
+      ok: false,
+      problem: `The models in ${configLabel} name ${openCodeTokens.length} OpenCode providers (${providers.join(", ")}), but the workflow forwards the keys of at most ${MAX_OPENCODE_PROVIDER_SLOTS}. Use at most ${MAX_OPENCODE_PROVIDER_SLOTS} OpenCode providers across your models, then run this again. Nothing was written.`,
+    };
+  }
+  return {
+    ok: true,
+    variables: {
+      configLabel,
+      hasModels: layer?.models !== undefined,
+      hasCredentials: layer?.credentials !== undefined,
+      openCodeTokens,
+    },
+  };
+}
+
+// The commands that put a person's models, credential order and OpenCode
+// providers where the scaffolded workflow reads them. Empty when the personal
+// config sets none of them: the workflow then runs the default Claude model.
+export function workflowVariableCommands(
+  variables: WorkflowVariables,
+): string[] {
+  const commands: string[] = [];
+  if (variables.hasModels) {
+    commands.push(
+      `$ gh variable set CRYSK_MODELS --body "$(jq -c .models ${variables.configLabel})"`,
+    );
+  }
+  if (variables.hasCredentials) {
+    commands.push(
+      `$ gh variable set CRYSK_CREDENTIALS --body "$(jq -c .credentials ${variables.configLabel})"`,
+    );
+  }
+  if (variables.openCodeTokens.length > 0) {
+    commands.push(
+      `$ gh variable set ${OPENCODE_PROVIDERS_VARIABLE} --body '${JSON.stringify(variables.openCodeTokens)}'`,
+    );
+  }
+  return commands;
+}
+
+const OPENAI_TOKEN = opencodeSecretToken(OPENCODE_OAUTH_SECRET_PROVIDER);
+
+// One secret per OpenCode provider the models name. OpenAI may be a ChatGPT
+// subscription instead of a key: its OpenCode login record, base64 on one line.
+export function openCodeSecretCommands(tokens: readonly string[]): string[] {
+  return tokens.flatMap((token) =>
+    token === OPENAI_TOKEN
+      ? [
+          `$ gh secret set CRYSK_OPENCODE_${token}_API_KEY`,
+          `  or, for a ChatGPT subscription (on macOS, drop -w0): jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_${token}_OAUTH`,
+        ]
+      : [`$ gh secret set CRYSK_OPENCODE_${token}_API_KEY`],
+  );
 }
 
 // Flags win (an agent already asked the person), then a terminal's answers,
@@ -245,6 +359,15 @@ export async function ciSetupCommand(
     log(`${workflowRelative} already exists; pass --force to overwrite it`);
     return 1;
   }
+
+  // Before any question and any write: models naming more OpenCode providers than
+  // the workflow has slots for would scaffold a workflow that drops some keys.
+  const variablesRead = await readWorkflowVariables(deps.home);
+  if (!variablesRead.ok) {
+    log(variablesRead.problem);
+    return 1;
+  }
+  const variables = variablesRead.variables;
 
   const current = await readCurrentSettings(repoRoot, target);
   const choices = await resolveChoices(options, deps, current);
@@ -333,19 +456,42 @@ export async function ciSetupCommand(
   let step = 0;
   const next = () => `  ${++step}.`;
   log(`${next()} Commit ${workflowRelative} and ${repoDirName}/config.json`);
+  // The CRYSK_* names the scaffolded workflow reads (S8); gh asks for the value.
   log(
     `${next()} Add a repository secret: ${
       choices.billing === "subscription"
-        ? "CLAUDE_CODE_OAUTH_TOKEN (create it with `claude setup-token`)"
+        ? "CRYSK_CLAUDE_OAUTH_TOKEN (create the value with `claude setup-token`)"
         : choices.billing === "api"
-          ? "ANTHROPIC_API_KEY (or OPENCODE_AUTH_JSON for an OpenCode provider)"
-          : "ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)"
+          ? "CRYSK_CLAUDE_API_KEY (or the CRYSK_OPENCODE_* key of the OpenCode provider your models use)"
+          : "CRYSK_CLAUDE_OAUTH_TOKEN (create the value with `claude setup-token`) or CRYSK_CLAUDE_API_KEY"
     }`,
   );
+  log(
+    `     $ gh secret set ${
+      choices.billing === "api"
+        ? "CRYSK_CLAUDE_API_KEY"
+        : "CRYSK_CLAUDE_OAUTH_TOKEN"
+    }`,
+  );
+  if (variables.openCodeTokens.length > 0) {
+    log(
+      `${next()} Add the API key of each OpenCode provider your models in ${variables.configLabel} use:`,
+    );
+    for (const line of openCodeSecretCommands(variables.openCodeTokens)) {
+      log(`     ${line}`);
+    }
+  }
+  const variableCommands = workflowVariableCommands(variables);
+  if (variableCommands.length > 0) {
+    log(
+      `${next()} Set the repository variables the workflow reads your models from (${variables.configLabel}):`,
+    );
+    for (const line of variableCommands) log(`     ${line}`);
+  }
   // Review instructions are optional (odd/tasks/review-md.md S3): with none
   // the review runs on the default guidance, so a repo without a file gets a
   // recommendation, not a required step. A file that exists but is empty or
-  // still the scaffold turns the first PR red (PRH-GOTCHAS-MISSING), so that
+  // still the scaffold turns the first PR red (CRYSK-GOTCHAS-MISSING), so that
   // one gets the fix steps. Asked through the resolver and the gate the review
   // itself uses, so this advice cannot disagree with the run.
   const instructions = resolveReviewInstructions(undefined, repoRoot);

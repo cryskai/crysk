@@ -7,7 +7,6 @@ export interface FindingObservation {
   readonly legId: string;
   readonly backend: string;
   readonly provider: string;
-  readonly gateway?: string;
   readonly modelFamily: string;
   readonly modelSnapshot: string;
   readonly modelVariant?: string;

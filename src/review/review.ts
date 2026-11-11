@@ -24,6 +24,7 @@ import {
 } from "#git/git";
 import { engineIdentity } from "#git/identity";
 import { countFreeRouteSteps } from "#model/free-discovery";
+import { planRoutes } from "#model/routing";
 import { reviewPr } from "#pr/review-pr";
 import type { Telemetry } from "#review/findings";
 import { type PipelineResult, runPipeline } from "#review/pipeline";
@@ -80,6 +81,7 @@ import { prheroLayout } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
 import { resolveRunnerAuthority } from "../runner-authority";
+import { resolveRunClaudeCredential } from "../security/claude-credential";
 
 export async function review(options: CliOptions): Promise<number> {
   // PR mode is a different front half (gh-resolved range, detached worktree)
@@ -105,6 +107,12 @@ export async function review(options: CliOptions): Promise<number> {
     options,
   });
   options = { ...options, scout, post };
+  // S5: the Claude credential this run uses, chosen once, here, from
+  // `credentials.claude` and what is set. Every runner, binding and child below
+  // reads its env, which holds that one credential and no other.
+  const claudeRun = resolveRunClaudeCredential({
+    credentials: config.credentials,
+  });
 
   // 3 — the base ref, then the canonical refs and the range.
   const baseRef = await resolveBase(repoRoot, options, config);
@@ -242,14 +250,15 @@ export async function review(options: CliOptions): Promise<number> {
     true,
   );
   const productionRoute = await resolvePipelineRoute({
-    routingConfigured: config.routing !== undefined,
+    modelsConfigured: config.models !== undefined,
     workspaceRoot: repoRoot,
     spec,
     options,
     agentFiles,
-    routingConfig: config.routing,
+    models: config.models,
     summary,
     materialityEnabled: resolveMaterialityGate(config),
+    claudeRun: options.dryRun ? undefined : claudeRun,
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
@@ -259,8 +268,12 @@ export async function review(options: CliOptions): Promise<number> {
     routePlan === undefined || productionAdmission === undefined
       ? undefined
       : await countFreeRouteSteps({
-          steps: routePlan.steps,
+          steps: planRoutes(routePlan),
           probe: productionAdmission.freeModelProbe,
+          // The CRYSK_OPENCODE_* names admission bound each route's kind with,
+          // so the card counts free exactly the routes admission probed (U3).
+          openCodeSecretNames:
+            productionAdmission.authorityOptions.openCodeSecretNames,
         });
   // Named rather than inlined into renderPlan: the same context is what the
   // confirm menu's "Show details" renders, and building it twice would risk
@@ -311,6 +324,10 @@ export async function review(options: CliOptions): Promise<number> {
   // claude-code ProviderCapabilityReport path byte-compatible.
   const runnerAuthority = await resolveRunnerAuthority({
     workspaceRoot: repoRoot,
+    env: claudeRun.env,
+    ...(claudeRun.kind === undefined
+      ? {}
+      : { claudeCredential: claudeRun.kind }),
   });
   await enforceCapabilityGate({
     routePlan,

@@ -104,3 +104,19 @@ describe("the all-excluded skip settles through settleCiGateSkip (#317)", () => 
     );
   });
 });
+
+// R003 (#494): the Claude credential refusal is thrown out of resolvePipelineRoute,
+// after the reservation and before any provider spend. resolvePrPlanAndConfirm has
+// no seam (above), so this pins that the call hands the error to the gate-skip
+// settle before rethrowing; the helper itself is tested in ci-admission-gate.test.ts.
+describe("the Claude credential refusal settles through the gate skip (R003)", () => {
+  test("src/pr/plan.ts settles a refusal from resolvePipelineRoute before rethrowing", () => {
+    const code = codeOnly(readSource("pr/plan.ts"));
+    const start = code.indexOf("await resolvePipelineRoute({");
+    expect(start).toBeGreaterThan(-1);
+    const call = code.slice(start, code.indexOf("const routePlan =", start));
+    expect(call).toMatch(
+      /\.catch\(async \(error: unknown\) => \{\s*await settleClaudeCredentialRefusal\(params\.ciAdmissionLedger, error\);\s*throw error;/,
+    );
+  });
+});

@@ -20,6 +20,7 @@ import {
   recordPendingCreatedAt,
   recordReviewDelivered,
   recordReviewing,
+  recordRunDir,
   recordUnsettledStatus,
   writeCliRecord,
   writeFatalCliRecord,
@@ -29,6 +30,7 @@ import {
   type CliRecord,
   PENDING_AT_FILE,
   parseCliRecord,
+  RUN_DIR_FILE,
 } from "#ci/outcome";
 
 const SHA = "e".repeat(40);
@@ -179,7 +181,10 @@ describe("writeFatalCliRecord", () => {
   });
 
   const reviewed: CliRecord = { v: 1, outcome: "reviewed", head_sha: SHA };
-  const unmapped = { kind: "route", reason: "unmapped" } as const;
+  const versionUnsupported = {
+    kind: "capability",
+    issue: "version_unsupported",
+  } as const;
 
   function onDisk(): string {
     return readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
@@ -231,11 +236,13 @@ describe("writeFatalCliRecord", () => {
   );
 
   test("no record yet: the fatal error is written with its class, and nothing is printed", () => {
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, env),
+    );
     expect(parseCliRecord(onDisk())).toEqual({
       v: 1,
       outcome: "error",
-      cls: unmapped,
+      cls: versionUnsupported,
     });
     expect(chunks).toEqual([]);
   });
@@ -243,11 +250,13 @@ describe("writeFatalCliRecord", () => {
   test("a malformed record is replaced by the fatal error, and nothing is printed", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, CLI_RECORD_FILE), "{not json");
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, env),
+    );
     expect(parseCliRecord(onDisk())).toEqual({
       v: 1,
       outcome: "error",
-      cls: unmapped,
+      cls: versionUnsupported,
     });
     expect(chunks).toEqual([]);
   });
@@ -263,7 +272,9 @@ describe("writeFatalCliRecord", () => {
       params: { step: "posting the review" },
     } as const;
     writeCliRecord(posting, env);
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, env),
+    );
     expect(parseCliRecord(onDisk())).toEqual(posting);
     expect(chunks).toEqual([
       "crysk: kept the recorded error outcome; a later step failed\n",
@@ -275,18 +286,22 @@ describe("writeFatalCliRecord", () => {
   // reviewing head, so the publisher posts on the head the lock is on.
   test("a reviewing record is overwritten by the fatal error, which keeps the reviewing head, and nothing is printed", () => {
     recordReviewing(SHA, env);
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, env),
+    );
     expect(parseCliRecord(onDisk())).toEqual({
       v: 1,
       outcome: "error",
-      cls: unmapped,
+      cls: versionUnsupported,
       head_sha: SHA,
     });
     expect(chunks).toEqual([]);
   });
 
   test("with CRYSK_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, {}));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, {}),
+    );
     expect(chunks).toEqual([]);
     expect(existsSync(dir)).toBe(false);
   });
@@ -301,7 +316,7 @@ describe("writeFatalCliRecord", () => {
     let chunks: string[] = [];
     try {
       ({ chunks } = captureStderr(() =>
-        writeFatalCliRecord(unmapped, blocked),
+        writeFatalCliRecord(versionUnsupported, blocked),
       ));
     } catch (error) {
       thrown = error;
@@ -377,6 +392,41 @@ describe("recordPendingCreatedAt (SB3)", () => {
   test("writes nothing outside action mode", () => {
     recordPendingCreatedAt("2026-10-17T10:00:00Z", {});
     expect(existsSync(path.join(dir, PENDING_AT_FILE))).toBe(false);
+  });
+});
+
+// The trace step (src/ci/platform-trace.ts) reads the run directory from here when
+// the run step published no run_dir output: every hunter failed, a fatal error, a
+// cancelled job.
+describe("recordRunDir", () => {
+  let root: string;
+  let dir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-run-dir-"));
+    dir = path.join(root, "outcome");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("writes the run directory's path in action mode", () => {
+    const runDir = path.join(root, "runs", "pr-7-abcdef12-1");
+    recordRunDir(runDir, { CRYSK_OUTCOME_DIR: dir });
+    expect(readFileSync(path.join(dir, RUN_DIR_FILE), "utf8")).toBe(
+      `${runDir}\n`,
+    );
+  });
+
+  test("writes nothing outside action mode", () => {
+    recordRunDir(path.join(root, "runs", "pr-7-abcdef12-1"), {});
+    expect(existsSync(path.join(dir, RUN_DIR_FILE))).toBe(false);
+  });
+
+  test("a path with a line break writes nothing", () => {
+    recordRunDir(`${root}/runs\n/etc`, { CRYSK_OUTCOME_DIR: dir });
+    expect(existsSync(path.join(dir, RUN_DIR_FILE))).toBe(false);
   });
 });
 

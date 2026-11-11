@@ -83,7 +83,7 @@ a maintainer decides between `/crysk review` and `/crysk override`.
 **`/crysk override` is a maintainer's, and only for what answers cannot unlock.** Never post it,
 and never ask for it because the review budget ran out, except to answer a manual-review hold. Ask
 a maintainer for it only when:
-- the CI review itself is broken (every hunter failing, credit or credentials, `PRH-HUNTERS-FAILED`):
+- the CI review itself is broken (every hunter failing, credit or credentials, `CRYSK-HUNTERS-FAILED`):
   stop the loop and report what is failing, never route around it;
 - a `deferred` or `misclassified` finding should merge unfixed: it names a real defect, so
   accepting it is the maintainer's call;
