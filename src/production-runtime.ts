@@ -86,6 +86,10 @@ import {
   resolveOpenCodeAuthPath,
 } from "./security/credential-broker";
 import { authorizeWorkspaceCwd } from "./security/execution-authority";
+import {
+  REVIEW_EXPIRY_MARGIN_MS,
+  recordExpiresAt,
+} from "./security/oauth-providers";
 import { readOpenCodeSecretNames } from "./security/opencode-secret-manifest";
 import {
   type AdmitRoutePlanOptions,
@@ -1241,7 +1245,8 @@ export interface OpenCodeCredentialRefusal {
   readonly message: string;
   readonly failureClass:
     | "missing_provider_record"
-    | "missing_subscription_record";
+    | "missing_subscription_record"
+    | "subscription_expiring";
   readonly params: {
     readonly backend: "opencode";
     readonly provider: string;
@@ -1328,6 +1333,7 @@ export async function openCodeCredentialRefusal(
   openCodeSecretNames: readonly string[] | undefined,
   freeVerdicts: ReadonlyMap<string, boolean>,
   env: Readonly<Record<string, string | undefined>>,
+  now: number = Date.now(),
 ): Promise<OpenCodeCredentialRefusal | undefined> {
   const needs = new Map<
     string,
@@ -1364,7 +1370,33 @@ export async function openCodeCredentialRefusal(
       kind === "opencode_chatgpt_oauth"
         ? await lookupOpenCodeOAuthRecord(reader)
         : await lookupOpenCodeApiRecord(reader, provider);
-    if (lookup.ok) continue;
+    if (lookup.ok) {
+      // A subscription login that would expire during the review: the review never
+      // renews it (the broker empties a rotating provider's refresh token), so its
+      // later steps would fail on a dead token. Refused before anything is spent.
+      const expiresAt =
+        kind === "opencode_chatgpt_oauth"
+          ? recordExpiresAt(lookup.record)
+          : undefined;
+      if (
+        expiresAt !== undefined &&
+        expiresAt - now <= REVIEW_EXPIRY_MARGIN_MS
+      ) {
+        refused.push({
+          sentence: `models name OpenCode provider ${provider} (${stepKeys.join(", ")}), but its subscription login ${expiresAt <= now ? "has expired" : `expires at ${new Date(expiresAt).toISOString()}, before the review would finish`}: the Crysk platform renews it ahead of time, or reconnect it in the Crysk dashboard (locally, run any \`opencode\` request to renew it)`,
+          refusal: {
+            failureClass: "subscription_expiring",
+            params: {
+              backend: "opencode",
+              provider,
+              model: step.route.modelSnapshot,
+              step: stepKeys[0] ?? step.stepKey,
+            },
+          },
+        });
+      }
+      continue;
+    }
     if (
       lookup.failureClass !== "missing_provider_record" &&
       lookup.failureClass !== "missing_subscription_record"

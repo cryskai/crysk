@@ -16,6 +16,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { CredentialKind } from "#model/provider-capabilities";
+import { recordExpiresAt, reviewCopyOfRecord } from "./oauth-providers";
 
 export type CredentialProjectionFile = {
   readonly path: string;
@@ -76,7 +77,11 @@ export type CredentialProjectionFailureClass =
   // whatever provider keys happen to be ambient. It falls into the
   // fail-closed branch there, and must stay there.
   | "missing_provider_record"
-  | "projection_layout_invalid";
+  | "projection_layout_invalid"
+  // A subscription login whose access token has expired (the broker) or expires
+  // within the review (admission, REVIEW_EXPIRY_MARGIN_MS). A review never renews
+  // a rotating provider's login itself (oauth-providers.ts).
+  | "subscription_expiring";
 
 export class CredentialProjectionError extends Error {
   readonly failureClass: CredentialProjectionFailureClass;
@@ -390,11 +395,18 @@ export class OpenCodeAuthBroker implements CredentialBroker {
     if (!lookup.ok) {
       throw new CredentialProjectionError(lookup.failureClass);
     }
+    // Admission refuses a login that would expire during the review; this is the
+    // last word for a step that starts after it already has, so the child never
+    // tries to renew it with the emptied refresh token.
+    const expiresAt = recordExpiresAt(lookup.record);
+    if (expiresAt !== undefined && expiresAt <= Date.now()) {
+      throw new CredentialProjectionError("subscription_expiring");
+    }
 
     return buildOpenCodeProjection(
       input.kind,
       OPENCODE_OAUTH_PROVIDER,
-      lookup.record,
+      reviewCopyOfRecord(OPENCODE_OAUTH_PROVIDER, lookup.record),
     );
   }
 }
@@ -469,13 +481,13 @@ function buildOpenCodeProjection(
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 
-  // The record travels WHOLE. On the OAuth route its access token expires
-  // (~10 days on the observed store) and the child renews it with the refresh
-  // token; a projection carrying only `access` would hand the child a
-  // credential it cannot rotate, and it would go stale mid-run with no way
-  // back. On the API-token route the same rule holds for a different reason:
-  // the store's own record shape is what OpenCode reads, and reconstructing a
-  // subset of it here would be a second, silently drifting schema.
+  // The record travels in the store's own shape, which is what OpenCode reads;
+  // reconstructing a subset here would be a second, silently drifting schema. The
+  // one change is made before this call, by the OAuth broker: a rotating
+  // provider's refresh token is emptied (reviewCopyOfRecord, oauth-providers.ts),
+  // because this copy is deleted after the run and a token renewed into it would
+  // spend the stored chain for nothing. The login is renewed by the Crysk
+  // platform's refresher, never by a review.
   const payload = `${JSON.stringify({ [provider]: record }, null, 2)}\n`;
   writeFileSync(layout.authFile, payload, { mode: 0o600 });
 

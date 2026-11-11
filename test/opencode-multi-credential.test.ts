@@ -6,6 +6,7 @@
 // (prepareProductionAdmissionContext) -> createProductionRuntime ->
 // MultiProviderRunner -> StepExecutionHarness, with per-route scripted
 // transports standing in for the OpenCode server so nothing spawns or spends.
+
 import {
   afterAll,
   afterEach,
@@ -52,6 +53,7 @@ import {
   OpenCodeAuthBroker,
   OpenCodeFreeBroker,
 } from "../src/security/credential-broker";
+import { reviewCopyOfRecord } from "../src/security/oauth-providers";
 import {
   createDefaultTransportRegistry,
   DefaultTransportRegistry,
@@ -424,9 +426,13 @@ describe("U4: several OpenCode providers in one review", () => {
         // The server's broker is the binding's own instance (#149, per route).
         expect(server.broker).toBe(binding?.credential.broker);
         expect(server.kind).toBe(binding?.credential.kind);
-        // One-record projection: only this provider's record, never another's.
+        // One-record projection: only this provider's record, never another's,
+        // in the copy a review may hold (no refresh token for a rotating provider).
         expect(await projectedRecord(server.broker, server.kind)).toEqual({
-          [provider]: STORE[provider as keyof typeof STORE],
+          [provider]: reviewCopyOfRecord(
+            provider,
+            STORE[provider as keyof typeof STORE],
+          ),
         });
       }
     } finally {

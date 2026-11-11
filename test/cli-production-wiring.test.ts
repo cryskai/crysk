@@ -42,6 +42,10 @@ import {
   type DefaultTransportRegistry,
 } from "../src/transport-registry";
 
+// A login that never expires during these tests: admission refuses one that does
+// (src/security/oauth-providers.ts, REVIEW_EXPIRY_MARGIN_MS).
+const FAR_FUTURE = Date.now() + 365 * 24 * 60 * 60 * 1000;
+
 const mockLoadSdk = async () =>
   ({
     createOpencodeClient: () => ({
@@ -90,7 +94,7 @@ function fixtureDeps(
 // kind its route binds, in a data home inside the test's own dir, so the
 // developer's real auth file is never read.
 const FIXTURE_AUTH = {
-  openai: { type: "oauth", refresh: "r", access: "a", expires: 0 },
+  openai: { type: "oauth", refresh: "r", access: "a", expires: FAR_FUTURE },
   zai: { type: "api", key: "k" },
 };
 
@@ -903,7 +907,7 @@ describe("an OpenCode effort is checked against the model's variants before the 
   // OAuth route needs and a deepseek API key, so these tests reach the
   // variants check (the credential check runs before it).
   const AUTH = {
-    openai: { type: "oauth", refresh: "r", access: "a", expires: 0 },
+    openai: { type: "oauth", refresh: "r", access: "a", expires: FAR_FUTURE },
     deepseek: { type: "api", key: "k" },
   };
 

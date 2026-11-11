@@ -255,7 +255,10 @@ export type CliErrorClass =
   | { kind: "trigger"; check: "no-credential" }
   | {
       kind: "credential";
-      failureClass: "missing_provider_record" | "missing_subscription_record";
+      failureClass:
+        | "missing_provider_record"
+        | "missing_subscription_record"
+        | "subscription_expiring";
     }
   | { kind: "capability"; issue: "sdk_unavailable" | "version_unsupported" }
   | {
@@ -667,7 +670,8 @@ function parseCliClass(value: unknown): CliErrorClass | undefined {
   if (value.kind === "credential") {
     if (
       value.failureClass === "missing_provider_record" ||
-      value.failureClass === "missing_subscription_record"
+      value.failureClass === "missing_subscription_record" ||
+      value.failureClass === "subscription_expiring"
     ) {
       return { kind: "credential", failureClass: value.failureClass };
     }
@@ -886,6 +890,7 @@ export function codeOf(cls: ErrorClass): ErrorCode {
       switch (cls.failureClass) {
         case "missing_provider_record":
         case "missing_subscription_record":
+        case "subscription_expiring":
         case "malformed_payload":
         case "source_read_failed":
         case "env-absent":
@@ -1008,6 +1013,7 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
       switch (cls.failureClass) {
         case "missing_provider_record":
         case "missing_subscription_record":
+        case "subscription_expiring":
         case "malformed_payload":
         case "source_read_failed":
         case "env-absent":
@@ -1139,6 +1145,8 @@ const CREDENTIAL_PHRASE: Record<
     "the expected subscription login is missing or of the wrong kind",
   missing_provider_record:
     "the OpenCode auth store has no entry for this provider",
+  subscription_expiring:
+    "the subscription login expires before the review would finish",
   "env-absent": "the secret is not set",
 };
 
@@ -1465,6 +1473,18 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           isOpencodeRoute(params)
             ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then set CRYSK_OPENCODE_OPENAI_OAUTH from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY to bill per token"
             : "log in again with `claude setup-token` and set `CRYSK_CLAUDE_OAUTH_TOKEN` (`gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`)",
+      },
+      // The review would outlive the login's access token, and a review never renews
+      // a rotating provider's login itself (src/security/oauth-providers.ts).
+      subscription_expiring: {
+        what: "The {provider} subscription login for {step} expires before the review would finish",
+        why: "A review never renews a subscription login whose provider rotates its refresh token: renewing it inside the run would spend the stored login and lose the new one with the run's copy",
+        fixes: [
+          "On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.",
+          "Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.",
+        ],
+        annotationFix:
+          "reconnect {provider} in the Crysk dashboard, or locally renew it with any `opencode` request",
       },
       malformed_payload: {
         // WHY no route in the sentence: this class is raised for the OpenCode auth

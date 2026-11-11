@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A review never renews a subscription login whose provider rotates its refresh token** (cryskai/platform
+  odd/tasks/openai-oauth.md). OpenAI refuses a refresh token once it has been used, and a run cannot write the
+  renewed token back to `CRYSK_OPENCODE_OPENAI_OAUTH`, so a review that renewed the login spent the stored
+  record and the next review failed to authenticate. The review's copy of the record now carries an empty
+  refresh token; a review refuses to start when the access token expires within two hours, and a step refuses
+  one that has expired, both as `CRYSK-CRED-UNUSABLE` with the new `subscription_expiring` class. The Crysk
+  platform renews the login ahead of time; a workflow managed by hand re-sets the secret before it expires
+  (about ten days for OpenAI). Which providers rotate is one table, `src/security/oauth-providers.ts`.
+
 ## [0.5.1] - 2026-11-11
 
 ### Changed

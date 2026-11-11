@@ -377,11 +377,15 @@ with mode `0600` (`$XDG_DATA_HOME/opencode/auth.json`, or
 - **When no `CRYSK_OPENCODE_*` secret serves your models**, the step writes no auth file and leaves one
   already on the runner alone, so a self-hosted runner can keep its own OpenCode login.
 
-**A renewed token is not saved.** When the access token in an `_OAUTH` record expires during a run,
-OpenCode renews it with the refresh token, but only inside that run: nothing can write the new token
-back to the GitHub secret. Every run starts again from the record you stored. If the provider rotates
-refresh tokens on use, or the stored refresh token expires, reviews start failing to authenticate. Then
-run `opencode auth login` again on your machine and set the secret anew:
+**A review never renews the login.** OpenAI issues a new refresh token on every renewal and refuses the old
+one afterwards, and a run cannot write a renewed token back to the GitHub secret. A review that renewed the
+login would spend the stored record and lose the new one with the run's copy, so every later review would fail
+to authenticate. So the review's copy of an `_OAUTH` record carries no refresh token (for a provider that
+rotates it), a review refuses to start when the access token expires within two hours, and a step refuses a
+login that has already expired (`CRYSK-CRED-UNUSABLE`, `subscription_expiring`). On a repository connected to
+the Crysk platform, the platform renews the login ahead of time. In a workflow you manage yourself, an OpenAI
+access token lasts about ten days: run `opencode auth login` again on your machine and set the secret anew
+before it expires:
 
 ```sh
 jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
@@ -1557,6 +1561,20 @@ Or bill per token with an OpenAI API key instead:
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+#### `subscription_expiring`
+
+**What:** The {provider} subscription login for {step} expires before the review would finish
+
+**Why:** A review never renews a subscription login whose provider rotates its refresh token: renewing it inside the run would spend the stored login and lose the new one with the run's copy
+
+On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.
+
+Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.
+
+A review refuses to start when the login's access token expires within two hours, and a review step refuses a
+login that has already expired. The review's copy of the login never carries the refresh token of a provider
+that rotates it (`openai`), so the review cannot renew it.
 
 #### `malformed_payload`
 

@@ -262,7 +262,8 @@ const FAKE_OPENCODE_STORE = JSON.stringify({
     access: "AT-openai-test-fake",
     refresh: "RT-openai-test-fake",
     accountId: "acct-test-fake",
-    expires: 1_788_000_000_000,
+    // A year from now: the broker refuses an expired record (see below).
+    expires: Date.now() + 365 * 24 * 60 * 60 * 1000,
   },
 });
 
@@ -304,10 +305,13 @@ describe("OpenCodeAuthBroker", () => {
     }
   });
 
-  // The record travels WHOLE. The access token expires (~10 days on the
-  // observed store) and the child rotates it with the refresh token;
-  // projecting only `access` would hand it a credential it cannot renew.
-  test("the whole record travels, refresh token included", async () => {
+  // A review never rotates the chain (cryskai/platform odd/tasks/openai-oauth.md, E1).
+  // OpenAI rotates refresh tokens and refuses a reused one for good, and the record
+  // this copy came from (a GitHub secret, or the operator's own store) never sees the
+  // renewed one. So the copy carries every field but the refresh token, emptied:
+  // OpenCode's schema accepts "", reads it only once the access token has expired,
+  // and then fails instead of spending the stored chain.
+  test("a rotating provider's record travels without its refresh token", async () => {
     const projection = await projectOpenCode();
     try {
       const written = JSON.parse(
@@ -320,10 +324,31 @@ describe("OpenCodeAuthBroker", () => {
         "refresh",
         "type",
       ]);
-      expect(written.openai.refresh).toBe("RT-openai-test-fake");
+      expect(written.openai.refresh).toBe("");
+      expect(written.openai.access).toBe("AT-openai-test-fake");
+      expect(written.openai.accountId).toBe("acct-test-fake");
+      expect(JSON.stringify(written)).not.toContain("RT-openai-test-fake");
     } finally {
       await projection.destroy();
     }
+  });
+
+  test("an expired record is refused, so the child never tries to renew it", async () => {
+    const expired = JSON.stringify({
+      openai: {
+        type: "oauth",
+        access: "AT-openai-test-fake",
+        refresh: "RT-openai-test-fake",
+        expires: Date.now() - 60_000,
+      },
+    });
+    const error = await projectOpenCode(
+      openCodeBroker(async () => expired),
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CredentialProjectionError);
+    expect((error as CredentialProjectionError).failureClass).toBe(
+      "subscription_expiring",
+    );
   });
 
   test("layout: root and every created level are 0700, auth.json is 0600", async () => {
