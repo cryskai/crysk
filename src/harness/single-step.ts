@@ -16,6 +16,7 @@ import {
   type HarnessIdentity,
   type HarnessRoutePlanInput,
   harnessIdentity,
+  harnessModelChoice,
   type PrepareHarnessRunnerInput,
   prepareHarnessRunner,
   routeStep,
@@ -42,10 +43,12 @@ export function singleStepPlanInput(
         bundledAgents: true,
         cliModel: model,
       };
+    // These take the model as the stage's own, not cliModel, so the bare
+    // pinned id is spelled out here as buildHarnessRoutePlan does for cliModel.
     case "scout":
-      return { scout: { model } };
+      return { scout: { model: harnessModelChoice(model) ?? model } };
     case "consolidate":
-      return { consolidate: { model } };
+      return { consolidate: { model: harnessModelChoice(model) ?? model } };
     default:
       return { agents: [{ key: step.key, role: "other" }], cliModel: model };
   }

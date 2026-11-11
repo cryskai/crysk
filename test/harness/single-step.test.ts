@@ -117,6 +117,19 @@ describe("singleStepRoute: today's model, as an explicit choice (S6)", () => {
   });
 });
 
+// PR #519 R001: a bare pinned Claude id stays accepted on every single step,
+// not only on the cliModel ones.
+describe("bare pinned Claude id", () => {
+  const id = "claude-sonnet-4-5-20250929";
+  for (const step of ["refuter", "scout", "consolidate"] as const) {
+    test(`${step} routes it to that Claude model`, () => {
+      const route = singleStepRoute(step, id).identity.route;
+      expect(route.backend).toBe("claude-code");
+      expect(route.modelSnapshot).toBe(id);
+    });
+  }
+});
+
 describe("routeIdentityFields", () => {
   test("the row fields are the seam's identity under snake_case names", () => {
     const route = singleStepRoute("refuter", "sonnet");
