@@ -28,7 +28,7 @@ import {
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { formatWorkflowCommand } from "#ci/reporter";
-import { openCodeModelsBillMetered } from "#ci/setup";
+import { openCodeRoutesBillMetered } from "#ci/setup";
 import { resolveRepoRoot } from "#git/git";
 import { ghCurrentBranchPr, ghPrView } from "#pr/pr";
 import {
@@ -47,6 +47,7 @@ import {
 } from "#review/preflight";
 import type { ParsedAgent, PromptSetIdentity } from "#review/prompt-set";
 import type { estimateCost } from "#review/report";
+import { buildCliRoutePlan } from "#review/route-preflight";
 import {
   type LoadedRunConfig,
   loadRunConfig,
@@ -151,6 +152,29 @@ export interface ResolvedPrPromptSet {
   gotchasPath: string | undefined;
 }
 
+// The OpenCode providers of every route the run resolves, fallbacks included,
+// from the same plan builder the run confirms with (buildCliRoutePlan), so each
+// source routing reads counts the way routing reads it. Undefined when the plan
+// cannot be built here; the run itself surfaces that error at confirm.
+async function openCodeRouteProviders(
+  input: Parameters<typeof buildCliRoutePlan>[0],
+): Promise<string[] | undefined> {
+  let plan: Awaited<ReturnType<typeof buildCliRoutePlan>>;
+  try {
+    plan = await buildCliRoutePlan(input);
+  } catch {
+    return undefined;
+  }
+  const providers = new Set<string>();
+  for (const step of plan.steps) {
+    for (const route of [step, ...(step.fallbacks ?? [])]) {
+      if (route.route.backend === "opencode")
+        providers.add(route.route.provider);
+    }
+  }
+  return [...providers].sort();
+}
+
 // Step 1's second half: the CI budget ceiling (+ its notices), then the
 // prompt set resolution and the gotchas PATH (never the validation itself —
 // see this module's header). Runs after the caller's own
@@ -163,6 +187,8 @@ export async function resolvePrPromptSetAndBudget(params: {
   config: LoadedRunConfig["config"];
   isCi: boolean;
   operatorRoot: string;
+  // The summarizer's settings, for its route (openCodeRouteProviders).
+  summary: LoadedRunConfig["summary"];
   // S5: the run's Claude credential, chosen once at run start (reviewPr). Its env
   // holds only the chosen credential, so the ceiling follows the choice: the
   // subscription has no metered ceiling, the API key keeps it. Absent (tests that
@@ -185,16 +211,14 @@ export async function resolvePrPromptSetAndBudget(params: {
   const billingMode = deriveCiBillingMode(
     params.claudeRun?.env ?? process.env,
     {
-      openCodeBillsMetered: openCodeModelsBillMetered({
-        models: params.config.models,
-        routeModels: [
-          params.options.model,
-          ...spec.agents.flatMap((agent) => [
-            agent.model,
-            ...(agent.models ?? []),
-          ]),
-          ...[...agentFiles.values()].map((agent) => agent.model),
-        ],
+      openCodeBillsMetered: openCodeRoutesBillMetered({
+        providers: await openCodeRouteProviders({
+          spec,
+          options: params.options,
+          agentFiles,
+          models: params.config.models,
+          summary: params.summary,
+        }),
         authFilePresent: existsSync(resolveOpenCodeAuthPath()),
         openCodeSecretNames: readOpenCodeSecretNames(),
       }),

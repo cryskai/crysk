@@ -149,24 +149,37 @@ export async function resolvePrPlanAndConfirm(params: {
   // the setup's models and its recent reviews, replaces the band, which prices
   // every model as Claude. The platform prices the whole pull request, so a run
   // that covers less of it (a re-review whose discovery reads only the commits
-  // or paths since the last review, or one that hunts nothing new) keeps the
-  // band when the band is lower (runCostEstimate). Without a platform estimate
-  // (standalone, or nothing priceable) the band decides.
+  // or paths since the last review, or one that hunts nothing new) scales it by
+  // the share of a full review it does, which the band measures
+  // (runCostEstimate). Without a platform estimate (standalone, or nothing
+  // priceable) the band decides.
   const platformEstimate = params.isCi
     ? readPlatformEstimate(process.env)
     : undefined;
+  const band = estimateCost(
+    params.diffStat,
+    params.hunterCount,
+    params.summary.enabled && !params.skipDiscovery,
+    params.options.scout && !params.skipDiscovery,
+    queuedVerification,
+    !params.skipDiscovery,
+  );
+  // discoveryPaths is null only when the hunters read the full PR range.
+  const narrowed =
+    params.skipDiscovery || params.prepared.discoveryPaths !== null;
   const estimate = runCostEstimate(
     platformEstimate,
-    estimateCost(
-      params.diffStat,
-      params.hunterCount,
-      params.summary.enabled && !params.skipDiscovery,
-      params.options.scout && !params.skipDiscovery,
-      queuedVerification,
-      !params.skipDiscovery,
-    ),
-    // discoveryPaths is null only when the hunters read the full PR range.
-    params.skipDiscovery || params.prepared.discoveryPaths !== null,
+    band,
+    narrowed && platformEstimate !== undefined
+      ? estimateCost(
+          params.target.ghDiffStat,
+          params.hunterCount,
+          params.summary.enabled,
+          params.options.scout,
+          queuedVerification,
+          true,
+        )
+      : undefined,
   );
   // 7b(CI) — the budget gate, immediately after the estimate it reads and
   // BEFORE the plan card/confirm/"committed to spending" commit-status

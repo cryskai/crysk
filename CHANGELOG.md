@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   band, which priced every model as Claude. The plan prints `estimate $X – $Y (platform: history)` or
   `(platform: catalog)`. A missing or malformed estimate leaves the band in charge. The platform prices
   the whole pull request, so a re-review whose discovery reads only what changed since the last review,
-  or one that only verifies earlier findings, takes the lower of the platform's figure and the band.
+  or one that only verifies earlier findings, scales the platform's figure by the share of a full review
+  it does; the band measures that share and never supplies the price.
 
 ### Fixed
 
@@ -24,8 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whenever an OpenCode auth file existed: for a ChatGPT subscription, a file left by an earlier run, or a
   run whose models use no OpenCode at all. A run is now metered on OpenCode only when the auth file exists
   and a model the run can route to is on a provider bound to an API key, by the same rule the run binds
-  it. Every route source counts: `models` (any role or fallback), `--model`, a spec agent's model or
-  diversity legs, and a prompt's own frontmatter model. A run that is no longer metered gets neither the ceiling nor the size limits unless the
+  it. The routes are the run's own route plan, so every source counts the way routing reads it:
+  `models` (any role or fallback), `--model`, `--scout-model`, a spec agent's model, a prompt's own
+  frontmatter model and the engine's defaults. If the plan cannot be resolved, the auth file decides as
+  before. A run that is no longer metered gets neither the ceiling nor the size limits unless the
   workflow or the repo config sets them.
 - **Skip comments on a Crysk platform repository name only what applies there.** The budget, size,
   coverage and manual-required comments no longer suggest `/pr-hero review`, `pr-hero-force.yml` or

@@ -28,16 +28,19 @@ import {
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { renderStepSummary } from "#ci/reporter";
-import { openCodeModelsBillMetered } from "#ci/setup";
+import {
+  openCodeProvidersOfModels,
+  openCodeRoutesBillMetered,
+} from "#ci/setup";
 import type { SizeGateVerdict } from "#review/size-gate";
 
 // cryskai/platform#12 item 5: the OpenCode half of the metered ceiling reads
 // the routes the models name, not merely whether an auth file exists.
-describe("openCodeModelsBillMetered", () => {
+describe("openCodeRoutesBillMetered", () => {
   const deepseek = ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"];
   const metered = (models: unknown, names: readonly string[] | undefined) =>
-    openCodeModelsBillMetered({
-      models,
+    openCodeRoutesBillMetered({
+      providers: openCodeProvidersOfModels(models),
       authFilePresent: true,
       openCodeSecretNames: names,
     });
@@ -80,23 +83,20 @@ describe("openCodeModelsBillMetered", () => {
     );
   });
 
-  test("a route named outside `models` counts too: --model, a spec model or a prompt's own", () => {
-    const run = (routeModels: readonly (string | undefined)[]) =>
-      openCodeModelsBillMetered({
-        models: { default: ["claude:sonnet-latest"] },
-        routeModels,
+  test("routes that could not be resolved leave the decision to the auth file", () => {
+    expect(
+      openCodeRoutesBillMetered({
+        providers: undefined,
         authFilePresent: true,
         openCodeSecretNames: deepseek,
-      });
-    expect(run(["opencode:deepseek/deepseek-v4-flash"])).toBe(true);
-    // A bare alias (a spec or prompt's legacy form) is a Claude route.
-    expect(run(["sonnet", undefined])).toBe(false);
+      }),
+    ).toBe(true);
   });
 
   test("no auth file stays unmetered, as before: a free opencode/* model invoices nothing", () => {
     expect(
-      openCodeModelsBillMetered({
-        models: { default: ["opencode:opencode/some-free-model"] },
+      openCodeRoutesBillMetered({
+        providers: ["opencode"],
         authFilePresent: false,
         openCodeSecretNames: undefined,
       }),
@@ -558,7 +558,7 @@ describe("deriveCiBillingMode", () => {
   });
 
   // An OpenCode route bound to an API key can invoice — same conservative
-  // doctrine as Anthropic keys. Which routes do is openCodeModelsBillMetered's
+  // doctrine as Anthropic keys. Which routes do is openCodeRoutesBillMetered's
   // call (ci/setup.ts); this function only ORs its verdict in.
   test("openCodeBillsMetered is metered with no Anthropic env — deepseek API-token CI", () => {
     expect(deriveCiBillingMode({}, { openCodeBillsMetered: true })).toBe(

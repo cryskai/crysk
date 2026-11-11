@@ -308,6 +308,7 @@ export async function reviewPr(
       options,
       loaded,
       config,
+      summary,
       isCi,
       operatorRoot,
       claudeRun,

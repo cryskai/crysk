@@ -415,7 +415,7 @@ export type CiBillingMode = "subscription" | "metered";
 // predicate, never folded into it. `envBillsMetered` stamps Claude CLI
 // usage and must stay Anthropic-env-only. Omit the option (or leave it
 // undefined/false) and this function stays env-only. The caller derives it
-// from the routes the models name (openCodeModelsBillMetered, ci/setup.ts):
+// from the routes the run resolves (openCodeRoutesBillMetered, ci/setup.ts):
 // an OpenCode provider bound to an API key can invoice; an auth file that only
 // holds providers no model uses cannot (cryskai/platform#12).
 export function deriveCiBillingMode(

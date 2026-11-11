@@ -85,17 +85,27 @@ export function platformCostEstimate(estimate: PlatformEstimate): {
 }
 
 // The estimate the run gates and plans on. The platform prices the whole pull
-// request before the engine knows how much of it this run reviews, so a narrowed
-// run (a re-review of the commits since the last one, or one that only verifies
-// earlier findings) takes the lower of the platform's figure and the band, which
-// is computed from what the run actually covers. A full review uses the
-// platform's figure; without one the band decides, as before.
+// request from the setup's own models, before the engine knows how much of it
+// this run reviews. A narrowed run (a re-review whose discovery reads only what
+// changed since the last review, or one that only verifies earlier findings)
+// passes `fullBand`, the band for a full review of the pull request: the
+// platform's figure is scaled by the share of that work the run does
+// (band / fullBand, at most 1). The band measures the share only; its prices,
+// which treat every model as Claude, never replace the platform's. A full review
+// uses the platform's figure; without one the band decides, as before.
 export function runCostEstimate<Band extends { high: number }>(
   platform: PlatformEstimate | undefined,
   band: Band,
-  narrowed: boolean,
+  fullBand: { high: number } | undefined,
 ): Band | ReturnType<typeof platformCostEstimate> {
   if (platform === undefined) return band;
-  if (narrowed && band.high < platform.usdHigh) return band;
-  return platformCostEstimate(platform);
+  const estimate = platformCostEstimate(platform);
+  if (fullBand === undefined || !(fullBand.high > 0)) return estimate;
+  const share = Math.min(1, Math.max(0, band.high / fullBand.high));
+  return {
+    ...estimate,
+    low: estimate.low * share,
+    high: estimate.high * share,
+    basis: `${estimate.basis} Scaled to the ${Math.round(share * 100)}% of a full review this run does.`,
+  };
 }

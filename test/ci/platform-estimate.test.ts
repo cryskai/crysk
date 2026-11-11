@@ -177,22 +177,39 @@ describe("platform.ts runs before `bun install`", () => {
 
 // The platform prices the whole pull request before the engine knows how much
 // of it this run reviews, so a narrowed run (a re-review of the new commits, or
-// one that only verifies) keeps the band when the band is the lower figure.
+// one that only verifies) scales the platform's figure by the share of a full
+// review it does. The band measures that share and never supplies the price.
 describe("runCostEstimate", () => {
   const platform = { usdLow: 4, usdHigh: 6, basis: "history" as const };
   const band = { low: 0.5, high: 1.5, basis: "band" };
 
   test("a full review uses the platform's estimate", () => {
-    expect(runCostEstimate(platform, band, false).high).toBe(6);
+    const estimate = runCostEstimate(platform, band, undefined);
+    expect([estimate.low, estimate.high]).toEqual([4, 6]);
   });
 
-  test("a narrowed run takes the lower of the two", () => {
-    expect(runCostEstimate(platform, band, true)).toEqual(band);
-    const bigBand = { low: 8, high: 12, basis: "band" };
-    expect(runCostEstimate(platform, bigBand, true).high).toBe(6);
+  test("a narrowed run scales the platform's figure by the share it reviews", () => {
+    // A quarter of a full review: $1.50 of a $6.00 band.
+    const estimate = runCostEstimate(platform, band, { high: 6 });
+    expect([estimate.low, estimate.high]).toEqual([1, 1.5]);
+    expect(estimate.basis).toContain("25% of a full review");
+  });
+
+  test("models dearer than Claude keep their price on a narrowed run", () => {
+    // The band (Claude prices) is far below the platform's $60, yet the share
+    // decides, not the band's number: half the work is half of $60.
+    const dear = { usdLow: 40, usdHigh: 60, basis: "catalog" as const };
+    expect(runCostEstimate(dear, band, { high: 3 }).high).toBe(30);
+  });
+
+  test("the share never exceeds a full review", () => {
+    expect(
+      runCostEstimate(platform, { low: 5, high: 9, basis: "band" }, { high: 6 })
+        .high,
+    ).toBe(6);
   });
 
   test("without a platform estimate the band decides", () => {
-    expect(runCostEstimate(undefined, band, false)).toEqual(band);
+    expect(runCostEstimate(undefined, band, { high: 6 })).toEqual(band);
   });
 });
