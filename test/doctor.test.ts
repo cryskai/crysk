@@ -1003,6 +1003,20 @@ describe("doctor tri-state evaluation", () => {
       ).toEqual(["claude-code", "claude-code", "opencode"]);
     });
 
+    // PR #518 R001: a Claude judge with the gate off never runs, so the
+    // doctor that calls Claude "not needed" must not probe that route either.
+    test("doctor route plan drops a Claude entry the review would never run", () => {
+      const models = {
+        default: ["opencode:openai/gpt-4o"],
+        judge: ["claude:sonnet-latest"],
+      };
+      expect(
+        reviewNeedsClaude({ models, materialityGate: false, env: {} }),
+      ).toBe(false);
+      const plan = buildDoctorRoutePlan(models, { claudeRequired: false });
+      expect(plan.steps.map((s) => s.route.backend)).toEqual(["opencode"]);
+    });
+
     test("reviewNeedsClaude: required unless every resolved step leaves Claude", () => {
       const oc = "opencode:openai/gpt-4o";
       expect(reviewNeedsClaude({ models: undefined, env: {} })).toBe(true);

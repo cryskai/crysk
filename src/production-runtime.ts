@@ -917,6 +917,15 @@ export function buildDoctorRoutePlan(
   const distinct = new Map<string, ResolvedStepRoute>();
   for (const entry of Object.values(models).flat()) {
     const step = resolveModelEntryRoute("doctor-model", "other", entry);
+    // claudeRequired=false means no step the review runs is on Claude (a
+    // Claude judge with the gate off, say), so probing it would contradict
+    // the "not needed" answer and fail on a machine without the CLI.
+    if (
+      options.claudeRequired === false &&
+      step.route.backend === "claude-code"
+    ) {
+      continue;
+    }
     if (!distinct.has(step.routeFingerprint)) {
       distinct.set(step.routeFingerprint, step);
     }
