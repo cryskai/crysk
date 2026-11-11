@@ -28,6 +28,7 @@ import {
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { formatWorkflowCommand } from "#ci/reporter";
+import { openCodeModelsBillMetered } from "#ci/setup";
 import { resolveRepoRoot } from "#git/git";
 import { ghCurrentBranchPr, ghPrView } from "#pr/pr";
 import {
@@ -65,7 +66,7 @@ import {
   prWorktreePath,
 } from "../home-preflight";
 import type { RunClaudeCredential } from "../security/claude-credential";
-import { resolveOpenCodeAuthPath } from "../security/credential-broker";
+import { readOpenCodeSecretNames } from "../security/opencode-secret-manifest";
 
 export interface ResolvedPrRunOptions {
   operatorRoot: string;
@@ -167,12 +168,19 @@ export async function resolvePrPromptSetAndBudget(params: {
   // pin the older wiring) reads the process env as before.
   claudeRun?: RunClaudeCredential;
 }): Promise<ResolvedPrPromptSet> {
-  // File presence, not envBillsMetered: that predicate stamps Claude
-  // usage and must stay Anthropic-env-only.
+  // The OpenCode half from the routes the models name, not from the auth file
+  // existing (cryskai/platform#12): a file built for a ChatGPT subscription, one
+  // left on a runner whose HOME persists, or a local `opencode auth login` store
+  // invoices nothing for a run whose models do not bill per token. Not
+  // envBillsMetered either: that predicate stamps Claude usage and must stay
+  // Anthropic-env-only.
   const billingMode = deriveCiBillingMode(
     params.claudeRun?.env ?? process.env,
     {
-      openCodeAuthPresent: existsSync(resolveOpenCodeAuthPath()),
+      openCodeBillsMetered: openCodeModelsBillMetered(
+        params.config.models,
+        readOpenCodeSecretNames(),
+      ),
     },
   );
   // Issue #156: resolve the ceiling ONCE, here, and use this same value at

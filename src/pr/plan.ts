@@ -200,6 +200,7 @@ export async function resolvePrPlanAndConfirm(params: {
       prNumber: params.prNumber,
       force: params.options.force,
       ciMode: params.ciMode,
+      platformConnected: process.env.CRYSK_PLATFORM_CONNECTED === "true",
     });
     if (budgetPlan !== null) {
       await settleCiGateSkip(

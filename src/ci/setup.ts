@@ -87,6 +87,7 @@ import {
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import { parseIgnoreFile } from "../ignore-file";
+import { credentialKindForRoute } from "../runner-authority";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
 import {
   type OpenCodeSecretManifestEntry,
@@ -850,6 +851,28 @@ export function openCodeProvidersOfModels(models: unknown): string[] {
     }
   }
   return [...providers].sort();
+}
+
+// Whether an OpenCode route these models name bills per token (cryskai/platform#12
+// item 5): some provider they name, any role or fallback, binds an API key, by
+// the same rule the run binds it with (credentialKindForRoute over the secret
+// manifest's names, the provider literal without one). An auth file on disk is
+// not enough: it also exists for a ChatGPT subscription, after an earlier run on
+// a runner whose HOME persists, or from a local `opencode auth login`.
+export function openCodeModelsBillMetered(
+  models: unknown,
+  openCodeSecretNames: readonly string[] | undefined,
+): boolean {
+  return openCodeProvidersOfModels(models).some(
+    (provider) =>
+      credentialKindForRoute(
+        "opencode",
+        provider,
+        {},
+        false,
+        openCodeSecretNames,
+      ) === "provider_api_token",
+  );
 }
 
 interface OpenCodeAuthAssembly {

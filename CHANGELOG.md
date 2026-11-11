@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The metered CI ceiling follows the routes the models use, not an OpenCode auth file on disk**
+  (cryskai/platform#12). The `$10` default, and the metered size limits, applied whenever an OpenCode auth
+  file existed: for a ChatGPT subscription, a file left by an earlier run, or a run whose models use no
+  OpenCode at all. A run is now metered on OpenCode only when a model, in any role or fallback, is on a
+  provider bound to an API key, by the same rule the run binds it.
+- **A budget skip on a Crysk platform repository names only what applies there.** It no longer suggests
+  `/pr-hero review`, `pr-hero-force.yml` or `crysk ci init --force`: it names `/crysk review` and the
+  model setup in the Crysk dashboard.
 - **A review trace shows each OpenCode model turn, and every agent that ran** (#511). An OpenCode attempt
   was one `chat` generation spanning the whole agent (465 s for a 78-call hunter), so per-turn latency,
   tokens and cost could not be read. It is now an `attempt <step>#<n>` span with one `chat` generation per

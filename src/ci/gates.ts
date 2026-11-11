@@ -68,7 +68,7 @@ import type { SizeGateVerdict } from "#review/size-gate";
 import { commandHint, MARKER_OPEN } from "../brand";
 import { CliUsageError } from "../errors";
 import { envBillsMetered } from "../execution/usage-normalized";
-import { ciForceReviewHintLine } from "./force-comment";
+import { CI_REVIEW_COMMENT, ciForceReviewHintLine } from "./force-comment";
 import {
   type CiOutputs,
   type CiSummaryData,
@@ -208,6 +208,14 @@ function buildSizeSkipComment(data: SkipSizeSummary): string {
   return `${lines.join("\n")}\n`;
 }
 
+// What a platform repository can do about a budget skip (cryskai/platform#12):
+// its workflow listens for `/crysk review` and nothing else, it was never
+// scaffolded by `crysk ci init` (so no force workflow, no `budget-usd` input to
+// raise), and what a review costs is the model setup chosen in the dashboard.
+export const PLATFORM_BUDGET_SKIP_HINT =
+  `Comment \`${CI_REVIEW_COMMENT}\` on this pull request to run it anyway. ` +
+  "To change what reviews cost, change the model setup in the Crysk dashboard.";
+
 function buildBudgetSkipComment(data: SkipBudgetSummary): string {
   const lines = [
     SKIP_BUDGET_COMMENT_MARKER,
@@ -216,10 +224,14 @@ function buildBudgetSkipComment(data: SkipBudgetSummary): string {
     `⚠️ The estimated review cost (${usd(data.estimatedCostUsd)}) exceeds ` +
       `the configured CI budget ceiling (${usd(data.budgetUsd)}).`,
     "",
-    "Crysk did not run to stay within the configured `--budget-usd` " +
-      "ceiling.",
-    "",
-    ciForceReviewHintLine(data.prNumber),
+    ...(data.platformConnected === true
+      ? [PLATFORM_BUDGET_SKIP_HINT]
+      : [
+          "Crysk did not run to stay within the configured `--budget-usd` " +
+            "ceiling.",
+          "",
+          ciForceReviewHintLine(data.prNumber),
+        ]),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -263,6 +275,9 @@ export interface CiBudgetGateSkipInput {
   estimatedCostUsd: number;
   budgetUsd: number;
   prNumber: number;
+  // The run came through the Crysk platform (CRYSK_PLATFORM_CONNECTED): the
+  // skip names only what applies to a platform repository.
+  platformConnected?: boolean;
 }
 
 export function ciBudgetGateSkip(
@@ -275,6 +290,7 @@ export function ciBudgetGateSkip(
     prNumber: input.prNumber,
     estimatedCostUsd: input.estimatedCostUsd,
     budgetUsd: input.budgetUsd,
+    ...(input.platformConnected === true ? { platformConnected: true } : {}),
   };
   return { comment: buildBudgetSkipComment(summary), summary };
 }
@@ -382,19 +398,19 @@ export type CiBillingMode = "subscription" | "metered";
 // through that one decision — this CI gate is not that caller, and never
 // should be.
 //
-// Optional `openCodeAuthPresent` is the OpenCode half of the same ceiling
+// Optional `openCodeBillsMetered` is the OpenCode half of the same ceiling
 // question — "could this run invoice?" — ORed beside the Anthropic env
 // predicate, never folded into it. `envBillsMetered` stamps Claude CLI
 // usage and must stay Anthropic-env-only. Omit the option (or leave it
-// undefined/false) and this function stays env-only. Presence of the 0600
-// auth.json is enough: we cannot rule out an invoice, same conservative
-// doctrine as Anthropic keys. The instance is the file, not a parsed
-// provider name.
+// undefined/false) and this function stays env-only. The caller derives it
+// from the routes the models name (openCodeModelsBillMetered, ci/setup.ts):
+// an OpenCode provider bound to an API key can invoice; an auth file that only
+// holds providers no model uses cannot (cryskai/platform#12).
 export function deriveCiBillingMode(
   env: Record<string, string | undefined>,
-  opts?: { openCodeAuthPresent?: boolean },
+  opts?: { openCodeBillsMetered?: boolean },
 ): CiBillingMode {
-  return envBillsMetered(env) || opts?.openCodeAuthPresent === true
+  return envBillsMetered(env) || opts?.openCodeBillsMetered === true
     ? "metered"
     : "subscription";
 }

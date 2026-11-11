@@ -802,10 +802,19 @@ credential, the first one in `credentials.claude` that is set (default `["subscr
 [Configuration, Credentials](configuration.md#credentials)). A run on the subscription
 (`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its real cash cost is `$0.00`
 and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
-A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or an OpenCode auth file built from a
-`CRYSK_OPENCODE_*` secret) gets a `10.00` default, because that is the case where a runaway PR really does
-produce an invoice. Setting
+A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode provider whose
+`CRYSK_OPENCODE_*` secret is an API key, any role or fallback) gets a `10.00` default, because that is the
+case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
+subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
+
+**In platform mode the Crysk platform's estimate replaces the cost band.** The connect step asks for it
+(`X-Crysk-Capabilities: estimate`) and the budget gate compares its high end to the ceiling: an estimate
+from the setup's recent reviews scaled to the pull request, or from the catalog prices of its models. The
+plan prints it as `estimate $X – $Y (platform: history)` or `(platform: catalog)`. Without one (an older
+platform, a model with no catalog price) the band decides as before. A budget skip on a platform
+repository names only `/crysk review` and the model setup in the Crysk dashboard, since its workflow has
+no `budget-usd` to raise.
 
 **Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
 subscription route there is no size limit, so large pull requests are reviewed instead of skipped, and

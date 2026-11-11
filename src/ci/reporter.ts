@@ -157,6 +157,8 @@ interface CiSkipBudgetSummary {
   prNumber: number;
   estimatedCostUsd: number;
   budgetUsd: number;
+  // A platform repository has no `--budget-usd` to raise (cryskai/platform#12).
+  platformConnected?: true;
 }
 
 interface CiSkipExcludedSummary {
@@ -342,8 +344,10 @@ function skipBudgetLines(data: CiSkipBudgetSummary): string[] {
     "| --- | --- |",
     `| Estimated cost | ${usd(data.estimatedCostUsd)} (budget ${usd(data.budgetUsd)}) |`,
     "",
-    "Crysk did not run to stay within the configured `--budget-usd` " +
-      "ceiling.",
+    data.platformConnected === true
+      ? "To change what reviews cost, change the model setup in the Crysk dashboard."
+      : "Crysk did not run to stay within the configured `--budget-usd` " +
+        "ceiling.",
   ];
 }
 
