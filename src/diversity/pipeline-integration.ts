@@ -245,6 +245,24 @@ export function recordDiversityHunterFailure(
   return appendAttempt(ledger, attempt);
 }
 
+// The route an observation names. A step carries no executed route only on
+// the no-plan path, which runs every step on the Claude CLI, so the leg's own
+// resolved route stands in when it is a Claude one. A non-Claude leg there has
+// no observed execution to name, and labelling it Anthropic (as this did
+// before S2) or with a route nobody ran would both be false: refuse.
+function provenanceRoute(
+  leg: DiversityLeg,
+  executedRoute: ResolvedModelRoute | undefined,
+): ResolvedModelRoute {
+  if (executedRoute !== undefined) return executedRoute;
+  if (leg.route.backend !== "claude-code") {
+    throw new DiversityAdmissionError(
+      `no executed route for ${leg.route.backend} leg ${leg.legId}`,
+    );
+  }
+  return leg.route;
+}
+
 export function recordDiversityHunterResult(
   ledger: DiversityLedger,
   plan: DiversityPlan,
@@ -290,12 +308,7 @@ export function recordDiversityHunterResult(
   }
   if (result.status !== "ok") return next;
   const terminalAttemptId = `${resolvedLeg.legId}-a${totalAttempts}`;
-  const routeProvenance: ResolvedModelRoute = executedRoute ?? {
-    backend: "claude-code",
-    provider: "anthropic",
-    modelFamily: resolvedLeg.model.split("/")[0] ?? "unknown",
-    modelSnapshot: resolvedLeg.model,
-  };
+  const routeProvenance = provenanceRoute(resolvedLeg, executedRoute);
   const output = result.output as { findings?: DraftFinding[] } | undefined;
   const findings = output?.findings ?? [];
   for (const [index, finding] of findings.entries()) {

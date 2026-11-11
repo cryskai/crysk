@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { modelNameFromAlias } from "#model/model-name";
 import {
   agentStepKey,
+  type ResolvedModelRoute,
   type ResolvedStepRoute,
   resolveStepRoute,
 } from "#model/routing";
@@ -26,6 +27,11 @@ export interface DiversityLeg {
   readonly logicalModel: string;
   readonly model: string;
   readonly routeFingerprint: string;
+  // The route the leg resolved to, the one its routeFingerprint names. Not
+  // part of the plan payload (the fingerprint already is), so legIds and the
+  // plan fingerprint stay what they were. Provenance reads it when a step
+  // carries no executed route (S2).
+  readonly route: ResolvedModelRoute;
   readonly executionKey: string;
   readonly stepKey: string;
 }
@@ -130,7 +136,10 @@ export function buildDiversityPlan(
     const specialty = resolveSpecialty(agent);
     for (const model of models) {
       // A leg's model is internal: a bare alias or a full model name. Its
-      // own model always wins over `models`, so the plan needs no `models`.
+      // own model is the step's spec model, which outranks `models`, the
+      // frontmatter and the profile in resolveStepChoices; only `--model`
+      // outranks it, and it is passed. So this is the route the run plan
+      // gives the leg's step, which assertDiversityLegRoutes checks (S2).
       const parsed = { canonical: modelNameFromAlias(model).raw };
       const provisionalKey = diversityLegAgentKey(
         agent.key,
@@ -158,6 +167,7 @@ export function buildDiversityPlan(
         logicalModel: model,
         model: parsed.canonical,
         routeFingerprint: stepRoute.routeFingerprint,
+        route: stepRoute.route,
         executionKey,
         stepKey,
       });
