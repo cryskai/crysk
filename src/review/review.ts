@@ -39,6 +39,7 @@ import {
 } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
+  isBundledAgentsDir,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
   pipelineScoutInput,
@@ -255,6 +256,7 @@ export async function review(options: CliOptions): Promise<number> {
     spec,
     options,
     agentFiles,
+    bundledAgents: isBundledAgentsDir(agents),
     models: config.models,
     summary,
     materialityEnabled: resolveMaterialityGate(config),
@@ -425,6 +427,8 @@ export async function review(options: CliOptions): Promise<number> {
         gotchasPath,
         agentsDir,
         ...(agents.files ? { agentFiles: agents.files } : {}),
+        // The same answer the plan was built with (resolvePipelineRoute).
+        ...(isBundledAgentsDir(agents) ? { bundledAgents: true } : {}),
         runDir,
         outPath: path.join(runDir, "findings.json"),
         mcpConfigPath,

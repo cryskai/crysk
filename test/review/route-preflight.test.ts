@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { MATERIALITY_STEP_KEY } from "#model/routing";
-import type { CliOptions } from "#review/preflight";
+import {
+  type AgentsDirSource,
+  type CliOptions,
+  resolveAgentsDirSetting,
+} from "#review/preflight";
+import { parseAgentSource } from "#review/prompt-set";
 import {
   buildCliRoutePlan,
+  isBundledAgentsDir,
   pipelineMaterialityInput,
 } from "#review/route-preflight";
 import { defaultReviewSpec } from "#review/spec";
@@ -26,6 +32,7 @@ describe("buildCliRoutePlan: the materiality judge key (S14)", () => {
     spec: defaultReviewSpec(),
     options: { model: "opus", scout: false } as CliOptions,
     agentFiles: new Map(),
+    bundledAgents: false,
     summary: { enabled: false },
   };
   const keys = (plan: { steps: readonly { stepKey: string }[] }) =>
@@ -52,4 +59,62 @@ describe("buildCliRoutePlan: the materiality judge key (S14)", () => {
     expect(judge?.route.backend).toBe("claude-code");
     expect(judge?.route.modelSnapshot).toBe("sonnet");
   });
+});
+
+// model-profiles S3 in production: only the bundled set (source "default")
+// routes by the profile; every set a person points at keeps its frontmatter.
+// The agents' frontmatter says haiku, which the `claude` profile never does,
+// so the plan shows which of the two decided.
+describe("the bundled-agents flag on the production plan (model-profiles S3)", () => {
+  const seat = {
+    value: "./prompts",
+    layer: "repo" as const,
+    dir: "/repo/.crysk",
+  };
+  const resolutions: Record<
+    AgentsDirSource,
+    Parameters<typeof resolveAgentsDirSetting>[0]
+  > = {
+    default: { cwd: "/work" },
+    flag: { flag: "/custom/agents", cwd: "/work" },
+    repo: { config: seat, cwd: "/work" },
+    global: { config: { ...seat, layer: "global" }, cwd: "/work" },
+    env: { env: "/env/agents", cwd: "/work" },
+  };
+  const spec = defaultReviewSpec();
+  const haiku = new Map(
+    spec.agents.map((a) => [
+      a.key,
+      parseAgentSource(
+        `---\nname: ${a.key}\nmodel: haiku\neffort: low\n---\nbody\n`,
+      ),
+    ]),
+  );
+
+  for (const [source, input] of Object.entries(resolutions)) {
+    test(`source ${source}`, async () => {
+      const agents = resolveAgentsDirSetting(input);
+      expect(agents.source).toBe(source as AgentsDirSource);
+      const bundled = isBundledAgentsDir(agents);
+      expect(bundled).toBe(source === "default");
+      const plan = await buildCliRoutePlan({
+        spec,
+        options: { scout: false } as CliOptions,
+        agentFiles: haiku,
+        bundledAgents: bundled,
+        summary: { enabled: false },
+        consolidateEnabled: false,
+      });
+      const identities = new Set(
+        plan.steps
+          .filter((s) => s.role === "hunter" || s.role === "refuter")
+          .map((s) => s.logicalIdentity),
+      );
+      expect([...identities].sort()).toEqual(
+        bundled
+          ? ["claude:opus-latest", "claude:sonnet-latest"]
+          : ["claude:haiku-latest"],
+      );
+    });
+  }
 });

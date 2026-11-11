@@ -521,6 +521,8 @@ export async function resolvePipelineRoute(params: {
   spec: ReviewSpec;
   options: CliOptions;
   agentFiles: Map<string, ParsedAgent>;
+  // isBundledAgentsDir (#review/route-preflight) of the run's agents.
+  bundledAgents: boolean;
   models: ModelsConfig | undefined;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
@@ -545,6 +547,7 @@ export async function resolvePipelineRoute(params: {
         spec: params.spec,
         options: params.options,
         agentFiles: params.agentFiles,
+        bundledAgents: params.bundledAgents,
         models: params.models,
         summary: params.summary,
         summarizerEnabled: params.summarizerEnabled,

@@ -11,6 +11,12 @@ import {
   modelNameFromAlias,
   parseModelName,
 } from "./model-name";
+import {
+  CLAUDE_PROFILE,
+  type ModelProfile,
+  profileModelAlias,
+  profileRoute,
+} from "./profiles";
 
 export type { ResolvedModelRoute, RunnerBackend };
 
@@ -65,7 +71,7 @@ export class InvalidModelError extends ModelRoutingError {}
 const NEW_FORM_PREFIXES = ["claude:", "opencode:"];
 
 // Where a step's model came from, for the error a bad one raises.
-type ModelSource = "--model" | "spec" | "models" | "prompt";
+type ModelSource = "--model" | "spec" | "models" | "prompt" | "profile";
 
 function toModelName(
   value: string,
@@ -172,17 +178,23 @@ export interface ResolveStepRouteInput {
   readonly cliModel?: string;
   readonly specModel?: string;
   readonly frontmatterModel?: string;
+  // The active profile's model for this step's role (model-profiles S3), the
+  // seat after the prompt's own. Absent: no profile seat, so a step with no
+  // other model fails as it always did.
+  readonly profileModel?: string;
   readonly models?: ModelsConfig;
 }
 
-// The precedence (L5, L6 item 5):
+// The precedence (L5, L6 item 5; model-profiles S3):
 //   1. `--model` (cliModel), the operator's override for one run;
 //   2. the review spec's own model for the agent (AgentSpec.model: the lab's
 //      spec and the diversity legs, whose whole point is to differ);
 //   3. `models[role]`;
 //   4. `models.default`;
-//   5. the prompt's own alias, converted to `claude:<alias>-latest`.
-// 1, 2 and 5 are internal or legacy inputs and keep accepting bare aliases.
+//   5. the prompt's own alias, converted to `claude:<alias>-latest`;
+//   6. the active profile's model for the role (profiles.ts), which already
+//      falls back to the `claude` profile role by role.
+// 1, 2, 5 and 6 are internal or legacy inputs and keep accepting bare aliases.
 //
 // Only `models` holds a list. Its first model is the step's route and the rest
 // are its fallbacks, tried in order when the provider fails the one before
@@ -226,6 +238,11 @@ function resolveStepChoices(
   ) {
     return [
       { name: toModelName(input.frontmatterModel, "prompt", input.stepKey) },
+    ];
+  }
+  if (input.profileModel !== undefined) {
+    return [
+      { name: toModelName(input.profileModel, "profile", input.stepKey) },
     ];
   }
   throw new ModelRoutingError(
@@ -349,8 +366,13 @@ interface RouteAgent {
 // The `models` key an agent reads. A hunter reads `hunter.<specialty>`, so a
 // diversity leg (`reliability--<leg>`) reads its base hunter's role. The
 // refuter role also covers the verifier and the adjudicator: they run under
-// the refuter agent's step key and so share its route.
-function agentModelRole(agent: RouteAgent): string | undefined {
+// the refuter agent's step key and so share its route. The same key names the
+// agent's profile role (profiles.ts).
+export function agentModelRole(agent: {
+  readonly key: string;
+  readonly role: string;
+  readonly specialty?: string;
+}): string | undefined {
   if (agent.role === "hunter") return hunterRole(agent.specialty ?? agent.key);
   if (agent.role === "refuter") return "refuter";
   return undefined;
@@ -385,8 +407,19 @@ export interface BuildRoutePlanInput {
   readonly agents: readonly RouteAgent[];
   readonly cliModel?: string;
   readonly models?: ModelsConfig;
+  // The active profile (S3). Absent: `claude`. Phase 1 has no config key for
+  // it, so only tests pass another.
+  readonly profile?: ModelProfile;
+  // The agents' prompt set is the engine's bundled one. Its frontmatter is
+  // then never read for routing: the profile decides (S3, "only the bundled
+  // set may drop those lines"). Absent or false: a user or lab set, whose
+  // frontmatter wins over the profile and which gets no profile seat at all,
+  // so a user prompt with no `model:` still fails as it did before profiles.
+  readonly bundledAgents?: boolean;
   readonly frontmatterModel?: (agentKey: string) => string | undefined;
   readonly summarizer?: { model?: string; frontmatterModel?: string };
+  // `defaultModel` is the legacy spelling of the profile seat, still passed by
+  // callers that predate profiles; it outranks the profile when given.
   readonly scout?: {
     model?: string;
     frontmatterModel?: string;
@@ -412,23 +445,30 @@ export const MATERIALITY_STEP_KEY = "materiality";
 // one run's noise. A judge on any other model or transport is a different,
 // unmeasured judge. So `models.judge` may pick between those two only, and
 // neither `--model` nor `models.default` ever moves it (L6 item 5).
-// MATERIALITY_JUDGE_MODEL is the alias a run with no route plan sends.
-export const MATERIALITY_JUDGE_MODEL = "sonnet";
+// MATERIALITY_JUDGE_MODEL is the alias a run with no route plan sends, read
+// from the `claude` profile's judge.
+export const MATERIALITY_JUDGE_MODEL = profileModelAlias(
+  profileRoute(CLAUDE_PROFILE, "judge").model,
+);
 export const MEASURED_JUDGE_MODELS: readonly string[] = [
   "claude:sonnet-latest",
   "claude:opus-latest",
 ];
 
 // The judge's model, and what `models.judge` listed that it cannot use. With no
-// `models.judge`, the measured default.
-export function judgeModelChoice(models: ModelsConfig | undefined): {
+// `models.judge`, the active profile's judge (the measured default on
+// `claude`), held to the same measured list.
+export function judgeModelChoice(
+  models: ModelsConfig | undefined,
+  profile: ModelProfile = CLAUDE_PROFILE,
+): {
   model?: string;
   dropped: string[];
 } {
   // Names only: models.judge takes no effort (D3), so an entry is its name.
-  const listed = (
-    models?.judge ?? [`claude:${MATERIALITY_JUDGE_MODEL}-latest`]
-  ).map((entry) => modelEntry(entry).name);
+  const listed = (models?.judge ?? [profileRoute(profile, "judge").model]).map(
+    (entry) => modelEntry(entry).name,
+  );
   const usable = listed.filter((name) => MEASURED_JUDGE_MODELS.includes(name));
   return {
     ...(usable.length === 0 ? {} : { model: usable[0] }),
@@ -442,8 +482,9 @@ export function judgeModelChoice(models: ModelsConfig | undefined): {
 // keeps route admission from gating the run on a step that will never spawn.
 export function resolveMaterialityJudgeRoute(
   models: ModelsConfig | undefined,
+  profile: ModelProfile = CLAUDE_PROFILE,
 ): ResolvedStepRoute | undefined {
-  const { model } = judgeModelChoice(models);
+  const { model } = judgeModelChoice(models, profile);
   if (model === undefined) return undefined;
   return stepRouteFor(MATERIALITY_STEP_KEY, "other", {
     name: parseModelName(model),
@@ -464,9 +505,17 @@ export function buildResolvedRoutePlan(
   input: BuildRoutePlanInput,
 ): ResolvedRoutePlan {
   assertHunterRolesExist(input.models, input.agents);
+  const profile = input.profile ?? CLAUDE_PROFILE;
+  const profileModel = (role: string) => profileRoute(profile, role).model;
   const stepRoutes: ResolvedStepRoute[] = [];
   for (const agent of input.agents) {
     const modelRole = agentModelRole(agent);
+    const prompt =
+      input.bundledAgents === true
+        ? modelRole === undefined
+          ? {}
+          : { profileModel: profileModel(modelRole) }
+        : { frontmatterModel: input.frontmatterModel?.(agent.key) };
     stepRoutes.push(
       resolveStepRoute({
         stepKey: agentStepKey(agent),
@@ -474,7 +523,7 @@ export function buildResolvedRoutePlan(
         ...(modelRole === undefined ? {} : { modelRole }),
         cliModel: input.cliModel,
         specModel: agent.model,
-        frontmatterModel: input.frontmatterModel?.(agent.key),
+        ...prompt,
         models: input.models,
       }),
     );
@@ -488,6 +537,8 @@ export function buildResolvedRoutePlan(
         cliModel: input.cliModel,
         specModel: input.summarizer.model,
         frontmatterModel: input.summarizer.frontmatterModel,
+        // No profile seat yet: the summarizer never had a default, so a prompt
+        // without `model:` must keep failing the plan as before (phase 1).
         models: input.models,
       }),
     );
@@ -502,6 +553,7 @@ export function buildResolvedRoutePlan(
         cliModel: input.cliModel ?? input.scout.model,
         frontmatterModel:
           input.scout.frontmatterModel ?? input.scout.defaultModel,
+        profileModel: profileModel("scout"),
         models: input.models,
       }),
     );
@@ -515,13 +567,14 @@ export function buildResolvedRoutePlan(
         cliModel: input.consolidate.model ?? input.cliModel,
         frontmatterModel:
           input.consolidate.frontmatterModel ?? input.consolidate.defaultModel,
+        profileModel: profileModel("consolidate"),
         models: input.models,
       }),
     );
   }
   if (input.materiality) {
     // No `cliModel` and no `models.default` on purpose (judgeModelChoice).
-    const judge = resolveMaterialityJudgeRoute(input.models);
+    const judge = resolveMaterialityJudgeRoute(input.models, profile);
     // With no `models.judge`, the judge joins only a plan that already runs a
     // Claude step: on a plan with none, the runner may hold no Claude
     // credential, and a judge it cannot bind must stand down rather than fail

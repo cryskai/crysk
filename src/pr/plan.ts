@@ -53,6 +53,7 @@ import {
 } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
 import { type DiffStat, estimateCost } from "#review/report";
+import { isBundledAgentsDir } from "#review/route-preflight";
 import {
   enforceCapabilityGate,
   type LoadedRunConfig,
@@ -247,6 +248,7 @@ export async function resolvePrPlanAndConfirm(params: {
     spec: params.spec,
     options: params.options,
     agentFiles: params.agentFiles,
+    bundledAgents: isBundledAgentsDir({ source: params.agentsDirSource }),
     models: params.config.models,
     summary: params.summary,
     summarizerEnabled: params.summary.enabled && !params.skipDiscovery,

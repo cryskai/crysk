@@ -14,6 +14,13 @@ import {
 import { defaultEffortForRole, type Effort, isEffort } from "#model/catalog";
 import type { ModelsConfig } from "#model/model-name";
 import {
+  CLAUDE_PROFILE,
+  type ModelProfile,
+  profileModelAlias,
+  profileRoute,
+} from "#model/profiles";
+import {
+  agentModelRole,
   agentStepKey,
   buildResolvedRoutePlan,
   claudeCliModel,
@@ -102,6 +109,7 @@ import {
   renderMaterialityPrompt,
 } from "#review/materiality-gate";
 import {
+  type ParsedAgent,
   parseAgentFile,
   parseAgentSource,
   renderAgentBody,
@@ -246,6 +254,15 @@ export interface PipelineInput {
   // the compiled path exactly as untestable as it was when it shipped unable
   // to load a single prompt.
   agentFiles?: Record<string, string>;
+  // The agents' prompt set is the engine's bundled one (model-profiles S3):
+  // its routing then comes from the active profile, never from its
+  // frontmatter. Absent: a user or lab set, whose frontmatter `model:` and
+  // `effort:` win over the profile, as they always did. Passed by the caller,
+  // which holds the agents-dir resolution, for agentFiles' reason.
+  bundledAgents?: boolean;
+  // The active model profile (S1). Absent: `claude`. Phase 1 has no config key
+  // for it; tests inject a fixture profile here.
+  modelProfile?: ModelProfile;
   runDir: string;
   // Where the CALLER will write the final findings document after merging the
   // run envelope — the pipeline itself never writes it (it returns the
@@ -1054,6 +1071,43 @@ function agentPromptPath(input: PipelineInput, file: string): string {
   );
 }
 
+function activeProfile(input: PipelineInput): ModelProfile {
+  return input.modelProfile ?? CLAUDE_PROFILE;
+}
+
+// The model and effort a spec agent's prompt contributes, in the seats its
+// frontmatter has always held (resolveModel, stepEffortFields). A bundled set
+// contributes the active profile's route for the agent's role instead of its
+// own frontmatter (S3), so the profile decides and the plan agrees with the
+// step (buildResolvedRoutePlan's bundledAgents). A user or lab set keeps its
+// frontmatter, unchanged.
+function agentPromptChoice(
+  input: PipelineInput,
+  agent: AgentSpec,
+  parsed: ParsedAgent,
+): { model?: string; effort?: Effort } {
+  if (input.bundledAgents !== true) {
+    return {
+      ...(parsed.model === undefined ? {} : { model: parsed.model }),
+      ...(parsed.effort === undefined ? {} : { effort: parsed.effort }),
+    };
+  }
+  const role = agentModelRole(agent);
+  if (role === undefined) return {};
+  const route = profileRoute(activeProfile(input), role);
+  return { model: profileModelAlias(route.model), effort: route.effort };
+}
+
+// The effort a step runs at when neither a `models` entry nor its prompt sets
+// one: the active profile's for the agent's role (S3). Under `claude` these
+// are ROLE_EFFORT's hunter and refuter levels, so nothing moves.
+function agentRoleEffort(input: PipelineInput, agent: AgentSpec): Effort {
+  const role = agentModelRole(agent);
+  return role === undefined
+    ? defaultEffortForRole("other")
+    : profileRoute(activeProfile(input), role).effort;
+}
+
 // A conditional hunter's trigger, resolved against the ReviewSpec: the
 // "input" sentinel reads PipelineInput.parityTriggerPaths (the trigger PATHS
 // stay lab config; the spec only wires "this hunter is conditional").
@@ -1646,6 +1700,8 @@ async function execute(
         agents: diversityCtx.routeAgents,
         cliModel: input.model,
         models: effectiveModels,
+        profile: activeProfile(input),
+        ...(input.bundledAgents === true ? { bundledAgents: true } : {}),
         frontmatterModel: (agentKey) => frontmatterByKey.get(agentKey),
         ...(input.summarizer === undefined
           ? {}
@@ -1661,7 +1717,6 @@ async function execute(
               scout: {
                 model: input.scout.model,
                 frontmatterModel: scoutFrontmatter,
-                defaultModel: DEFAULT_SCOUT_MODEL,
               },
             }),
         ...(input.consolidate === undefined
@@ -1670,7 +1725,6 @@ async function execute(
               consolidate: {
                 model: input.consolidate.model,
                 frontmatterModel: consolidateFrontmatter,
-                defaultModel: DEFAULT_CONSOLIDATE_MODEL,
               },
             }),
         ...(input.materiality === undefined
@@ -1821,6 +1875,7 @@ async function execute(
   }> = [];
   for (const hunter of huntersAdmitted ? hunters : []) {
     const agent = await parseAgentFile(agentPromptPath(input, hunter.file));
+    const prompt = agentPromptChoice(input, hunter, agent);
     const name = `hunter-${hunter.key}`;
     const systemPromptPath = path.join(stepsDir, `${name}.system.md`);
     const shared =
@@ -1861,12 +1916,12 @@ async function execute(
       prompt: shared ? `${body}\n\n${SHARED_PREFIX_CLOSING}` : sharedBlock,
       tools: agent.tools,
       mcpConfigPath: input.mcpConfigPath,
-      model: resolveModel(input, hunter.model, agent.model, hunter.file),
+      model: resolveModel(input, hunter.model, prompt.model, hunter.file),
       ...stepEffortFields(
         routePlan,
         name,
-        agent.effort,
-        defaultEffortForRole("hunter"),
+        prompt.effort,
+        agentRoleEffort(input, hunter),
       ),
       cwd: input.worktree,
       outPath: path.join(stepsDir, `${name}.draft.json`),
@@ -1916,7 +1971,7 @@ async function execute(
     summarizerMeta = {
       name,
       model: input.summarizer.model ?? input.model ?? "unresolved",
-      effort: defaultEffortForRole("summarizer"),
+      effort: profileRoute(activeProfile(input), "summary").effort,
       tools: [],
       systemPromptPath,
       outPath,
@@ -1935,7 +1990,7 @@ async function execute(
         routePlan,
         name,
         agent.effort,
-        defaultEffortForRole("summarizer"),
+        profileRoute(activeProfile(input), "summary").effort,
       );
       summarizerMeta.effort = summarizerEffort.effort;
       summarizerMeta.tools = agent.tools;
@@ -2506,17 +2561,18 @@ async function runRefuter(
       nonce: options.nonce,
     }),
   );
+  const prompt = agentPromptChoice(input, options.agent, agent);
   const model = resolveModel(
     input,
     options.agent.model,
-    agent.model,
+    prompt.model,
     options.agent.file,
   );
   const effortFields = stepEffortFields(
     state.routePlan,
     agentStepKey(options.agent),
-    agent.effort,
-    defaultEffortForRole("refuter"),
+    prompt.effort,
+    agentRoleEffort(input, options.agent),
   );
   // A finding's content is composed LONG after the run's nonce was committed
   // — the hunters wrote its `claim` and `proof_refs` from the patch — so it is
@@ -2734,19 +2790,20 @@ async function runVerify(
       nonce: options.nonce,
     }),
   );
+  const prompt = agentPromptChoice(input, options.agent, agent);
   const model = resolveModel(
     input,
     options.agent.model,
-    agent.model,
+    prompt.model,
     options.agent.file,
   );
   // The verifier re-reads the REFUTER's prompt file, so a frontmatter `effort:`
-  // there applies to it as well; `verifier` is only the fallback for a prompt
-  // that omits the key.
+  // there applies to it as well (on the bundled set, the profile's refuter
+  // effort); `verifier` is only the fallback for a prompt that omits the key.
   const effortFields = stepEffortFields(
     state.routePlan,
     agentStepKey(options.agent),
-    agent.effort,
+    prompt.effort,
     defaultEffortForRole("verifier"),
   );
   const forged: VerifySubject[] = [];
@@ -2933,17 +2990,18 @@ async function runAdjudicate(
   );
   const systemPromptPath = path.join(options.stepsDir, "adjudicator.system.md");
   await writeSystemPrompt(systemPromptPath, body);
+  const prompt = agentPromptChoice(input, options.agent, agent);
   const model = resolveModel(
     input,
     options.agent.model,
-    agent.model,
+    prompt.model,
     options.agent.file,
   );
   const effortFields = stepEffortFields(
     state.routePlan,
     agentStepKey(options.agent),
-    agent.effort,
-    defaultEffortForRole("refuter"),
+    prompt.effort,
+    agentRoleEffort(input, options.agent),
   );
   const specs: Array<{
     index: number;
@@ -3054,8 +3112,11 @@ const SCOUT_TIMEOUT_MS = 15 * 60 * 1000;
 // the prompt's frontmatter), and M6's whole control corpus is sonnet (§1.2) —
 // so this is the model the scout has actually been measured on, and the model
 // the A/B will run it on. `--scout-model` is the documented exit; the cheap
-// tier is its own later experiment (§3.13), not a variable inside M6.
-export const DEFAULT_SCOUT_MODEL = "sonnet";
+// tier is its own later experiment (§3.13), not a variable inside M6. Read
+// from the `claude` profile, which holds the value now (model-profiles S2).
+export const DEFAULT_SCOUT_MODEL = profileModelAlias(
+  profileRoute(CLAUDE_PROFILE, "scout").model,
+);
 
 // Runs the scout and returns the block to append to every hunter prompt —
 // the EMPTY STRING whenever there is nothing to append, which covers all four
@@ -3100,7 +3161,7 @@ async function runScout(
   const meta: StepMeta = {
     name,
     model: input.scout.model ?? input.model ?? "unresolved",
-    effort: defaultEffortForRole("scout"),
+    effort: profileRoute(activeProfile(input), "scout").effort,
     // FORCED to empty here, never read from the prompt file's frontmatter.
     // §3.5 mechanism 1 — "the scout cannot open a file, grep, or walk a call
     // graph" — is the guarantee this whole design rests on, and a guarantee a
@@ -3164,12 +3225,13 @@ async function runScout(
     const agent = parseAgentSource(raw);
     await writeSystemPrompt(systemPromptPath, agent.body);
     // Precedence, the JD rule extended one seat: --model > --scout-model >
-    // the prompt's frontmatter > the engine default. The default sits LAST so
-    // a frontmatter model added later still outranks it.
+    // the prompt's frontmatter > the active profile's scout. The profile sits
+    // LAST so a frontmatter model added later still outranks it.
+    const scoutRoute = profileRoute(activeProfile(input), "scout");
     meta.model = resolveModel(
       input,
       input.scout.model,
-      agent.model ?? DEFAULT_SCOUT_MODEL,
+      agent.model ?? profileModelAlias(scoutRoute.model),
       input.scout.promptPath,
     );
     record.model = meta.model;
@@ -3177,7 +3239,7 @@ async function runScout(
       state.routePlan,
       name,
       agent.effort,
-      defaultEffortForRole("scout"),
+      scoutRoute.effort,
     );
     meta.effort = scoutEffort.effort;
     // FULL sha256, not the 12 chars the probe prints: the probe's artifact
@@ -3281,13 +3343,11 @@ const CONSOLIDATE_MAX_ATTEMPTS = 2;
 // Last resort in the model chain, the scout's rule: the frontmatter of
 // prompts/consolidate.md names sonnet too, and the Martian 50 measurement
 // ran on sonnet, so a frontmatter edit that drops the line cannot silently
-// move the stage onto an unmeasured model.
-export const DEFAULT_CONSOLIDATE_MODEL = "sonnet";
-
-// The effort the stage was measured at, pinned here rather than taken from the
-// "other" role default: a prompt edit that drops `effort:` must not silently
-// move the stage to an unmeasured level if that role default ever changes.
-const DEFAULT_CONSOLIDATE_EFFORT: Effort = "high";
+// move the stage onto an unmeasured model. Read from the `claude` profile
+// (model-profiles S2).
+export const DEFAULT_CONSOLIDATE_MODEL = profileModelAlias(
+  profileRoute(CLAUDE_PROFILE, "consolidate").model,
+);
 
 // The ceiling's settle grace: the caller's override, else the harness's own
 // bound. One helper so runPipeline and the consolidation budget check cannot
@@ -3442,10 +3502,15 @@ async function runConsolidation(
     const raw = await Bun.file(input.consolidate.promptPath).text();
     const agent = parseAgentSource(raw);
     await writeSystemPrompt(systemPromptPath, agent.body);
+    // The profile's consolidate route is the last seat, model AND effort: the
+    // effort is the level the stage was measured at, not the "other" role
+    // default, so a prompt edit that drops `effort:` cannot move the stage to
+    // an unmeasured level if that role default ever changes.
+    const consolidateRoute = profileRoute(activeProfile(input), "consolidate");
     meta.model = resolveModel(
       input,
       input.consolidate.model,
-      agent.model ?? DEFAULT_CONSOLIDATE_MODEL,
+      agent.model ?? profileModelAlias(consolidateRoute.model),
       input.consolidate.promptPath,
     );
     record.model = meta.model;
@@ -3453,7 +3518,7 @@ async function runConsolidation(
       state.routePlan,
       name,
       agent.effort,
-      DEFAULT_CONSOLIDATE_EFFORT,
+      consolidateRoute.effort,
     );
     meta.effort = consolidateEffort.effort;
     record.prompt_sha256 = new Bun.CryptoHasher("sha256")
@@ -3657,6 +3722,7 @@ async function runMaterialityJudge(
         route !== undefined ||
         resolveMaterialityJudgeRoute(
           input.models ?? input.config?.effective?.models,
+          activeProfile(input),
         ) === undefined
           ? "judge route is not the measured claude-code route"
           : "route plan carries no judge step";
@@ -3732,7 +3798,7 @@ async function runMaterialityJudge(
     state.routePlan,
     MATERIALITY_STEP_KEY,
     undefined,
-    defaultEffortForRole("other"),
+    profileRoute(activeProfile(input), "judge").effort,
   );
   const specs: Array<{ id: string; spec: StepSpec; meta: StepMeta }> = [];
   // The owner's file as posting policy, or undefined when it holds nothing of
@@ -4371,7 +4437,7 @@ function resolveModel(
 // level as intent only, as before.
 //
 // `roleDefault` is a level, not a StepRole, because the consolidation pass has
-// its own default (DEFAULT_CONSOLIDATE_EFFORT) outside the role table.
+// its own default (the profile's consolidate effort) outside the role table.
 function stepEffortFields(
   routePlan: ResolvedRoutePlan | undefined,
   stepKey: string,

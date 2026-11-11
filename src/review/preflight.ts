@@ -18,6 +18,11 @@ import {
   type ModelsConfig,
   parseModelsConfig,
 } from "#model/model-name";
+import {
+  CLAUDE_PROFILE,
+  profileModelAlias,
+  profileRoute,
+} from "#model/profiles";
 import { judgeModelChoice } from "#model/routing";
 import { POST_MIN_SEVERITIES, type PostMinSeverity } from "#pr/post-floor";
 import type { SuspicionPrior } from "#review/prompt-set";
@@ -60,10 +65,12 @@ export const DEFAULT_GC_INTERVAL_MIN = 360;
 
 export const DEFAULT_HEAD_REF = "HEAD";
 
-// Keep this in sync with prompts/summarizer.md. The prompt remains the source
-// of truth for execution when no model override is configured; this value is
-// only the honest model label shown in a preflight plan.
-export const DEFAULT_SUMMARY_MODEL = "haiku";
+// The `claude` profile's summary model as a CLI alias (model-profiles S2),
+// which prompts/summarizer.md's frontmatter also names while it keeps the
+// line. This value is only the honest model label shown in a preflight plan.
+export const DEFAULT_SUMMARY_MODEL = profileModelAlias(
+  profileRoute(CLAUDE_PROFILE, "summary").model,
+);
 
 export interface CliOptions {
   // Relative on purpose: parseArgs is pure, so "resolve against cwd" is the

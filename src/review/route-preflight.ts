@@ -42,6 +42,7 @@ import {
 import type { OpenCodeSdkLike } from "../transports/opencode-client";
 import { DEFAULT_CONSOLIDATE_MODEL, DEFAULT_SCOUT_MODEL } from "./pipeline";
 import {
+  type AgentsDirResolution,
   type CliOptions,
   type ConfigLayer,
   resolveMaterialityGate,
@@ -116,10 +117,26 @@ export function pipelineMaterialityInput(
     : {};
 }
 
+// Whether a run's agents are the engine's bundled prompt set, the one input
+// that decides whether their routing comes from the model profile or from
+// their frontmatter (model-profiles S3). The resolution's SOURCE, not its
+// `kind`: `kind === "bundled"` is the compiled binary only, while dev and npm
+// resolve the same bundled set to a real directory with source "default".
+// Every product path reads it here, for the plan and the pipeline alike, so the
+// two can never disagree about it.
+export function isBundledAgentsDir(
+  agents: Pick<AgentsDirResolution, "source">,
+): boolean {
+  return agents.source === "default";
+}
+
 export async function buildCliRoutePlan(params: {
   spec: ReviewSpec;
   options: CliOptions;
   agentFiles: Map<string, ParsedAgent>;
+  // isBundledAgentsDir of the run's agents. Required so no caller can drop it
+  // and build a plan that disagrees with the steps the pipeline composes.
+  bundledAgents: boolean;
   models?: ModelsConfig;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
@@ -173,6 +190,7 @@ export async function buildCliRoutePlan(params: {
     agents: params.spec.agents,
     cliModel: params.options.model,
     models: params.models,
+    ...(params.bundledAgents ? { bundledAgents: true } : {}),
     frontmatterModel: (agentKey) => params.agentFiles.get(agentKey)?.model,
     ...(summarizerEnabled
       ? {

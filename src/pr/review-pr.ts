@@ -95,6 +95,7 @@ import {
 } from "#review/preflight";
 import { code, estimateCost } from "#review/report";
 import {
+  isBundledAgentsDir,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
   pipelineScoutInput,
@@ -847,6 +848,8 @@ export async function reviewPr(
               gotchasPath,
               agentsDir,
               ...(agents.files ? { agentFiles: agents.files } : {}),
+              // The same answer the plan was built with (pr/plan.ts).
+              ...(isBundledAgentsDir(agents) ? { bundledAgents: true } : {}),
               runDir,
               outPath: path.join(runDir, "findings.json"),
               mcpConfigPath,
