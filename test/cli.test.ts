@@ -222,6 +222,8 @@ describe("CLI summarizer activation", () => {
           "summarizer.md",
         ),
         model: "opus",
+        // Engine-owned: routed by the profile (model-profiles S3-S4).
+        bundled: true,
       },
     });
   });
@@ -243,10 +245,10 @@ describe("CLI scout activation (ROADMAP-DOORDASH M5)", () => {
 
   test("on supplies the bundled prompt, and the model only when asked for", () => {
     expect(pipelineScoutInput({ scout: true })).toEqual({
-      scout: { promptPath: BUNDLED },
+      scout: { promptPath: BUNDLED, bundled: true },
     });
     expect(pipelineScoutInput({ scout: true, scoutModel: "haiku" })).toEqual({
-      scout: { promptPath: BUNDLED, model: "haiku" },
+      scout: { promptPath: BUNDLED, model: "haiku", bundled: true },
     });
   });
 

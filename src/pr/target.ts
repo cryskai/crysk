@@ -47,7 +47,7 @@ import {
 } from "#review/preflight";
 import type { ParsedAgent, PromptSetIdentity } from "#review/prompt-set";
 import type { estimateCost } from "#review/report";
-import { buildCliRoutePlan } from "#review/route-preflight";
+import { buildCliRoutePlan, isBundledAgentsDir } from "#review/route-preflight";
 import {
   type LoadedRunConfig,
   loadRunConfig,
@@ -216,6 +216,7 @@ export async function resolvePrPromptSetAndBudget(params: {
           spec,
           options: params.options,
           agentFiles,
+          bundledAgents: isBundledAgentsDir(agents),
           models: params.config.models,
           summary: params.summary,
         }),

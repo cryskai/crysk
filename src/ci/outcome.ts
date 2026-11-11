@@ -23,7 +23,9 @@
 
 import { commandHint, MARKER_OPEN, matchMarkerPrefix } from "../brand";
 import type {
+  ClaudeFailureCredential,
   FailureCredential,
+  OpenCodeFailureCredential,
   TransportFailureCause,
 } from "../execution/contracts";
 import type { CredentialProjectionFailureClass } from "../security/credential-broker";
@@ -324,7 +326,8 @@ export interface HunterFailureRecord {
   // One short line saying why the hunter failed, in the provider's words (see
   // safeFailureDetail). Present only when the transport knew it.
   detail?: string;
-  // The secret the hunter ran on (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN), so a
+  // The secret the hunter ran on (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN for a
+  // Claude route, CRYSK_OPENCODE_<P>_API_KEY or _OAUTH for an OpenCode one), so a
   // credential or quota failure can name which one to replace or top up.
   credential?: FailureCredential;
 }
@@ -379,21 +382,51 @@ export function safeModelName(value: unknown): string | undefined {
     : undefined;
 }
 
-// Every FailureCredential, as a runtime lookup (tied to the union by `satisfies`, like the
-// cause list above: this file cannot import the runtime list from execution/contracts).
+// Every Claude FailureCredential, as a runtime lookup (tied to the union by `satisfies`,
+// like the cause list above: this file cannot import the runtime list from
+// execution/contracts).
 const FAILURE_CREDENTIAL_LOOKUP = {
   ANTHROPIC_API_KEY: true,
   ANTHROPIC_AUTH_TOKEN: true,
   CLAUDE_CODE_OAUTH_TOKEN: true,
-} satisfies Record<FailureCredential, true>;
+} satisfies Record<ClaudeFailureCredential, true>;
+
+// An OpenCode FailureCredential: a CRYSK_OPENCODE_<P>_API_KEY or _OAUTH secret name. A
+// COPY of OPENCODE_SECRET_NAME_RE in crysk-secrets.ts, which this module cannot import at
+// runtime (the builtins-only guard); test/ci/opencode-failure-credential.test.ts pins the
+// two to the same answers.
+const OPENCODE_FAILURE_CREDENTIAL_RE =
+  /^CRYSK_OPENCODE_([A-Z0-9]+(?:_[A-Z0-9]+)*)_(API_KEY|OAUTH)$/;
+
+function isOpenCodeCredential(
+  value: string,
+): value is OpenCodeFailureCredential {
+  return OPENCODE_FAILURE_CREDENTIAL_RE.test(value);
+}
 
 export function knownFailureCredential(
   value: unknown,
 ): FailureCredential | undefined {
-  return typeof value === "string" &&
-    Object.hasOwn(FAILURE_CREDENTIAL_LOOKUP, value)
-    ? (value as FailureCredential)
-    : undefined;
+  if (typeof value !== "string") return undefined;
+  if (Object.hasOwn(FAILURE_CREDENTIAL_LOOKUP, value)) {
+    return value as ClaudeFailureCredential;
+  }
+  return isOpenCodeCredential(value) ? value : undefined;
+}
+
+// The OpenCode variant of a credential's fix, or undefined for a Claude credential. An
+// `_OAUTH` secret is a subscription record (openai only, crysk-secrets.ts), so its fix is
+// a new `opencode auth login`; an `_API_KEY` secret is replaced with a new key.
+function openCodeCredentialVariant(
+  secret: string | undefined,
+): "opencode_api_key" | "opencode_oauth" | undefined {
+  const kind =
+    secret === undefined
+      ? undefined
+      : OPENCODE_FAILURE_CREDENTIAL_RE.exec(secret)?.[2];
+  if (kind === "API_KEY") return "opencode_api_key";
+  if (kind === "OAUTH") return "opencode_oauth";
+  return undefined;
 }
 
 // A failure detail, as the record may carry it. Unlike a provider or model name it is the
@@ -1166,6 +1199,10 @@ const CLAUDE_SUBSCRIPTION_FIXES = [
   "Log in again with `claude setup-token`, then set `CRYSK_CLAUDE_OAUTH_TOKEN`:",
   "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
 ];
+// An OpenCode route uses an OpenAI subscription record while its _OAUTH secret is passed
+// (chooseOpenCodeSecret, subscription first), so billing per token needs both steps.
+const OPENAI_API_KEY_INSTEAD =
+  "Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):";
 const OPENCODE_SUBSCRIPTION_FIXES = [
   "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then set its record, base64 on one line (on macOS, drop -w0):",
   "$ opencode auth login",
@@ -1487,6 +1524,35 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         annotationFix:
           "log in again with `claude setup-token` and set `{secret}` (`gh secret set {secret}`)",
       },
+      // S7: an OpenCode route names its CRYSK_OPENCODE_* secret, so the fix is that
+      // provider's, never a Claude login.
+      opencode_api_key: {
+        why: "the provider refused the API key in that secret: it is invalid, expired or revoked",
+        fixes: [
+          "Create a new key with the provider and set it:",
+          "$ gh secret set {secret}",
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "create a new key with the provider and run `gh secret set {secret}`",
+      },
+      opencode_oauth: {
+        why: "the ChatGPT login recorded in that secret is expired or revoked",
+        fixes: [
+          "Log in again with `opencode auth login` and choose ChatGPT, then set the provider's record, base64 on one line (on macOS, drop -w0):",
+          "$ opencode auth login",
+          OPENAI_OAUTH_SECRET,
+          OPENAI_API_KEY_INSTEAD,
+          "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "log in again with `opencode auth login`, choose ChatGPT and set {secret} from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} to bill per token",
+      },
       default: {
         why: "it is expired, revoked, or a short-lived /login session token",
         fixes: [
@@ -1779,6 +1845,34 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         annotationFix:
           "re-run after the limit resets, or set CRYSK_CLAUDE_API_KEY and put api_key first in `credentials.claude` to bill per token",
       },
+      // S7: the OpenCode secret every failed hunter ran on. The OpenCode transport reports
+      // no provider words, so these sentences name the secret instead of quoting them.
+      opencode_api_key: {
+        what: "the account behind {secret} reached a rate limit or quota",
+        why: "the provider refuses requests on this key until the limit resets or the account has credit again, so an immediate retry would fail the same way",
+        fixes: [
+          "Wait for the limit to reset, or add credit or raise the quota on the provider account behind the key, then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+          "Or set a key from an account that has quota:",
+          "$ gh secret set {secret}",
+        ],
+        annotationFix:
+          "wait for the limit to reset or add credit to the provider account behind {secret}, or set another key with `gh secret set {secret}`",
+      },
+      opencode_oauth: {
+        what: "the ChatGPT subscription behind {secret} reached its usage limit",
+        why: "the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way",
+        fixes: [
+          "Re-run after the limit resets:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+          OPENAI_API_KEY_INSTEAD,
+          "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+        ],
+        annotationFix:
+          "re-run after the limit resets, or set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} to bill per token",
+      },
     },
   },
   "CRYSK-PROVIDER-UNAVAILABLE": {
@@ -1932,6 +2026,18 @@ export function renderHunterCause(
   // subscription window by waiting for its reset. Without the words the default wording
   // stands.
   if (cause === "quota_exhausted") {
+    // An OpenCode secret names its own fix with or without the provider's words: the
+    // OpenCode transport reports no detail today, and the Claude variants below would
+    // send the user to the Anthropic account.
+    const openCode = openCodeCredentialVariant(shared.credential);
+    if (openCode !== undefined && shared.credential !== undefined) {
+      return renderCode(
+        "CRYSK-PROVIDER-LIMITED",
+        { ...params, secret: secretNameOf(shared.credential, ctx) },
+        ctx,
+        openCode,
+      );
+    }
     if (shared.detail === undefined) {
       return renderCode("CRYSK-PROVIDER-LIMITED", params, ctx);
     }
@@ -1963,8 +2069,9 @@ export function renderHunterCause(
 // variable was filled from the CRYSK_* secret the workflow passes in the
 // crysk-secrets input (S8, U5), so `gh secret set` must name that secret. A local
 // run exports the CLI's variable itself, so it keeps that name.
+// An OpenCode credential already is the CRYSK_* secret (S7), so it is named as it is.
 const CRYSK_SECRET_OF_CREDENTIAL: Readonly<
-  Partial<Record<FailureCredential, string>>
+  Partial<Record<ClaudeFailureCredential, string>>
 > = {
   ANTHROPIC_API_KEY: "CRYSK_CLAUDE_API_KEY",
   CLAUDE_CODE_OAUTH_TOKEN: "CRYSK_CLAUDE_OAUTH_TOKEN",
@@ -1973,7 +2080,7 @@ function secretNameOf(
   credential: FailureCredential,
   ctx: OutcomeContext,
 ): string {
-  if (ctx !== "action") return credential;
+  if (ctx !== "action" || isOpenCodeCredential(credential)) return credential;
   return CRYSK_SECRET_OF_CREDENTIAL[credential] ?? credential;
 }
 
@@ -2058,6 +2165,8 @@ function paramVariant(
     ) {
       return "oauth";
     }
+    const openCode = openCodeCredentialVariant(params.secret);
+    if (openCode !== undefined) return openCode;
   }
   // A caller that names a variant keeps it, so the default wording stays
   // reachable with a detail present.

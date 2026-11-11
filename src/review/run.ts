@@ -450,8 +450,11 @@ export interface ResolvedPromptSet {
 export async function resolvePromptSet(
   options: Pick<CliOptions, "agents">,
   loaded: EffectiveConfig,
+  // The active model profile's prompt set (model-profiles S4). Absent:
+  // `claude`, the default set. Phase 1 has no config key, so only tests pass it.
+  prompts?: Parameters<typeof resolveAgentsDir>[3],
 ): Promise<ResolvedPromptSet> {
-  const agents = resolveAgentsDir(options, loaded);
+  const agents = resolveAgentsDir(options, loaded, undefined, prompts);
   const spec = validateReviewSpec(localReviewSpec());
   spec.agents.forEach((agent, i) => {
     assertBasenameOnly(agent.file, i);
@@ -487,8 +490,10 @@ export async function resolvePromptSet(
     spec.agents.map((a) => agentFilePath(agents, a.file)),
     // A bundled set has no directory basename to be named after. "default"
     // is what dev and npm derive from prompts/default, so the same prompt
-    // set names itself identically in all three runtimes.
-    agents.kind === "bundled" ? "default" : undefined,
+    // set names itself identically in all three runtimes. A profile's prompt
+    // set merged over it (model-profiles S4) is named after that set, the way
+    // a person's set is named after its directory.
+    agents.promptSet ?? (agents.kind === "bundled" ? "default" : undefined),
   );
   return { agents, spec, agentFiles, promptSet };
 }
@@ -521,6 +526,8 @@ export async function resolvePipelineRoute(params: {
   spec: ReviewSpec;
   options: CliOptions;
   agentFiles: Map<string, ParsedAgent>;
+  // isBundledAgentsDir (#review/route-preflight) of the run's agents.
+  bundledAgents: boolean;
   models: ModelsConfig | undefined;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
@@ -545,6 +552,7 @@ export async function resolvePipelineRoute(params: {
         spec: params.spec,
         options: params.options,
         agentFiles: params.agentFiles,
+        bundledAgents: params.bundledAgents,
         models: params.models,
         summary: params.summary,
         summarizerEnabled: params.summarizerEnabled,
