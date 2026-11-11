@@ -1788,3 +1788,68 @@ describe("buildTraceBundle: an OpenCode attempt's turns", () => {
     expect(lastTurn?.status.code).toBe(0);
   });
 });
+
+// PR #512 R001: the engine races its evidence write against a 100 ms timer and
+// swallows its failure, so a settled attempt can have a request plan and no
+// evidence. Only an attempt nothing else shows settled is `unsettled`.
+describe("buildTraceBundle: an attempt with a request plan and no evidence", () => {
+  const started = { atMs: T0 + 2_000, model: "m", provider: "p" };
+  const build = (
+    pipelineStatus: string | undefined,
+    attempts: TraceRunInput["steps"][number]["attempts"],
+  ) =>
+    buildTraceBundle(
+      {
+        outcome: "reviewed",
+        code: null,
+        pipeline:
+          pipelineStatus === undefined
+            ? undefined
+            : { steps: [{ name: "hunter-logic", status: pipelineStatus }] },
+        steps: [{ name: "hunter-logic", attempts }],
+        startedAtMs: T0,
+        endedAtMs: T0 + 20_000,
+      },
+      false,
+    );
+  const chats = (bundle: TraceBundle) =>
+    spans(bundle).filter((span) => span.name === "chat m");
+
+  test("with nothing else, it never settled: ERROR, until the trace step", () => {
+    const [chat] = chats(build(undefined, [{ attempt: 1, started }]));
+    expect(attr(chat, "crysk.attempt.status")).toBe("unsettled");
+    expect(chat?.status.code).toBe(2);
+    expect(chat?.endTimeUnixNano).toBe(nanos(20));
+  });
+
+  test("a step pipeline.json settled is not unsettled", () => {
+    const [chat] = chats(build("ok", [{ attempt: 1, started }]));
+    expect(attr(chat, "crysk.attempt.status")).toBeUndefined();
+    expect(chat?.status.code).toBe(0);
+    expect(chat?.endTimeUnixNano).toBe(nanos(2));
+  });
+
+  test("an attempt a later attempt followed is not unsettled", () => {
+    const [first] = chats(
+      build(undefined, [
+        { attempt: 1, started },
+        { attempt: 2, started: { ...started, atMs: T0 + 5_000 } },
+      ]),
+    );
+    expect(attr(first, "crysk.attempt.status")).toBeUndefined();
+    expect(first?.status.code).toBe(0);
+  });
+
+  test("an attempt that left a transcript is not unsettled", () => {
+    const [chat] = chats(
+      build(undefined, [
+        {
+          attempt: 1,
+          started,
+          transcriptMetadata: { input: [], output: [], tools: [] },
+        },
+      ]),
+    );
+    expect(attr(chat, "crysk.attempt.status")).toBeUndefined();
+  });
+});

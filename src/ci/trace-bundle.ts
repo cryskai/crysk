@@ -420,18 +420,26 @@ interface AttemptFacts {
   end?: number;
 }
 
-// An attempt with a frozen plan and no evidence never settled: the job ended
-// while it ran.
+// An attempt with a frozen plan that nothing shows settled: the job ended
+// while it ran. Missing evidence alone is not enough: the engine races its
+// evidence write against a 100 ms timer and swallows a failure
+// (src/execution/harness.ts runAdmittedAttempt), so a settled attempt can
+// have none. `settled` is everything else that only settlement writes.
 const UNSETTLED = "unsettled";
 
-function attemptFacts(attempt: TraceAttemptInput): AttemptFacts {
+function attemptFacts(
+  attempt: TraceAttemptInput,
+  settled: boolean,
+): AttemptFacts {
   const facts = settledFacts(attempt.evidence);
   const started = attempt.started;
   if (started === undefined) return facts;
   facts.model ??= started.model;
   facts.provider ??= started.provider;
   facts.start ??= started.atMs;
-  if (attempt.evidence === undefined) facts.completion = UNSETTLED;
+  if (attempt.evidence === undefined && !settled) {
+    facts.completion = UNSETTLED;
+  }
   return facts;
 }
 
@@ -679,7 +687,16 @@ function build(
     const attempts = [...step.attempts].sort((a, b) => a.attempt - b.attempt);
     const finalAttempt = attempts.at(-1)?.attempt;
     for (const attempt of attempts) {
-      const facts = attemptFacts(attempt);
+      // A step pipeline.json gave a status, a later attempt, or a transcript
+      // or capture (copied only at settlement) each prove this one settled.
+      const facts = attemptFacts(
+        attempt,
+        str(meta?.status) !== undefined ||
+          attempt.attempt !== finalAttempt ||
+          attempt.sessionJsonl !== undefined ||
+          attempt.openCodeCapture !== undefined ||
+          attempt.transcriptMetadata !== undefined,
+      );
       const known = content ? undefined : views.get(attempt);
       const parsed: ParsedAttempt =
         known === undefined ? parseAttempt(attempt) : { conversation: known };
