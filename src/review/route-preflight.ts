@@ -3,6 +3,7 @@
 // routes across Claude and OpenCode runners before confirming or spending tokens.
 
 import type { ModelsConfig } from "#model/model-name";
+import { CLAUDE_PROFILE, type ModelProfile } from "#model/profiles";
 import {
   capabilityGateDecision,
   produceClaudeCapabilityReport,
@@ -13,7 +14,7 @@ import {
   planRoutes,
   type ResolvedRoutePlan,
 } from "#model/routing";
-import { resolveEngineAssets } from "../assets";
+import { type EngineAssets, resolveEngineAssets } from "../assets";
 import { CliError } from "../errors";
 import type { RunnerBackend } from "../execution/contracts";
 import {
@@ -40,7 +41,6 @@ import {
   type TransportRegistry,
 } from "../transport-registry";
 import type { OpenCodeSdkLike } from "../transports/opencode-client";
-import { DEFAULT_CONSOLIDATE_MODEL, DEFAULT_SCOUT_MODEL } from "./pipeline";
 import {
   type AgentsDirResolution,
   type CliOptions,
@@ -48,19 +48,67 @@ import {
   resolveMaterialityGate,
   type SummarySettings,
 } from "./preflight";
-import { type ParsedAgent, parseAgentFile } from "./prompt-set";
+import {
+  type EnginePromptFile,
+  type ParsedAgent,
+  type ProfilePromptSets,
+  profilePromptSet,
+} from "./prompt-set";
 import type { ReviewSpec } from "./spec";
 
+// Where the engine-owned root prompts are looked up (model-profiles S4). All
+// optional: production passes nothing, which is the `claude` profile over the
+// runtime's own assets. `promptSets` is injected by tests only, since no
+// profile ships a set yet.
+export interface EnginePromptOptions {
+  profile?: ModelProfile;
+  promptSets?: ProfilePromptSets;
+  assets?: EngineAssets;
+}
+
+// THE read site for an engine-owned root prompt: the active profile's set,
+// falling back to the default file. A user `agents_dir` never reaches here:
+// it covers the five agent files only, as it always did.
+export function enginePromptPath(
+  file: EnginePromptFile,
+  options: EnginePromptOptions = {},
+): string {
+  const assets = options.assets ?? resolveEngineAssets();
+  const override = profilePromptSet(
+    options.profile ?? CLAUDE_PROFILE,
+    Object.keys(assets.bundledAgentFiles),
+    options.promptSets,
+  ).engine[file];
+  if (override !== undefined) return override;
+  switch (file) {
+    case "consolidate.md":
+      return assets.consolidatePromptPath;
+    case "scout.md":
+      return assets.scoutPromptPath;
+    case "summarizer.md":
+      return assets.summarizerPromptPath;
+    case "materiality.md":
+      return assets.materialityPromptPath;
+  }
+}
+
+// Every input below marks its prompt `bundled`: it is the engine's own, so its
+// model and effort come from the active profile and never from its
+// frontmatter (S3), in the plan and in the step alike. The materiality judge
+// needs no mark: its model is pinned (judgeModelChoice) and its frontmatter
+// was never read for routing.
 export function pipelineSummarizerInput(
   summary: SummarySettings,
+  prompts: EnginePromptOptions = {},
 ):
-  | { summarizer: { promptPath: string; model?: string } }
+  | { summarizer: { promptPath: string; model?: string; bundled: true } }
   | Record<string, never> {
   return summary.enabled
     ? {
         summarizer: {
-          promptPath: resolveEngineAssets().summarizerPromptPath,
+          promptPath: enginePromptPath("summarizer.md", prompts),
           ...(summary.model === undefined ? {} : { model: summary.model }),
+          bundled: true,
         },
       }
     : {};
@@ -74,14 +122,18 @@ export function pipelineSummarizerInput(
 // than argued. `prompts/` is the door the summarizer already walked through.
 export function pipelineScoutInput(
   options: Pick<CliOptions, "scout" | "scoutModel">,
-): { scout: { promptPath: string; model?: string } } | Record<string, never> {
+  prompts: EnginePromptOptions = {},
+):
+  | { scout: { promptPath: string; model?: string; bundled: true } }
+  | Record<string, never> {
   return options.scout
     ? {
         scout: {
-          promptPath: resolveEngineAssets().scoutPromptPath,
+          promptPath: enginePromptPath("scout.md", prompts),
           ...(options.scoutModel === undefined
             ? {}
             : { model: options.scoutModel }),
+          bundled: true,
         },
       }
     : {};
@@ -92,11 +144,14 @@ export function pipelineScoutInput(
 // gain on the Martian 50 (lab bench/METRICS.md 2026-10-27), and a failed pass
 // falls back to the unconsolidated findings. The lab's direct `runPipeline`
 // callers do not go through here, so their pipeline is unchanged.
-export function pipelineConsolidateInput(): {
-  consolidate: { promptPath: string; model?: string };
+export function pipelineConsolidateInput(prompts: EnginePromptOptions = {}): {
+  consolidate: { promptPath: string; model?: string; bundled: true };
 } {
   return {
-    consolidate: { promptPath: resolveEngineAssets().consolidatePromptPath },
+    consolidate: {
+      promptPath: enginePromptPath("consolidate.md", prompts),
+      bundled: true,
+    },
   };
 }
 
@@ -107,11 +162,12 @@ export function pipelineConsolidateInput(): {
 // travels here.
 export function pipelineMaterialityInput(
   config: Pick<ConfigLayer, "materiality_gate">,
+  prompts: EnginePromptOptions = {},
 ): { materiality: { promptPath: string } } | Record<string, never> {
   return resolveMaterialityGate(config)
     ? {
         materiality: {
-          promptPath: resolveEngineAssets().materialityPromptPath,
+          promptPath: enginePromptPath("materiality.md", prompts),
         },
       }
     : {};
@@ -148,75 +204,30 @@ export async function buildCliRoutePlan(params: {
   // Defaults OFF, unlike consolidation: the gate is opt-in, and a judge key in
   // the plan changes its fingerprint, so absent must mean today's plan.
   materialityEnabled?: boolean;
+  // The active model profile (S1). Absent: `claude`. Phase 1 has no config
+  // key for it; tests pass a fixture profile.
+  profile?: ModelProfile;
 }): Promise<ResolvedRoutePlan> {
   const summarizerEnabled = params.summarizerEnabled ?? params.summary.enabled;
   const scoutEnabled = params.scoutEnabled ?? params.options.scout;
   const consolidateEnabled = params.consolidateEnabled ?? true;
-  let summarizerFrontmatter: string | undefined;
-  if (summarizerEnabled) {
-    try {
-      const parsed = await parseAgentFile(
-        resolveEngineAssets().summarizerPromptPath,
-      );
-      summarizerFrontmatter = parsed.model;
-    } catch {
-      // Engine-owned prompt may be unreadable in tests; route resolution still
-      // falls through CLI > spec > frontmatter precedence without it.
-    }
-  }
-  let scoutFrontmatter: string | undefined;
-  if (scoutEnabled) {
-    try {
-      const parsed = await parseAgentFile(
-        resolveEngineAssets().scoutPromptPath,
-      );
-      scoutFrontmatter = parsed.model;
-    } catch {
-      // Same contract as the summarizer branch above.
-    }
-  }
-  let consolidateFrontmatter: string | undefined;
-  if (consolidateEnabled) {
-    try {
-      const parsed = await parseAgentFile(
-        resolveEngineAssets().consolidatePromptPath,
-      );
-      consolidateFrontmatter = parsed.model;
-    } catch {
-      // Same contract as the summarizer branch above.
-    }
-  }
+  // The root prompts are the engine's own (pipeline*Input marks them), so
+  // their frontmatter is not read: the profile holds their seat (S3), the
+  // same seat the pipeline gives each step, and the two cannot disagree.
   return buildResolvedRoutePlan({
     agents: params.spec.agents,
     cliModel: params.options.model,
     models: params.models,
+    profile: params.profile ?? CLAUDE_PROFILE,
     ...(params.bundledAgents ? { bundledAgents: true } : {}),
     frontmatterModel: (agentKey) => params.agentFiles.get(agentKey)?.model,
     ...(summarizerEnabled
-      ? {
-          summarizer: {
-            model: params.summary.model,
-            frontmatterModel: summarizerFrontmatter,
-          },
-        }
+      ? { summarizer: { model: params.summary.model, bundled: true } }
       : {}),
     ...(scoutEnabled
-      ? {
-          scout: {
-            model: params.options.scoutModel,
-            frontmatterModel: scoutFrontmatter,
-            defaultModel: DEFAULT_SCOUT_MODEL,
-          },
-        }
+      ? { scout: { model: params.options.scoutModel, bundled: true } }
       : {}),
-    ...(consolidateEnabled
-      ? {
-          consolidate: {
-            frontmatterModel: consolidateFrontmatter,
-            defaultModel: DEFAULT_CONSOLIDATE_MODEL,
-          },
-        }
-      : {}),
+    ...(consolidateEnabled ? { consolidate: { bundled: true } } : {}),
     ...(params.materialityEnabled === true
       ? { materiality: true as const }
       : {}),

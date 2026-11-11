@@ -42,9 +42,15 @@ export interface ModelProfile {
   readonly roles: Readonly<Partial<Record<ProfileRole, ProfileRoute>>>;
   // Per-hunter overrides, keyed by specialty (`logic`, `parity`, ...).
   readonly hunters?: Readonly<Record<string, ProfileRoute>>;
-  // Reserved for later slices, unread in phase 1: the profile's prompt set
-  // (S4) and what was measured on its models (S5).
+  // The profile's prompt set (S4): the name of a set under
+  // `prompts/profiles/<name>/` that holds only the files that differ from the
+  // default set, every other prompt falling back to the default file by file
+  // (profilePromptSet, src/review/prompt-set.ts). Absent: the default set, as
+  // `claude` uses it. A user `agents_dir` still outranks it for the five
+  // agent files.
   readonly promptSet?: string;
+  // Reserved for slice 3, unread in phase 1: what was measured on the
+  // profile's models (S5).
   readonly measured?: Readonly<Record<string, unknown>>;
 }
 

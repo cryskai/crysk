@@ -53,6 +53,17 @@ export const BUNDLED_AGENT_FILES: Record<string, string> = {
   "review-refuter.md": refuterPrompt,
 };
 
+// Model-profile prompt sets (odd/tasks/model-profiles.md S4): set name ->
+// logical filename -> path, read from `prompts/profiles/<set>/<file>`. A set
+// holds only the files that differ from the default set; every other file
+// falls back to it (profilePromptSet, src/review/prompt-set.ts). Bun embeds
+// only what is imported, so each override needs its own `with { type: "file" }`
+// import above and an entry here; test/assets.test.ts checks this map against
+// the disk. No profile ships a set yet.
+export const PROFILE_PROMPT_FILES: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {};
+
 export const CONSOLIDATE_PROMPT_PATH = consolidatePrompt;
 export const MATERIALITY_PROMPT_PATH = materialityPrompt;
 export const SCOUT_PROMPT_PATH = scoutPrompt;

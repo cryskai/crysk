@@ -417,18 +417,30 @@ export interface BuildRoutePlanInput {
   // so a user prompt with no `model:` still fails as it did before profiles.
   readonly bundledAgents?: boolean;
   readonly frontmatterModel?: (agentKey: string) => string | undefined;
-  readonly summarizer?: { model?: string; frontmatterModel?: string };
+  // `bundled` marks an engine-owned root prompt resolved through the active
+  // profile's prompt set (model-profiles S4): its frontmatter is then never
+  // read for routing and the profile holds the seat, the bundled agents' rule.
+  // Unmarked (the lab's direct callers, older harnesses): the frontmatter wins
+  // over the profile as before, and the summarizer has no profile seat, so a
+  // summarizer prompt with no `model:` still fails the plan.
+  readonly summarizer?: {
+    model?: string;
+    frontmatterModel?: string;
+    bundled?: boolean;
+  };
   // `defaultModel` is the legacy spelling of the profile seat, still passed by
   // callers that predate profiles; it outranks the profile when given.
   readonly scout?: {
     model?: string;
     frontmatterModel?: string;
     defaultModel?: string;
+    bundled?: boolean;
   };
   readonly consolidate?: {
     model?: string;
     frontmatterModel?: string;
     defaultModel?: string;
+    bundled?: boolean;
   };
   // The materiality judge (odd/tasks/materiality-gate.md S14). Present only
   // when the gate is enabled, so a run with the gate off keeps its plan's step
@@ -536,9 +548,11 @@ export function buildResolvedRoutePlan(
         modelRole: "summary",
         cliModel: input.cliModel,
         specModel: input.summarizer.model,
-        frontmatterModel: input.summarizer.frontmatterModel,
-        // No profile seat yet: the summarizer never had a default, so a prompt
-        // without `model:` must keep failing the plan as before (phase 1).
+        ...(input.summarizer.bundled === true
+          ? { profileModel: profileModel("summary") }
+          : // No profile seat for an unmarked prompt: the summarizer never had
+            // a default, so one without `model:` keeps failing the plan.
+            { frontmatterModel: input.summarizer.frontmatterModel }),
         models: input.models,
       }),
     );
@@ -551,8 +565,12 @@ export function buildResolvedRoutePlan(
         modelRole: "scout",
         // `--model` outranks `--scout-model`, as the scout step records it.
         cliModel: input.cliModel ?? input.scout.model,
-        frontmatterModel:
-          input.scout.frontmatterModel ?? input.scout.defaultModel,
+        ...(input.scout.bundled === true
+          ? {}
+          : {
+              frontmatterModel:
+                input.scout.frontmatterModel ?? input.scout.defaultModel,
+            }),
         profileModel: profileModel("scout"),
         models: input.models,
       }),
@@ -565,8 +583,13 @@ export function buildResolvedRoutePlan(
         role: "other",
         modelRole: "consolidate",
         cliModel: input.consolidate.model ?? input.cliModel,
-        frontmatterModel:
-          input.consolidate.frontmatterModel ?? input.consolidate.defaultModel,
+        ...(input.consolidate.bundled === true
+          ? {}
+          : {
+              frontmatterModel:
+                input.consolidate.frontmatterModel ??
+                input.consolidate.defaultModel,
+            }),
         profileModel: profileModel("consolidate"),
         models: input.models,
       }),

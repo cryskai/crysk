@@ -3,6 +3,8 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { engineIdentity } from "#git/identity";
 import { localReviewSpec } from "#review/preflight";
+import { profilePromptSet } from "#review/prompt-set";
+import { PROFILE_PROMPT_FILES } from "../src/asset-manifest";
 import {
   deriveEngineIdentity,
   isNpxCacheInvocation,
@@ -101,6 +103,38 @@ describe("resolveEngineAssets", () => {
     expect(missingInManifest).toEqual([]);
     expect(missingOnDisk).toEqual([]);
     expect(manifestEntries.sort()).toEqual(onDiskEntries.sort());
+  });
+
+  // model-profiles S4: a profile's prompt set reaches the compiled binary only
+  // through an explicit manifest import, so every file under prompts/profiles
+  // must be in PROFILE_PROMPT_FILES, at its own path, and nothing else.
+  test("manifest <-> prompts/profiles/ parity, every override overriding a default file", () => {
+    const assets = resolveEngineAssets();
+    const profilesDir = path.resolve(import.meta.dir, "../prompts/profiles");
+    const onDisk = existsSync(profilesDir)
+      ? readdirSync(profilesDir, { recursive: true, encoding: "utf8" })
+          .filter((entry) => entry.endsWith(".md"))
+          .map((entry) => path.join(profilesDir, entry))
+          .sort()
+      : [];
+    const inManifest = Object.entries(PROFILE_PROMPT_FILES)
+      .flatMap(([set, files]) =>
+        Object.entries(files).map(([file, filePath]) => {
+          // Dev mode: a manifest import is the file's own path on disk.
+          expect(filePath).toBe(path.join(profilesDir, set, file));
+          return filePath;
+        }),
+      )
+      .sort();
+    expect(inManifest).toEqual(onDisk);
+    for (const set of Object.keys(PROFILE_PROMPT_FILES)) {
+      expect(() =>
+        profilePromptSet(
+          { id: set, promptSet: set },
+          Object.keys(assets.bundledAgentFiles),
+        ),
+      ).not.toThrow();
+    }
   });
 
   test("manifest-loaded set satisfies localReviewSpec() (all six logical names, nothing extra)", () => {

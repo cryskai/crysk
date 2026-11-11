@@ -73,9 +73,11 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
       scout: ["haiku", "haiku", "low", "haiku", "low"],
       // The judge reads the profile, still held to the measured list.
       "materiality-F001": ["opus", "opus", "medium", "opus", "medium"],
-      // The engine-owned root prompts keep their frontmatter in phase 1
-      // (consolidate.md: sonnet/high, summarizer.md: haiku), and the role
-      // the fixture leaves out falls back to `claude` (summary effort high).
+      // The root prompts reach this harness unmarked, as the lab passes
+      // them, so their frontmatter keeps its seats (consolidate.md:
+      // sonnet/high, summarizer.md: haiku), and the role the fixture leaves
+      // out falls back to `claude` (summary effort high). Marked as the
+      // engine's own, the profile decides: profile-prompt-sets.test.ts.
       consolidate: ["sonnet", "sonnet", "high", "sonnet", "high"],
       summarizer: ["haiku", "haiku", "high", "haiku", "high"],
     });

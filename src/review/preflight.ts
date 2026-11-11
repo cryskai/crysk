@@ -20,12 +20,17 @@ import {
 } from "#model/model-name";
 import {
   CLAUDE_PROFILE,
+  type ModelProfile,
   profileModelAlias,
   profileRoute,
 } from "#model/profiles";
 import { judgeModelChoice } from "#model/routing";
 import { POST_MIN_SEVERITIES, type PostMinSeverity } from "#pr/post-floor";
-import type { SuspicionPrior } from "#review/prompt-set";
+import {
+  type ProfilePromptSets,
+  profilePromptSet,
+  type SuspicionPrior,
+} from "#review/prompt-set";
 import { type AgentSpec, isSafeSlug, type ReviewSpec } from "#review/spec";
 import {
   ADJUDICATED_TAGS,
@@ -1616,6 +1621,11 @@ export interface AgentsDirResolution {
   kind: "dir" | "bundled";
   // Logical filename -> readable path. Present iff `kind === "bundled"`.
   files?: Record<string, string>;
+  // The model profile's prompt set merged over the default one
+  // (model-profiles S4), present only when that set overrides an agent file.
+  // It names the merged set in provenance, as a directory basename names a
+  // user set. Absent: the default set itself, exactly as before profiles.
+  promptSet?: string;
 }
 
 // The label the shipped binary shows wherever a prompt-set path would go.
@@ -1693,6 +1703,11 @@ export function resolveAgentsDirSetting(input: {
   // inside the default branch so an explicit flag, config or env never pays
   // for asset detection.
   assets?: EngineAssets | undefined;
+  // The active model profile (model-profiles S4). Absent: `claude`, whose
+  // default set is the bundled one. `promptSets` is injected by tests only:
+  // no profile ships a set yet (asset-manifest.ts PROFILE_PROMPT_FILES).
+  profile?: ModelProfile | undefined;
+  promptSets?: ProfilePromptSets | undefined;
 }): AgentsDirResolution {
   if (input.flag) {
     return {
@@ -1716,6 +1731,28 @@ export function resolveAgentsDirSetting(input: {
     };
   }
   const assets = input.assets ?? resolveEngineAssets();
+  // The active profile's prompt set, file by file over the default set (S4).
+  // Only here, in the default branch: a person's `--agents`, `agents_dir` or
+  // env set above outranks the profile and is never mixed with it. With no
+  // agent override (`claude`, or a set that only changes root prompts) the
+  // resolution below is today's, byte for byte.
+  const overrides = profilePromptSet(
+    input.profile ?? CLAUDE_PROFILE,
+    Object.keys(assets.bundledAgentFiles),
+    input.promptSets,
+  ).agents;
+  const setName = (input.profile ?? CLAUDE_PROFILE).promptSet;
+  if (Object.keys(overrides).length > 0 && setName !== undefined) {
+    // A MAP, like the compiled binary's: the files now live in two places, so
+    // there is no single directory to join a basename onto.
+    return {
+      dir: `${BUNDLED_AGENTS_DIR_LABEL}, prompt set ${setName}`,
+      source: "default",
+      kind: "bundled",
+      files: { ...assets.bundledAgentFiles, ...overrides },
+      promptSet: setName,
+    };
+  }
   // The compiled binary's default set is a MAP, never a directory: its
   // `defaultAgentsDir` is `path.dirname(<embedded path>)`, i.e. "/$bunfs/root",
   // which no `existsSync` accepts and no `Bun.Glob` can scan. Handing that
@@ -2028,6 +2065,12 @@ export function resolveAgentsDir(
   // detectAssetMode() reads `import.meta.dir` and always reports "dev" under
   // `bun test`.
   assets?: EngineAssets,
+  // The active model profile and, in tests only, its prompt sets
+  // (model-profiles S4). Absent: `claude`, today's resolution.
+  prompts: Pick<
+    Parameters<typeof resolveAgentsDirSetting>[0],
+    "profile" | "promptSets"
+  > = {},
 ): AgentsDirResolution {
   const seat = agentsDirSeat({
     config: loaded.effective,
@@ -2041,6 +2084,7 @@ export function resolveAgentsDir(
     env: readBrandEnv(process.env, "AGENTS_DIR")?.value,
     cwd: process.cwd(),
     ...(assets === undefined ? {} : { assets }),
+    ...prompts,
   });
   // Only a DIRECTORY can be checked for existence, and this gate running
   // unconditionally is the whole shipped defect: the compiled binary's bundled

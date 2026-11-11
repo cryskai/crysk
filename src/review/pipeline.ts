@@ -288,9 +288,15 @@ export interface PipelineInput {
   // beside `pipelineTimeoutMs` and is injectable for the same reason: without
   // it every ceiling test would sleep 8.5 real seconds.
   ceilingGraceMs?: number;
+  // `bundled` on the summarizer, scout and consolidate inputs (set by the
+  // product paths' pipeline*Input, #review/route-preflight) marks the engine's
+  // own prompt, resolved through the active profile's prompt set: its model
+  // and effort then come from the profile, never from its frontmatter
+  // (model-profiles S3-S4). Unmarked, as the lab passes them, the frontmatter
+  // keeps its seats, unchanged.
   // Optional engine-owned summary step. It is deliberately outside ReviewSpec:
   // this prompt is bundled with pr-hero, not part of the benchmarked agent set.
-  summarizer?: { promptPath: string; model?: string };
+  summarizer?: { promptPath: string; model?: string; bundled?: boolean };
   // Optional engine-owned scout step (ROADMAP-DOORDASH M5,
   // `docs/scout-design.md` §3.3). Outside ReviewSpec for the summarizer's
   // reason and one more of its own: `ReviewSpec.role` is
@@ -298,7 +304,7 @@ export interface PipelineInput {
   // entry without widening that union — and widening it would re-fingerprint
   // the prompt set, which is exactly what M6's one-variable property forbids.
   // ABSENT means the control pipeline, byte for byte.
-  scout?: { promptPath: string; model?: string };
+  scout?: { promptPath: string; model?: string; bundled?: boolean };
   // Optional engine-owned consolidation pass over the POSTED findings, after
   // the refuter (prompts/consolidate.md, measured on the Martian 50: F1
   // 39.7 -> 42.3, lab bench/METRICS.md 2026-10-27). Opt-in on the engine input
@@ -307,7 +313,7 @@ export interface PipelineInput {
   // as before; pipeline.json still carries a `consolidation` record
   // (`enabled: false`, `status: "skipped"`), the scout's rule, so the two
   // arms are told apart from the artifact alone.
-  consolidate?: { promptPath: string; model?: string };
+  consolidate?: { promptPath: string; model?: string; bundled?: boolean };
   // Optional engine-owned materiality gate (odd/tasks/materiality-gate.md):
   // an isolated judge reads every finding that would post as blocking and
   // demotes the immaterial ones to advisory. ABSENT means no judge step and
@@ -1108,6 +1114,34 @@ function agentRoleEffort(input: PipelineInput, agent: AgentSpec): Effort {
     : profileRoute(activeProfile(input), role).effort;
 }
 
+// The model and effort an engine-owned root prompt contributes, the seats
+// agentPromptChoice fills for an agent. A prompt marked `bundled` (the
+// engine's own, resolved through the profile's set) contributes the active
+// profile's route for its role, never its frontmatter (S3), so the step
+// agrees with the plan (buildResolvedRoutePlan's `bundled`). Unmarked, its
+// frontmatter holds both seats; `profileFallback` says whether the profile
+// still backs an absent `model:` there (scout, consolidate) or not
+// (summarizer, which has always failed without one).
+function enginePromptChoice(
+  input: PipelineInput,
+  prompt: { bundled?: boolean },
+  role: "summary" | "scout" | "consolidate",
+  parsed: ParsedAgent,
+  profileFallback: boolean,
+): { model?: string; effort?: Effort } {
+  const route = profileRoute(activeProfile(input), role);
+  if (prompt.bundled === true) {
+    return { model: profileModelAlias(route.model), effort: route.effort };
+  }
+  const model =
+    parsed.model ??
+    (profileFallback ? profileModelAlias(route.model) : undefined);
+  return {
+    ...(model === undefined ? {} : { model }),
+    ...(parsed.effort === undefined ? {} : { effort: parsed.effort }),
+  };
+}
+
 // A conditional hunter's trigger, resolved against the ReviewSpec: the
 // "input" sentinel reads PipelineInput.parityTriggerPaths (the trigger PATHS
 // stay lab config; the spec only wires "this hunter is conditional").
@@ -1669,7 +1703,7 @@ async function execute(
   let routePlan = input.routePlan;
   if (!routePlan) {
     let summarizerFrontmatter: string | undefined;
-    if (input.summarizer) {
+    if (input.summarizer && input.summarizer.bundled !== true) {
       try {
         const parsed = await parseAgentFile(input.summarizer.promptPath);
         summarizerFrontmatter = parsed.model;
@@ -1678,7 +1712,7 @@ async function execute(
       }
     }
     let scoutFrontmatter: string | undefined;
-    if (input.scout) {
+    if (input.scout && input.scout.bundled !== true) {
       try {
         const parsed = await parseAgentFile(input.scout.promptPath);
         scoutFrontmatter = parsed.model;
@@ -1687,7 +1721,7 @@ async function execute(
       }
     }
     let consolidateFrontmatter: string | undefined;
-    if (input.consolidate) {
+    if (input.consolidate && input.consolidate.bundled !== true) {
       try {
         const parsed = await parseAgentFile(input.consolidate.promptPath);
         consolidateFrontmatter = parsed.model;
@@ -1709,6 +1743,7 @@ async function execute(
               summarizer: {
                 model: input.summarizer.model,
                 frontmatterModel: summarizerFrontmatter,
+                bundled: input.summarizer.bundled === true,
               },
             }),
         ...(input.scout === undefined
@@ -1717,6 +1752,7 @@ async function execute(
               scout: {
                 model: input.scout.model,
                 frontmatterModel: scoutFrontmatter,
+                bundled: input.scout.bundled === true,
               },
             }),
         ...(input.consolidate === undefined
@@ -1725,6 +1761,7 @@ async function execute(
               consolidate: {
                 model: input.consolidate.model,
                 frontmatterModel: consolidateFrontmatter,
+                bundled: input.consolidate.bundled === true,
               },
             }),
         ...(input.materiality === undefined
@@ -1980,16 +2017,23 @@ async function execute(
     try {
       const agent = await parseAgentFile(input.summarizer.promptPath);
       await writeSystemPrompt(systemPromptPath, agent.body);
+      const own = enginePromptChoice(
+        input,
+        input.summarizer,
+        "summary",
+        agent,
+        false,
+      );
       summarizerMeta.model = resolveModel(
         input,
         input.summarizer.model,
-        agent.model,
+        own.model,
         input.summarizer.promptPath,
       );
       const summarizerEffort = stepEffortFields(
         routePlan,
         name,
-        agent.effort,
+        own.effort,
         profileRoute(activeProfile(input), "summary").effort,
       );
       summarizerMeta.effort = summarizerEffort.effort;
@@ -3226,19 +3270,21 @@ async function runScout(
     await writeSystemPrompt(systemPromptPath, agent.body);
     // Precedence, the JD rule extended one seat: --model > --scout-model >
     // the prompt's frontmatter > the active profile's scout. The profile sits
-    // LAST so a frontmatter model added later still outranks it.
+    // LAST so a frontmatter model added later still outranks it, unless the
+    // prompt is the engine's own (`bundled`), whose seat is the profile's.
     const scoutRoute = profileRoute(activeProfile(input), "scout");
+    const own = enginePromptChoice(input, input.scout, "scout", agent, true);
     meta.model = resolveModel(
       input,
       input.scout.model,
-      agent.model ?? profileModelAlias(scoutRoute.model),
+      own.model,
       input.scout.promptPath,
     );
     record.model = meta.model;
     const scoutEffort = stepEffortFields(
       state.routePlan,
       name,
-      agent.effort,
+      own.effort,
       scoutRoute.effort,
     );
     meta.effort = scoutEffort.effort;
@@ -3339,15 +3385,6 @@ async function runScout(
 // is a lost precision gain on findings the run already paid for.
 const CONSOLIDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const CONSOLIDATE_MAX_ATTEMPTS = 2;
-
-// Last resort in the model chain, the scout's rule: the frontmatter of
-// prompts/consolidate.md names sonnet too, and the Martian 50 measurement
-// ran on sonnet, so a frontmatter edit that drops the line cannot silently
-// move the stage onto an unmeasured model. Read from the `claude` profile
-// (model-profiles S2).
-export const DEFAULT_CONSOLIDATE_MODEL = profileModelAlias(
-  profileRoute(CLAUDE_PROFILE, "consolidate").model,
-);
 
 // The ceiling's settle grace: the caller's override, else the harness's own
 // bound. One helper so runPipeline and the consolidation budget check cannot
@@ -3506,18 +3543,26 @@ async function runConsolidation(
     // effort is the level the stage was measured at, not the "other" role
     // default, so a prompt edit that drops `effort:` cannot move the stage to
     // an unmeasured level if that role default ever changes.
+    // A `bundled` prompt (the engine's own) takes both from the profile.
     const consolidateRoute = profileRoute(activeProfile(input), "consolidate");
+    const own = enginePromptChoice(
+      input,
+      input.consolidate,
+      "consolidate",
+      agent,
+      true,
+    );
     meta.model = resolveModel(
       input,
       input.consolidate.model,
-      agent.model ?? profileModelAlias(consolidateRoute.model),
+      own.model,
       input.consolidate.promptPath,
     );
     record.model = meta.model;
     const consolidateEffort = stepEffortFields(
       state.routePlan,
       name,
-      agent.effort,
+      own.effort,
       consolidateRoute.effort,
     );
     meta.effort = consolidateEffort.effort;
@@ -4265,6 +4310,19 @@ async function writePipelinePlan(
     // a ledger's run ordering into guesswork once already (§2.6).
     ...(input.engine === undefined ? {} : { engine: input.engine }),
     ...(input.promptSet === undefined ? {} : { prompt_set: input.promptSet }),
+    // model-profiles S4, additive: the profile's prompt set, laid file by file
+    // over the default one. Absent when the profile names none (`claude`), so
+    // a default run's artifact keeps its keys byte for byte. `prompt_set`
+    // above fingerprints the agent files only; this names the set that every
+    // step's prompt, the engine-owned ones included, was looked up through.
+    ...(activeProfile(input).promptSet === undefined
+      ? {}
+      : {
+          profile_prompt_set: {
+            profile: activeProfile(input).id,
+            name: activeProfile(input).promptSet,
+          },
+        }),
     // C5 O-6. Beside the other two provenance blocks on purpose: the question
     // "which inputs made this run what it was" has one place to look.
     ...(input.config === undefined ? {} : { config: input.config }),

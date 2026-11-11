@@ -300,10 +300,22 @@ function rewriteFrontmatter(
 }
 
 // `extra` reaches PipelineInput as is: the profile tests set `bundledAgents`
-// and `modelProfile` through it. The baseline fixtures never use it.
+// and `modelProfile` through it, and the prompt-set tests (S4) the agent file
+// map and the engine-owned stage inputs. The baseline fixtures never use it.
 export async function captureBaseline(
   c: BaselineCase,
-  extra: Pick<PipelineInput, "bundledAgents" | "modelProfile"> = {},
+  extra: Pick<
+    PipelineInput,
+    | "bundledAgents"
+    | "modelProfile"
+    | "agentFiles"
+    | "summarizer"
+    | "scout"
+    | "consolidate"
+    | "materiality"
+  > = {},
+  // Sees the whole parsed pipeline.json, for assertions outside the baseline.
+  inspect?: (pipelineJson: Record<string, unknown>) => void,
 ): Promise<Baseline> {
   const tmp = await mkdtemp(path.join(tmpdir(), "crysk-profiles-baseline-"));
   try {
@@ -383,6 +395,7 @@ export async function captureBaseline(
       route_plan?: ResolvedRoutePlan;
       steps: Record<string, unknown>[];
     };
+    inspect?.(pipeline);
     const steps: RecordedStep[] = runner.recorded.map(({ spec, system }) => {
       const backend = spec.route?.backend ?? spec.backend ?? "claude-code";
       return {

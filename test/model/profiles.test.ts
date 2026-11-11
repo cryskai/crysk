@@ -18,10 +18,7 @@ import {
   ModelRoutingError,
   resolveStepRoute,
 } from "#model/routing";
-import {
-  DEFAULT_CONSOLIDATE_MODEL,
-  DEFAULT_SCOUT_MODEL,
-} from "#review/pipeline";
+import { DEFAULT_SCOUT_MODEL } from "#review/pipeline";
 import { DEFAULT_SUMMARY_MODEL } from "#review/preflight";
 
 describe("the registry (S1)", () => {
@@ -56,7 +53,6 @@ describe("the claude profile is exactly today's defaults (S2)", () => {
 
   test("the old constants read the profile and keep their alias values", () => {
     expect(DEFAULT_SCOUT_MODEL).toBe("sonnet");
-    expect(DEFAULT_CONSOLIDATE_MODEL).toBe("sonnet");
     expect(DEFAULT_SUMMARY_MODEL).toBe("haiku");
     expect(MATERIALITY_JUDGE_MODEL).toBe("sonnet");
     expect(defaultEffortForRole("hunter")).toBe("xhigh");
