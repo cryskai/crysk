@@ -41,6 +41,28 @@ export interface ToolCall {
   isError?: boolean;
   startMs?: number;
   endMs?: number;
+  // The index in Conversation.turns of the model turn that made this call.
+  turn?: number;
+}
+
+// One model call of an agent loop (#511): an OpenCode attempt is dozens of
+// these, one assistant message each, and each message records its own times,
+// tokens and cost. Token counts are OpenCode's disjoint leaves.
+export interface Turn {
+  startMs?: number;
+  endMs?: number;
+  // The model the provider says answered this turn.
+  model?: string;
+  finishReason?: string;
+  isError?: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  costUsd?: number;
+  // What the turn answered. Content only: withoutContent drops it.
+  message?: ChatMessage;
 }
 
 export interface Conversation {
@@ -53,6 +75,8 @@ export interface Conversation {
   finishReason?: string;
   startMs?: number;
   endMs?: number;
+  // The model turns, when the transcript records each one (OpenCode).
+  turns?: Turn[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -112,6 +136,11 @@ export function withoutContent(conversation: Conversation): Conversation {
     tools: conversation.tools.map(
       ({ arguments: _a, result: _r, ...call }) => call,
     ),
+    ...(conversation.turns === undefined
+      ? {}
+      : {
+          turns: conversation.turns.map(({ message: _m, ...turn }) => turn),
+        }),
   };
 }
 
@@ -370,6 +399,9 @@ export function openCodeConversation(capture: unknown): Conversation {
     }
     if (info.role !== "assistant") continue;
     const message: ChatMessage = { role: "assistant", parts: [] };
+    const turn = openCodeTurn(info);
+    const turnIndex = conversation.turns?.length ?? 0;
+    conversation.turns = [...(conversation.turns ?? []), turn];
     const model = nonEmpty(info.modelID);
     if (model !== undefined) conversation.responseModel = model;
     const finish = nonEmpty(info.finish);
@@ -390,6 +422,7 @@ export function openCodeConversation(capture: unknown): Conversation {
           ...(id === undefined ? {} : { id }),
           name: part.tool,
           ...(state.input === undefined ? {} : { arguments: state.input }),
+          turn: turnIndex,
         };
         const result = nonEmpty(state.output) ?? nonEmpty(state.error);
         if (result !== undefined) call.result = result;
@@ -410,6 +443,38 @@ export function openCodeConversation(capture: unknown): Conversation {
       }
     }
     conversation.output.push(message);
+    if (message.parts.length > 0) turn.message = message;
   }
   return conversation;
+}
+
+function count(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+// An assistant message's own record: `time.created`/`completed` in epoch ms,
+// `tokens` {input, output, reasoning, cache: {read, write}} and `cost` in USD.
+// A message still being written has no `completed` time.
+function openCodeTurn(info: Record<string, unknown>): Turn {
+  const time = isRecord(info.time) ? info.time : {};
+  const tokens = isRecord(info.tokens) ? info.tokens : {};
+  const cache = isRecord(tokens.cache) ? tokens.cache : {};
+  const leaves: Array<[keyof Turn, unknown]> = [
+    ["startMs", timeOf(time.created)],
+    ["endMs", timeOf(time.completed)],
+    ["model", nonEmpty(info.modelID)],
+    ["finishReason", nonEmpty(info.finish)],
+    ["inputTokens", count(tokens.input)],
+    ["outputTokens", count(tokens.output)],
+    ["reasoningTokens", count(tokens.reasoning)],
+    ["cacheReadTokens", count(cache.read)],
+    ["cacheWriteTokens", count(cache.write)],
+    ["costUsd", count(info.cost)],
+  ];
+  const turn: Record<string, unknown> = {};
+  for (const [key, value] of leaves) if (value !== undefined) turn[key] = value;
+  if (info.error !== undefined && info.error !== null) turn.isError = true;
+  return turn as Turn;
 }

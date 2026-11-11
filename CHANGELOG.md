@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A review trace shows each OpenCode model turn, and every agent that ran** (#511). An OpenCode attempt
+  was one `chat` generation spanning the whole agent (465 s for a 78-call hunter), so per-turn latency,
+  tokens and cost could not be read. It is now an `attempt <step>#<n>` span with one `chat` generation per
+  turn under it, each with its own times, usage and cost, and each tool call under the turn that made it.
+  A hunter still running when the job was cancelled left no span at all; it now gets one from the request
+  plan it froze at spawn, marked `unsettled` (this holds for a cut-off Claude CLI attempt too). Settled
+  Claude CLI attempts are unchanged.
+
 ## [0.5.0] - 2026-11-11
 
 ### Added

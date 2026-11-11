@@ -48,6 +48,7 @@ import {
   openCodeConversation,
   parseClaudeSession,
   type ToolCall,
+  type Turn,
   withoutContent,
 } from "./trace-transcripts";
 
@@ -148,6 +149,16 @@ export interface TraceAttemptInput {
   // or results, the finish reason, the response model and the times. Used
   // only when neither text is present.
   transcriptMetadata?: Conversation;
+  // steps/evidence.<step>.attempt<n>.request.json, the plan frozen at spawn
+  // (#511): its route and its file time. The only file an attempt still
+  // running when the job was cancelled has written, so the only proof it ran.
+  started?: AttemptStart;
+}
+
+export interface AttemptStart {
+  atMs?: number;
+  model?: string;
+  provider?: string;
 }
 
 export interface TraceStepInput {
@@ -409,7 +420,33 @@ interface AttemptFacts {
   end?: number;
 }
 
-function attemptFacts(evidence: unknown): AttemptFacts {
+// An attempt with a frozen plan that nothing shows settled: the job ended
+// while it ran. Missing evidence alone is not enough: the engine races its
+// evidence write against a 100 ms timer and swallows a failure
+// (src/execution/harness.ts runAdmittedAttempt), so a settled attempt can
+// have none. `settled` is what else proves it: a step status of ok or failed
+// (pipeline.ts stamps every step "unsettled" until it settles), or a later
+// attempt. A transcript or capture is no proof: the harness copies a
+// cancelled attempt's session too.
+const UNSETTLED = "unsettled";
+
+function attemptFacts(
+  attempt: TraceAttemptInput,
+  settled: boolean,
+): AttemptFacts {
+  const facts = settledFacts(attempt.evidence);
+  const started = attempt.started;
+  if (started === undefined) return facts;
+  facts.model ??= started.model;
+  facts.provider ??= started.provider;
+  facts.start ??= started.atMs;
+  if (attempt.evidence === undefined && !settled) {
+    facts.completion = UNSETTLED;
+  }
+  return facts;
+}
+
+function settledFacts(evidence: unknown): AttemptFacts {
   if (!isRecord(evidence)) return {};
   const identity = isRecord(evidence.identity) ? evidence.identity : {};
   const route = isRecord(identity.route) ? identity.route : {};
@@ -653,7 +690,12 @@ function build(
     const attempts = [...step.attempts].sort((a, b) => a.attempt - b.attempt);
     const finalAttempt = attempts.at(-1)?.attempt;
     for (const attempt of attempts) {
-      const facts = attemptFacts(attempt.evidence);
+      const facts = attemptFacts(
+        attempt,
+        meta?.status === "ok" ||
+          meta?.status === "failed" ||
+          attempt.attempt !== finalAttempt,
+      );
       const known = content ? undefined : views.get(attempt);
       const parsed: ParsedAttempt =
         known === undefined ? parseAttempt(attempt) : { conversation: known };
@@ -665,8 +707,146 @@ function build(
       if (chatWindow.start === undefined) {
         widen(chatWindow, conversation.startMs, conversation.endMs);
       }
-      const attrs = new Attributes(content, budget);
+      // It ran until the job stopped, as far as anything recorded says.
+      if (facts.completion === UNSETTLED) widen(chatWindow, run.endedAtMs);
       const model = facts.model ?? str(meta?.model);
+      const cause = modelCause(meta, model);
+      const failed =
+        facts.completion !== undefined &&
+        facts.completion !== "success" &&
+        facts.completion !== "completed";
+      const turns = conversation.turns ?? [];
+      if (turns.length > 0) {
+        // #511: one generation per model turn, under an attempt span that is
+        // no generation itself, so a backend neither counts the attempt's
+        // usage twice nor reads its whole length as one model call.
+        const attrs = new Attributes(content, budget);
+        attrs.text("crysk.step.name", step.name);
+        attrs.number("crysk.attempt.number", attempt.attempt);
+        attrs.text("crysk.attempt.status", facts.completion);
+        attrs.text("crysk.attempt.cause", cause);
+        if (facts.usage !== undefined)
+          attrs.flatten("crysk.usage", facts.usage);
+        if (attempt.evidence !== undefined) {
+          attrs.flatten("crysk.attempt", attempt.evidence);
+        }
+        const turnIds = turns.map((_, index) =>
+          id(`turn:${step.name}:${attempt.attempt}:${index}`),
+        );
+        const toolSpans = conversation.tools.map((call, index) => {
+          const owner = call.turn === undefined ? undefined : turns[call.turn];
+          return toolSpan(call, {
+            traceId,
+            spanId: id(`tool:${step.name}:${attempt.attempt}:${index}`),
+            parentSpanId:
+              call.turn === undefined ? chatId : (turnIds[call.turn] ?? chatId),
+            content,
+            ...(budget === undefined ? {} : { budget }),
+            fallbackMs: owner?.startMs ?? chatWindow.start ?? run.startedAtMs,
+          });
+        });
+        const container: OtlpSpan = {
+          traceId,
+          spanId: chatId,
+          parentSpanId: stepId,
+          name: spanName("attempt", `${step.name}#${attempt.attempt}`),
+          kind: SPAN_KIND_INTERNAL,
+          startTimeUnixNano: "",
+          endTimeUnixNano: "",
+          attributes: attrs.list,
+          status: failed
+            ? withMessage(
+                STATUS_ERROR,
+                content ? (cause ?? facts.completion) : undefined,
+              )
+            : {
+                code: facts.completion === undefined ? STATUS_UNSET : STATUS_OK,
+              },
+        };
+        stepSpans.push(container);
+        const input = content ? chatInput(step, conversation) : [];
+        turns.forEach((turn, index) => {
+          const own = toolSpans.filter(
+            (_, at) => conversation.tools[at]?.turn === index,
+          );
+          const window: Window = {};
+          widen(window, turn.startMs, turn.endMs);
+          // A turn still being written has no end of its own: its last tool
+          // call is the last thing it did.
+          if (turn.endMs === undefined) {
+            for (const span of own) {
+              widen(window, undefined, Number(span.endTimeUnixNano) / 1e6);
+            }
+          }
+          widen(chatWindow, window.start, window.end);
+          const turnAttrs = new Attributes(content, budget);
+          turnAttrs.text("gen_ai.operation.name", "chat");
+          turnAttrs.text("gen_ai.provider.name", facts.provider);
+          turnAttrs.text("gen_ai.request.model", model);
+          turnAttrs.text("gen_ai.response.model", turn.model ?? model);
+          if (turn.finishReason !== undefined) {
+            turnAttrs.words("gen_ai.response.finish_reasons", [
+              turn.finishReason,
+            ]);
+          }
+          writeTurnUsage(turnAttrs, turn);
+          turnAttrs.text("crysk.step.name", step.name);
+          turnAttrs.number("crysk.attempt.number", attempt.attempt);
+          turnAttrs.number("crysk.turn.number", index + 1);
+          if (content) {
+            // The prompt once, on the turn that read it; each turn's answer on
+            // its own span. Repeating the history on every turn would grow
+            // with the square of the turns.
+            if (index === 0) writeChatInput(turnAttrs, step, input);
+            if (turn.message !== undefined) {
+              turnAttrs.contentJson("gen_ai.output.messages", [turn.message]);
+            }
+          }
+          const span: OtlpSpan = {
+            traceId,
+            spanId: turnIds[index] ?? chatId,
+            parentSpanId: chatId,
+            name: spanName("chat", model),
+            kind: SPAN_KIND_CLIENT,
+            startTimeUnixNano: "",
+            endTimeUnixNano: "",
+            attributes: turnAttrs.list,
+            status: {
+              code:
+                turn.isError === true
+                  ? STATUS_ERROR
+                  : turn.finishReason !== undefined
+                    ? STATUS_OK
+                    : STATUS_UNSET,
+            },
+          };
+          pending.push({ span, window });
+          stepSpans.push(span, ...own);
+        });
+        stepSpans.push(
+          ...toolSpans.filter((_, at) => {
+            const owner = conversation.tools[at]?.turn;
+            return owner === undefined || turnIds[owner] === undefined;
+          }),
+        );
+        for (const span of toolSpans) {
+          widen(
+            chatWindow,
+            Number(span.startTimeUnixNano) / 1e6,
+            Number(span.endTimeUnixNano) / 1e6,
+          );
+        }
+        pending.push({ span: container, window: chatWindow });
+        widen(stepWindow, chatWindow.start, chatWindow.end);
+        if (content) {
+          transcripts.push(...transcriptsOf(step.name, attempt, parsed, model));
+        }
+        if (known === undefined && attempt.openCodeCapture !== undefined) {
+          settle?.();
+        }
+        continue;
+      }
+      const attrs = new Attributes(content, budget);
       attrs.text("gen_ai.operation.name", "chat");
       attrs.text("gen_ai.provider.name", facts.provider);
       attrs.text("gen_ai.request.model", model);
@@ -680,7 +860,6 @@ function build(
       attrs.text("crysk.step.name", step.name);
       attrs.number("crysk.attempt.number", attempt.attempt);
       attrs.text("crysk.attempt.status", facts.completion);
-      const cause = modelCause(meta, model);
       attrs.text("crysk.attempt.cause", cause);
       if (attempt.evidence !== undefined) {
         attrs.flatten("crysk.attempt", attempt.evidence);
@@ -708,10 +887,6 @@ function build(
           Number(span.endTimeUnixNano) / 1e6,
         );
       }
-      const failed =
-        facts.completion !== undefined &&
-        facts.completion !== "success" &&
-        facts.completion !== "completed";
       const chat: OtlpSpan = {
         traceId,
         spanId: chatId,
@@ -857,25 +1032,7 @@ function writeChatContent(
   conversation: Conversation,
   context: { final: boolean; completion?: string },
 ): void {
-  if (step.systemPrompt !== undefined) {
-    attrs.contentJson("gen_ai.system_instructions", [
-      { type: "text", content: step.systemPrompt },
-    ]);
-  }
-  const input: ChatMessage[] =
-    conversation.input.length > 0
-      ? conversation.input
-      : step.promptBody !== undefined
-        ? [
-            {
-              role: "user",
-              parts: [{ type: "text", content: step.promptBody }],
-            },
-          ]
-        : [];
-  if (input.length > 0) {
-    attrs.contentJson("gen_ai.input.messages", input);
-  }
+  writeChatInput(attrs, step, chatInput(step, conversation));
   // Without a transcript, the final attempt's output file is what it answered.
   const output: ChatMessage[] =
     conversation.output.length > 0
@@ -895,6 +1052,53 @@ function writeChatContent(
   if (output.length > 0) {
     attrs.contentJson("gen_ai.output.messages", output);
   }
+}
+
+// What the model was asked: the transcript's user messages, else the step's
+// rendered body.
+function chatInput(
+  step: TraceStepInput,
+  conversation: Conversation,
+): ChatMessage[] {
+  if (conversation.input.length > 0) return conversation.input;
+  return step.promptBody === undefined
+    ? []
+    : [{ role: "user", parts: [{ type: "text", content: step.promptBody }] }];
+}
+
+function writeChatInput(
+  attrs: Attributes,
+  step: TraceStepInput,
+  input: ChatMessage[],
+): void {
+  if (step.systemPrompt !== undefined) {
+    attrs.contentJson("gen_ai.system_instructions", [
+      { type: "text", content: step.systemPrompt },
+    ]);
+  }
+  if (input.length > 0) {
+    attrs.contentJson("gen_ai.input.messages", input);
+  }
+}
+
+// A turn's usage in the conventions' totals: input with its cache, output
+// with its reasoning (OpenCode's leaves are disjoint, as the engine's are).
+function writeTurnUsage(attrs: Attributes, turn: Turn): void {
+  attrs.number(
+    "gen_ai.usage.input_tokens",
+    sumKnown(turn.inputTokens, turn.cacheReadTokens, turn.cacheWriteTokens),
+  );
+  attrs.number(
+    "gen_ai.usage.output_tokens",
+    sumKnown(turn.outputTokens, turn.reasoningTokens),
+  );
+  attrs.number("gen_ai.usage.cache_read.input_tokens", turn.cacheReadTokens);
+  attrs.number(
+    "gen_ai.usage.cache_creation.input_tokens",
+    turn.cacheWriteTokens,
+  );
+  attrs.number("gen_ai.usage.reasoning.output_tokens", turn.reasoningTokens);
+  attrs.number("gen_ai.usage.cost", turn.costUsd);
 }
 
 function toolSpan(

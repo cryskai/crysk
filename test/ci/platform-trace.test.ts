@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -580,6 +581,57 @@ describe("runTraceStep: which run directory", () => {
     expect(body.outcome).toBe("error");
     expect(body.code).toBe("CRYSK-CANCELLED");
   });
+
+  // #511: a hunter still running when the job is cancelled has written only
+  // the request plan it froze at spawn, and no pipeline.json exists yet.
+  for (const content of ["true", "false"]) {
+    test(`a cancelled job: an agent that never settled still gets its spans (content ${content})`, async () => {
+      triggerRecord();
+      cliRecord({ v: 1, outcome: "reviewing", head_sha: HEAD });
+      reviewedRunDir();
+      rmSync(path.join(runDir, "pipeline.json"));
+      const plan = path.join(
+        runDir,
+        "steps",
+        "evidence.hunter-reliability.attempt1.request.json",
+      );
+      write(plan, {
+        schemaVersion: 1,
+        sessionId: "s-rel",
+        attempt: 1,
+        stepName: "hunter-reliability",
+        route: {
+          backend: "opencode",
+          provider: "aiand",
+          modelSnapshot: "deepseek-v4.1-flash",
+        },
+        effort: "xhigh",
+      });
+      utimesSync(plan, (T0 + 2_000) / 1000, (T0 + 2_000) / 1000);
+      const r = await run(
+        [202],
+        env({ CRYSK_JOB_STATUS: "cancelled", CRYSK_TRACE_CONTENT: content }),
+      );
+      const all = spansOf(r.received[0]?.body ?? {});
+      const agent = all.find(
+        (span) => span.name === "invoke_agent hunter-reliability",
+      );
+      expect(agent).toBeDefined();
+      const chat = all.find((span) => span.name === "chat deepseek-v4.1-flash");
+      expect(attrOf(chat, "gen_ai.provider.name")).toBe("aiand");
+      expect(attrOf(chat, "crysk.attempt.status")).toBe("unsettled");
+      expect(chat?.status?.code).toBe(2);
+      // From the spawn to the trace: the run's clock reads T0 + 30 s.
+      expect([chat?.startTimeUnixNano, chat?.endTimeUnixNano]).toEqual([
+        nanos(2),
+        nanos(30),
+      ]);
+      // The settled hunter beside it is unchanged.
+      expect(
+        all.some((span) => span.name === "invoke_agent hunter-logic"),
+      ).toBe(true);
+    });
+  }
 
   // The job context's status inside a composite action is not documented, so
   // the step also reads the cancelled-run refresh, which runs only on a cancel.
