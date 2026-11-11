@@ -1840,7 +1840,18 @@ describe("buildTraceBundle: an attempt with a request plan and no evidence", () 
     expect(first?.status.code).toBe(0);
   });
 
-  test("an attempt that left a transcript is not unsettled", () => {
+  // pipeline.ts stamps every step "unsettled" at construction; only ok or
+  // failed is a settlement (PR #512 R002).
+  test("a step pipeline.json still calls unsettled stays unsettled", () => {
+    const [chat] = chats(build("unsettled", [{ attempt: 1, started }]));
+    expect(attr(chat, "crysk.attempt.status")).toBe("unsettled");
+    expect(chat?.status.code).toBe(2);
+    expect(chat?.endTimeUnixNano).toBe(nanos(20));
+  });
+
+  // The harness copies a cancelled attempt's Claude session too, so a
+  // transcript proves the attempt ended, not that it settled (PR #512 R003).
+  test("a cancelled attempt that left a transcript and no evidence stays unsettled", () => {
     const [chat] = chats(
       build(undefined, [
         {
@@ -1850,6 +1861,7 @@ describe("buildTraceBundle: an attempt with a request plan and no evidence", () 
         },
       ]),
     );
-    expect(attr(chat, "crysk.attempt.status")).toBeUndefined();
+    expect(attr(chat, "crysk.attempt.status")).toBe("unsettled");
+    expect(chat?.status.code).toBe(2);
   });
 });

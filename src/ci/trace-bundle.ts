@@ -424,7 +424,10 @@ interface AttemptFacts {
 // while it ran. Missing evidence alone is not enough: the engine races its
 // evidence write against a 100 ms timer and swallows a failure
 // (src/execution/harness.ts runAdmittedAttempt), so a settled attempt can
-// have none. `settled` is everything else that only settlement writes.
+// have none. `settled` is what else proves it: a step status of ok or failed
+// (pipeline.ts stamps every step "unsettled" until it settles), or a later
+// attempt. A transcript or capture is no proof: the harness copies a
+// cancelled attempt's session too.
 const UNSETTLED = "unsettled";
 
 function attemptFacts(
@@ -687,15 +690,11 @@ function build(
     const attempts = [...step.attempts].sort((a, b) => a.attempt - b.attempt);
     const finalAttempt = attempts.at(-1)?.attempt;
     for (const attempt of attempts) {
-      // A step pipeline.json gave a status, a later attempt, or a transcript
-      // or capture (copied only at settlement) each prove this one settled.
       const facts = attemptFacts(
         attempt,
-        str(meta?.status) !== undefined ||
-          attempt.attempt !== finalAttempt ||
-          attempt.sessionJsonl !== undefined ||
-          attempt.openCodeCapture !== undefined ||
-          attempt.transcriptMetadata !== undefined,
+        meta?.status === "ok" ||
+          meta?.status === "failed" ||
+          attempt.attempt !== finalAttempt,
       );
       const known = content ? undefined : views.get(attempt);
       const parsed: ParsedAttempt =
