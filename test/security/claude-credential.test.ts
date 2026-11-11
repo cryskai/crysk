@@ -363,6 +363,28 @@ describe("a credential refusal settles the CI ledger row as an unspent skip", ()
     expect(calls.length).toBe(1);
   });
 
+  test("an expiring subscription login settles gate-skipped, naming why", async () => {
+    const state = ledgerState();
+    await settleClaudeCredentialRefusal(
+      state,
+      new OpenCodeCredentialRefusalError({
+        message: "models name OpenCode provider openai (refuter), but …",
+        failureClass: "subscription_expiring",
+        params: {
+          backend: "opencode",
+          provider: "openai",
+          model: "gpt-5.5",
+          step: "refuter",
+        },
+      }),
+      { spawnFn: fakeGh([]) },
+    );
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(
+      "subscription login for OpenCode provider openai expires within the review; refused before any provider spend",
+    );
+  });
+
   test("the Claude refusal keeps its own reason", async () => {
     const state = ledgerState();
     await settleClaudeCredentialRefusal(

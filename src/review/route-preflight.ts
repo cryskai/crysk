@@ -286,7 +286,9 @@ export class OpenCodeCredentialRefusalError extends CredentialRefusalError {
       refusal.message,
       { kind: "credential", failureClass: refusal.failureClass },
       refusal.params,
-      `no credential record for OpenCode provider ${refusal.params.provider}; refused before any provider spend`,
+      refusal.failureClass === "subscription_expiring"
+        ? `subscription login for OpenCode provider ${refusal.params.provider} expires within the review; refused before any provider spend`
+        : `no credential record for OpenCode provider ${refusal.params.provider}; refused before any provider spend`,
     );
   }
 }
