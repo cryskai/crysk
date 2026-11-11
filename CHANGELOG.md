@@ -7,24 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **The metered CI ceiling follows the routes the models use, not an OpenCode auth file on disk**
-  (cryskai/platform#12). The `$10` default, and the metered size limits, applied whenever an OpenCode auth
-  file existed: for a ChatGPT subscription, a file left by an earlier run, or a run whose models use no
-  OpenCode at all. A run is now metered on OpenCode only when a model, in any role or fallback, is on a
-  provider bound to an API key, by the same rule the run binds it.
-- **A budget skip on a Crysk platform repository names only what applies there.** It no longer suggests
-  `/pr-hero review`, `pr-hero-force.yml` or `crysk ci init --force`: it names `/crysk review` and the
-  model setup in the Crysk dashboard.
-- **A review trace shows each OpenCode model turn, and every agent that ran** (#511). An OpenCode attempt
-  was one `chat` generation spanning the whole agent (465 s for a 78-call hunter), so per-turn latency,
-  tokens and cost could not be read. It is now an `attempt <step>#<n>` span with one `chat` generation per
-  turn under it, each with its own times, usage and cost, and each tool call under the turn that made it.
-  A hunter still running when the job was cancelled left no span at all; it now gets one from the request
-  plan it froze at spawn, marked `unsettled` (this holds for a cut-off Claude CLI attempt too). Settled
-  Claude CLI attempts are unchanged.
-
 ### Changed
 
 - **Platform mode: the CI budget gate reads the Crysk platform's estimate** (cryskai/platform#12,
@@ -32,6 +14,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the run as `CRYSK_PLATFORM_ESTIMATE`; the gate compares its high end to the ceiling instead of the
   band, which priced every model as Claude. The plan prints `estimate $X – $Y (platform: history)` or
   `(platform: catalog)`. A missing or malformed estimate leaves the band in charge.
+
+### Fixed
+
+- **The metered CI ceiling follows the routes the models use, not an OpenCode auth file on disk**
+  (cryskai/platform#12). The `$10` default, and the metered size limits (4000 lines / 50 files), applied
+  whenever an OpenCode auth file existed: for a ChatGPT subscription, a file left by an earlier run, or a
+  run whose models use no OpenCode at all. A run is now metered on OpenCode only when the auth file exists
+  and a model, in any role or fallback, is on a provider bound to an API key, by the same rule the run
+  binds it. A run that is no longer metered gets neither the ceiling nor the size limits unless the
+  workflow or the repo config sets them.
+- **Skip comments on a Crysk platform repository name only what applies there.** The budget, size,
+  coverage and manual-required comments no longer suggest `/pr-hero review`, `pr-hero-force.yml` or
+  `crysk ci init --force`: they name `/crysk review`, and the budget and size skips point at the model
+  setup and the size limits in the Crysk dashboard.
+- **A review trace shows each OpenCode model turn, and every agent that ran** (#511). An OpenCode attempt
+  was one `chat` generation spanning the whole agent (465 s for a 78-call hunter), so per-turn latency,
+  tokens and cost could not be read. It is now an `attempt <step>#<n>` span with one `chat` generation per
+  turn under it, each with its own times, usage and cost, and each tool call under the turn that made it.
+  A hunter still running when the job was cancelled left no span at all; it now gets one from the request
+  plan it froze at spawn, marked `unsettled` (this holds for a cut-off Claude CLI attempt too). Settled
+  Claude CLI attempts are unchanged.
 
 ## [0.5.0] - 2026-11-11
 

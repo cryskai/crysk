@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../../src/ci/platform-estimate";
 import { planEstimateLine } from "../../src/ui/plan";
 
+const SRC_CI = path.resolve(import.meta.dir, "../../src/ci");
 const OIDC_URL = "https://token.actions.example/id?api-version=2.0";
 const ENV = {
   ACTIONS_ID_TOKEN_REQUEST_URL: OIDC_URL,
@@ -152,5 +153,23 @@ describe("the plan's estimate line", () => {
         summarizer: true,
       }),
     ).toBe("estimate $5.13 – $11.06 (3 hunter(s) + refuter + summarizer)");
+  });
+});
+
+describe("platform.ts runs before `bun install`", () => {
+  // ./platform-estimate is the one non-builtin: it imports nothing itself, so the
+  // connect step still loads before `bun install` (as trigger.ts does ../brand).
+  test("it imports only runtime builtins, plus the import-free ./platform-estimate", () => {
+    const source = readFileSync(path.join(SRC_CI, "platform.ts"), "utf-8");
+    const specifiers = [
+      ...source.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gms),
+    ].map((match) => match[1]);
+    expect(specifiers.length).toBeGreaterThan(0);
+    for (const specifier of specifiers) {
+      expect(specifier).toMatch(/^(node:|bun$|bun:|\.\/platform-estimate$)/);
+    }
+    expect(
+      readFileSync(path.join(SRC_CI, "platform-estimate.ts"), "utf-8"),
+    ).not.toMatch(/^\s*import\b/m);
   });
 });

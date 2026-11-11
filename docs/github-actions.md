@@ -812,9 +812,10 @@ subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) d
 (`X-Crysk-Capabilities: estimate`) and the budget gate compares its high end to the ceiling: an estimate
 from the setup's recent reviews scaled to the pull request, or from the catalog prices of its models. The
 plan prints it as `estimate $X – $Y (platform: history)` or `(platform: catalog)`. Without one (an older
-platform, a model with no catalog price) the band decides as before. A budget skip on a platform
-repository names only `/crysk review` and the model setup in the Crysk dashboard, since its workflow has
-no `budget-usd` to raise.
+platform, a model with no catalog price) the band decides as before. On a platform repository every skip
+comment names only `/crysk review` (no legacy spelling, force workflow or re-scaffold), and the budget
+and size skips point at the model setup and the size limits in the Crysk dashboard, since its workflow
+has no `budget-usd` or `max-changed-*` inputs to raise.
 
 **Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
 subscription route there is no size limit, so large pull requests are reviewed instead of skipped, and

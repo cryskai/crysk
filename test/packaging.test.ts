@@ -1057,6 +1057,29 @@ describe("Packaging & distribution configuration", () => {
       expect(mentions).toEqual(["trigger", "materialize"]);
     });
 
+    // cryskai/platform#12: the run step gets the connect step's estimate and its
+    // connection, the two the budget gate and the skip comments read. A typo in
+    // either output name would silently fall back to the band and the legacy hints.
+    test("Run Crysk reads the platform's estimate and whether the run is connected", () => {
+      const estimate = '{"usd_low":0.41,"usd_high":0.87,"basis":"history"}';
+      const runStep = steps().find((step) => step.id === "run-crysk");
+      const ctx = {
+        inputs: {},
+        github: {},
+        trigger: {},
+        runner: { temp: "/runner/temp" },
+      };
+      const connected = resolveEnv(runStep?.env ?? {}, {
+        ...ctx,
+        platform: { "github-token": "ghs_x", estimate },
+      });
+      expect(connected.CRYSK_PLATFORM_ESTIMATE).toBe(estimate);
+      expect(connected.CRYSK_PLATFORM_CONNECTED).toBe("true");
+      const standalone = resolveEnv(runStep?.env ?? {}, ctx);
+      expect(standalone.CRYSK_PLATFORM_ESTIMATE).toBe("");
+      expect(standalone.CRYSK_PLATFORM_CONNECTED).toBe("false");
+    });
+
     test.each([
       ["platform names OpenCode, input empty", "true", "", "true"],
       [

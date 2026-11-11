@@ -10,6 +10,7 @@ import {
   planCiBudgetSkip,
   planCiReviewManualRequired,
   planCiReviewSkip,
+  planCiSizeSkip,
 } from "#ci/gates";
 import { generateCiWorkflowTemplate } from "#ci/setup";
 
@@ -140,7 +141,7 @@ describe("a budget skip on a platform repository", () => {
       expect(text).toContain("change the model setup in the Crysk dashboard");
     }
     expect(plan?.comment).toContain(
-      "Comment `/crysk review` on this pull request to run it anyway.",
+      "Comment `/crysk review` on this pull request to run it anyway",
     );
   });
 
@@ -148,5 +149,71 @@ describe("a budget skip on a platform repository", () => {
     const plan = skip(false);
     expect(plan?.comment).toContain(ciForceReviewHintLine(11));
     expect(plan?.comment).toContain("`--budget-usd`");
+  });
+});
+
+describe("every other skip on a platform repository", () => {
+  const prior = { blocking: 0, advisory: 0, score: 0, source: "none" as const };
+  const comments = [
+    planCiSizeSkip({
+      isCi: true,
+      verdict: {
+        ok: false,
+        reason: "lines",
+        effectiveLines: 5000,
+        effectiveFiles: 3,
+        excludedFiles: 0,
+        excludedLines: 0,
+        limit: 4000,
+        message: "5000 changed lines exceed the limit of 4000",
+      },
+      prNumber: 11,
+      maxChangedLines: 4000,
+      maxChangedFiles: 50,
+      ciMode: "advisory",
+      platformConnected: true,
+    })?.comment ?? "",
+    planCiReviewSkip({
+      prNumber: 11,
+      ciMode: "advisory",
+      verdict: {
+        action: "skip",
+        reason: "once-per-pr",
+        prior,
+        reviewCount: 1,
+        maxAttempts: 2,
+        minScore: 4,
+      },
+      platformConnected: true,
+    }).comment,
+    planCiReviewManualRequired({
+      prNumber: 11,
+      ciMode: "advisory",
+      verdict: {
+        action: "manual-required",
+        reason: "max-attempts-exhausted",
+        prior,
+        reviewCount: 2,
+        maxAttempts: 2,
+        minScore: 4,
+      },
+      platformConnected: true,
+    }).comment,
+  ];
+
+  test("names `/crysk review`, never the legacy spelling, force workflow or re-scaffold", () => {
+    for (const comment of comments) {
+      expect(comment).toContain(ciForceReviewHintLine(11, true));
+      expect(comment).not.toContain(CI_FORCE_WORKFLOW_FILE);
+      expect(comment).not.toContain("crysk ci init --force");
+      expect(comment).not.toContain("/pr-hero review");
+    }
+  });
+
+  test("the size skip points at the dashboard's limits, not the workflow inputs", () => {
+    expect(comments[0]).toContain(
+      "raise the size limits in the Crysk dashboard",
+    );
+    expect(comments[0]).not.toContain("`max-changed-lines`");
   });
 });

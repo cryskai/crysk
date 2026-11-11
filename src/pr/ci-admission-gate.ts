@@ -352,6 +352,7 @@ export async function evaluateCiAdmissionGate(input: {
         verdict: admissionVerdict,
         admission: admissionContext,
         ciMode: input.ciMode,
+        platformConnected: process.env.CRYSK_PLATFORM_CONNECTED === "true",
       });
       const exitCode = await publishCiSkip({
         operatorRoot,
@@ -394,6 +395,7 @@ export async function evaluateCiAdmissionGate(input: {
         verdict: admissionVerdict,
         admission: admissionContext,
         ciMode: input.ciMode,
+        platformConnected: process.env.CRYSK_PLATFORM_CONNECTED === "true",
       });
       const exitCode = await publishCiSkip({
         operatorRoot,

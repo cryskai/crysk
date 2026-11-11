@@ -585,6 +585,7 @@ export async function reviewPr(
         maxChangedLines: gateConfig.maxChangedLines,
         maxChangedFiles: gateConfig.maxChangedFiles,
         ciMode,
+        platformConnected: process.env.CRYSK_PLATFORM_CONNECTED === "true",
       });
       if (sizePlan !== null) {
         await settleCiGateSkip(

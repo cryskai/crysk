@@ -68,7 +68,7 @@ import type { SizeGateVerdict } from "#review/size-gate";
 import { commandHint, MARKER_OPEN } from "../brand";
 import { CliUsageError } from "../errors";
 import { envBillsMetered } from "../execution/usage-normalized";
-import { CI_REVIEW_COMMENT, ciForceReviewHintLine } from "./force-comment";
+import { ciForceReviewHintLine } from "./force-comment";
 import {
   type CiOutputs,
   type CiSummaryData,
@@ -190,7 +190,10 @@ function sizeLimitsText(maxLines: number, maxFiles: number): string {
   return `${lines} / ${files}`;
 }
 
-function buildSizeSkipComment(data: SkipSizeSummary): string {
+function buildSizeSkipComment(
+  data: SkipSizeSummary,
+  platformConnected: boolean,
+): string {
   const lines = [
     SKIP_SIZE_COMMENT_MARKER,
     "## Crysk review skipped",
@@ -199,24 +202,28 @@ function buildSizeSkipComment(data: SkipSizeSummary): string {
       `${data.changedFiles} file(s), exceeding the configured size gate ` +
       `(${sizeLimitsText(data.maxChangedLines, data.maxChangedFiles)}).`,
     "",
-    "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
-      "PR or raise `max-changed-lines` / `max-changed-files` to change the " +
-      "limit for later pushes.",
+    // A platform repository sets its limits in the dashboard, not as inputs.
+    platformConnected
+      ? "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
+        "PR or raise the size limits in the Crysk dashboard to change them " +
+        "for later pushes."
+      : "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
+        "PR or raise `max-changed-lines` / `max-changed-files` to change the " +
+        "limit for later pushes.",
     "",
-    ciForceReviewHintLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber, platformConnected),
   ];
   return `${lines.join("\n")}\n`;
 }
 
 // What a platform repository can do about a budget skip (cryskai/platform#12):
-// its workflow listens for `/crysk review` and nothing else, it was never
-// scaffolded by `crysk ci init` (so no force workflow, no `budget-usd` input to
-// raise), and what a review costs is the model setup chosen in the dashboard.
-export const PLATFORM_BUDGET_SKIP_HINT =
-  `Comment \`${CI_REVIEW_COMMENT}\` on this pull request to run it anyway. ` +
+// it has no `budget-usd` input to raise, and what a review costs is the model
+// setup chosen in the dashboard.
+const PLATFORM_BUDGET_SKIP_HINT =
   "To change what reviews cost, change the model setup in the Crysk dashboard.";
 
 function buildBudgetSkipComment(data: SkipBudgetSummary): string {
+  const platformConnected = data.platformConnected === true;
   const lines = [
     SKIP_BUDGET_COMMENT_MARKER,
     "## Crysk review skipped",
@@ -224,14 +231,12 @@ function buildBudgetSkipComment(data: SkipBudgetSummary): string {
     `⚠️ The estimated review cost (${usd(data.estimatedCostUsd)}) exceeds ` +
       `the configured CI budget ceiling (${usd(data.budgetUsd)}).`,
     "",
-    ...(data.platformConnected === true
-      ? [PLATFORM_BUDGET_SKIP_HINT]
-      : [
-          "Crysk did not run to stay within the configured `--budget-usd` " +
-            "ceiling.",
-          "",
-          ciForceReviewHintLine(data.prNumber),
-        ]),
+    platformConnected
+      ? PLATFORM_BUDGET_SKIP_HINT
+      : "Crysk did not run to stay within the configured `--budget-usd` " +
+        "ceiling.",
+    "",
+    ciForceReviewHintLine(data.prNumber, platformConnected),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -252,6 +257,9 @@ export interface CiSizeGateSkipInput {
   // failed (size-gate.ts), but the summary/comment show both metrics.
   maxChangedLines: number;
   maxChangedFiles: number;
+  // The run came through the Crysk platform (CRYSK_PLATFORM_CONNECTED): the
+  // comment names only what applies to a platform repository.
+  platformConnected?: boolean;
 }
 
 // `null` means "nothing to publish": either this isn't a CI run, or the
@@ -267,7 +275,10 @@ export function ciSizeGateSkip(input: CiSizeGateSkipInput): CiGateSkip | null {
     maxChangedLines: input.maxChangedLines,
     maxChangedFiles: input.maxChangedFiles,
   };
-  return { comment: buildSizeSkipComment(summary), summary };
+  return {
+    comment: buildSizeSkipComment(summary, input.platformConnected === true),
+    summary,
+  };
 }
 
 export interface CiBudgetGateSkipInput {
@@ -671,6 +682,7 @@ const COVERAGE_REASON_LABEL: Record<
 function buildCoverageSkipComment(
   data: SkipCoverageSummary,
   reason: CiReviewSkipReason,
+  platformConnected: boolean,
 ): string {
   // A stop is a maintainer's decision, not a score: the score line would
   // blame the push for a skip it did not cause.
@@ -693,7 +705,7 @@ function buildCoverageSkipComment(
     "The existing review comment still describes the last head Crysk " +
       "reviewed.",
     "",
-    ciForceReviewHintLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber, platformConnected),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -702,7 +714,10 @@ function buildCoverageSkipComment(
 // it by the repository's own rules, says what the gate does with the next pushes, and how to ask for more.
 // Stage 2 #12: no review reads those pushes, so the gate holds a green instead of carrying it, and the
 // override is how a human merges a head no review verified.
-function buildManualRequiredComment(data: ManualRequiredSummary): string {
+function buildManualRequiredComment(
+  data: ManualRequiredSummary,
+  platformConnected: boolean,
+): string {
   const manualOnly = data.admissionReason === "manual-only-policy";
   const rules = [
     ...(data.policyMode === undefined
@@ -736,7 +751,7 @@ function buildManualRequiredComment(data: ManualRequiredSummary): string {
     "",
     "The existing review comment still describes the last head Crysk reviewed.",
     "",
-    `Want more review rounds? ${ciForceReviewHintLine(data.prNumber)}`,
+    `Want more review rounds? ${ciForceReviewHintLine(data.prNumber, platformConnected)}`,
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -796,6 +811,8 @@ export function planCiReviewSkip(input: {
   verdict: Extract<CiReviewAdmissionVerdict, { action: "skip" }>;
   admission?: AdmissionContext;
   ciMode: CiMode;
+  // The run came through the Crysk platform: the hint names only `/crysk review`.
+  platformConnected?: boolean;
 }): CiGateSkipPlan {
   const detail = ciReviewSkipDetail(input.verdict);
   const summary: SkipCoverageSummary = {
@@ -810,7 +827,11 @@ export function planCiReviewSkip(input: {
     ...skipAdmissionSummaryFields(input.verdict, input.admission),
   };
   return {
-    comment: buildCoverageSkipComment(summary, input.verdict.reason),
+    comment: buildCoverageSkipComment(
+      summary,
+      input.verdict.reason,
+      input.platformConnected === true,
+    ),
     markerPrefix: SKIP_COVERAGE_COMMENT_MARKER,
     summaryMarkdown: renderStepSummary(summary, input.ciMode),
     outputs: ciGateSkipOutputs("skipped-coverage", 0),
@@ -822,6 +843,8 @@ export function planCiReviewManualRequired(input: {
   verdict: Extract<CiReviewAdmissionVerdict, { action: "manual-required" }>;
   admission?: AdmissionContext;
   ciMode: CiMode;
+  // The run came through the Crysk platform: the hint names only `/crysk review`.
+  platformConnected?: boolean;
 }): CiGateSkipPlan {
   const detail = ciReviewManualRequiredDetail(input.verdict);
   const summary: ManualRequiredSummary = {
@@ -838,7 +861,10 @@ export function planCiReviewManualRequired(input: {
     ...manualAdmissionSummaryFields(input.verdict, input.admission),
   };
   return {
-    comment: buildManualRequiredComment(summary),
+    comment: buildManualRequiredComment(
+      summary,
+      input.platformConnected === true,
+    ),
     markerPrefix: MANUAL_REQUIRED_COMMENT_MARKER,
     summaryMarkdown: renderStepSummary(summary, input.ciMode),
     outputs: ciGateSkipOutputs("manual-required", 0),
