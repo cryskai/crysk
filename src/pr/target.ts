@@ -28,6 +28,7 @@ import {
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { formatWorkflowCommand } from "#ci/reporter";
+import { openCodeRoutesBillMetered } from "#ci/setup";
 import { resolveRepoRoot } from "#git/git";
 import { ghCurrentBranchPr, ghPrView } from "#pr/pr";
 import {
@@ -46,6 +47,7 @@ import {
 } from "#review/preflight";
 import type { ParsedAgent, PromptSetIdentity } from "#review/prompt-set";
 import type { estimateCost } from "#review/report";
+import { buildCliRoutePlan } from "#review/route-preflight";
 import {
   type LoadedRunConfig,
   loadRunConfig,
@@ -66,6 +68,7 @@ import {
 } from "../home-preflight";
 import type { RunClaudeCredential } from "../security/claude-credential";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
+import { readOpenCodeSecretNames } from "../security/opencode-secret-manifest";
 
 export interface ResolvedPrRunOptions {
   operatorRoot: string;
@@ -149,6 +152,29 @@ export interface ResolvedPrPromptSet {
   gotchasPath: string | undefined;
 }
 
+// The OpenCode providers of every route the run resolves, fallbacks included,
+// from the same plan builder the run confirms with (buildCliRoutePlan), so each
+// source routing reads counts the way routing reads it. Undefined when the plan
+// cannot be built here; the run itself surfaces that error at confirm.
+async function openCodeRouteProviders(
+  input: Parameters<typeof buildCliRoutePlan>[0],
+): Promise<string[] | undefined> {
+  let plan: Awaited<ReturnType<typeof buildCliRoutePlan>>;
+  try {
+    plan = await buildCliRoutePlan(input);
+  } catch {
+    return undefined;
+  }
+  const providers = new Set<string>();
+  for (const step of plan.steps) {
+    for (const route of [step, ...(step.fallbacks ?? [])]) {
+      if (route.route.backend === "opencode")
+        providers.add(route.route.provider);
+    }
+  }
+  return [...providers].sort();
+}
+
 // Step 1's second half: the CI budget ceiling (+ its notices), then the
 // prompt set resolution and the gotchas PATH (never the validation itself —
 // see this module's header). Runs after the caller's own
@@ -161,18 +187,41 @@ export async function resolvePrPromptSetAndBudget(params: {
   config: LoadedRunConfig["config"];
   isCi: boolean;
   operatorRoot: string;
+  // The summarizer's settings, for its route (openCodeRouteProviders).
+  summary: LoadedRunConfig["summary"];
   // S5: the run's Claude credential, chosen once at run start (reviewPr). Its env
   // holds only the chosen credential, so the ceiling follows the choice: the
   // subscription has no metered ceiling, the API key keeps it. Absent (tests that
   // pin the older wiring) reads the process env as before.
   claudeRun?: RunClaudeCredential;
 }): Promise<ResolvedPrPromptSet> {
-  // File presence, not envBillsMetered: that predicate stamps Claude
-  // usage and must stay Anthropic-env-only.
+  // The WHOLE resolution, not just its dir: under the compiled binary the
+  // prompt set is a map of embedded paths and `dir` is only a display label.
+  // Resolved first because the ceiling below reads the models it names.
+  const { agents, spec, agentFiles, promptSet } = await resolvePromptSet(
+    params.options,
+    params.loaded,
+  );
+  // The OpenCode half from the routes the run can take, not from the auth file
+  // existing (cryskai/platform#12): a file built for a ChatGPT subscription, one
+  // left on a runner whose HOME persists, or a local `opencode auth login` store
+  // invoices nothing for a run whose models do not bill per token. Not
+  // envBillsMetered either: that predicate stamps Claude usage and must stay
+  // Anthropic-env-only.
   const billingMode = deriveCiBillingMode(
     params.claudeRun?.env ?? process.env,
     {
-      openCodeAuthPresent: existsSync(resolveOpenCodeAuthPath()),
+      openCodeBillsMetered: openCodeRoutesBillMetered({
+        providers: await openCodeRouteProviders({
+          spec,
+          options: params.options,
+          agentFiles,
+          models: params.config.models,
+          summary: params.summary,
+        }),
+        authFilePresent: existsSync(resolveOpenCodeAuthPath()),
+        openCodeSecretNames: readOpenCodeSecretNames(),
+      }),
     },
   );
   // Issue #156: resolve the ceiling ONCE, here, and use this same value at
@@ -222,12 +271,6 @@ export async function resolvePrPromptSetAndBudget(params: {
       }
     }
   }
-  // The WHOLE resolution, not just its dir: under the compiled binary the
-  // prompt set is a map of embedded paths and `dir` is only a display label.
-  const { agents, spec, agentFiles, promptSet } = await resolvePromptSet(
-    params.options,
-    params.loaded,
-  );
   const instructions = resolveReviewInstructions(
     params.options.gotchas,
     params.operatorRoot,

@@ -707,6 +707,9 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
+        if (expr === "steps.platform.outputs.estimate") {
+          return ctx.platform?.estimate ?? "";
+        }
         // The setup step's platform bindings, unset in a standalone run.
         if (expr === "steps.platform.outputs.config-file") {
           return ctx.platform?.["config-file"] ?? "";
@@ -1052,6 +1055,29 @@ describe("Packaging & distribution configuration", () => {
         .filter((step) => JSON.stringify(step).includes("inputs.models"))
         .map((step) => step.id);
       expect(mentions).toEqual(["trigger", "materialize"]);
+    });
+
+    // cryskai/platform#12: the run step gets the connect step's estimate and its
+    // connection, the two the budget gate and the skip comments read. A typo in
+    // either output name would silently fall back to the band and the legacy hints.
+    test("Run Crysk reads the platform's estimate and whether the run is connected", () => {
+      const estimate = '{"usd_low":0.41,"usd_high":0.87,"basis":"history"}';
+      const runStep = steps().find((step) => step.id === "run-crysk");
+      const ctx = {
+        inputs: {},
+        github: {},
+        trigger: {},
+        runner: { temp: "/runner/temp" },
+      };
+      const connected = resolveEnv(runStep?.env ?? {}, {
+        ...ctx,
+        platform: { "github-token": "ghs_x", estimate },
+      });
+      expect(connected.CRYSK_PLATFORM_ESTIMATE).toBe(estimate);
+      expect(connected.CRYSK_PLATFORM_CONNECTED).toBe("true");
+      const standalone = resolveEnv(runStep?.env ?? {}, ctx);
+      expect(standalone.CRYSK_PLATFORM_ESTIMATE).toBe("");
+      expect(standalone.CRYSK_PLATFORM_CONNECTED).toBe("false");
     });
 
     test.each([

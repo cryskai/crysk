@@ -6,6 +6,7 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
+import type { PlatformEstimateBasis } from "#ci/platform-estimate";
 import type { EffectiveConfig } from "#config/config";
 import { exclusionLines } from "#git/git";
 import { isFullCommitId } from "#git/refs";
@@ -492,7 +493,7 @@ export function freeRouteEstimateText(estimate: {
 // byte-identical. The band never reads $0 – $0 here: estimateCost clamps the
 // hunter seats (report.ts), so a free route is "not billed", never a zero estimate.
 export function planEstimateLine(input: {
-  estimate: { low: number; high: number };
+  estimate: { low: number; high: number; platform?: PlatformEstimateBasis };
   hunterCount: number;
   summarizer: boolean;
   freeRoute?: FreeRouteBilling;
@@ -505,9 +506,13 @@ export function planEstimateLine(input: {
   if (billing === "free") {
     return `estimate: ${freeRouteEstimateText(input.estimate)}`;
   }
+  // The platform's range is not the band, so the line says where it came from
+  // instead of the agent count the band is built on (cryskai/platform#12).
   const line =
-    `estimate ${low} – ${high} (${input.hunterCount} hunter(s) + refuter ` +
-    `${input.summarizer ? "+ summarizer" : "+ summarizer disabled"})`;
+    input.estimate.platform === undefined
+      ? `estimate ${low} – ${high} (${input.hunterCount} hunter(s) + refuter ` +
+        `${input.summarizer ? "+ summarizer" : "+ summarizer disabled"})`
+      : `estimate ${low} – ${high} (platform: ${input.estimate.platform})`;
   return billing === "mixed" ? `${line} ${FREE_STEPS_NOTE}` : line;
 }
 

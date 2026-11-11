@@ -802,10 +802,24 @@ credential, the first one in `credentials.claude` that is set (default `["subscr
 [Configuration, Credentials](configuration.md#credentials)). A run on the subscription
 (`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its real cash cost is `$0.00`
 and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
-A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or an OpenCode auth file built from a
-`CRYSK_OPENCODE_*` secret) gets a `10.00` default, because that is the case where a runaway PR really does
-produce an invoice. Setting
+A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode provider whose
+`CRYSK_OPENCODE_*` secret is an API key, on any route the run resolves: any role or fallback of `models`,
+`--model`, `--scout-model`, a spec agent, a prompt's frontmatter or an engine default) gets a `10.00` default, because that is the
+case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
+subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
+
+**In platform mode the Crysk platform's estimate replaces the cost band.** The connect step asks for it
+(`X-Crysk-Capabilities: estimate`) and the budget gate compares its high end to the ceiling: an estimate
+from the setup's recent reviews scaled to the pull request, or from the catalog prices of its models. The
+plan prints it as `estimate $X – $Y (platform: history)` or `(platform: catalog)`. The platform prices the
+whole pull request, so a re-review whose discovery reads only what changed since the last review, or one
+that only verifies earlier findings, scales that figure by the share of a full review it does (the band
+measures the share; it never supplies the price). Without one (an older
+platform, a model with no catalog price) the band decides as before. On a platform repository every skip
+comment names only `/crysk review` (no legacy spelling, force workflow or re-scaffold), and the budget
+and size skips point at the model setup and the size limits in the Crysk dashboard, since its workflow
+has no `budget-usd` or `max-changed-*` inputs to raise.
 
 **Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
 subscription route there is no size limit, so large pull requests are reviewed instead of skipped, and

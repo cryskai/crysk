@@ -17,6 +17,7 @@ import {
   CODEGRAPH_ONLY_MCP_CONFIG,
   computeDiffStatAndSizeGate,
   EMPTY_MCP_CONFIG,
+  fullReviewHunterCount,
   prepareRunnerForRoute,
   resolveParityFires,
   resolvePromptSet,
@@ -141,6 +142,36 @@ describe("selectActiveHunters", () => {
   test("a triggered hunter is included when parity fires", () => {
     const active = selectActiveHunters([hunterA, hunterConditional], true);
     expect(active).toEqual([hunterA, hunterConditional]);
+  });
+});
+
+// cryskai/platform#12: a narrowed run's share of a full review divides by the
+// hunters a full review of the whole PR would run, never by this run's own.
+describe("fullReviewHunterCount", () => {
+  const hunter = { key: "a", file: "a.md", role: "hunter" as const };
+  const parity = {
+    key: "p",
+    file: "p.md",
+    role: "hunter" as const,
+    trigger: "input" as const,
+  };
+  const patch = (file: string) =>
+    `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-a\n+b\n`;
+
+  test("counts the parity hunter when the whole PR touches a trigger path", () => {
+    expect(
+      fullReviewHunterCount([hunter, parity], patch("src/auth/guard.ts"), [
+        "src/auth/**",
+      ]),
+    ).toBe(2);
+  });
+
+  test("leaves it out when the whole PR does not", () => {
+    expect(
+      fullReviewHunterCount([hunter, parity], patch("src/ui/x.ts"), [
+        "src/auth/**",
+      ]),
+    ).toBe(1);
   });
 });
 

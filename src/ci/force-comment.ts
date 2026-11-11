@@ -28,7 +28,20 @@ export function ciForceReviewDispatch(prNumber: number): string {
   return `gh workflow run ${CI_FORCE_WORKFLOW_FILE} -f pr=${prNumber}`;
 }
 
-export function ciForceReviewHintLine(prNumber: number): string {
+// `platformConnected`: the run came through the Crysk platform. Its workflow is
+// the platform's stub, which listens for the `/crysk` spellings only and was
+// never scaffolded here, so the legacy names, the force workflow and the
+// re-scaffold do not apply there (cryskai/platform#12).
+export function ciForceReviewHintLine(
+  prNumber: number,
+  platformConnected = false,
+): string {
+  if (platformConnected) {
+    return (
+      `Comment \`${CI_REVIEW_COMMENT}\` on this pull request to run it anyway ` +
+      `(\`${CI_REVIEW_FULL_COMMENT}\` re-discovers the whole range).`
+    );
+  }
   return (
     `Comment ${commandHint(CI_REVIEW_COMMENT)} on this pull request to run it ` +
     `on GitHub Actions anyway (${commandHint(CI_REVIEW_FULL_COMMENT)} re-discovers the ` +

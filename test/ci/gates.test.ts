@@ -28,7 +28,81 @@ import {
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { renderStepSummary } from "#ci/reporter";
+import {
+  openCodeProvidersOfModels,
+  openCodeRoutesBillMetered,
+} from "#ci/setup";
 import type { SizeGateVerdict } from "#review/size-gate";
+
+// cryskai/platform#12 item 5: the OpenCode half of the metered ceiling reads
+// the routes the models name, not merely whether an auth file exists.
+describe("openCodeRoutesBillMetered", () => {
+  const deepseek = ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"];
+  const metered = (models: unknown, names: readonly string[] | undefined) =>
+    openCodeRoutesBillMetered({
+      providers: openCodeProvidersOfModels(models),
+      authFilePresent: true,
+      openCodeSecretNames: names,
+    });
+
+  test("an auth file whose providers no model uses does not make a Claude-only run metered", () => {
+    expect(metered(undefined, deepseek)).toBe(false);
+    expect(metered({ default: ["claude:sonnet-latest"] }, deepseek)).toBe(
+      false,
+    );
+  });
+
+  test("a model on a provider bound to an API key is metered, fallbacks included", () => {
+    expect(
+      metered(
+        {
+          refuter: [
+            "claude:opus-latest",
+            "opencode:deepseek/deepseek-v4-flash",
+          ],
+        },
+        deepseek,
+      ),
+    ).toBe(true);
+  });
+
+  test("a ChatGPT subscription route is not metered", () => {
+    expect(
+      metered({ default: ["opencode:openai/gpt-5.5"] }, [
+        "CRYSK_OPENCODE_OPENAI_OAUTH",
+      ]),
+    ).toBe(false);
+  });
+
+  test("without a manifest the provider literal decides, as the run binds it", () => {
+    expect(
+      metered({ default: ["opencode:deepseek/deepseek-v4-flash"] }, undefined),
+    ).toBe(true);
+    expect(metered({ default: ["opencode:openai/gpt-5.5"] }, undefined)).toBe(
+      false,
+    );
+  });
+
+  test("routes that could not be resolved leave the decision to the auth file", () => {
+    expect(
+      openCodeRoutesBillMetered({
+        providers: undefined,
+        authFilePresent: true,
+        openCodeSecretNames: deepseek,
+      }),
+    ).toBe(true);
+  });
+
+  test("no auth file stays unmetered, as before: a free opencode/* model invoices nothing", () => {
+    expect(
+      openCodeRoutesBillMetered({
+        providers: ["opencode"],
+        authFilePresent: false,
+        openCodeSecretNames: undefined,
+      }),
+    ).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // evaluateBudgetGate
@@ -152,6 +226,22 @@ describe("ciSizeGateSkip", () => {
       maxChangedLines: 1000,
       maxChangedFiles: 50,
     });
+  });
+
+  test("on a platform repository the step summary points at the dashboard, like the comment", () => {
+    const skip = ciSizeGateSkip({
+      isCi: true,
+      verdict: failedLinesGate,
+      prNumber: 55,
+      maxChangedLines: 1000,
+      maxChangedFiles: 50,
+      platformConnected: true,
+    });
+    if (skip === null) throw new Error("expected a skip");
+    const rendered = renderStepSummary(skip.summary);
+    expect(rendered).toContain("raise the size limits in the Crysk dashboard");
+    expect(rendered).not.toContain("max-changed-lines");
+    expect(skip.comment).not.toContain("max-changed-lines");
   });
 
   test("in CI mode with a failed (files) verdict, still builds a valid payload", () => {
@@ -449,8 +539,8 @@ describe("deriveCiBillingMode", () => {
 
   // omit ⇒ env-only. OpenCode env blobs must not become a second Anthropic
   // key: envBillsMetered stays the Claude usage-stamp, and this ceiling ORs
-  // file presence through the optional second argument only.
-  test("omitting openCodeAuthPresent is env-only — OpenCode env blobs do not meter", () => {
+  // the OpenCode routes' verdict through the optional second argument only.
+  test("omitting openCodeBillsMetered is env-only — OpenCode env blobs do not meter", () => {
     expect(
       deriveCiBillingMode({
         OPENCODE_AUTH_JSON: '{"deepseek":{"type":"api","key":"sk-test-fake"}}',
@@ -467,33 +557,32 @@ describe("deriveCiBillingMode", () => {
     ).toBe("subscription");
   });
 
-  // Presence of the 0600 auth.json means we cannot rule out an invoice —
-  // same conservative doctrine as Anthropic keys. The executable CI path
-  // is a deepseek (or any non-openai) API-token store; we do not parse the
-  // file here. openai type:api is refused at the broker, not remapped.
-  test("openCodeAuthPresent is metered with no Anthropic env — deepseek API-token CI", () => {
-    expect(deriveCiBillingMode({}, { openCodeAuthPresent: true })).toBe(
+  // An OpenCode route bound to an API key can invoice — same conservative
+  // doctrine as Anthropic keys. Which routes do is openCodeRoutesBillMetered's
+  // call (ci/setup.ts); this function only ORs its verdict in.
+  test("openCodeBillsMetered is metered with no Anthropic env — deepseek API-token CI", () => {
+    expect(deriveCiBillingMode({}, { openCodeBillsMetered: true })).toBe(
       "metered",
     );
   });
 
-  test("openCodeAuthPresent beside Claude OAuth is still metered", () => {
+  test("openCodeBillsMetered beside Claude OAuth is still metered", () => {
     expect(
       deriveCiBillingMode(
         { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test" },
-        { openCodeAuthPresent: true },
+        { openCodeBillsMetered: true },
       ),
     ).toBe("metered");
   });
 
-  test("openCodeAuthPresent false is env-only", () => {
-    expect(deriveCiBillingMode({}, { openCodeAuthPresent: false })).toBe(
+  test("openCodeBillsMetered false is env-only", () => {
+    expect(deriveCiBillingMode({}, { openCodeBillsMetered: false })).toBe(
       "subscription",
     );
   });
 
-  test("deepseek-style OpenCode auth gets the default metered ceiling", () => {
-    const billingMode = deriveCiBillingMode({}, { openCodeAuthPresent: true });
+  test("deepseek-style OpenCode routes get the default metered ceiling", () => {
+    const billingMode = deriveCiBillingMode({}, { openCodeBillsMetered: true });
     expect(
       resolveCiBudgetCeiling({ configured: undefined, billingMode }),
     ).toEqual({
