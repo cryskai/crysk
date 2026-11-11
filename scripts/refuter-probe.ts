@@ -76,100 +76,44 @@
 // $1.5 on sonnet — still far below the ~$10 replay that cannot answer this
 // question at all.
 //
-// Run: bun run scripts/refuter-probe.ts [replicates]
+// Run: bun run scripts/refuter-probe.ts [replicates] [--refuter-model <m>]
+//      [--hunter-model <m>]
+// The refuter runs on opus and the planted hunter is planned on haiku unless a
+// flag (or REFUTER_PROBE_REFUTER_MODEL / REFUTER_PROBE_HUNTER_MODEL) names
+// another model, `opencode:<provider>/<model>` included. Every step runs on
+// its route through the production route path (src/harness/route-runner.ts),
+// and each attempt records the route its refuter actually ran.
 import path from "node:path";
-import type { DraftFinding, HunterDraft, RefuterResult } from "#review/drafts";
+import type { RefuterResult } from "#review/drafts";
 import type { RefuterVerdict } from "#review/findings";
-import { runPipeline } from "#review/pipeline";
-import type { ReviewSpec } from "#review/spec";
-import {
-  ClaudeCodeRunner,
-  type StepResult,
-  type StepRunner,
-  type StepSpec,
-} from "#review/step-runner";
 import {
   buildRefuterProbeFixture,
   EXPECTED_VERDICT,
-  HUNTER_AGENT_FILE,
-  HUNTER_KEY,
   PROBE_ARMS,
   type ProbeArm,
-  REFUTER_AGENT_FILE,
+  parseRefuterProbeArgs,
+  refuterProbePipelineInput,
+  runRefuterProbePipeline,
 } from "../fixtures/refuter-probe";
-import { resolveRunnerAuthority } from "../src/runner-authority";
-import { zeroUsage } from "../src/usage";
+import type { ResolvedModelRoute } from "../src/execution/contracts";
+import { buildPipelineHarnessPlan } from "../src/harness/pipeline-plan";
+import { prepareHarnessRunner } from "../src/harness/route-runner";
+import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 
-const REPLICATES = Number(process.argv[2] ?? 3);
+const OPTIONS = parseRefuterProbeArgs(process.argv.slice(2), process.env);
+const REPLICATES = OPTIONS.replicates;
 const REFUTER_SOURCE_PATH = path.resolve(
   import.meta.dir,
   "../prompts/default/review-refuter.md",
 );
-// The production refuter model: it must equal the `model:` in
-// prompts/default/review-refuter.md (test/review/preflight-bundled-prompts.test.ts
-// asserts that value). A haiku refuter would answer a different question —
-// this probe is about the v2 PROMPT's deference, not about what a cheap model
-// can verify. Set on the AgentSpec on purpose, so the probe is pinned even if
-// the agent file's frontmatter is later retuned; that also means retuning the
-// frontmatter does NOT move this constant, and a probe run on a model
-// production no longer uses proves nothing about production.
-const REFUTER_MODEL = "opus";
-// Effort is deliberately NOT pinned beside it: the fixture carries the refuter
-// prompt verbatim, so the step runs at the `effort:` the frontmatter declares
-// (`high`, #299), i.e. the production level. A pass at a lower level is not
-// evidence for it: 16/16 at `medium` did not predict that `medium` refutes a
-// real, known blocker on actual findings (3 of 4 verdicts on pr-1858).
-
-// One hunter (never spawned — see the runner below) and one refuter, which is
-// the minimum the pipeline accepts. The hunter is non-parity, so the
-// conditional parity leg cannot fire.
-const PROBE_SPEC: ReviewSpec = {
-  agents: [
-    { key: HUNTER_KEY, file: HUNTER_AGENT_FILE, role: "hunter" },
-    {
-      key: "refuter",
-      file: REFUTER_AGENT_FILE,
-      role: "refuter",
-      model: REFUTER_MODEL,
-    },
-  ],
-};
+// The models and why they are pinned: REFUTER_PROBE_MODELS in
+// fixtures/refuter-probe.ts. The spec, the planted runner and the pipeline
+// input are built there, so the route plan comes from the same object the
+// pipeline runs.
 
 const refuterSource = await Bun.file(REFUTER_SOURCE_PATH).text();
-
-// THE ENGINE SEAM. Hunter steps are answered with a canned draft carrying the
-// arm's planted finding — free, deterministic, and not what is under test.
-// Refuter steps go to a real ClaudeCodeRunner, so the genuine refuterPrompt,
-// refuter.system.md write, isolation argv, retry ordering, watchdog,
-// validateRefuterResult and verdict→tier mapping all stay in the path. A
-// reimplementation of that leg would measure the reimplementation.
-class PlantedDraftRunner implements StepRunner {
-  constructor(
-    private readonly draft: DraftFinding,
-    private readonly live: StepRunner,
-  ) {}
-
-  async run(spec: StepSpec): Promise<StepResult> {
-    if (spec.name.startsWith("refuter-")) return this.live.run(spec);
-    if (!spec.name.startsWith("hunter-")) {
-      // An unrecognised step name means the spec drifted; failing loudly beats
-      // quietly answering it with the planted draft.
-      throw new Error(`refuter probe: unexpected step ${spec.name}`);
-    }
-    const output: HunterDraft = { findings: [this.draft] };
-    return {
-      name: spec.name,
-      status: "ok",
-      output,
-      // Zero on purpose: a fabricated bill for the fake leg would pollute the
-      // only cost figure this probe reports honestly, the refuter's own.
-      usage: zeroUsage(),
-      attempts: 1,
-      stderrTail: "",
-      resultText: "",
-    };
-  }
-}
+// S5: the Claude credential, chosen once for the probe, as a review does.
+const claudeRun = resolveRunClaudeCredential({});
 
 interface Attempt {
   arm: ProbeArm;
@@ -184,6 +128,10 @@ interface Attempt {
   refuter_status: string;
   run_status: string;
   refuter_proof_refs: string[];
+  // The route the refuter actually ran, from the run's pipeline.json.
+  refuter_model: string;
+  refuter_route: ResolvedModelRoute;
+  route_fingerprint: string;
   run_dir: string;
 }
 
@@ -212,55 +160,29 @@ async function runOnce(arm: ProbeArm, replicate: number): Promise<Attempt> {
   const mcpConfigPath = path.join(fixture.runDir, "mcp.json");
   await Bun.write(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
 
-  const runnerAuthority = await resolveRunnerAuthority({
-    workspaceRoot: fixture.repoDir,
+  const input = refuterProbePipelineInput(fixture, {
+    mcpConfigPath,
+    refuterModel: OPTIONS.refuterModel,
+    hunterModel: OPTIONS.hunterModel,
   });
-  if (runnerAuthority.error !== undefined) {
-    throw new Error(
-      `execution authority unavailable: ${runnerAuthority.error}`,
-    );
+  // The route plan from the pipeline input itself, admitted and bound through
+  // the production path. Its deps carry §5.3 D1-10b's ONE ceiling controller,
+  // shared by the pipeline and the runtime: the pipeline aborts it when the
+  // ceiling fires, and the runtime refuses to start another attempt, so
+  // in-flight steps stop instead of billing on — and this probe spends real
+  // money.
+  const harness = await prepareHarnessRunner({
+    workspaceRoot: fixture.repoDir,
+    buildRoutePlan: () => buildPipelineHarnessPlan(input),
+    claudeRun,
+  });
+  let run: Awaited<ReturnType<typeof runRefuterProbePipeline>>;
+  try {
+    run = await runRefuterProbePipeline(input, harness, fixture.draft);
+  } finally {
+    await harness.dispose();
   }
-
-  // §5.3 D1-10b: ONE controller shared by the pipeline and the runner. The
-  // pipeline aborts it when the ceiling fires; the runner's harness reads the
-  // same signal and refuses to start another attempt, so in-flight steps stop
-  // instead of billing on past a report that has already been returned. Two
-  // controllers would leave the ceiling unable to stop the steps it is waiting
-  // on — and this probe spends real money.
-  const ceilingController = new AbortController();
-  const result = await runPipeline(
-    {
-      pr: 0,
-      baseSha: fixture.baseSha,
-      headSha: fixture.headSha,
-      worktree: fixture.repoDir,
-      diffPath: fixture.diffPath,
-      gotchasPath: fixture.gotchasPath,
-      agentsDir: fixture.agentsDir,
-      runDir: fixture.runDir,
-      outPath: path.join(fixture.runDir, "findings.json"),
-      mcpConfigPath,
-      hopBudget: 4,
-      parityTriggerPaths: [],
-      // Priors template into HUNTER bodies only, and this run's hunter is a
-      // fake that is never spawned. The refuter body anchors {{GOTCHAS}} (the
-      // repository facts, rendered from fixture.gotchasPath) but no
-      // {{PRIORS}}, so empty priors keep the probe honest.
-      suspicionPriors: [],
-      stepTimeoutMs: 10 * 60 * 1000,
-      spec: PROBE_SPEC,
-    },
-    {
-      runner: new PlantedDraftRunner(
-        fixture.draft,
-        new ClaudeCodeRunner({
-          ...runnerAuthority.runnerOptions,
-          signal: ceilingController.signal,
-        }),
-      ),
-      ceilingController,
-    },
-  );
+  const { result, identity } = run;
 
   // `refuted` findings LEAVE findings[] for debug.refuted; every other verdict
   // stays in findings[] carrying refuter_verdict — `downgraded-latent` included
@@ -291,6 +213,9 @@ async function runOnce(arm: ProbeArm, replicate: number): Promise<Attempt> {
     refuter_status: refuter?.status ?? "missing",
     run_status: skillOutput.run_status,
     refuter_proof_refs: await readRefuterProofRefs(fixture.runDir, row.id),
+    refuter_model: identity.route.modelSnapshot,
+    refuter_route: identity.route,
+    route_fingerprint: identity.routeFingerprint,
     run_dir: fixture.runDir,
   };
 }
@@ -306,10 +231,16 @@ for (let r = 1; r <= REPLICATES; r++) {
     console.error(
       `[${arm} #${r}] verdict=${attempt.verdict} ` +
         `expected=${attempt.expected_verdict} ` +
+        `${attempt.refuter_route.backend}:${attempt.refuter_model} ` +
         `$${attempt.refuter_cost_usd.toFixed(4)} ${attempt.run_dir}`,
     );
   }
 }
+
+const distinct = (values: string[]): string | string[] => {
+  const unique = [...new Set(values)];
+  return unique.length === 1 ? (unique[0] as string) : unique;
+};
 
 const summarise = (arm: ProbeArm) => {
   const rows = attempts.filter((a) => a.arm === arm);
@@ -339,7 +270,11 @@ console.log(
     {
       replicates: REPLICATES,
       refuter_source: REFUTER_SOURCE_PATH,
-      refuter_model: REFUTER_MODEL,
+      // From the routes the attempts ran, never from the flag: one value when
+      // every attempt ran the same route (the default reads "opus", as before).
+      refuter_model: distinct(attempts.map((a) => a.refuter_model)),
+      refuter_backend: distinct(attempts.map((a) => a.refuter_route.backend)),
+      route_fingerprint: distinct(attempts.map((a) => a.route_fingerprint)),
       "true-claim": summarise("true-claim"),
       "false-claim": summarise("false-claim"),
       "hard-false-claim": summarise("hard-false-claim"),

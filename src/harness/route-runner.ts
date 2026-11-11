@@ -72,6 +72,20 @@ function modelsForAgents(
 
 // The route plan for the steps a harness runs. A whole-pipeline harness uses
 // buildCliRoutePlan (#review/route-preflight) instead, the review's own plan.
+// A bare pinned Claude id (`claude-sonnet-4-5-20250929`) reached the Claude
+// CLI as given before harnesses ran on route plans, and the lab's recipes still
+// pass one. Production's `--model` refuses that spelling, so a harness names it
+// `claude:<id>` for the user: the same model, now through a route.
+const BARE_CLAUDE_ID_RE = /^claude-[a-z0-9.-]+[a-z0-9]$/;
+
+export function harnessModelChoice(
+  model: string | undefined,
+): string | undefined {
+  return model !== undefined && BARE_CLAUDE_ID_RE.test(model)
+    ? `claude:${model}`
+    : model;
+}
+
 export function buildHarnessRoutePlan(
   input: HarnessRoutePlanInput,
 ): ResolvedRoutePlan {
@@ -84,8 +98,10 @@ export function buildHarnessRoutePlan(
   if (input.materiality === true && models?.judge === undefined) {
     models = { ...models, judge: [profileRoute(profile, "judge").model] };
   }
+  const cliModel = harnessModelChoice(input.cliModel);
   const plan = buildResolvedRoutePlan({
     ...input,
+    ...(cliModel === undefined ? {} : { cliModel }),
     agents,
     profile,
     ...(models === undefined ? {} : { models }),

@@ -227,7 +227,7 @@ What is on disk for the TypeScript slice. Not the 50.
 1. **Worklist** — `docs/martian-cal-goldens.json` + `docs/martian-cal-cases.json` (SHAs via `gh`, captured 2026-08-19).
 2. **Driver** — `benchmarks/martian/martian-cal.ts` (`plan|check|run|score`). Local `pr-hero review --repo --base --head --two-dot --yes --no-summary`. Refuses `--pr` / `--post`. `--out` outside the clone.
 3. **Adapter** — `src/martian-adapter.ts`: `findings.json` → `martian-review.json` (`candidates[]` + `review_comments`). One candidate per finding.
-4. **Judge (Surface A)** — `benchmarks/martian/martian-judge.ts`. Martian’s `JUDGE_PROMPT` (“same underlying issue?”), one Claude Code spawn per PR (`tools: []`, model `sonnet`). **Not** their Python gateway / `MARTIAN_API_KEY`. Sibling findings at the same `path:line` are not extra FPs (mechanical analogue of their step 2.5). Artifact: `~/Desktop/martian-cal/runs/martian-judge.json`.
+4. **Judge (Surface A)** — `benchmarks/martian/martian-judge.ts`. Martian’s `JUDGE_PROMPT` (“same underlying issue?”), one Claude Code spawn per PR (`tools: []`, model `sonnet`), run through the production route seam on its own `martian-judge` step; the artifact records the route and its fingerprints under `judge_route`. **Not** their Python gateway / `MARTIAN_API_KEY`. Sibling findings at the same `path:line` are not extra FPs (mechanical analogue of their step 2.5). Artifact: `~/Desktop/martian-cal/runs/martian-judge.json`.
 5. **Inject** — not done. A copy of `benchmark_data.json` with `tool: "pr-hero"` is still the path to sit in *their* Opus 4.5 / Sonnet 4.5 / GPT-5.2 tables.
 6. **Surface B** — not done. Stored Greptile/CodeRabbit comments are still on their repo, not bucketed against us for the ten.
 

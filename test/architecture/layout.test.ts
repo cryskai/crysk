@@ -199,7 +199,13 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "harness",
-    files: ["route-runner"],
+    files: [
+      "materiality-judge",
+      "pipeline-plan",
+      "replay-rows",
+      "route-runner",
+      "single-step",
+    ],
   },
 ];
 

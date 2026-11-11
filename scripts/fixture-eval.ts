@@ -3,31 +3,28 @@
 // fixture, asserted against its answer key. Costs cents (haiku frontmatter).
 // Proves plumbing + contract end-to-end, NOT recall quality (the lab's job).
 // Run: bun run fixture-eval
+// Every step runs on its route through the production route path
+// (src/harness/route-runner.ts): the route plan is built from the same
+// pipeline input the run gets, so the fixture's haiku agents, the summarizer's
+// frontmatter and `--model` route exactly as they did with no plan.
 import path from "node:path";
 import { validateFinding } from "#review/findings";
 import { runPipeline } from "#review/pipeline";
-import { ClaudeCodeRunner } from "#review/step-runner";
-import { buildPlantedFixture } from "../fixtures/setup";
-import { resolveRunnerAuthority } from "../src/runner-authority";
-
-const SUMMARIZER_PROMPT_PATH = path.join(
-  import.meta.dir,
-  "..",
-  "prompts",
-  "summarizer.md",
-);
-const SCOUT_PROMPT_PATH = path.join(
-  import.meta.dir,
-  "..",
-  "prompts",
-  "scout.md",
-);
+import {
+  buildPlantedFixture,
+  FIXTURE_EVAL_SCOUT_MODEL,
+  fixtureEvalPipelineInput,
+} from "../fixtures/setup";
+import {
+  buildPipelineHarnessPlan,
+  readPipelineRouteIdentity,
+} from "../src/harness/pipeline-plan";
+import { prepareHarnessRunner } from "../src/harness/route-runner";
+import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 
 // `bun run fixture-eval --scout` (ROADMAP-DOORDASH M5's exit: the planted bug
-// is still found with the flag ON and with it OFF). The scout runs on the
-// fixture's haiku the same way the rest of the run does — this eval proves
-// PLUMBING, never recall, and a sonnet scout here would spend real money to
-// prove nothing extra.
+// is still found with the flag ON and with it OFF). The scout runs on
+// FIXTURE_EVAL_SCOUT_MODEL (haiku), as the rest of the run does.
 const scoutEnabled = Bun.argv.includes("--scout");
 const agentsArgIndex = Bun.argv.indexOf("--agents");
 const customAgentsDir =
@@ -41,67 +38,40 @@ const customModel =
 
 const fixture = await buildPlantedFixture();
 
-// Resolved only after the disposable repo exists: its root is where every
-// step below executes, so that is the root the authority must name.
-const runnerAuthority = await resolveRunnerAuthority({
-  workspaceRoot: fixture.repoDir,
-});
-if (runnerAuthority.error !== undefined) {
-  throw new Error(`execution authority unavailable: ${runnerAuthority.error}`);
-}
-
 // Empty MCP registry + the runner's --strict-mcp-config: the fixture repo has
 // no codegraph index, so the steps run on Read/Grep/Glob alone and no other
 // MCP source can leak in.
 const mcpConfigPath = path.join(fixture.runDir, "mcp.json");
 await Bun.write(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
 
+const input = fixtureEvalPipelineInput(fixture, {
+  mcpConfigPath,
+  scout: scoutEnabled,
+  ...(customModel ? { model: customModel } : {}),
+  ...(customAgentsDir ? { agentsDir: customAgentsDir } : {}),
+});
+
+// Prepared only after the disposable repo exists: its root is where every
+// step below executes, so that is the root admission must name. The deps
+// carry §5.3 D1-10b's ONE ceiling controller, shared by the pipeline and the
+// runtime, so in-flight steps stop when the ceiling fires instead of billing
+// on — and this eval spends real money.
+const harness = await prepareHarnessRunner({
+  workspaceRoot: fixture.repoDir,
+  buildRoutePlan: () => buildPipelineHarnessPlan(input),
+  claudeRun: resolveRunClaudeCredential({}),
+});
+
 const started = performance.now();
-// §5.3 D1-10b: ONE controller shared by the pipeline and the runner. The
-// pipeline aborts it when the ceiling fires; the runner's harness reads the
-// same signal and refuses to start another attempt, so in-flight steps stop
-// instead of billing on past a report that has already been returned. Two
-// controllers would leave the ceiling unable to stop the steps it is waiting
-// on — and this probe spends real money.
-const ceilingController = new AbortController();
-const result = await runPipeline(
-  {
-    pr: 0,
-    baseSha: fixture.baseSha,
-    headSha: fixture.headSha,
-    worktree: fixture.repoDir,
-    diffPath: fixture.diffPath,
-    gotchasPath: fixture.gotchasPath,
-    agentsDir: customAgentsDir ?? fixture.agentsDir,
-    runDir: fixture.runDir,
-    // The pipeline never writes outPath (the caller's job) — recorded here
-    // only so pipeline.json carries the full resolved plan.
-    outPath: path.join(fixture.runDir, "findings.json"),
-    mcpConfigPath,
-    hopBudget: 4,
-    ...(customModel ? { model: customModel } : {}),
-    summarizer: { promptPath: SUMMARIZER_PROMPT_PATH },
-    ...(scoutEnabled
-      ? { scout: { promptPath: SCOUT_PROMPT_PATH, model: "haiku" } }
-      : {}),
-    parityTriggerPaths: [], // parity never fires — 2 hunters, cheapest run
-    suspicionPriors: [
-      {
-        path: "src/volume.ts",
-        weight: "high",
-        reason: "volume/gain scaling changed in this diff",
-      },
-    ],
-    stepTimeoutMs: 10 * 60 * 1000,
-  },
-  {
-    runner: new ClaudeCodeRunner({
-      ...runnerAuthority.runnerOptions,
-      signal: ceilingController.signal,
-    }),
-    ceilingController,
-  },
-);
+let result: Awaited<ReturnType<typeof runPipeline>>;
+try {
+  result = await runPipeline(
+    { ...input, routePlan: harness.plan },
+    harness.deps,
+  );
+} finally {
+  await harness.dispose();
+}
 const wallMs = Math.round(performance.now() - started);
 
 const failures: string[] = [];
@@ -234,6 +204,15 @@ for (const hunter of hunters) {
   }
 }
 
+let routeFingerprint: string | null = null;
+try {
+  routeFingerprint = (
+    await readPipelineRouteIdentity(fixture.runDir, "hunter-reliability")
+  ).routeFingerprint;
+} catch (error) {
+  failures.push(`no route identity: ${(error as Error).message}`);
+}
+
 const pass = failures.length === 0;
 console.log(
   JSON.stringify(
@@ -242,6 +221,9 @@ console.log(
       cost_usd: result.usage.cost_usd_est,
       wall_ms: wallMs,
       scout: scoutEnabled,
+      ...(scoutEnabled ? { scout_model: FIXTURE_EVAL_SCOUT_MODEL } : {}),
+      // The identity of what ran, from the run's own pipeline.json.
+      route_fingerprint: routeFingerprint,
       findings_count: skillOutput.findings.length,
       hit: hit ? { path: hit.path, line: hit.line } : null,
       run_dir: fixture.runDir,

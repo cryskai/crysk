@@ -2,7 +2,7 @@
 // dirs, with a selectable model, and score the verdicts against hand labels.
 // No hunters, no dedupe, no pipeline: one refuter step per case.
 //
-//   bun run scripts/refuter-replay.ts --cases <cases.json> --model opus|sonnet \
+//   bun run scripts/refuter-replay.ts --cases <cases.json> --model <model> \
 //     --out <results.jsonl> [--concurrency 4] [--system-prompt <file>]
 //     [--user-prompt-template <file>]
 //
@@ -20,7 +20,13 @@
 // The refuter gets what it got on the benchmark: a detached worktree of the
 // corpus clone at the head SHA and an empty MCP registry (no Martian clone
 // has a .codegraph index, and none may get one). Results append per case, so
-// a rerun skips (run, finding, model) rows already in --out.
+// a rerun skips (run, finding, source) rows already answered on the same
+// route in --out, including rows written before the route seam.
+//
+// --model is the refuter's model, routed through the production route seam
+// (src/harness/single-step.ts): `opus` or `sonnet` is the Claude route it
+// always ran (`claude:<alias>-latest`), and `opencode:<provider>/<model>`
+// measures an OpenCode model. Every row records the route and its fingerprints.
 
 import { createHash } from "node:crypto";
 import { appendFile, chmod, mkdtemp, rm } from "node:fs/promises";
@@ -28,20 +34,23 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { Effort } from "#model/catalog";
 import { wrapBlock } from "#review/boundary";
-import {
-  extractJsonObject,
-  type RefuterResult,
-  validateRefuterResult,
-} from "#review/drafts";
+import { extractJsonObject, validateRefuterResult } from "#review/drafts";
 import type { Finding } from "#review/findings";
 import { makeProofRefResolver, refuterPrompt } from "#review/pipeline";
-import {
-  ClaudeCodeRunner,
-  DEFAULT_STEP_MAX_ATTEMPTS,
-  type StepSpec,
-} from "#review/step-runner";
-import { resolveRunnerAuthority } from "../src/runner-authority";
+import { DEFAULT_STEP_MAX_ATTEMPTS, type StepSpec } from "#review/step-runner";
 import { BENCH_HOME, CORPORA } from "../benchmarks/martian/martian-corpora";
+import {
+  type RefuterPromptCheck,
+  type RefuterReplayCase,
+  refuterReplayCaseKey,
+  refuterReplayDone,
+  refuterReplayRow,
+} from "../src/harness/replay-rows";
+import {
+  prepareSingleStepRunner,
+  singleStepRoute,
+} from "../src/harness/single-step";
+import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 
 function argValue(flag: string): string | undefined {
   const i = Bun.argv.indexOf(flag);
@@ -78,17 +87,16 @@ if (!casesPath || !model || !outPath) {
     "usage: bun run scripts/refuter-replay.ts --cases <cases.json> --model <model> --out <results.jsonl> [--concurrency 4]",
   );
 }
+// Built before anything is read or spent, so an invalid --model fails here.
+const route = (() => {
+  try {
+    return singleStepRoute("refuter", model);
+  } catch (error) {
+    fail(`--model ${model}: ${(error as Error).message}`);
+  }
+})();
 
-interface ReplayCase {
-  run: string;
-  finding: string;
-  expect: "keep" | "drop";
-  label: string;
-  // "refuted": the finding lives in findings.json debug.refuted, not in the
-  // posted list (the run deleted it). Its id may collide with a posted one.
-  source?: "posted" | "refuted";
-  note?: string;
-}
+type ReplayCase = RefuterReplayCase;
 
 interface PipelineMeta {
   head_sha: string;
@@ -113,41 +121,26 @@ function cloneFor(runDir: string): string {
   return path.join(BENCH_HOME, corpus.clone);
 }
 
-const done = new Set<string>();
 const outFile = Bun.file(outPath);
-if (await outFile.exists()) {
-  for (const line of (await outFile.text()).split("\n")) {
-    if (!line.trim()) continue;
-    const row = JSON.parse(line) as {
-      run: string;
-      finding: string;
-      source?: string;
-      model: string;
-      status: string;
-    };
-    // A failed step (quota, auth, timeout) is not an answer: rerun it. The key
-    // carries the source because a refuted finding's id may collide with a
-    // posted one (see ReplayCase), and the two must not resume each other.
-    if (row.status === "ok")
-      done.add(
-        `${row.run}|${row.finding}|${row.source ?? "posted"}|${row.model}`,
-      );
-  }
-}
+const done = (await outFile.exists())
+  ? refuterReplayDone(await outFile.text(), route)
+  : new Set<string>();
 
 const scratch = await mkdtemp(path.join(tmpdir(), "refuter-replay-"));
 const mcpConfigPath = path.join(scratch, "mcp.json");
 await Bun.write(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
 
 // The runner only spawns inside its workspace root, so the root is the
-// scratch dir that holds every worktree and step artifact.
-const authority = await resolveRunnerAuthority({
+// scratch dir that holds every worktree and step artifact. Prepared as a review
+// prepares it: the run's Claude credential, production admission.
+const runner = await prepareSingleStepRunner({
   workspaceRoot: scratch,
+  route,
+  claudeRun: resolveRunClaudeCredential({}),
+}).catch(async (error) => {
+  await rm(scratch, { recursive: true, force: true });
+  fail(`execution authority unavailable: ${error}`);
 });
-if (authority.error !== undefined) {
-  fail(`execution authority unavailable: ${authority.error}`);
-}
-const runner = new ClaudeCodeRunner(authority.runnerOptions);
 
 async function git(cwd: string, args: string[]): Promise<void> {
   const proc = Bun.spawn(["git", "-C", cwd, ...args], {
@@ -251,7 +244,7 @@ async function replay(c: ReplayCase) {
   const evidence = Bun.file(
     path.join(c.run, "steps", `evidence.refuter-${f.id}.attempt1.request.json`),
   );
-  let promptCheck: "match" | "unrecorded" | "candidate" =
+  let promptCheck: RefuterPromptCheck =
     userPromptTemplate === undefined ? "unrecorded" : "candidate";
   if (userPromptTemplate === undefined && (await evidence.exists())) {
     const recorded = ((await evidence.json()) as { userPromptSha256: string })
@@ -304,7 +297,9 @@ async function replay(c: ReplayCase) {
     prompt,
     tools,
     mcpConfigPath,
-    model: model as string,
+    // The route decides what the backend is sent; this is what a review
+    // records when a step has none.
+    model: route.model,
     effort,
     cwd: dir,
     outPath: path.join(caseDir, `refuter-${f.id}.result.json`),
@@ -319,40 +314,16 @@ async function replay(c: ReplayCase) {
     },
   };
   const result = await runner.run(spec);
-  // A failed step reads as `inconclusive`, exactly as runRefuter treats it.
-  const entry =
-    result.status === "ok"
-      ? (result.output as RefuterResult).results[0]
-      : undefined;
-  const verdict =
-    result.status === "ok"
-      ? ((result.output as RefuterResult).results[0]?.outcome ?? "inconclusive")
-      : "inconclusive";
-  return {
-    run: c.run,
-    finding: f.id,
-    source: c.source ?? "posted",
-    model,
-    severity: f.severity,
-    tier: f.tier,
-    original_verdict: c.source === "refuted" ? "refuted" : f.refuter_verdict,
-    verdict,
-    refuter_proof_refs: entry?.proof_refs ?? [],
-    status: result.status,
-    denial: result.denialCode ?? null,
-    stderr_tail:
-      result.status === "ok" ? null : (result.stderrTail ?? "").slice(-400),
-    expect: c.expect,
-    label: c.label,
-    prompt_check: promptCheck,
-    notional_usd: result.usageV2?.notionalCostUsd ?? null,
-    wall_ms: result.usageV2?.wallMs ?? null,
-  };
+  return refuterReplayRow({
+    replayCase: c,
+    finding: f,
+    route,
+    result,
+    promptCheck,
+  });
 }
 
-const pending = cases.filter(
-  (c) => !done.has(`${c.run}|${c.finding}|${c.source ?? "posted"}|${model}`),
-);
+const pending = cases.filter((c) => !done.has(refuterReplayCaseKey(c)));
 console.error(
   `${cases.length} cases, ${cases.length - pending.length} already in ${outPath}, ${pending.length} to run on ${model}`,
 );
@@ -391,6 +362,9 @@ try {
       );
     }
   }
+  await runner.dispose().catch((error) => {
+    console.error(`  cleanup: runner dispose failed: ${error}`);
+  });
   await rm(scratch, { recursive: true, force: true });
 }
 process.exit(failures > 0 ? 1 : 0);

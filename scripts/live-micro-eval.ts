@@ -1,5 +1,6 @@
-// Slice-3 live micro-eval (plan §Evals): one REAL ClaudeCodeRunner.run() with
-// a trivial StepSpec. Proves the actual spawn path, JSON envelope parsing and
+// Slice-3 live micro-eval (plan §Evals): one REAL step run, through the route
+// seam onto the production runner (the Claude Code CLI on sonnet), with a
+// trivial StepSpec. Proves the actual spawn path, JSON envelope parsing and
 // usage capture outside the fake — costs cents. Run: bun run scripts/live-micro-eval.ts
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,8 +9,12 @@ import { defaultEffortForRole } from "#model/catalog";
 import { selectBoundaryNonce } from "#review/boundary";
 import { parseAgentFile } from "#review/prompt-set";
 import { scoutPrompt, validateScoutLeads } from "#review/scout";
-import { ClaudeCodeRunner } from "#review/step-runner";
-import { resolveRunnerAuthority } from "../src/runner-authority";
+import {
+  prepareSingleStepRunner,
+  routeIdentityFields,
+  singleStepRoute,
+} from "../src/harness/single-step";
+import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 
 // `--scout` (ROADMAP-DOORDASH M5, §3.12.8) runs the SCOUT's real spawn shape
 // instead of the trivial one: the bundled prompt, the real output contract,
@@ -67,11 +72,20 @@ chmodSync(systemPromptPath, 0o600);
 const mcpConfigPath = path.join(dir, "mcp.json");
 writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
 
-const runnerAuthority = await resolveRunnerAuthority({ workspaceRoot: dir });
-if (runnerAuthority.error !== undefined) {
-  throw new Error(`execution authority unavailable: ${runnerAuthority.error}`);
-}
-const runner = new ClaudeCodeRunner(runnerAuthority.runnerOptions);
+// The model this probe has always measured, as an explicit choice on the route
+// seam (src/harness/single-step.ts): `claude:sonnet-latest`, the scout's own
+// step in --scout mode and a harness-only step otherwise. Prepared as a review
+// prepares it: the run's Claude credential, production admission.
+const MODEL = "sonnet";
+const route = singleStepRoute(
+  scoutMode ? "scout" : { key: "micro-eval" },
+  MODEL,
+);
+const runner = await prepareSingleStepRunner({
+  workspaceRoot: dir,
+  route,
+  claudeRun: resolveRunClaudeCredential({}),
+});
 const started = performance.now();
 const result = await runner.run({
   name: scoutMode ? "scout" : "micro-eval",
@@ -82,7 +96,7 @@ const result = await runner.run({
   // The load-bearing difference. Empty, not omitted.
   tools: scoutMode ? [] : ["Read"],
   mcpConfigPath,
-  model: "sonnet",
+  model: MODEL,
   // Explicit, like every step: the transport refuses a request without one.
   effort: defaultEffortForRole(scoutMode ? "scout" : "other"),
   cwd: dir,
@@ -105,12 +119,16 @@ const result = await runner.run({
     return parsed;
   },
 });
+// A throw above exits the process, which ends the runtime with it.
+await runner.dispose();
 
 const wallMs = Math.round(performance.now() - started);
 console.log(
   JSON.stringify(
     {
       mode: scoutMode ? "scout" : "trivial",
+      model: MODEL,
+      ...routeIdentityFields(route.identity),
       status: result.status,
       attempts: result.attempts,
       output: result.output,

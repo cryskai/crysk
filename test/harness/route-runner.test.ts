@@ -27,6 +27,7 @@ import {
   buildHarnessRoutePlan,
   HarnessRouteError,
   harnessIdentity,
+  harnessModelChoice,
   prepareHarnessRunner,
   requireRoutedRunner,
   routeStep,
@@ -400,5 +401,34 @@ describe("prepareHarnessRunner", () => {
         ...seams(),
       }),
     ).rejects.toThrow(HarnessRouteError);
+  });
+});
+
+// S6: harness flags kept accepting a bare pinned Claude id
+// (`--model claude-sonnet-4-5-20250929`), which used to reach the CLI as given.
+describe("harnessModelChoice", () => {
+  test("a bare pinned Claude id becomes its claude: name", () => {
+    expect(harnessModelChoice("claude-sonnet-4-5-20250929")).toBe(
+      "claude:claude-sonnet-4-5-20250929",
+    );
+  });
+
+  test("aliases and prefixed names pass through unchanged", () => {
+    expect(harnessModelChoice("sonnet")).toBe("sonnet");
+    expect(harnessModelChoice("claude:opus-latest")).toBe("claude:opus-latest");
+    expect(harnessModelChoice("opencode:openai/gpt-x")).toBe(
+      "opencode:openai/gpt-x",
+    );
+    expect(harnessModelChoice(undefined)).toBeUndefined();
+  });
+
+  test("the plan routes a bare pinned id to that Claude model", () => {
+    const plan = buildHarnessRoutePlan({
+      agents: [{ key: "probe", role: "other" }],
+      cliModel: "claude-sonnet-4-5-20250929",
+    });
+    const route = plan.steps[0]?.route;
+    expect(route?.backend).toBe("claude-code");
+    expect(route?.modelSnapshot).toBe("claude-sonnet-4-5-20250929");
   });
 });

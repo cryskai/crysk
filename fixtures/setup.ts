@@ -8,6 +8,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { PipelineInput } from "#review/pipeline";
 import { AGENT_NAMES } from "#review/prompt-set";
 
 export interface PlantedFixture {
@@ -298,5 +299,64 @@ export async function buildPlantedFixture(): Promise<PlantedFixture> {
     gotchasPath,
     runDir,
     expected,
+  };
+}
+
+// --- The eval's runPipeline input (route-plan-harness S4, S6) ---------------
+
+const PROMPTS_DIR = path.join(import.meta.dir, "..", "prompts");
+
+// The scout runs on haiku the same way the rest of the run does (the fixture
+// agents' frontmatter): this eval proves PLUMBING, never recall, and a sonnet
+// scout here would spend real money to prove nothing extra.
+export const FIXTURE_EVAL_SCOUT_MODEL = "haiku";
+
+// The eval's runPipeline input. The route plan is built from this same object
+// (buildPipelineHarnessPlan), so the plan and the steps cannot disagree. The
+// fixture's agents are a lab-style set (bundledAgents unset): their own
+// frontmatter routes them, as it always has. The root prompts are passed
+// unbundled for the same reason.
+export function fixtureEvalPipelineInput(
+  fixture: PlantedFixture,
+  options: {
+    mcpConfigPath: string;
+    scout?: boolean;
+    model?: string;
+    agentsDir?: string;
+  },
+): PipelineInput {
+  return {
+    pr: 0,
+    baseSha: fixture.baseSha,
+    headSha: fixture.headSha,
+    worktree: fixture.repoDir,
+    diffPath: fixture.diffPath,
+    gotchasPath: fixture.gotchasPath,
+    agentsDir: options.agentsDir ?? fixture.agentsDir,
+    runDir: fixture.runDir,
+    // The pipeline never writes outPath (the caller's job) — recorded here
+    // only so pipeline.json carries the full resolved plan.
+    outPath: path.join(fixture.runDir, "findings.json"),
+    mcpConfigPath: options.mcpConfigPath,
+    hopBudget: 4,
+    ...(options.model ? { model: options.model } : {}),
+    summarizer: { promptPath: path.join(PROMPTS_DIR, "summarizer.md") },
+    ...(options.scout === true
+      ? {
+          scout: {
+            promptPath: path.join(PROMPTS_DIR, "scout.md"),
+            model: FIXTURE_EVAL_SCOUT_MODEL,
+          },
+        }
+      : {}),
+    parityTriggerPaths: [], // parity never fires — 2 hunters, cheapest run
+    suspicionPriors: [
+      {
+        path: "src/volume.ts",
+        weight: "high",
+        reason: "volume/gain scaling changed in this diff",
+      },
+    ],
+    stepTimeoutMs: 10 * 60 * 1000,
   };
 }

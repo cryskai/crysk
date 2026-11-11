@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadQualifiedReview } from "../benchmarks/martian/martian-evidence";
-import { computeQualifiedBenchmarkMetrics } from "../benchmarks/martian/martian-judge";
+import {
+  computeQualifiedBenchmarkMetrics,
+  martianJudgeRoute,
+} from "../benchmarks/martian/martian-judge";
+import { routeIdentityFields } from "../src/harness/single-step";
 import { OpenCodeEvidenceCollector } from "../src/transports/opencode-evidence";
 
 test("legacy proofless complete findings never qualifies", async () => {
@@ -376,6 +380,27 @@ test("actual judge CLI honors frozen selected denominator and includes valid emp
   expect(report.aggregate.missing).toBe(1);
   expect(report.aggregate.high_critical.precision).toBeUndefined();
   expect(report.aggregate.surfaces.surface_b).toContain("not run");
+  // The judge's route identity is recorded even when no PR needed a judge
+  // call, and no runner was prepared for a run that judged nothing.
+  expect(report.judge_model).toBe("sonnet");
+  expect(report.judge_route).toEqual(
+    JSON.parse(
+      JSON.stringify(routeIdentityFields(martianJudgeRoute().identity)),
+    ),
+  );
+});
+
+// S6: the judge keeps measuring the model it always measured, the Claude Code
+// CLI's sonnet, now as an explicit choice on the route seam.
+test("the Martian judge runs claude:sonnet-latest on its own step", () => {
+  const route = martianJudgeRoute();
+  expect(route.stepKey).toBe("martian-judge");
+  expect(route.identity.route).toEqual({
+    backend: "claude-code",
+    provider: "anthropic",
+    modelFamily: "sonnet",
+    modelSnapshot: "sonnet",
+  });
 });
 
 test("actual run CLI resumes only full matching proof, and preserves prior attempt when model identity changes", async () => {
