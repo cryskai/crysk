@@ -101,6 +101,7 @@ import {
   pipelineSummarizerInput,
 } from "#review/route-preflight";
 import {
+  fullReviewHunterCount,
   prepareRunnerForRoute,
   resolveParityFires,
   validateGotchas,
@@ -685,6 +686,11 @@ export async function reviewPr(
       parityFires,
     });
     const hunterCount = activeHunters.length;
+    const fullHunterCount = fullReviewHunterCount(
+      spec.agents,
+      anchorPatch,
+      config.parity_trigger_paths,
+    );
     // See resolvePrPlanAndConfirm (src/pr/plan.ts) for the full rationale —
     // the CI budget gate, route/capability resolution, the plan card, the
     // interactive confirm, and the "committed to spending" commit-status
@@ -720,6 +726,7 @@ export async function reviewPr(
       ciAdmissionLedger,
       skipDiscovery,
       hunterCount,
+      fullHunterCount,
       parityFires,
       verifyQueue,
       prepared,

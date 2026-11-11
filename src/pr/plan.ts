@@ -138,6 +138,8 @@ export async function resolvePrPlanAndConfirm(params: {
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
   hunterCount: number;
+  // Hunters a full review of the whole PR runs (fullReviewHunterCount).
+  fullHunterCount: number;
   parityFires: boolean;
   verifyQueue: ReturnType<typeof buildPhaseBQueue>["queued"];
   prepared: PreparedDiscovery;
@@ -175,7 +177,7 @@ export async function resolvePrPlanAndConfirm(params: {
     narrowed && platformEstimate !== undefined
       ? estimateCost(
           params.prDiffStat,
-          params.hunterCount,
+          params.fullHunterCount,
           params.summary.enabled,
           params.options.scout,
           queuedVerification,
