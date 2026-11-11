@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`operation: refresh-credential` renews a subscription login on the runner** (cryskai/platform
+  odd/tasks/openai-oauth.md). The Crysk platform dispatches it before the access token expires, with
+  `refresh-provider` naming the OpenCode provider (`openai`). Only the connect step, the install and the new
+  `Refresh the subscription login` step run: it renews the login once at the provider's token endpoint, seals
+  the new `CRYSK_OPENCODE_<P>_OAUTH` record with the target's GitHub public key, and posts only the ciphertext
+  to `/runs/credential-refresh`, retrying for up to 10 minutes once the old refresh token is spent. A provider
+  refusal (`refresh_token_reused`, `refresh_token_expired`, `refresh_token_invalidated`, `invalid_grant`) is
+  reported as a failure so the dashboard asks for a new login. Reviews are unchanged: `operation` defaults to
+  `review`, and every review step is skipped for a refresh. The endpoints are documented under "Subscription
+  logins" in docs/github-actions.md. New dependency: `libsodium-wrappers` 0.8.4, loaded only by the refresh
+  step.
+
 ### Changed
 
 - **A review never renews a subscription login whose provider rotates its refresh token** (cryskai/platform

@@ -358,8 +358,8 @@ with mode `0600` (`$XDG_DATA_HOME/opencode/auth.json`, or
   writes nothing from these secrets. An OpenCode model given only in the `model` input gets no record:
   name it in `models`.
 - **`_API_KEY`** becomes OpenCode's own API record, `{"type": "api", "key": "…"}`.
-- **`_OAUTH`** is the provider's login record, decoded and written whole, refresh token included, so
-  OpenCode can renew the access token during the run.
+- **`_OAUTH`** is the provider's login record, decoded and written whole, except that a provider which
+  rotates its refresh token gets an empty one (see "A review never renews the login" below).
 - **`_OAUTH` is read for `openai` only, for now.** That is the one subscription Crysk can project. An
   `_OAUTH` secret for another provider your models use fails the step with `CRYSK-CRED-UNUSABLE`, naming
   the secret and telling you to set that provider's `_API_KEY` instead.
@@ -383,7 +383,8 @@ login would spend the stored record and lose the new one with the run's copy, so
 to authenticate. So the review's copy of an `_OAUTH` record carries no refresh token (for a provider that
 rotates it), a review refuses to start when the access token expires within two hours, and a step refuses a
 login that has already expired (`CRYSK-CRED-UNUSABLE`, `subscription_expiring`). On a repository connected to
-the Crysk platform, the platform renews the login ahead of time. In a workflow you manage yourself, an OpenAI
+the Crysk platform, the platform renews the login ahead of time, on your runner (see
+[Subscription logins](#subscription-logins)). In a workflow you manage yourself, an OpenAI
 access token lasts about ten days: run `opencode auth login` again on your machine and set the secret anew
 before it expires:
 
@@ -741,6 +742,66 @@ turn the job red. An HTTP 503 (the platform could not store it) is retried once;
 failure, a 401, 400, 413, 5xx or a network error, prints a `::warning::` naming the status and the API's
 message, never the token, and the step exits 0. A repeat of the same run attempt is answered as already
 recorded and is not an error.
+
+### Subscription logins
+
+A subscription login (`CRYSK_OPENCODE_<P>_OAUTH`, today `openai`) carries an access token that expires (about
+ten days for OpenAI) and a refresh token that renews it. OpenAI issues a new refresh token on every renewal and
+refuses the old one for good (`refresh_token_reused`), so a review never renews the login (see "A review never
+renews the login" above). Instead, before the access token expires, the platform dispatches the stub with
+`operation: refresh-credential` and `refresh-provider: <provider id>`, one at a time per login. The renewal runs
+on your runner: the platform never holds the login, only its ciphertext for the moment it writes the secret.
+
+With `operation: refresh-credential` only `Setup Bun`, `Connect to Crysk` (unchanged, so the job needs
+`id-token: write`, which the stub grants), `Install dependencies` and `Refresh the subscription login` run.
+Every review step is skipped. `operation` absent, `review` or empty is a review, unchanged; any other value
+fails the refresh step. The step reads the provider's `_OAUTH` line from `crysk-secrets` on stdin, masks every
+value, and then:
+
+1. `POST https://api.crysk.dev/runs/credential-refresh/targets` with `{"provider": "<id>"}`. The platform
+   answers `{"key_id": "…", "key": "…"}`, the GitHub public key of the secret's target (the organization or the
+   repository), as GitHub's `secrets/public-key` endpoint does.
+2. `POST https://api.crysk.dev/runs/credential-refresh/begin` with `{"provider": "<id>"}`. The platform records
+   that the stored refresh token is about to be spent. Then one form-encoded POST to the provider's token
+   endpoint (`grant_type=refresh_token`, the stored refresh token, the provider's `client_id`; for OpenAI,
+   `https://auth.openai.com/oauth/token` and Codex's client id, as OpenCode does). That request is never
+   retried: one that may have reached the provider may have spent the token.
+3. The new record, in OpenCode's shape (`type: "oauth"`, `access`, `refresh`, `expires` in milliseconds,
+   `accountId`), is encoded as the secret stores it (standard base64 of its JSON), sealed with libsodium's
+   `crypto_box_seal` to the target's key, and posted to `https://api.crysk.dev/runs/credential-refresh`:
+
+   ```json
+   {
+     "provider": "openai",
+     "key_id": "…",
+     "encrypted_value": "<standard base64 of the sealed box>",
+     "issued_at": "2026-11-11T12:00:00.000Z",
+     "expires_at": "2026-11-21T12:00:00.000Z",
+     "provider_account_id": "…"
+   }
+   ```
+
+   `encrypted_value` is exactly what GitHub's "create or update a secret" API takes, and the platform writes it
+   as the same `CRYSK_OPENCODE_<P>_OAUTH`. `issued_at` is the runner's clock when the provider answered,
+   `expires_at` the record's `expires`, both ISO 8601 in UTC; `provider_account_id` is null when the provider
+   has none. Once the provider has answered with new tokens the stored refresh token is spent, so this POST is
+   retried on a network error, a 5xx or a 429, with backoff from 5 seconds up to a minute, for up to 10
+   minutes; any other 4xx stops it. A refresh job's `timeout-minutes` and the platform's lease must outlast
+   that.
+
+When the provider refuses the login with one of its permanent codes (for OpenAI `refresh_token_reused`,
+`refresh_token_expired`, `refresh_token_invalidated`, and the standard `invalid_grant`), the step posts
+`{"provider": "<id>", "failure": "<code>"}` to the same endpoint instead, and the dashboard asks for a new
+login. Any other error answer from the provider (a 5xx, a 429, an unknown code, or no access token) posts
+`{"failure": "provider_error"}`; the provider's own text is never sent. A provider request that fails in flight
+posts nothing. Each of these ends the job red.
+
+Every request to the platform carries `Authorization: Bearer <run token>` (from the connect step) and
+`X-Crysk-Dispatch-Id: <dispatch id>`. A failure before the provider request (the target, `begin`, a missing or
+malformed record, an unknown provider, a key that is not 32 bytes) ends the job red with nothing spent, so the
+platform may dispatch again. The step writes no file and no output, and no token reaches the log or an error
+message. The provider's endpoints, client id, permanent codes and where its account id lives are one entry in
+`src/security/oauth-providers.ts`; the contract types are in `src/ci/credential-refresh.ts`.
 
 ## Security considerations
 
@@ -1398,6 +1459,8 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `anthropic-api-key`, `claude-token`, `opencode-auth`, `routing` | empty | Removed. A value in any of them stops the run with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed): pass the `CRYSK_*` secrets in `crysk-secrets`, and the models per role in `models`. |
 | `crysk-secrets` | empty | The credentials: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets](#crysk_-secrets). |
 | `models` | empty | The models per role, as JSON (the `models` object of a person config), from `vars.CRYSK_MODELS`. See [OpenCode in CI](#opencode-in-ci) and [Configuration, Models](configuration.md#models). Empty: every step runs its prompt's model. Ignored, with a warning, on a repository whose platform settings apply. |
+| `operation` | `review` | `review` reviews a pull request; `refresh-credential` renews a subscription login, and only the Crysk platform dispatches it. See [Subscription logins](#subscription-logins). Empty is a review. |
+| `refresh-provider` | empty | With `operation: refresh-credential`, the OpenCode provider id whose login is renewed (`openai`). |
 | `credentials` | empty | The Claude credential order, as JSON (`{"claude": ["subscription", "api_key"]}`), from `vars.CRYSK_CREDENTIALS`. Empty: the subscription first. Ignored like `models`. |
 
 ## Error codes

@@ -1028,10 +1028,16 @@ describe("Packaging & distribution configuration", () => {
         (step) => step.name === "Install OpenCode CLI",
       );
       expect(String(install?.if)).toBe(
-        `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') }}`,
+        `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') && (inputs.operation == 'review' || inputs.operation == '') }}`,
       );
-      // No input decides it: the setup step read the models input already.
-      expect(String(install?.if)).not.toContain("inputs.");
+      // No input decides it but the operation (review or a credential
+      // refresh): the setup step read the models input already.
+      expect(
+        String(install?.if).replace(
+          " && (inputs.operation == 'review' || inputs.operation == '')",
+          "",
+        ),
+      ).not.toContain("inputs.");
     });
 
     // E-f F3 (D1): the two inputs reach the setup step only, as values. The
@@ -1177,10 +1183,15 @@ describe("Packaging & distribution configuration", () => {
       );
       expect(after.length).toBeGreaterThan(0);
       // The publisher is gated on the publish output instead: it must also
-      // run for the outcomes where the run never starts (T2b).
+      // run for the outcomes where the run never starts (T2b). The credential
+      // refresh runs only when the trigger does not (operation:
+      // refresh-credential, test/ci/credential-refresh.test.ts).
       const ungated = after
         .filter(
-          (step) => step.id !== "publish" && step.id !== "platform-publish",
+          (step) =>
+            step.id !== "publish" &&
+            step.id !== "platform-publish" &&
+            step.id !== "credential-refresh",
         )
         .filter(
           (step) =>
@@ -1335,7 +1346,7 @@ describe("Packaging & distribution configuration", () => {
       expect(settle).toBe(publish + 3);
       const step = all[settle];
       expect(step?.if).toBe(
-        `\${{ cancelled() && steps.trigger.outputs.run == 'true' }}`,
+        `\${{ cancelled() && steps.trigger.outputs.run == 'true' && (inputs.operation == 'review' || inputs.operation == '') }}`,
       );
       expect(step?.run).toContain("src/ci/publish.ts");
       const env = step?.env as Record<string, string> | undefined;
