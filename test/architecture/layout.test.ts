@@ -67,6 +67,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "override",
       "platform",
       "platform-config",
+      "platform-estimate",
       "platform-report",
       "platform-trace",
       "publish",

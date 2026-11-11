@@ -24,6 +24,10 @@ import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
 import { actionsRunUrl } from "#ci/outcome";
 import {
+  platformCostEstimate,
+  readPlatformEstimate,
+} from "#ci/platform-estimate";
+import {
   countFreeRouteSteps,
   type FreeRouteBilling,
 } from "#model/free-discovery";
@@ -144,14 +148,24 @@ export async function resolvePrPlanAndConfirm(params: {
     params.verifyQueue.length,
     maxVerificationSteps,
   );
-  const estimate = estimateCost(
-    params.diffStat,
-    params.hunterCount,
-    params.summary.enabled && !params.skipDiscovery,
-    params.options.scout && !params.skipDiscovery,
-    queuedVerification,
-    !params.skipDiscovery,
-  );
+  // cryskai/platform#12: in a platform run the platform's estimate, priced from
+  // the setup's models and its recent reviews, replaces the band, which prices
+  // every model as Claude. Without one (standalone, or nothing priceable) the
+  // band decides as before.
+  const platformEstimate = params.isCi
+    ? readPlatformEstimate(process.env)
+    : undefined;
+  const estimate =
+    platformEstimate === undefined
+      ? estimateCost(
+          params.diffStat,
+          params.hunterCount,
+          params.summary.enabled && !params.skipDiscovery,
+          params.options.scout && !params.skipDiscovery,
+          queuedVerification,
+          !params.skipDiscovery,
+        )
+      : platformCostEstimate(platformEstimate);
   // 7b(CI) — the budget gate, immediately after the estimate it reads and
   // BEFORE the plan card/confirm/"committed to spending" commit-status
   // block below: spec 3.1 ("Review MUST halt before agent spawning") is

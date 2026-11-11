@@ -707,6 +707,9 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
+        if (expr === "steps.platform.outputs.estimate") {
+          return ctx.platform?.estimate ?? "";
+        }
         // The setup step's platform bindings, unset in a standalone run.
         if (expr === "steps.platform.outputs.config-file") {
           return ctx.platform?.["config-file"] ?? "";

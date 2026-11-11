@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plan it froze at spawn, marked `unsettled` (this holds for a cut-off Claude CLI attempt too). Settled
   Claude CLI attempts are unchanged.
 
+### Changed
+
+- **Platform mode: the CI budget gate reads the Crysk platform's estimate** (cryskai/platform#12,
+  #138). The connect step sends `X-Crysk-Capabilities: estimate` and passes the platform's `estimate` to
+  the run as `CRYSK_PLATFORM_ESTIMATE`; the gate compares its high end to the ceiling instead of the
+  band, which priced every model as Claude. The plan prints `estimate $X – $Y (platform: history)` or
+  `(platform: catalog)`. A missing or malformed estimate leaves the band in charge.
+
 ## [0.5.0] - 2026-11-11
 
 ### Added

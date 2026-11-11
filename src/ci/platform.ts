@@ -21,6 +21,13 @@
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+// A sibling with no imports of its own, so the builtins-only rule still holds.
+import {
+  PLATFORM_ESTIMATE_CAPABILITY,
+  type PlatformEstimate,
+  parsePlatformEstimate,
+  serializePlatformEstimate,
+} from "./platform-estimate";
 
 export const PLATFORM_API_URL = "https://api.crysk.dev";
 
@@ -106,6 +113,8 @@ export type PlatformTokenResult =
   // `full` or `metadata_only`; the connect step reads absence as metadata_only.
   // `traceContent` is present, and true, only when the platform sent exactly
   // `true`; the connect step reads absence as false.
+  // `estimate` is present only for the first connect step (refresh steps do not
+  // ask for one) and only when the platform sent a usable range.
   | {
       ok: true;
       githubToken: string;
@@ -114,6 +123,7 @@ export type PlatformTokenResult =
       dataMode?: PlatformDataMode;
       traceContent?: true;
       config?: PlatformConfig;
+      estimate?: PlatformEstimate;
     }
   // `message` names the HTTP status and the API's own `message` when there was
   // one. It never carries a token.
@@ -235,6 +245,11 @@ export async function exchangePlatformToken(
       headers: {
         Authorization: `Bearer ${oidc}`,
         "X-Crysk-Dispatch-Id": dispatchId,
+        // Only the first connect step asks: its estimate is the one the budget
+        // gate reads, and the platform records each estimate it sends.
+        ...(deps.ignoreConfig === true
+          ? {}
+          : { "X-Crysk-Capabilities": PLATFORM_ESTIMATE_CAPABILITY }),
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -252,6 +267,7 @@ export async function exchangePlatformToken(
       data_mode?: unknown;
       trace_content?: unknown;
       config?: unknown;
+      estimate?: unknown;
     };
     const {
       github_token: githubToken,
@@ -285,6 +301,12 @@ export async function exchangePlatformToken(
         [...secrets, githubToken, runToken],
       );
     }
+    // An estimate is advice: one that does not parse is dropped and the
+    // engine's own band decides, never a failed exchange.
+    const estimate =
+      deps.ignoreConfig === true
+        ? undefined
+        : parsePlatformEstimate(body.estimate);
     return {
       ok: true,
       githubToken,
@@ -300,6 +322,7 @@ export async function exchangePlatformToken(
       // an absent or malformed value sends metadata only.
       ...(body.trace_content === true ? { traceContent: true as const } : {}),
       ...(config.config === undefined ? {} : { config: config.config }),
+      ...(estimate === undefined ? {} : { estimate }),
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -401,6 +424,13 @@ export async function runPlatformConnect(
     // set never learns one from anywhere else (see CRYSK_PLATFORM_ACTOR).
     if (result.githubActor !== undefined) {
       deps.appendOutput(`github-actor=${result.githubActor}\n`);
+    }
+    // Not a secret: two validated numbers and a basis. The run step's budget
+    // gate reads it as CRYSK_PLATFORM_ESTIMATE in place of the engine's band.
+    if (result.estimate !== undefined) {
+      deps.appendOutput(
+        `estimate=${serializePlatformEstimate(result.estimate)}\n`,
+      );
     }
     // Present only when there is configuration to apply: the setup step and the
     // run step are gated on it, so a standalone run (no platform step, no
