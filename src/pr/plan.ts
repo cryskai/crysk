@@ -23,6 +23,7 @@
 import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
 import { actionsRunUrl } from "#ci/outcome";
+import { readPlatformEstimate, runCostEstimate } from "#ci/platform-estimate";
 import {
   countFreeRouteSteps,
   type FreeRouteBilling,
@@ -112,6 +113,8 @@ export async function resolvePrPlanAndConfirm(params: {
   diffFromSha: string;
   diffPath: string;
   diffStat: DiffStat;
+  // The whole PR range's stat under the same filters (discovery's prDiffStat).
+  prDiffStat: DiffStat;
   droppedPaths: string[];
   sizeGate: SizeGateVerdict;
   sizeGateConfirmed: boolean;
@@ -135,6 +138,8 @@ export async function resolvePrPlanAndConfirm(params: {
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
   hunterCount: number;
+  // Hunters a full review of the whole PR runs (fullReviewHunterCount).
+  fullHunterCount: number;
   parityFires: boolean;
   verifyQueue: ReturnType<typeof buildPhaseBQueue>["queued"];
   prepared: PreparedDiscovery;
@@ -144,13 +149,41 @@ export async function resolvePrPlanAndConfirm(params: {
     params.verifyQueue.length,
     maxVerificationSteps,
   );
-  const estimate = estimateCost(
+  // cryskai/platform#12: in a platform run the platform's estimate, priced from
+  // the setup's models and its recent reviews, replaces the band, which prices
+  // every model as Claude. The platform prices the whole pull request, so a run
+  // that covers less of it (a re-review whose discovery reads only the commits
+  // or paths since the last review, or one that hunts nothing new) scales it by
+  // the share of a full review it does, which the band measures
+  // (runCostEstimate). Without a platform estimate (standalone, or nothing
+  // priceable) the band decides.
+  const platformEstimate = params.isCi
+    ? readPlatformEstimate(process.env)
+    : undefined;
+  const band = estimateCost(
     params.diffStat,
     params.hunterCount,
     params.summary.enabled && !params.skipDiscovery,
     params.options.scout && !params.skipDiscovery,
     queuedVerification,
     !params.skipDiscovery,
+  );
+  // discoveryPaths is null only when the hunters read the full PR range.
+  const narrowed =
+    params.skipDiscovery || params.prepared.discoveryPaths !== null;
+  const estimate = runCostEstimate(
+    platformEstimate,
+    band,
+    narrowed && platformEstimate !== undefined
+      ? estimateCost(
+          params.prDiffStat,
+          params.fullHunterCount,
+          params.summary.enabled,
+          params.options.scout,
+          queuedVerification,
+          true,
+        )
+      : undefined,
   );
   // 7b(CI) — the budget gate, immediately after the estimate it reads and
   // BEFORE the plan card/confirm/"committed to spending" commit-status
@@ -186,6 +219,7 @@ export async function resolvePrPlanAndConfirm(params: {
       prNumber: params.prNumber,
       force: params.options.force,
       ciMode: params.ciMode,
+      platformConnected: process.env.CRYSK_PLATFORM_CONNECTED === "true",
     });
     if (budgetPlan !== null) {
       await settleCiGateSkip(

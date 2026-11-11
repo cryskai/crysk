@@ -351,6 +351,13 @@ runs:
         # The login the platform returned for the App's bot, empty in a
         # standalone run: the answered-findings gate trusts it as a poster.
         CRYSK_PLATFORM_ACTOR: ${{ steps.platform.outputs.github-actor }}
+        # The platform's cost estimate for this run (src/ci/platform-estimate.ts),
+        # empty in a standalone run or when the platform could not price it: the
+        # CI budget gate then reads it instead of the engine's own band.
+        CRYSK_PLATFORM_ESTIMATE: ${{ steps.platform.outputs.estimate }}
+        # Whether the connect step ran: a skip comment on a platform repository
+        # names only what applies there (`/crysk review`, the dashboard).
+        CRYSK_PLATFORM_CONNECTED: ${{ steps.platform.outputs.github-token != '' }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         # Platform mode only, and only for a checkout with no repo config of its
         # own: the temp file holding the platform's repo layer, handed to the

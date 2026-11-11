@@ -101,6 +101,7 @@ import {
   pipelineSummarizerInput,
 } from "#review/route-preflight";
 import {
+  fullReviewHunterCount,
   prepareRunnerForRoute,
   resolveParityFires,
   validateGotchas,
@@ -308,6 +309,7 @@ export async function reviewPr(
       options,
       loaded,
       config,
+      summary,
       isCi,
       operatorRoot,
       claudeRun,
@@ -565,6 +567,7 @@ export async function reviewPr(
       adjudicationQueue,
       phaseB,
       diffStat,
+      prDiffStat,
       sizeGate,
     } = discovery;
 
@@ -585,6 +588,7 @@ export async function reviewPr(
         maxChangedLines: gateConfig.maxChangedLines,
         maxChangedFiles: gateConfig.maxChangedFiles,
         ciMode,
+        platformConnected: process.env.CRYSK_PLATFORM_CONNECTED === "true",
       });
       if (sizePlan !== null) {
         await settleCiGateSkip(
@@ -682,6 +686,11 @@ export async function reviewPr(
       parityFires,
     });
     const hunterCount = activeHunters.length;
+    const fullHunterCount = fullReviewHunterCount(
+      spec.agents,
+      anchorPatch,
+      config.parity_trigger_paths,
+    );
     // See resolvePrPlanAndConfirm (src/pr/plan.ts) for the full rationale —
     // the CI budget gate, route/capability resolution, the plan card, the
     // interactive confirm, and the "committed to spending" commit-status
@@ -698,6 +707,7 @@ export async function reviewPr(
       diffFromSha,
       diffPath,
       diffStat,
+      prDiffStat,
       droppedPaths: effectiveDiff.droppedPaths,
       sizeGate,
       sizeGateConfirmed,
@@ -716,6 +726,7 @@ export async function reviewPr(
       ciAdmissionLedger,
       skipDiscovery,
       hunterCount,
+      fullHunterCount,
       parityFires,
       verifyQueue,
       prepared,

@@ -7,6 +7,7 @@
 // come out byte-identical (the lab already replays old findings.json files;
 // a renderer that reached for `new Date()` would make that a lie).
 
+import type { PlatformEstimateBasis } from "#ci/platform-estimate";
 import { listPaths } from "#git/refs";
 import type { ResolvedRoutePlan, ResolvedStepRoute } from "#model/routing";
 import type { PostMinSeverity } from "#pr/post-floor";
@@ -56,6 +57,9 @@ export interface CostEstimate {
   // Plain-language statement of how coarse this is, meant to be printed next
   // to the numbers so nobody reads the band as a quote.
   basis: string;
+  // Set when the range is the Crysk platform's estimate, not this band: what
+  // the platform priced it from (src/ci/platform-estimate.ts).
+  platform?: PlatformEstimateBasis;
 }
 
 // Per-hunter marginal cost, fitted to the measured runs (see BAND below).

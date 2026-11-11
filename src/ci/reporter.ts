@@ -150,6 +150,9 @@ interface CiSkipSizeSummary {
   changedFiles: number;
   maxChangedLines: number;
   maxChangedFiles: number;
+  // A platform-connected run: the limits live in the Crysk dashboard, not in
+  // workflow inputs, so the summary says so like the comment does.
+  platformConnected?: true;
 }
 
 interface CiSkipBudgetSummary {
@@ -157,6 +160,8 @@ interface CiSkipBudgetSummary {
   prNumber: number;
   estimatedCostUsd: number;
   budgetUsd: number;
+  // A platform repository has no `--budget-usd` to raise (cryskai/platform#12).
+  platformConnected?: true;
 }
 
 interface CiSkipExcludedSummary {
@@ -327,8 +332,11 @@ function skipSizeLines(data: CiSkipSizeSummary): string[] {
     `| Changed lines | ${data.changedLines} (${sizeLimitText(data.maxChangedLines)}) |`,
     `| Changed files | ${data.changedFiles} (${sizeLimitText(data.maxChangedFiles)}) |`,
     "",
-    "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
-      "PR or raise `max-changed-lines` / `max-changed-files`.",
+    data.platformConnected === true
+      ? "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
+        "PR or raise the size limits in the Crysk dashboard."
+      : "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
+        "PR or raise `max-changed-lines` / `max-changed-files`.",
   ];
 }
 
@@ -342,8 +350,10 @@ function skipBudgetLines(data: CiSkipBudgetSummary): string[] {
     "| --- | --- |",
     `| Estimated cost | ${usd(data.estimatedCostUsd)} (budget ${usd(data.budgetUsd)}) |`,
     "",
-    "Crysk did not run to stay within the configured `--budget-usd` " +
-      "ceiling.",
+    data.platformConnected === true
+      ? "To change what reviews cost, change the model setup in the Crysk dashboard."
+      : "Crysk did not run to stay within the configured `--budget-usd` " +
+        "ceiling.",
   ];
 }
 

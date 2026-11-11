@@ -472,7 +472,8 @@ Environment is operational, but some optional tools or configurations are degrad
 - **The cost band ignores billing mode.** It is a diff-size-and-agent-count estimate, calibrated from
   measured runs, not derived from a live route. It prints the same non-zero range on a `$0.00`
   subscription route as on a metered one — read it as "how big is this diff", not "what will this
-  cost".
+  cost". A platform run's CI budget gate reads the platform's estimate instead, priced from the setup's
+  models (see [GitHub Actions](github-actions.md)).
 
 ## What is proven for OpenCode, and what is not
 

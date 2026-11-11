@@ -256,6 +256,22 @@ export function resolveParityFires(
   return parityTriggered(changedPathsFromDiff(patch), parityTriggerPaths);
 }
 
+// How many hunters a full review of the whole PR runs: the unconditional ones,
+// plus the parity hunter when the full PR patch touches a trigger path. A
+// narrowed run's own count (none on a verify-only pass, no parity hunter when
+// only the delta was read) would understate a full review, which is what the
+// platform estimate's share divides by (cryskai/platform#12).
+export function fullReviewHunterCount(
+  agents: readonly AgentSpec[],
+  prPatch: string,
+  parityTriggerPaths: string[],
+): number {
+  return selectActiveHunters(
+    agents,
+    resolveParityFires(prPatch, parityTriggerPaths),
+  ).length;
+}
+
 // The diff stat, TWICE and on purpose (moved here from review()'s own WHY
 // comment when reviewPr()'s copy — which never carried it — started sharing
 // this stage):

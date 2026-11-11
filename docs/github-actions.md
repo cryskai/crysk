@@ -677,11 +677,20 @@ still in Development, so the engine pins that version and records it as `crysk.g
   including the cache, `gen_ai.usage.output_tokens` including reasoning, the cache read and creation and the
   reasoning tokens apart), `gen_ai.usage.cost` (list price in USD: the notional cost on a subscription, the
   cash cost on a per-token key) and the attempt's evidence and settlement as `crysk.attempt.*`;
+- for an OpenCode attempt, whose capture records each model turn, an `attempt <step>#<n>` span instead,
+  carrying the attempt's status, evidence and total usage as `crysk.*` attributes only, and under it one
+  `chat <model>` span per turn with that turn's own times, response model, finish reason, token usage and
+  cost, and `crysk.turn.number`. Only the turns are generations, so a backend counts the attempt's cost once
+  and can attribute time and money to single turns. The first turn carries the prompt, each turn its own
+  answer;
 - an `execute_tool <tool>` span per tool call the model made, read from the Claude CLI session transcript
-  or the OpenCode capture, with `gen_ai.tool.name`, the call id, its timing and whether it failed. A
-  metadata trace has them too, without the arguments and result (see below).
+  or the OpenCode capture, with `gen_ai.tool.name`, the call id, its timing and whether it failed, under
+  the turn that made it. A metadata trace has them too, without the arguments and result (see below).
 
-Every span has its start and end time, from the attempt's settlement record and the transcript. The body is
+Every span has its start and end time, from the attempt's settlement record and the transcript. An attempt
+still running when the job was cancelled has settled nothing, so its `chat` span comes from the request plan
+it froze at spawn (`steps/evidence.<step>.attempt<n>.request.json`): its route's model and provider, from the
+file's time to the trace step, with `crysk.attempt.status` `unsettled`. The body is
 `{ schema: "crysk.trace.v1", outcome, code, content, truncated, otlp, transcripts }`, gzip-compressed, posted
 to `https://api.crysk.dev/runs/trace` with the newest run token (the cancelled-run refresh's, else the
 publish refresh's, else the first exchange's). When the run published no run directory (every hunter
@@ -793,10 +802,24 @@ credential, the first one in `credentials.claude` that is set (default `["subscr
 [Configuration, Credentials](configuration.md#credentials)). A run on the subscription
 (`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its real cash cost is `$0.00`
 and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
-A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or an OpenCode auth file built from a
-`CRYSK_OPENCODE_*` secret) gets a `10.00` default, because that is the case where a runaway PR really does
-produce an invoice. Setting
+A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode provider whose
+`CRYSK_OPENCODE_*` secret is an API key, on any route the run resolves: any role or fallback of `models`,
+`--model`, `--scout-model`, a spec agent, a prompt's frontmatter or an engine default) gets a `10.00` default, because that is the
+case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
+subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
+
+**In platform mode the Crysk platform's estimate replaces the cost band.** The connect step asks for it
+(`X-Crysk-Capabilities: estimate`) and the budget gate compares its high end to the ceiling: an estimate
+from the setup's recent reviews scaled to the pull request, or from the catalog prices of its models. The
+plan prints it as `estimate $X – $Y (platform: history)` or `(platform: catalog)`. The platform prices the
+whole pull request, so a re-review whose discovery reads only what changed since the last review, or one
+that only verifies earlier findings, scales that figure by the share of a full review it does (the band
+measures the share; it never supplies the price). Without one (an older
+platform, a model with no catalog price) the band decides as before. On a platform repository every skip
+comment names only `/crysk review` (no legacy spelling, force workflow or re-scaffold), and the budget
+and size skips point at the model setup and the size limits in the Crysk dashboard, since its workflow
+has no `budget-usd` or `max-changed-*` inputs to raise.
 
 **Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
 subscription route there is no size limit, so large pull requests are reviewed instead of skipped, and
@@ -944,16 +967,17 @@ Re-scaffold with `crysk ci init --force` to switch to the comment trigger. It re
 the review workflow only (`pr-hero.yml` or `crysk.yml`, whichever the repository has) and leaves
 `pr-hero-force.yml` in place; delete that file yourself once the new workflow is on the default branch.
 
-In this repository, a comment run reviews with the pull request's own engine: `crysk.yml` is
-generated with `OWN_CI_WORKFLOW_OPTIONS`, so on a comment a first step resolves the PR head commit and
-checkout pins that commit before `uses: ./`. A comment run starts on the default branch, so without the
-pin it would run the default branch's engine instead of the one under review. Consumer workflows run
-the published `cryskai/crysk@v0`, where the checkout does not select the engine.
+This repository is reviewed through the Crysk platform, which configures its review, so it commits no
+`crysk.yml` or `.crysk/config.json` of its own. `OWN_CI_WORKFLOW_OPTIONS` still generates the workflow
+it used before: on a comment a first step resolves the PR head commit and checkout pins that commit
+before `uses: ./`, so a comment run reviews with the pull request's own engine rather than the default
+branch's. Consumer workflows run the published `cryskai/crysk@v0`, where the checkout does not select
+the engine.
 
 - **When it takes effect.** GitHub reads a comment-triggered workflow from the default branch, so the
   comment trigger works only once the workflow (`crysk.yml`, or `pr-hero.yml` in a repository set up before
   the rename) with its `issue_comment` trigger is on the default
-  branch; in this repository that means `main`, not `dev`. Until then a comment starts nothing. In a
+  branch (for example `main`, not an integration branch like `dev`). Until then a comment starts nothing. In a
   consumer repository, the comment handling also needs an action release that has it, reached through
   the `@v0` tag the workflow pins.
 - **Minimum action version.** This workflow listens to comments, and only an action release that ships

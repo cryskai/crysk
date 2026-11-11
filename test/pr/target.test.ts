@@ -111,7 +111,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
   async function limitsFor(argv: string[], isCi = true) {
     const repo = path.join(dir, "repo");
     const { options } = parseArgs(["review", "--pr", "1", ...argv]);
-    const { loaded, config } = await loadRunConfig({
+    const { loaded, config, summary } = await loadRunConfig({
       root: repo,
       home: path.join(dir, "home"),
       configFlag: undefined,
@@ -121,6 +121,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
       options,
       loaded,
       config,
+      summary,
       isCi,
       operatorRoot: repo,
     });
@@ -156,6 +157,56 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     expect(await limitsFor([], false)).toBeUndefined();
   });
 
+  // cryskai/platform#12 item 5: with an OpenCode auth file on disk, the ceiling
+  // reads the routes the run actually resolves, from every source routing reads.
+  async function ceilingWithAuthFile(argv: string[]) {
+    const authDir = path.join(dir, "xdg", "opencode");
+    mkdirSync(authDir, { recursive: true });
+    writeFileSync(path.join(authDir, "auth.json"), "{}");
+    const repo = path.join(dir, "repo");
+    const { options } = parseArgs(["review", "--pr", "1", "--ci", ...argv]);
+    const { loaded, config, summary } = await loadRunConfig({
+      root: repo,
+      home: path.join(dir, "home"),
+      configFlag: undefined,
+      options,
+    });
+    const step2 = await resolvePrPromptSetAndBudget({
+      options,
+      loaded,
+      config,
+      summary,
+      isCi: true,
+      operatorRoot: repo,
+    });
+    return step2.ciBudgetCeiling.budgetUsd;
+  }
+
+  test("a per-token OpenCode model on --scout-model keeps the metered ceiling", async () => {
+    expect(
+      await ceilingWithAuthFile([
+        "--scout",
+        "--scout-model",
+        "opencode:deepseek/deepseek-v4-flash",
+      ]),
+    ).toBe(10);
+  });
+
+  test("--model is read the way routing reads it, surrounding spaces included", async () => {
+    expect(
+      await ceilingWithAuthFile([
+        "--model",
+        " opencode:deepseek/deepseek-v4-flash",
+      ]),
+    ).toBe(10);
+  });
+
+  test("an auth file no resolved route uses leaves a Claude run unmetered", async () => {
+    expect(
+      await ceilingWithAuthFile(["--model", "claude:sonnet-latest"]),
+    ).toBeUndefined();
+  });
+
   // S5: the ceiling and the size limits follow the credential the run chose, not
   // the presence of a key. Both Claude secrets set is the billing change the docs
   // name: the default order picks the subscription.
@@ -164,7 +215,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
   ) {
     const repo = path.join(dir, "repo");
     const { options } = parseArgs(["review", "--pr", "1", "--ci"]);
-    const { loaded, config } = await loadRunConfig({
+    const { loaded, config, summary } = await loadRunConfig({
       root: repo,
       home: path.join(dir, "home"),
       configFlag: undefined,
@@ -174,6 +225,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
       options,
       loaded,
       config,
+      summary,
       isCi: true,
       operatorRoot: repo,
       claudeRun: resolveRunClaudeCredential({
