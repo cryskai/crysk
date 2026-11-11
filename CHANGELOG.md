@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-11
+
 ### Added
 
 - **Platform mode: every run sends the Crysk platform its full trace.** A new `Upload the Crysk trace` step
@@ -28,42 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can show what a review costs even when `cost_usd`, the cash cost, is 0. An agent row sums every step it
   owns, the refuter's one step per finding included. Every new field is optional: a run without `usage_v2`,
   or with a malformed figure, leaves out only that field, and the existing fields are unchanged.
-
-### Fixed
-
-- **A model whose provider has no credential is refused by name, before anything spends.** An OpenCode
-  model with an effort used to fail listing its variants (`opencode models <provider> exited 1`) and was
-  reported as `CRYSK-UNCLASSIFIED`; without an effort it passed admission and failed at its first hunter.
-  Admission now checks that the OpenCode auth file holds a record for every model the plan may run,
-  fallbacks included and free models excepted, and refuses the run naming the provider and the
-  `CRYSK_OPENCODE_<PROVIDER>_API_KEY` secret that did not reach it, classified `CRYSK-CRED-UNUSABLE` with the
-  route's OpenCode fixes. A plan with a Claude route and no Claude credential is now `CRYSK-CRED-MISSING`
-  instead of `CRYSK-UNCLASSIFIED`. Both settle the CI admission row as a skip that spent nothing, and the
-  setup step names a provider with no `CRYSK_OPENCODE_*` secret even when no auth file is written.
-
-- A re-review with nothing new to discover no longer prints a model on the plan's summarizer and
-  scout rows. Neither stage runs on that pass, so the rows read `not run this pass (nothing new to
-  review)` instead of the default `haiku`, which named a model the review's `models` did not use.
-  A model name longer than its column is also separated from the text after it, which read
-  `(effort high)always`.
-
-### Removed
-
-- The `lifecycle` hunter is retired from the default review. Measured before the decision: on
-  ReviewBench (6 PRs, 2 replicates) a review without it cost 39% less and took 38% less wall time,
-  for about 2 valid findings lost per run and none of high severity; on the Martian 50 judgments it
-  was the only hunter behind 0 of 52 High+Critical findings. One real case argued the other way: on
-  a musive PR it was the only hunter to find a known blocker, once in two runs. A custom prompt set
-  that still carries `deep-review-lifecycle.md` now fails the prompt-set check with a message that
-  says to delete the file, or to keep the hunter with
-  `CRYSK_EXTRA_HUNTERS=lifecycle:deep-review-lifecycle.md`.
-
-## [0.4.0] - 2026-11-06
-
-### Security
-- **Model text is made safe before it is published.** A pull request can steer what a model writes about it, and findings, the review summary, CI adjudication evidence and triage replies were posted as written. Credential-shaped text is now redacted, and mentions, Markdown images, raw HTML and HTML comments are defused, in PR comments, the step summary and the state block. A finding or path can no longer spell a marker that hides the real state block. `findings.json` in the run artifact still holds the original text.
-
-### Added
+- **Every Claude CLI attempt keeps its session transcript in the run directory.** The session JSONL is
+  copied to `steps/trace.<step>.attempt<n>.jsonl` before the credential home is removed, including for
+  attempts that time out, are killed or are cancelled (each spawn now passes `--session-id`), and
+  `pipeline.json` lists the copies in the step's `tracePaths`. The copy is redacted first and capped at
+  4 MiB per line and 64 MiB per file. The shared redactor now also catches PEM private keys, AWS key ids,
+  Stripe keys, unlabeled JWTs, `user:password@` in URLs and quoted or env/ini/YAML credential assignments.
+  A missing file or a failed copy only warns.
 - **Models per role.** The person config's `models` maps a role to the models it runs on: `default`,
   `hunter.<key>` for each hunter, `refuter` (which also covers the re-review verifier and the CI
   adjudicator), `consolidate`, `scout`, `summary` and `judge`, with a role not listed using `default`. A model
@@ -111,6 +84,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attempts, cause and own usage; the platform report's per-agent model and the failed-hunter record name the
   model that ran. A list of one model behaves and records exactly as before. See
   [Fallback models](docs/configuration.md#fallback-models).
+
+### Changed
+
+- **A run uses one Claude credential, in the order `credentials.claude` sets.** Your person config's
+  `credentials.claude` (`["subscription", "api_key"]`, either or both) names the order; the run uses the first
+  one that is set, chosen once at the start and never switched mid-run, and a credential that is set but not
+  listed is never used. **The default is `["subscription", "api_key"]`, a billing change for anyone holding
+  both**: before, the Claude CLI preferred a set `ANTHROPIC_API_KEY` and the review billed per token with the
+  `$10` CI ceiling; now the subscription runs, with no ceiling. Put `api_key` first to keep the old billing.
+  With only one credential set nothing changes. The Claude child gets only the chosen one
+  (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`); the other and `ANTHROPIC_AUTH_TOKEN` are removed, and
+  `ANTHROPIC_AUTH_TOKEN` is no longer used. A run on the API key attaches no macOS Keychain broker. The CI
+  budget ceiling and size limits follow the chosen credential. A plan that sends a step to the Claude CLI
+  with none of the listed credentials set stops before any spend, naming the order and what is set. The
+  `CRYSK_CLAUDE_OAUTH_TOKEN` and `CRYSK_CLAUDE_API_KEY` variables count as the subscription and the key when
+  they reach the run. The error fixes that told you to delete the API key secret so the OAuth token would
+  win now say to change `credentials.claude`. See [Credentials](docs/configuration.md#credentials).
+- **Breaking: error codes are `CRYSK-*`, not `PRH-*`.** Every code keeps its name after the prefix
+  (`PRH-CRED-MISSING` is now `CRYSK-CRED-MISSING`) in annotations, job summaries, outcome comments and commit
+  statuses, and the cancelled status now says `/crysk review`. `report.outcome_code` in `crysk status --json`
+  reports `CRYSK-*` values: an outcome comment posted before the rename reads as the `CRYSK-*` code it became,
+  and the codes removed with `routing` (`PRH-ROUTING-MISSING`, `PRH-ROUTING-INVALID`,
+  `PRH-ROUTE-UNRESOLVABLE`) read as none. One code is new, `CRYSK-INPUT-REMOVED`. Each docs section keeps its
+  old `#prh-*` anchor, so links in those comments still land. Anything that matches `PRH-` in a status
+  description, a comment or `outcome_code` needs to match `CRYSK-`.
+- **The doctor's Claude credential check follows the run's rule.** `crysk doctor` counts the
+  `CRYSK_CLAUDE_*` and the Claude CLI's own variables, `~/.claude/.credentials.json`, or the macOS Keychain
+  broker; `~/.claude.json` or `~/.claude/session.json` alone no longer count, nor does `ANTHROPIC_AUTH_TOKEN`.
+  Its hint names `CRYSK_CLAUDE_OAUTH_TOKEN` and `CRYSK_CLAUDE_API_KEY`. The CI trigger's runner-login check
+  follows the same rule.
+- **Every action step that runs a script binds the Claude variables empty** (`ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `CRYSK_CLAUDE_OAUTH_TOKEN`, `CRYSK_CLAUDE_API_KEY`), so a
+  value set in the job's `env:` reaches no installer, `gh` or `git` call; a `CRYSK_OPENCODE_*` variable in the
+  job's `env:` gets a warning naming it.
+
+### Removed
+
+- The `lifecycle` hunter is retired from the default review. Measured before the decision: on
+  ReviewBench (6 PRs, 2 replicates) a review without it cost 39% less and took 38% less wall time,
+  for about 2 valid findings lost per run and none of high severity; on the Martian 50 judgments it
+  was the only hunter behind 0 of 52 High+Critical findings. One real case argued the other way: on
+  a musive PR it was the only hunter to find a known blocker, once in two runs. A custom prompt set
+  that still carries `deep-review-lifecycle.md` now fails the prompt-set check with a message that
+  says to delete the file, or to keep the hunter with
+  `CRYSK_EXTRA_HUNTERS=lifecycle:deep-review-lifecycle.md`.
+- **Breaking: the `routing` config key.** Its alias-keyed mappings (`logical`, `gateway`, `modelSnapshot`,
+  `disabled`, `allowSpend`) are replaced by `models` per role, not read beside it: a config that still has
+  `routing`, in either file, is refused with the form to write, e.g. `"models": {"hunter.logic":
+  ["claude:sonnet-latest"]}`.
+- **Breaking: `summary.model`.** The summary model is the `summary` role under `models`, a person setting. The
+  value `crysk init` used to write, `"haiku"`, still reads with a warning (in the person config it becomes
+  `models.summary`, in a repository file it is ignored); any other value is refused. `crysk init` no longer
+  writes it.
+- **Breaking: the `anthropic-api-key`, `claude-token`, `opencode-auth` and `routing` action inputs**, with the
+  `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and `OPENCODE_AUTH_JSON` secrets and the `CRYSK_ROUTING`
+  (`PRHERO_ROUTING`) variable they carried. A workflow that still passes a value in one stops at the trigger,
+  before anything is installed, with `CRYSK-INPUT-REMOVED` naming each input and its replacement; an old input
+  left empty is not refused. Re-run `crysk ci init --force`, or pass the `CRYSK_*` secrets in `crysk-secrets`
+  and the models in `models`. The old secret names written inside `crysk-secrets` are not read either, and the
+  trigger warns with the `CRYSK_*` name for each.
+- **Breaking: the `#variant` suffix on an OpenCode model.** `opencode:openai/gpt-5#high` is refused wherever a
+  model is written (`models`, `--model`, the CI `model` input), with the entry to write instead:
+  `{"model": "opencode:openai/gpt-5", "effort": "high"}`.
+
+### Fixed
+
+- **A model whose provider has no credential is refused by name, before anything spends.** An OpenCode
+  model with an effort used to fail listing its variants (`opencode models <provider> exited 1`) and was
+  reported as `CRYSK-UNCLASSIFIED`; without an effort it passed admission and failed at its first hunter.
+  Admission now checks that the OpenCode auth file holds a record for every model the plan may run,
+  fallbacks included and free models excepted, and refuses the run naming the provider and the
+  `CRYSK_OPENCODE_<PROVIDER>_API_KEY` secret that did not reach it, classified `CRYSK-CRED-UNUSABLE` with the
+  route's OpenCode fixes. A plan with a Claude route and no Claude credential is now `CRYSK-CRED-MISSING`
+  instead of `CRYSK-UNCLASSIFIED`. Both settle the CI admission row as a skip that spent nothing, and the
+  setup step names a provider with no `CRYSK_OPENCODE_*` secret even when no auth file is written.
+- A re-review with nothing new to discover no longer prints a model on the plan's summarizer and
+  scout rows. Neither stage runs on that pass, so the rows read `not run this pass (nothing new to
+  review)` instead of the default `haiku`, which named a model the review's `models` did not use.
+  A model name longer than its column is also separated from the text after it, which read
+  `(effort high)always`.
+
+## [0.4.0] - 2026-11-06
+
+### Security
+- **Model text is made safe before it is published.** A pull request can steer what a model writes about it, and findings, the review summary, CI adjudication evidence and triage replies were posted as written. Credential-shaped text is now redacted, and mentions, Markdown images, raw HTML and HTML comments are defused, in PR comments, the step summary and the state block. A finding or path can no longer spell a marker that hides the real state block. `findings.json` in the run artifact still holds the original text.
+
+### Added
 - **Platform mode: a run the Crysk platform dispatched posts as the Crysk App's bot.** When the event is
   `workflow_dispatch` and the `dispatch-id` input is non-empty, a new `Connect to Crysk` step exchanges the
   run's GitHub OIDC token (audience `crysk`) for a repo-scoped installation token, masks it, and the trigger,
@@ -147,8 +207,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token, and never turns the job red. Standalone runs are unchanged.
 - **Platform mode: the review configuration the Crysk platform holds is applied on the runner.** The token
   exchange's `config: { person, repo }` now reaches the engine's own two-layer read. `person` is written to
-  the runner's personal config file (a non-empty one wins whole over the `models` and `credentials` inputs,
-  which are then ignored with a warning), and `repo` is used only when the checkout has no
+  the personal config file the action already writes `routing` to (its `routing` wins over the `routing`
+  input; without one the input keeps working), and `repo` is used only when the checkout has no
   `.crysk/config.json` (or legacy `.prhero/config.json`) of its own, through the CLI's existing `--config`
   override pointing at a temp file outside the workspace; a repository's own file wins whole and a
   `::notice::` says so. Empty objects change nothing. A value the engine's parsers refuse, a malformed
@@ -156,41 +216,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value or a token. Standalone runs are unchanged. In platform mode the personal config file belongs to the
   run (rewritten, or removed when there is nothing to write, so a runner whose `HOME` persists never reads an
   earlier run's keys), a `post` the platform sets is applied (`--post` is left out, since the flag would
-  outrank the config), platform models override the input for the OpenCode install and the no-credentials
+  outrank the config), platform routing overrides the input for the OpenCode install and the no-credentials
   backend alike, and the refresh steps ignore the `config` in their response.
 
 ### Changed
-- **A run uses one Claude credential, in the order `credentials.claude` sets.** Your person config's
-  `credentials.claude` (`["subscription", "api_key"]`, either or both) names the order; the run uses the first
-  one that is set, chosen once at the start and never switched mid-run, and a credential that is set but not
-  listed is never used. **The default is `["subscription", "api_key"]`, a billing change for anyone holding
-  both**: before, the Claude CLI preferred a set `ANTHROPIC_API_KEY` and the review billed per token with the
-  `$10` CI ceiling; now the subscription runs, with no ceiling. Put `api_key` first to keep the old billing.
-  With only one credential set nothing changes. The Claude child gets only the chosen one
-  (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`); the other and `ANTHROPIC_AUTH_TOKEN` are removed, and
-  `ANTHROPIC_AUTH_TOKEN` is no longer used. A run on the API key attaches no macOS Keychain broker. The CI
-  budget ceiling and size limits follow the chosen credential. A plan that sends a step to the Claude CLI
-  with none of the listed credentials set stops before any spend, naming the order and what is set. The
-  `CRYSK_CLAUDE_OAUTH_TOKEN` and `CRYSK_CLAUDE_API_KEY` variables count as the subscription and the key when
-  they reach the run. The error fixes that told you to delete the API key secret so the OAuth token would
-  win now say to change `credentials.claude`. See [Credentials](docs/configuration.md#credentials).
-- **Breaking: error codes are `CRYSK-*`, not `PRH-*`.** Every code keeps its name after the prefix
-  (`PRH-CRED-MISSING` is now `CRYSK-CRED-MISSING`) in annotations, job summaries, outcome comments and commit
-  statuses, and the cancelled status now says `/crysk review`. `report.outcome_code` in `crysk status --json`
-  reports `CRYSK-*` values: an outcome comment posted before the rename reads as the `CRYSK-*` code it became,
-  and the codes removed with `routing` (`PRH-ROUTING-MISSING`, `PRH-ROUTING-INVALID`,
-  `PRH-ROUTE-UNRESOLVABLE`) read as none. One code is new, `CRYSK-INPUT-REMOVED`. Each docs section keeps its
-  old `#prh-*` anchor, so links in those comments still land. Anything that matches `PRH-` in a status
-  description, a comment or `outcome_code` needs to match `CRYSK-`.
-- **The doctor's Claude credential check follows the run's rule.** `crysk doctor` counts the
-  `CRYSK_CLAUDE_*` and the Claude CLI's own variables, `~/.claude/.credentials.json`, or the macOS Keychain
-  broker; `~/.claude.json` or `~/.claude/session.json` alone no longer count, nor does `ANTHROPIC_AUTH_TOKEN`.
-  Its hint names `CRYSK_CLAUDE_OAUTH_TOKEN` and `CRYSK_CLAUDE_API_KEY`. The CI trigger's runner-login check
-  follows the same rule.
-- **Every action step that runs a script binds the Claude variables empty** (`ANTHROPIC_API_KEY`,
-  `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `CRYSK_CLAUDE_OAUTH_TOKEN`, `CRYSK_CLAUDE_API_KEY`), so a
-  value set in the job's `env:` reaches no installer, `gh` or `git` call; a `CRYSK_OPENCODE_*` variable in the
-  job's `env:` gets a warning naming it.
 - **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the
   review-comments fallback already did. Before, a bot's comments read on that path (for example
   `github-actions[bot]` summaries in standalone mode) arrived under the bare login, so exact-login trust
@@ -204,26 +233,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commit it names, and the loop metrics count it as not green. `/crysk stop`, a low-risk or below-threshold
   delta, and once per PR still carry a green. A required `crysk` check now blocks merge on those heads until a
   maintainer reviews or overrides them.
-
-### Removed
-- **Breaking: the `routing` config key.** Its alias-keyed mappings (`logical`, `gateway`, `modelSnapshot`,
-  `disabled`, `allowSpend`) are replaced by `models` per role, not read beside it: a config that still has
-  `routing`, in either file, is refused with the form to write, e.g. `"models": {"hunter.logic":
-  ["claude:sonnet-latest"]}`.
-- **Breaking: `summary.model`.** The summary model is the `summary` role under `models`, a person setting. The
-  value `crysk init` used to write, `"haiku"`, still reads with a warning (in the person config it becomes
-  `models.summary`, in a repository file it is ignored); any other value is refused. `crysk init` no longer
-  writes it.
-- **Breaking: the `anthropic-api-key`, `claude-token`, `opencode-auth` and `routing` action inputs**, with the
-  `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and `OPENCODE_AUTH_JSON` secrets and the `CRYSK_ROUTING`
-  (`PRHERO_ROUTING`) variable they carried. A workflow that still passes a value in one stops at the trigger,
-  before anything is installed, with `CRYSK-INPUT-REMOVED` naming each input and its replacement; an old input
-  left empty is not refused. Re-run `crysk ci init --force`, or pass the `CRYSK_*` secrets in `crysk-secrets`
-  and the models in `models`. The old secret names written inside `crysk-secrets` are not read either, and the
-  trigger warns with the `CRYSK_*` name for each.
-- **Breaking: the `#variant` suffix on an OpenCode model.** `opencode:openai/gpt-5#high` is refused wherever a
-  model is written (`models`, `--model`, the CI `model` input), with the entry to write instead:
-  `{"model": "opencode:openai/gpt-5", "effort": "high"}`.
 
 ### Fixed
 - **`crysk status` sees a first review's outside-diff findings.** An outside-diff finding has no comment of its
@@ -879,7 +888,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/cryskai/crysk/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cryskai/crysk/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/cryskai/crysk/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/cryskai/crysk/compare/v0.3.1...v0.3.2
