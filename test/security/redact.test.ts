@@ -718,7 +718,10 @@ describe("redactSessionText: a key after an encoded or escaped prefix", () => {
 // timing one against a fixed bound: a fixed 2 s bound failed on the slow
 // macOS Intel release runner (2.0-2.7 s) while every other runner passed.
 // Quadrupling the input costs about 4x when linear and about 16x when
-// quadratic, on any machine, so a ratio under 8 separates them. Each repeat
+// quadratic, on any machine, so a ratio under 8 separates them. A ratio
+// cannot see a regression that stays linear but gets much slower (a bounded
+// rescan per start), so 4 MiB also keeps a ceiling of 10 s: about 4x the
+// slowest runner measured, and far below that kind of regression. Each repeat
 // is redacted as it would be alone.
 describe("redaction stays linear on unclosed expressions", () => {
   const MIB = 1024 * 1024;
@@ -743,6 +746,7 @@ describe("redaction stays linear on unclosed expressions", () => {
       const one = timed(redact, unit.repeat(small));
       const four = timed(redact, unit.repeat(large));
       expect(four.ms / Math.max(one.ms, 1)).toBeLessThan(8);
+      expect(four.ms).toBeLessThan(10_000);
       expect(four.out).toBe(redact(unit).repeat(large));
     },
     30_000,
