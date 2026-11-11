@@ -853,21 +853,40 @@ export function openCodeProvidersOfModels(models: unknown): string[] {
   return [...providers].sort();
 }
 
-// Whether an OpenCode route these models name bills per token (cryskai/platform#12
-// item 5): an auth file exists AND some provider the models name, any role or
-// fallback, binds an API key, by the same rule the run binds it with
-// (credentialKindForRoute over the secret manifest's names, the provider literal
-// without one). The file alone is not enough: it also exists for a ChatGPT
-// subscription, after an earlier run on a runner whose HOME persists, or from a
-// local `opencode auth login`. And no file means no credential for a per-token
-// route, as before: a free `opencode/*` model stays unmetered.
+// Whether an OpenCode route this run can take bills per token (cryskai/platform#12
+// item 5): an auth file exists AND some provider the run can route to binds an
+// API key, by the same rule the run binds it with (credentialKindForRoute over the
+// secret manifest's names, the provider literal without one). The providers come
+// from `models` (every role and fallback) and from `routeModels`, every other
+// source a step's route can come from: `--model`, a spec agent's model or
+// diversity legs, and a prompt's own frontmatter model (routing.ts,
+// resolveStepChoices). A source a step does not end up using can only make the
+// run read as metered, the side that keeps the ceiling. The file alone is not
+// enough: it also exists for a ChatGPT subscription, after an earlier run on a
+// runner whose HOME persists, or from a local `opencode auth login`. And no file
+// means no credential for a per-token route, as before: a free `opencode/*` model
+// stays unmetered.
 export function openCodeModelsBillMetered(input: {
   models: unknown;
+  routeModels?: readonly (string | undefined)[];
   authFilePresent: boolean;
   openCodeSecretNames: readonly string[] | undefined;
 }): boolean {
   if (!input.authFilePresent) return false;
-  return openCodeProvidersOfModels(input.models).some(
+  const providers = new Set(openCodeProvidersOfModels(input.models));
+  for (const raw of input.routeModels ?? []) {
+    if (raw === undefined) continue;
+    let parsed: ReturnType<typeof parseModelName>;
+    try {
+      parsed = parseModelName(raw);
+    } catch {
+      // A bare alias (`sonnet`) is the legacy Claude form; routing converts it to
+      // `claude:<alias>-latest`, never to an OpenCode route.
+      continue;
+    }
+    if (parsed.backend === "opencode") providers.add(parsed.provider);
+  }
+  return [...providers].some(
     (provider) =>
       credentialKindForRoute(
         "opencode",

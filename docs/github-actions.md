@@ -803,7 +803,8 @@ credential, the first one in `credentials.claude` that is set (default `["subscr
 (`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its real cash cost is `$0.00`
 and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
 A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode provider whose
-`CRYSK_OPENCODE_*` secret is an API key, any role or fallback) gets a `10.00` default, because that is the
+`CRYSK_OPENCODE_*` secret is an API key, in any role or fallback of `models` or named by `--model`, a spec
+agent or a prompt's frontmatter) gets a `10.00` default, because that is the
 case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
 subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
@@ -811,7 +812,9 @@ subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) d
 **In platform mode the Crysk platform's estimate replaces the cost band.** The connect step asks for it
 (`X-Crysk-Capabilities: estimate`) and the budget gate compares its high end to the ceiling: an estimate
 from the setup's recent reviews scaled to the pull request, or from the catalog prices of its models. The
-plan prints it as `estimate $X – $Y (platform: history)` or `(platform: catalog)`. Without one (an older
+plan prints it as `estimate $X – $Y (platform: history)` or `(platform: catalog)`. The platform prices the
+whole pull request, so a re-review whose discovery reads only what changed since the last review, or one
+that only verifies earlier findings, takes the lower of that figure and the band. Without one (an older
 platform, a model with no catalog price) the band decides as before. On a platform repository every skip
 comment names only `/crysk review` (no legacy spelling, force workflow or re-scaffold), and the budget
 and size skips point at the model setup and the size limits in the Crysk dashboard, since its workflow

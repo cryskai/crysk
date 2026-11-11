@@ -80,6 +80,19 @@ describe("openCodeModelsBillMetered", () => {
     );
   });
 
+  test("a route named outside `models` counts too: --model, a spec model or a prompt's own", () => {
+    const run = (routeModels: readonly (string | undefined)[]) =>
+      openCodeModelsBillMetered({
+        models: { default: ["claude:sonnet-latest"] },
+        routeModels,
+        authFilePresent: true,
+        openCodeSecretNames: deepseek,
+      });
+    expect(run(["opencode:deepseek/deepseek-v4-flash"])).toBe(true);
+    // A bare alias (a spec or prompt's legacy form) is a Claude route.
+    expect(run(["sonnet", undefined])).toBe(false);
+  });
+
   test("no auth file stays unmetered, as before: a free opencode/* model invoices nothing", () => {
     expect(
       openCodeModelsBillMetered({
@@ -213,6 +226,22 @@ describe("ciSizeGateSkip", () => {
       maxChangedLines: 1000,
       maxChangedFiles: 50,
     });
+  });
+
+  test("on a platform repository the step summary points at the dashboard, like the comment", () => {
+    const skip = ciSizeGateSkip({
+      isCi: true,
+      verdict: failedLinesGate,
+      prNumber: 55,
+      maxChangedLines: 1000,
+      maxChangedFiles: 50,
+      platformConnected: true,
+    });
+    if (skip === null) throw new Error("expected a skip");
+    const rendered = renderStepSummary(skip.summary);
+    expect(rendered).toContain("raise the size limits in the Crysk dashboard");
+    expect(rendered).not.toContain("max-changed-lines");
+    expect(skip.comment).not.toContain("max-changed-lines");
   });
 
   test("in CI mode with a failed (files) verdict, still builds a valid payload", () => {

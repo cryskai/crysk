@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   #138). The connect step sends `X-Crysk-Capabilities: estimate` and passes the platform's `estimate` to
   the run as `CRYSK_PLATFORM_ESTIMATE`; the gate compares its high end to the ceiling instead of the
   band, which priced every model as Claude. The plan prints `estimate $X – $Y (platform: history)` or
-  `(platform: catalog)`. A missing or malformed estimate leaves the band in charge.
+  `(platform: catalog)`. A missing or malformed estimate leaves the band in charge. The platform prices
+  the whole pull request, so a re-review whose discovery reads only what changed since the last review,
+  or one that only verifies earlier findings, takes the lower of the platform's figure and the band.
 
 ### Fixed
 
@@ -21,13 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (cryskai/platform#12). The `$10` default, and the metered size limits (4000 lines / 50 files), applied
   whenever an OpenCode auth file existed: for a ChatGPT subscription, a file left by an earlier run, or a
   run whose models use no OpenCode at all. A run is now metered on OpenCode only when the auth file exists
-  and a model, in any role or fallback, is on a provider bound to an API key, by the same rule the run
-  binds it. A run that is no longer metered gets neither the ceiling nor the size limits unless the
+  and a model the run can route to is on a provider bound to an API key, by the same rule the run binds
+  it. Every route source counts: `models` (any role or fallback), `--model`, a spec agent's model or
+  diversity legs, and a prompt's own frontmatter model. A run that is no longer metered gets neither the ceiling nor the size limits unless the
   workflow or the repo config sets them.
 - **Skip comments on a Crysk platform repository name only what applies there.** The budget, size,
   coverage and manual-required comments no longer suggest `/pr-hero review`, `pr-hero-force.yml` or
   `crysk ci init --force`: they name `/crysk review`, and the budget and size skips point at the model
-  setup and the size limits in the Crysk dashboard.
+  setup and the size limits in the Crysk dashboard. The size skip's step summary says the same.
 - **A review trace shows each OpenCode model turn, and every agent that ran** (#511). An OpenCode attempt
   was one `chat` generation spanning the whole agent (465 s for a 78-call hunter), so per-turn latency,
   tokens and cost could not be read. It is now an `attempt <step>#<n>` span with one `chat` generation per

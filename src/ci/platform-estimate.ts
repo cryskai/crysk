@@ -83,3 +83,19 @@ export function platformCostEstimate(estimate: PlatformEstimate): {
     platform: estimate.basis,
   };
 }
+
+// The estimate the run gates and plans on. The platform prices the whole pull
+// request before the engine knows how much of it this run reviews, so a narrowed
+// run (a re-review of the commits since the last one, or one that only verifies
+// earlier findings) takes the lower of the platform's figure and the band, which
+// is computed from what the run actually covers. A full review uses the
+// platform's figure; without one the band decides, as before.
+export function runCostEstimate<Band extends { high: number }>(
+  platform: PlatformEstimate | undefined,
+  band: Band,
+  narrowed: boolean,
+): Band | ReturnType<typeof platformCostEstimate> {
+  if (platform === undefined) return band;
+  if (narrowed && band.high < platform.usdHigh) return band;
+  return platformCostEstimate(platform);
+}

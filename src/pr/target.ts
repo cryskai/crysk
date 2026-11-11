@@ -169,7 +169,14 @@ export async function resolvePrPromptSetAndBudget(params: {
   // pin the older wiring) reads the process env as before.
   claudeRun?: RunClaudeCredential;
 }): Promise<ResolvedPrPromptSet> {
-  // The OpenCode half from the routes the models name, not from the auth file
+  // The WHOLE resolution, not just its dir: under the compiled binary the
+  // prompt set is a map of embedded paths and `dir` is only a display label.
+  // Resolved first because the ceiling below reads the models it names.
+  const { agents, spec, agentFiles, promptSet } = await resolvePromptSet(
+    params.options,
+    params.loaded,
+  );
+  // The OpenCode half from the routes the run can take, not from the auth file
   // existing (cryskai/platform#12): a file built for a ChatGPT subscription, one
   // left on a runner whose HOME persists, or a local `opencode auth login` store
   // invoices nothing for a run whose models do not bill per token. Not
@@ -180,6 +187,14 @@ export async function resolvePrPromptSetAndBudget(params: {
     {
       openCodeBillsMetered: openCodeModelsBillMetered({
         models: params.config.models,
+        routeModels: [
+          params.options.model,
+          ...spec.agents.flatMap((agent) => [
+            agent.model,
+            ...(agent.models ?? []),
+          ]),
+          ...[...agentFiles.values()].map((agent) => agent.model),
+        ],
         authFilePresent: existsSync(resolveOpenCodeAuthPath()),
         openCodeSecretNames: readOpenCodeSecretNames(),
       }),
@@ -232,12 +247,6 @@ export async function resolvePrPromptSetAndBudget(params: {
       }
     }
   }
-  // The WHOLE resolution, not just its dir: under the compiled binary the
-  // prompt set is a map of embedded paths and `dir` is only a display label.
-  const { agents, spec, agentFiles, promptSet } = await resolvePromptSet(
-    params.options,
-    params.loaded,
-  );
   const instructions = resolveReviewInstructions(
     params.options.gotchas,
     params.operatorRoot,

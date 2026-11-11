@@ -23,10 +23,7 @@
 import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
 import { actionsRunUrl } from "#ci/outcome";
-import {
-  platformCostEstimate,
-  readPlatformEstimate,
-} from "#ci/platform-estimate";
+import { readPlatformEstimate, runCostEstimate } from "#ci/platform-estimate";
 import {
   countFreeRouteSteps,
   type FreeRouteBilling,
@@ -150,22 +147,27 @@ export async function resolvePrPlanAndConfirm(params: {
   );
   // cryskai/platform#12: in a platform run the platform's estimate, priced from
   // the setup's models and its recent reviews, replaces the band, which prices
-  // every model as Claude. Without one (standalone, or nothing priceable) the
-  // band decides as before.
+  // every model as Claude. The platform prices the whole pull request, so a run
+  // that covers less of it (a re-review whose discovery reads only the commits
+  // or paths since the last review, or one that hunts nothing new) keeps the
+  // band when the band is lower (runCostEstimate). Without a platform estimate
+  // (standalone, or nothing priceable) the band decides.
   const platformEstimate = params.isCi
     ? readPlatformEstimate(process.env)
     : undefined;
-  const estimate =
-    platformEstimate === undefined
-      ? estimateCost(
-          params.diffStat,
-          params.hunterCount,
-          params.summary.enabled && !params.skipDiscovery,
-          params.options.scout && !params.skipDiscovery,
-          queuedVerification,
-          !params.skipDiscovery,
-        )
-      : platformCostEstimate(platformEstimate);
+  const estimate = runCostEstimate(
+    platformEstimate,
+    estimateCost(
+      params.diffStat,
+      params.hunterCount,
+      params.summary.enabled && !params.skipDiscovery,
+      params.options.scout && !params.skipDiscovery,
+      queuedVerification,
+      !params.skipDiscovery,
+    ),
+    // discoveryPaths is null only when the hunters read the full PR range.
+    params.skipDiscovery || params.prepared.discoveryPaths !== null,
+  );
   // 7b(CI) — the budget gate, immediately after the estimate it reads and
   // BEFORE the plan card/confirm/"committed to spending" commit-status
   // block below: spec 3.1 ("Review MUST halt before agent spawning") is

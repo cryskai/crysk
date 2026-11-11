@@ -10,6 +10,7 @@ import {
   parsePlatformEstimate,
   platformCostEstimate,
   readPlatformEstimate,
+  runCostEstimate,
 } from "../../src/ci/platform-estimate";
 import { planEstimateLine } from "../../src/ui/plan";
 
@@ -171,5 +172,27 @@ describe("platform.ts runs before `bun install`", () => {
     expect(
       readFileSync(path.join(SRC_CI, "platform-estimate.ts"), "utf-8"),
     ).not.toMatch(/^\s*import\b/m);
+  });
+});
+
+// The platform prices the whole pull request before the engine knows how much
+// of it this run reviews, so a narrowed run (a re-review of the new commits, or
+// one that only verifies) keeps the band when the band is the lower figure.
+describe("runCostEstimate", () => {
+  const platform = { usdLow: 4, usdHigh: 6, basis: "history" as const };
+  const band = { low: 0.5, high: 1.5, basis: "band" };
+
+  test("a full review uses the platform's estimate", () => {
+    expect(runCostEstimate(platform, band, false).high).toBe(6);
+  });
+
+  test("a narrowed run takes the lower of the two", () => {
+    expect(runCostEstimate(platform, band, true)).toEqual(band);
+    const bigBand = { low: 8, high: 12, basis: "band" };
+    expect(runCostEstimate(platform, bigBand, true).high).toBe(6);
+  });
+
+  test("without a platform estimate the band decides", () => {
+    expect(runCostEstimate(undefined, band, false)).toEqual(band);
   });
 });

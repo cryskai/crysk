@@ -274,6 +274,7 @@ export function ciSizeGateSkip(input: CiSizeGateSkipInput): CiGateSkip | null {
     changedFiles: input.verdict.effectiveFiles,
     maxChangedLines: input.maxChangedLines,
     maxChangedFiles: input.maxChangedFiles,
+    ...(input.platformConnected === true ? { platformConnected: true } : {}),
   };
   return {
     comment: buildSizeSkipComment(summary, input.platformConnected === true),

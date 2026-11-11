@@ -150,6 +150,9 @@ interface CiSkipSizeSummary {
   changedFiles: number;
   maxChangedLines: number;
   maxChangedFiles: number;
+  // A platform-connected run: the limits live in the Crysk dashboard, not in
+  // workflow inputs, so the summary says so like the comment does.
+  platformConnected?: true;
 }
 
 interface CiSkipBudgetSummary {
@@ -329,8 +332,11 @@ function skipSizeLines(data: CiSkipSizeSummary): string[] {
     `| Changed lines | ${data.changedLines} (${sizeLimitText(data.maxChangedLines)}) |`,
     `| Changed files | ${data.changedFiles} (${sizeLimitText(data.maxChangedFiles)}) |`,
     "",
-    "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
-      "PR or raise `max-changed-lines` / `max-changed-files`.",
+    data.platformConnected === true
+      ? "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
+        "PR or raise the size limits in the Crysk dashboard."
+      : "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
+        "PR or raise `max-changed-lines` / `max-changed-files`.",
   ];
 }
 
