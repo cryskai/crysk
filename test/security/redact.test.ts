@@ -713,12 +713,23 @@ describe("redactSessionText: a key after an encoded or escaped prefix", () => {
 
 // A line of unclosed expressions after secret names (`token=${{ ` again and
 // again) once cost a scan to the end of the line from every start. Redacting
-// stays linear: 4 MiB, the largest string a capture accepts, takes a few
-// hundred milliseconds, where the quadratic scan took minutes. The bound
-// leaves room for a slow runner and still fails on any per-start rescan; each
-// repeat is redacted as it would be alone.
+// stays linear up to 4 MiB, the largest string a capture accepts, where the
+// quadratic scan took minutes. The check compares two sizes instead of
+// timing one against a fixed bound: a fixed 2 s bound failed on the slow
+// macOS Intel release runner (2.0-2.7 s) while every other runner passed.
+// Quadrupling the input costs about 4x when linear and about 16x when
+// quadratic, on any machine, so a ratio under 8 separates them. A ratio
+// cannot see a regression that stays linear but gets much slower (a bounded
+// rescan per start), so 4 MiB also keeps a ceiling of 10 s: about 4x the
+// slowest runner measured, and far below that kind of regression. Each repeat
+// is redacted as it would be alone.
 describe("redaction stays linear on unclosed expressions", () => {
   const MIB = 1024 * 1024;
+  const timed = (redact: (text: string) => string, text: string) => {
+    const started = performance.now();
+    const out = redact(text);
+    return { out, ms: performance.now() - started };
+  };
   test.each([
     ["redactEvidenceText", redactEvidenceText, "token=${{ "],
     ["redactEvidenceText", redactEvidenceText, "a=${{ "],
@@ -726,14 +737,20 @@ describe("redaction stays linear on unclosed expressions", () => {
     ["redactSessionText", redactSessionText, "password: ${{ "],
     ["redactEvidenceText", redactEvidenceText, "token: # "],
     ["redactSessionText", redactSessionText, "apiKey:\n#"],
-  ])("%s on a 4 MiB line of %p", (_name, redact, unit) => {
-    const count = Math.floor((4 * MIB) / unit.length);
-    const started = performance.now();
-    const out = redact(unit.repeat(count));
-    const elapsed = performance.now() - started;
-    expect(elapsed).toBeLessThan(2_000);
-    expect(out).toBe(redact(unit).repeat(count));
-  });
+  ])(
+    "%s on a 4 MiB line of %p",
+    (_name, redact, unit) => {
+      const small = Math.floor(MIB / unit.length);
+      const large = small * 4;
+      redact(unit.repeat(1024)); // warm up, so the first timing is not compile time
+      const one = timed(redact, unit.repeat(small));
+      const four = timed(redact, unit.repeat(large));
+      expect(four.ms / Math.max(one.ms, 1)).toBeLessThan(8);
+      expect(four.ms).toBeLessThan(10_000);
+      expect(four.out).toBe(redact(unit).repeat(large));
+    },
+    30_000,
+  );
 
   test("an unclosed expression after a secret name is hidden, not kept", () => {
     expect(redactEvidenceText("token=${{ a token=${{ b")).toBe(
