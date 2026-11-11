@@ -3747,10 +3747,11 @@ async function runMaterialityJudge(
   );
   record.protected = protectedCount;
 
-  // S14. A routed run whose plan does not carry a claude-code judge would run
-  // some other model, or nothing at all: a different, unmeasured judge is
-  // worse than no judge, so the stage stands down and every finding keeps
-  // its tier. A run with no route plan is the legacy Claude-only path, where
+  // S14. A routed run whose plan does not carry a judge on a route the active
+  // profile measured (model-profiles S5; on `claude`, the claude-code sonnet
+  // or opus) would run some other model, or nothing at all: a different,
+  // unmeasured judge is worse than no judge, so the stage stands down and
+  // every finding keeps its tier. A run with no route plan is the legacy Claude-only path, where
   // the step goes to the Claude Code runner exactly as the judge was
   // measured. A plan WITHOUT the key also stands down rather than spawning a
   // route-less step inside a routed run: that is a caller that never threaded
@@ -3758,7 +3759,10 @@ async function runMaterialityJudge(
   let route: ResolvedModelRoute | undefined;
   if (state.routePlan !== undefined) {
     route = routeForStepKey(state.routePlan, MATERIALITY_STEP_KEY);
-    if (route === undefined || !isMeasuredJudgeRoute(route)) {
+    if (
+      route === undefined ||
+      !isMeasuredJudgeRoute(route, activeProfile(input))
+    ) {
       record.status = "unsupported_route";
       // A route in hand that fails the check names itself; only a plan with
       // no judge step asks the config whether the step was left out because

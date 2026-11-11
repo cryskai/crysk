@@ -24,7 +24,7 @@ import {
   profileModelAlias,
   profileRoute,
 } from "#model/profiles";
-import { judgeModelChoice } from "#model/routing";
+import { judgeModelChoice, MEASURED_JUDGE_MODELS } from "#model/routing";
 import { POST_MIN_SEVERITIES, type PostMinSeverity } from "#pr/post-floor";
 import {
   type ProfilePromptSets,
@@ -2568,11 +2568,13 @@ function parseConfigLayer(
   }
   // The judge's list is kept as written (the plan skips what it cannot
   // use), but a model it will never run on is said out loud here, once.
+  // Checked against the `claude` profile: phase 1 has no `profile` key, so
+  // it is the active one for every config read here (model-profiles S5).
   if (models?.judge !== undefined) {
     const { model, dropped } = judgeModelChoice(models);
     if (dropped.length > 0) {
       warnings?.push(
-        `${file}: models.judge skips ${dropped.join(", ")}: the materiality judge runs only on claude:sonnet-latest or claude:opus-latest${model === undefined ? ", so it stands down" : ""}.`,
+        `${file}: models.judge skips ${dropped.join(", ")}: the materiality judge runs only on ${MEASURED_JUDGE_MODELS.join(" or ")}${model === undefined ? ", so it stands down" : ""}.`,
       );
     }
   }

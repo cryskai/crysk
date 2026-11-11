@@ -14,6 +14,7 @@ import {
 import {
   CLAUDE_PROFILE,
   type ModelProfile,
+  profileJudgeModels,
   profileModelAlias,
   profileRoute,
 } from "./profiles";
@@ -451,25 +452,22 @@ export interface BuildRoutePlanInput {
 // The step key the materiality judge runs under in every route plan.
 export const MATERIALITY_STEP_KEY = "materiality";
 
-// The judge was measured on Claude sonnet and opus through the Claude Code CLI
-// (same bundled prompt, same bar; both passed, lab bench/METRICS.md
-// 2026-11-01); sonnet was chosen because it costs half for a difference within
-// one run's noise. A judge on any other model or transport is a different,
-// unmeasured judge. So `models.judge` may pick between those two only, and
-// neither `--model` nor `models.default` ever moves it (L6 item 5).
-// MATERIALITY_JUDGE_MODEL is the alias a run with no route plan sends, read
-// from the `claude` profile's judge.
+// The judge runs only on a model the active profile measured it on
+// (profileJudgeModels; on `claude`, sonnet and opus through the Claude Code
+// CLI). A judge on any other model or transport is a different, unmeasured
+// judge. So `models.judge` may pick among those only, and neither `--model`
+// nor `models.default` ever moves it (L6 item 5). MATERIALITY_JUDGE_MODEL is
+// the alias a run with no route plan sends, read from the `claude` profile's
+// judge.
 export const MATERIALITY_JUDGE_MODEL = profileModelAlias(
   profileRoute(CLAUDE_PROFILE, "judge").model,
 );
-export const MEASURED_JUDGE_MODELS: readonly string[] = [
-  "claude:sonnet-latest",
-  "claude:opus-latest",
-];
+// The `claude` profile's measured judge models, for callers with no profile.
+export const MEASURED_JUDGE_MODELS: readonly string[] =
+  profileJudgeModels(CLAUDE_PROFILE);
 
 // The judge's model, and what `models.judge` listed that it cannot use. With no
-// `models.judge`, the active profile's judge (the measured default on
-// `claude`), held to the same measured list.
+// `models.judge`, the active profile's judge, held to the same measured list.
 export function judgeModelChoice(
   models: ModelsConfig | undefined,
   profile: ModelProfile = CLAUDE_PROFILE,
@@ -481,10 +479,11 @@ export function judgeModelChoice(
   const listed = (models?.judge ?? [profileRoute(profile, "judge").model]).map(
     (entry) => modelEntry(entry).name,
   );
-  const usable = listed.filter((name) => MEASURED_JUDGE_MODELS.includes(name));
+  const measured = profileJudgeModels(profile);
+  const usable = listed.filter((name) => measured.includes(name));
   return {
     ...(usable.length === 0 ? {} : { model: usable[0] }),
-    dropped: listed.filter((name) => !MEASURED_JUDGE_MODELS.includes(name)),
+    dropped: listed.filter((name) => !measured.includes(name)),
   };
 }
 
@@ -503,14 +502,23 @@ export function resolveMaterialityJudgeRoute(
   });
 }
 
-// The route the judge was measured on: sonnet or opus, through the Claude Code
-// CLI talking to Anthropic.
-export function isMeasuredJudgeRoute(route: ResolvedModelRoute): boolean {
-  return (
-    route.backend === "claude-code" &&
-    route.provider === "anthropic" &&
-    (route.modelSnapshot === "sonnet" || route.modelSnapshot === "opus")
-  );
+// Whether a route is one the active profile measured the judge on: the same
+// backend, provider and model as a measured name's route. On `claude`, sonnet
+// or opus through the Claude Code CLI talking to Anthropic; a pinned id
+// (`claude-sonnet-5-5`) is a different model. The variant is not compared:
+// the judge takes no effort (D3), so its route carries none.
+export function isMeasuredJudgeRoute(
+  route: ResolvedModelRoute,
+  profile: ModelProfile = CLAUDE_PROFILE,
+): boolean {
+  return profileJudgeModels(profile).some((name) => {
+    const measured = resolveModelRoute(name);
+    return (
+      route.backend === measured.backend &&
+      route.provider === measured.provider &&
+      route.modelSnapshot === measured.modelSnapshot
+    );
+  });
 }
 
 export function buildResolvedRoutePlan(
@@ -599,16 +607,21 @@ export function buildResolvedRoutePlan(
     // No `cliModel` and no `models.default` on purpose (judgeModelChoice).
     const judge = resolveMaterialityJudgeRoute(input.models, profile);
     // With no `models.judge`, the judge joins only a plan that already runs a
-    // Claude step: on a plan with none, the runner may hold no Claude
-    // credential, and a judge it cannot bind must stand down rather than fail
-    // admission for the whole run. An explicit `models.judge` is the operator
-    // saying the judge can run, so it always joins.
-    const hasClaudeStep = stepRoutes.some(
-      (s) => s.route.backend === "claude-code",
-    );
+    // step on its backend and provider (on `claude`, a Claude step): on a plan
+    // with none, the runner may hold no credential for it, and a judge it
+    // cannot bind must stand down rather than fail admission for the whole
+    // run. An explicit `models.judge` is the operator saying the judge can
+    // run, so it always joins.
+    const sharesCredential =
+      judge !== undefined &&
+      stepRoutes.some(
+        (s) =>
+          s.route.backend === judge.route.backend &&
+          s.route.provider === judge.route.provider,
+      );
     if (
       judge !== undefined &&
-      (input.models?.judge !== undefined || hasClaudeStep)
+      (input.models?.judge !== undefined || sharesCredential)
     ) {
       stepRoutes.push(judge);
     }

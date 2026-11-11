@@ -49,9 +49,19 @@ export interface ModelProfile {
   // `claude` uses it. A user `agents_dir` still outranks it for the five
   // agent files.
   readonly promptSet?: string;
-  // Reserved for slice 3, unread in phase 1: what was measured on the
-  // profile's models (S5).
-  readonly measured?: Readonly<Record<string, unknown>>;
+  // What was measured on the profile's models (S5). Absent: `claude`'s
+  // measurements, as a role the profile leaves out takes `claude`'s route.
+  readonly measured?: MeasuredFacts;
+}
+
+// Facts a lab run established for a profile, read by the gates that may only
+// run on what was measured.
+export interface MeasuredFacts {
+  // The model names (as `models` writes them) the materiality judge was
+  // measured on. `models.judge` may pick among these only, and a plan's judge
+  // runs only on one of their routes (routing.ts, judgeModelChoice and
+  // isMeasuredJudgeRoute). Absent: `claude`'s list.
+  readonly judgeModels?: readonly string[];
 }
 
 // Exactly what 4898e1b4 runs with no configuration, read off the bundled
@@ -73,6 +83,13 @@ export const CLAUDE_PROFILE: ModelProfile = Object.freeze({
     scout: Object.freeze({ model: "claude:sonnet-latest", effort: "high" }),
     summary: Object.freeze({ model: "claude:haiku-latest", effort: "high" }),
     judge: Object.freeze({ model: "claude:sonnet-latest", effort: "high" }),
+  }),
+  // The judge was measured on Claude sonnet and opus through the Claude Code
+  // CLI (same bundled prompt, same bar; both passed, lab bench/METRICS.md
+  // 2026-11-01); sonnet was chosen because it costs half for a difference
+  // within one run's noise.
+  measured: Object.freeze({
+    judgeModels: Object.freeze(["claude:sonnet-latest", "claude:opus-latest"]),
   }),
 } satisfies ModelProfile);
 
@@ -109,6 +126,17 @@ export function profileRoute(
     throw new Error(`no profile role "${role}"`);
   }
   return profile.roles[role] ?? claudeRoute(role);
+}
+
+// The models a profile's materiality judge was measured on (S5). A profile
+// that measured nothing inherits `claude`'s list, so it judges only where
+// `claude` would: a judge on an unmeasured model is a different judge.
+export function profileJudgeModels(profile: ModelProfile): readonly string[] {
+  const own = profile.measured?.judgeModels;
+  if (own !== undefined) return own;
+  const claude = CLAUDE_PROFILE.measured?.judgeModels;
+  if (claude === undefined) throw new Error("claude profile lacks judgeModels");
+  return claude;
 }
 
 function isProfileRole(role: string): role is ProfileRole {
