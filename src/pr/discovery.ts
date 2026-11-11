@@ -138,6 +138,11 @@ export interface PrDiscoveryResult {
       }
     | undefined;
   diffStat: DiffStat;
+  // The whole PR range's stat, filtered by the same rules as `diffStat`
+  // (merge-base..head, no path restriction). Equal to `diffStat` when discovery
+  // read the whole range; the plan divides the two to price a narrowed run
+  // (cryskai/platform#12).
+  prDiffStat: DiffStat;
   sizeGate: SizeGateVerdict;
 }
 
@@ -426,6 +431,18 @@ export async function resolvePrDiscovery(params: {
     }));
   }
 
+  const prDiffStat =
+    discoveryIsPrRange && !skipDiscovery
+      ? diffStat
+      : (
+          await computeDiffStatAndSizeGate({
+            runGit: git.runGit,
+            range: `${diffFromSha}..${headSha}`,
+            pathArgs: [],
+            gateConfig,
+          })
+        ).diffStat;
+
   return {
     prepared,
     skipDiscovery,
@@ -439,6 +456,7 @@ export async function resolvePrDiscovery(params: {
     adjudicationQueue: adjudicationSubjects,
     phaseB,
     diffStat,
+    prDiffStat,
     sizeGate,
   };
 }

@@ -659,6 +659,52 @@ function discoveryFor(
   });
 }
 
+// cryskai/platform#12: a narrowed run prices its share of a full review, so
+// discovery also measures the whole PR range under the same filters.
+describe("resolvePrDiscovery — prDiffStat is the whole PR range", () => {
+  function statGit(calls: string[][]) {
+    const git = rangeGit(
+      { [`${L}..${H}`]: PATCH, [`${B}..${H}`]: PATCH + SESSION_HUNK },
+      calls,
+    );
+    return {
+      ...git,
+      runGit: (args: string[]) => {
+        calls.push(args);
+        if (!args.includes("--numstat")) return git.runGit(args);
+        const whole = args.includes(`${B}..${H}`) && !args.includes("--");
+        return Promise.resolve({
+          ok: true,
+          stdout: whole
+            ? "1\t1\tsrc/a.ts\n9\t9\tsrc/session.ts\n"
+            : "1\t1\tsrc/a.ts\n",
+          stderr: "",
+        });
+      },
+    };
+  }
+
+  test("an incremental re-review measures merge-base..head with no path restriction", async () => {
+    const result = await discoveryFor(statGit([]), {});
+    expect(result.prepared.discoveryFrom).toBe(L);
+    expect(result.diffStat).toEqual({ files: 1, insertions: 1, deletions: 1 });
+    expect(result.prDiffStat).toEqual({
+      files: 2,
+      insertions: 10,
+      deletions: 10,
+    });
+  });
+
+  test("a full pass reuses its own stat", async () => {
+    const calls: string[][] = [];
+    const result = await discoveryFor(statGit(calls), {
+      full: true,
+      issueComments: [],
+    });
+    expect(result.prDiffStat).toBe(result.diffStat);
+  });
+});
+
 describe("resolvePrDiscovery — anchorPatch is the full PR diff (inline anchoring)", () => {
   test("an incremental re-review anchors against merge-base..head, not the push delta", async () => {
     const calls: string[][] = [];

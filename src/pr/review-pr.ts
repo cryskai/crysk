@@ -566,6 +566,7 @@ export async function reviewPr(
       adjudicationQueue,
       phaseB,
       diffStat,
+      prDiffStat,
       sizeGate,
     } = discovery;
 
@@ -700,6 +701,7 @@ export async function reviewPr(
       diffFromSha,
       diffPath,
       diffStat,
+      prDiffStat,
       droppedPaths: effectiveDiff.droppedPaths,
       sizeGate,
       sizeGateConfirmed,

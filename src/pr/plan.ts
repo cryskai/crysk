@@ -113,6 +113,8 @@ export async function resolvePrPlanAndConfirm(params: {
   diffFromSha: string;
   diffPath: string;
   diffStat: DiffStat;
+  // The whole PR range's stat under the same filters (discovery's prDiffStat).
+  prDiffStat: DiffStat;
   droppedPaths: string[];
   sizeGate: SizeGateVerdict;
   sizeGateConfirmed: boolean;
@@ -172,7 +174,7 @@ export async function resolvePrPlanAndConfirm(params: {
     band,
     narrowed && platformEstimate !== undefined
       ? estimateCost(
-          params.target.ghDiffStat,
+          params.prDiffStat,
           params.hunterCount,
           params.summary.enabled,
           params.options.scout,
