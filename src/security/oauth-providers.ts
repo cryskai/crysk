@@ -15,10 +15,58 @@ export interface OAuthProviderDescriptor {
   // holds such a provider's refresh token: renewing it inside a run would spend
   // the stored chain and throw the new token away with the run's copy.
   readonly rotatesRefreshToken: boolean;
+  // How the runner-side refresher renews the login (src/ci/credential-refresh.ts):
+  // an RFC 6749 `grant_type=refresh_token` POST, form-encoded, to `tokenUrl` with
+  // `client_id` and any `extraParams`.
+  readonly refresh: {
+    readonly tokenUrl: string;
+    readonly clientId: string;
+    readonly extraParams?: Readonly<Record<string, string>>;
+  };
+  // The provider error codes that mean the login is gone and the person must log
+  // in again. Read from the token endpoint's error body (a string `error`, an
+  // `error.code`, or a top-level `code`). Any other error is not permanent.
+  readonly permanentErrors: readonly string[];
+  // Where the record's account id comes from, or undefined when the provider has
+  // none. The id is read from the JWT claims of the token response's `tokens`,
+  // in order, trying each claim path in order; when none answers, the stored
+  // record's `recordField` is kept.
+  readonly accountId?: {
+    readonly recordField: string;
+    readonly tokens: readonly string[];
+    readonly claims: readonly (readonly (string | number)[])[];
+  };
 }
 
+// OpenAI's values are OpenCode's (v1.18.30,
+// packages/opencode/src/plugin/openai/codex.ts: CLIENT_ID, refreshAccessToken,
+// extractAccountIdFromClaims), so the refresher renews the login exactly as
+// OpenCode itself would. The error codes are Codex's permanent refresh failures
+// plus the standard OAuth `invalid_grant`.
 export const OAUTH_PROVIDERS: readonly OAuthProviderDescriptor[] = [
-  { id: "openai", rotatesRefreshToken: true },
+  {
+    id: "openai",
+    rotatesRefreshToken: true,
+    refresh: {
+      tokenUrl: "https://auth.openai.com/oauth/token",
+      clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
+    },
+    permanentErrors: [
+      "refresh_token_reused",
+      "refresh_token_expired",
+      "refresh_token_invalidated",
+      "invalid_grant",
+    ],
+    accountId: {
+      recordField: "accountId",
+      tokens: ["id_token", "access_token"],
+      claims: [
+        ["chatgpt_account_id"],
+        ["https://api.openai.com/auth", "chatgpt_account_id"],
+        ["organizations", 0, "id"],
+      ],
+    },
+  },
 ];
 
 export function oauthProvider(id: string): OAuthProviderDescriptor | undefined {
