@@ -854,23 +854,27 @@ export function openCodeProvidersOfModels(models: unknown): string[] {
 }
 
 // Whether an OpenCode route these models name bills per token (cryskai/platform#12
-// item 5): some provider they name, any role or fallback, binds an API key, by
-// the same rule the run binds it with (credentialKindForRoute over the secret
-// manifest's names, the provider literal without one). An auth file on disk is
-// not enough: it also exists for a ChatGPT subscription, after an earlier run on
-// a runner whose HOME persists, or from a local `opencode auth login`.
-export function openCodeModelsBillMetered(
-  models: unknown,
-  openCodeSecretNames: readonly string[] | undefined,
-): boolean {
-  return openCodeProvidersOfModels(models).some(
+// item 5): an auth file exists AND some provider the models name, any role or
+// fallback, binds an API key, by the same rule the run binds it with
+// (credentialKindForRoute over the secret manifest's names, the provider literal
+// without one). The file alone is not enough: it also exists for a ChatGPT
+// subscription, after an earlier run on a runner whose HOME persists, or from a
+// local `opencode auth login`. And no file means no credential for a per-token
+// route, as before: a free `opencode/*` model stays unmetered.
+export function openCodeModelsBillMetered(input: {
+  models: unknown;
+  authFilePresent: boolean;
+  openCodeSecretNames: readonly string[] | undefined;
+}): boolean {
+  if (!input.authFilePresent) return false;
+  return openCodeProvidersOfModels(input.models).some(
     (provider) =>
       credentialKindForRoute(
         "opencode",
         provider,
         {},
         false,
-        openCodeSecretNames,
+        input.openCodeSecretNames,
       ) === "provider_api_token",
   );
 }

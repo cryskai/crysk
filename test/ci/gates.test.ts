@@ -32,23 +32,26 @@ import { openCodeModelsBillMetered } from "#ci/setup";
 import type { SizeGateVerdict } from "#review/size-gate";
 
 // cryskai/platform#12 item 5: the OpenCode half of the metered ceiling reads
-// the routes the models name, never whether an auth file exists.
+// the routes the models name, not merely whether an auth file exists.
 describe("openCodeModelsBillMetered", () => {
   const deepseek = ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"];
+  const metered = (models: unknown, names: readonly string[] | undefined) =>
+    openCodeModelsBillMetered({
+      models,
+      authFilePresent: true,
+      openCodeSecretNames: names,
+    });
 
-  test("an API-key secret no model uses does not make a Claude-only run metered", () => {
-    expect(openCodeModelsBillMetered(undefined, deepseek)).toBe(false);
-    expect(
-      openCodeModelsBillMetered(
-        { default: ["claude:sonnet-latest"] },
-        deepseek,
-      ),
-    ).toBe(false);
+  test("an auth file whose providers no model uses does not make a Claude-only run metered", () => {
+    expect(metered(undefined, deepseek)).toBe(false);
+    expect(metered({ default: ["claude:sonnet-latest"] }, deepseek)).toBe(
+      false,
+    );
   });
 
   test("a model on a provider bound to an API key is metered, fallbacks included", () => {
     expect(
-      openCodeModelsBillMetered(
+      metered(
         {
           refuter: [
             "claude:opus-latest",
@@ -62,7 +65,7 @@ describe("openCodeModelsBillMetered", () => {
 
   test("a ChatGPT subscription route is not metered", () => {
     expect(
-      openCodeModelsBillMetered({ default: ["opencode:openai/gpt-5.5"] }, [
+      metered({ default: ["opencode:openai/gpt-5.5"] }, [
         "CRYSK_OPENCODE_OPENAI_OAUTH",
       ]),
     ).toBe(false);
@@ -70,16 +73,20 @@ describe("openCodeModelsBillMetered", () => {
 
   test("without a manifest the provider literal decides, as the run binds it", () => {
     expect(
-      openCodeModelsBillMetered(
-        { default: ["opencode:deepseek/deepseek-v4-flash"] },
-        undefined,
-      ),
+      metered({ default: ["opencode:deepseek/deepseek-v4-flash"] }, undefined),
     ).toBe(true);
+    expect(metered({ default: ["opencode:openai/gpt-5.5"] }, undefined)).toBe(
+      false,
+    );
+  });
+
+  test("no auth file stays unmetered, as before: a free opencode/* model invoices nothing", () => {
     expect(
-      openCodeModelsBillMetered(
-        { default: ["opencode:openai/gpt-5.5"] },
-        undefined,
-      ),
+      openCodeModelsBillMetered({
+        models: { default: ["opencode:opencode/some-free-model"] },
+        authFilePresent: false,
+        openCodeSecretNames: undefined,
+      }),
     ).toBe(false);
   });
 });

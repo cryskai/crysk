@@ -66,6 +66,7 @@ import {
   prWorktreePath,
 } from "../home-preflight";
 import type { RunClaudeCredential } from "../security/claude-credential";
+import { resolveOpenCodeAuthPath } from "../security/credential-broker";
 import { readOpenCodeSecretNames } from "../security/opencode-secret-manifest";
 
 export interface ResolvedPrRunOptions {
@@ -177,10 +178,11 @@ export async function resolvePrPromptSetAndBudget(params: {
   const billingMode = deriveCiBillingMode(
     params.claudeRun?.env ?? process.env,
     {
-      openCodeBillsMetered: openCodeModelsBillMetered(
-        params.config.models,
-        readOpenCodeSecretNames(),
-      ),
+      openCodeBillsMetered: openCodeModelsBillMetered({
+        models: params.config.models,
+        authFilePresent: existsSync(resolveOpenCodeAuthPath()),
+        openCodeSecretNames: readOpenCodeSecretNames(),
+      }),
     },
   );
   // Issue #156: resolve the ceiling ONCE, here, and use this same value at
