@@ -12,8 +12,10 @@ import {
   appendGithubOutput,
   exchangePlatformToken,
   PLATFORM_API_URL,
+  personModelsMayNeedClaude,
   runPlatformConnect,
 } from "../../src/ci/platform";
+import { reviewNeedsClaude } from "../../src/doctor";
 
 const OIDC_URL = "https://token.actions.example/id?api-version=2.0";
 const OIDC_REQUEST_TOKEN = "request-bearer-secret";
@@ -499,6 +501,8 @@ describe("platform review configuration", () => {
       `output:config-file=${file}\n`,
       // A person layer with no models: the default models are in effect.
       "output:routing-opencode=false\n",
+      // ...so a Claude route is in effect too.
+      "output:routing-claude=true\n",
     ]);
     // The token never lands in the config file.
     expect(readFileSync(file, "utf8")).not.toContain(GITHUB_TOKEN);
@@ -547,6 +551,85 @@ describe("platform review configuration", () => {
     expect(await repoOnly.run()).toBe(0);
     expect(repoOnly.events.join("")).toContain("output:config-file=");
     expect(repoOnly.events.join("")).not.toContain("routing-opencode");
+  });
+
+  test("platform models that send every step to OpenCode announce that no Claude route is needed", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "platform-config-"));
+    const run = async (person: Record<string, unknown>) => {
+      const h = connect({ person, repo: {} }, { configDir: dir });
+      expect(await h.run()).toBe(0);
+      return h.events.filter((e) => e.startsWith("output:routing-claude="));
+    };
+    expect(
+      await run({ models: { default: ["opencode:deepseek/deepseek-chat"] } }),
+    ).toEqual(["output:routing-claude=false\n"]);
+    // A Claude model anywhere, a fallback included, keeps the CLI.
+    expect(
+      await run({
+        models: {
+          default: ["opencode:deepseek/deepseek-chat", "claude:sonnet-latest"],
+        },
+      }),
+    ).toEqual(["output:routing-claude=true\n"]);
+    // A legacy summary.model is read as a Claude summary model.
+    expect(
+      await run({
+        models: { default: ["opencode:deepseek/deepseek-chat"] },
+        summary: { model: "haiku" },
+      }),
+    ).toEqual(["output:routing-claude=true\n"]);
+    // No models: the `claude` profile is in effect.
+    expect(await run({ max_changed_lines: 10 })).toEqual([
+      "output:routing-claude=true\n",
+    ]);
+    // An empty person layer leaves the inputs in effect: no answer, so the
+    // install step installs.
+    const repoOnly = connect(
+      { person: {}, repo: { max_changed_lines: 10 } },
+      { configDir: dir },
+    );
+    expect(await repoOnly.run()).toBe(0);
+    expect(repoOnly.events.join("")).not.toContain("routing-claude");
+  });
+
+  // One table for the connect step's builtins-only walk and the doctor's
+  // answer from the real route plan (src/doctor.ts reviewNeedsClaude), so the
+  // two cannot drift. `true` wherever either is unsure.
+  const OC = "opencode:deepseek/deepseek-chat";
+  test.each<[string, unknown, boolean]>([
+    ["no models", undefined, true],
+    ["a Claude default", { default: ["claude:sonnet-latest"] }, true],
+    ["an OpenCode default", { default: [OC] }, false],
+    ["an effort entry", { default: [{ model: OC, effort: "high" }] }, false],
+    ["a Claude fallback", { default: [OC, "claude:sonnet-latest"] }, true],
+    ["no default", { "hunter.logic": [OC], refuter: [OC] }, true],
+    [
+      "a Claude role",
+      { default: [OC], summary: ["claude:haiku-latest"] },
+      true,
+    ],
+    [
+      "a Claude judge",
+      { default: [OC], judge: ["claude:sonnet-latest"] },
+      true,
+    ],
+    ["an OpenCode judge", { default: [OC], judge: [OC] }, false],
+  ])("%s: Claude route needed is %p", (_l, models, expected) => {
+    expect(personModelsMayNeedClaude(models)).toBe(expected);
+    expect(reviewNeedsClaude({ models: models as never, env: {} })).toBe(
+      expected,
+    );
+  });
+
+  test.each<[string, unknown]>([
+    ["a string", "opencode:x/y"],
+    ["an array", [OC]],
+    ["a non-list role", { default: OC }],
+    ["an empty list", { default: [OC], refuter: [] }],
+    ["an entry with no model", { default: [{ effort: "high" }] }],
+    ["a model that only contains the prefix", { default: [` ${OC}`] }],
+  ])("%s the walk does not know needs Claude", (_l, models) => {
+    expect(personModelsMayNeedClaude(models)).toBe(true);
   });
 
   test.each([
@@ -723,6 +806,23 @@ describe("action.yml platform wiring", () => {
     );
     expect(find("platform-settle").if).toContain(
       "steps.trigger.outputs.run == 'true'",
+    );
+  });
+
+  test("Install Claude Code CLI skips only when the connect step says exactly false and no model input overrides it", () => {
+    const install = steps.findIndex(
+      (s) => s.name === "Install Claude Code CLI",
+    );
+    expect(install).toBeGreaterThan(
+      steps.findIndex((s) => s.id === "platform"),
+    );
+    expect(install).toBeLessThan(steps.findIndex((s) => s.id === "run-crysk"));
+    // `!= 'false'`: an absent or empty output (standalone, an older platform,
+    // an empty person layer) installs, as every run did before.
+    expect((steps[install] as Step).if).toBe(
+      expression(
+        "steps.trigger.outputs.run == 'true' && (steps.platform.outputs.routing-claude != 'false' || inputs.model != '')",
+      ),
     );
   });
 

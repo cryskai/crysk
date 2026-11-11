@@ -1,7 +1,7 @@
 import os from "node:os";
 import { loadEffectiveConfig, resolveOptionalRepoRoot } from "#config/config";
 import { type ModelsConfig, modelsNeedOpenCode } from "#model/model-name";
-import type { CliOptions } from "#review/preflight";
+import { type CliOptions, resolveMaterialityGate } from "#review/preflight";
 import { styleEnabled, terminalWidth } from "#ui/primitives";
 import {
   type DoctorCheckItem,
@@ -9,6 +9,7 @@ import {
   evaluateDoctorReport,
   openCodeRoutingSdkCheck,
   renderDoctorReport,
+  reviewNeedsClaude,
   runDoctor,
 } from "../doctor";
 import { prheroLayout } from "../home-preflight";
@@ -39,6 +40,9 @@ export async function runDoctorCommand(input: {
   readSdkVersion?: () => Promise<string | undefined>;
 }): Promise<{ report: DoctorReport; lines: string[] }> {
   let models: ModelsConfig | undefined;
+  // Required unless the configuration loads and proves otherwise: a config
+  // that fails to load must not quietly excuse a missing Claude CLI.
+  let claudeRequired = true;
   let configCheck: DoctorCheckItem | undefined;
   try {
     const loaded = await loadEffectiveConfig({
@@ -47,6 +51,10 @@ export async function runDoctorCommand(input: {
       configFlag: input.configFlag,
     });
     models = loaded.effective.models;
+    claudeRequired = reviewNeedsClaude({
+      models,
+      materialityGate: resolveMaterialityGate(loaded.effective),
+    });
     // A config that loads with warnings works today and will not after the
     // key it uses is removed: degraded, with the warning as its message.
     if (loaded.warnings.length > 0) {
@@ -69,10 +77,12 @@ export async function runDoctorCommand(input: {
   const doctorReport = await runDoctorFn({
     repoRoot: input.repoRoot,
     cwd: input.repoRoot,
+    claudeRequired,
     probeExactBindings: () =>
       collectDoctorExactBindingReports({
         workspaceRoot: input.workspaceRoot,
         models,
+        claudeRequired,
       }),
   });
   // Same home the command was given. The no-arg reader uses os.homedir().

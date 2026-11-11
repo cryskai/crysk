@@ -452,6 +452,11 @@ or on macOS the Keychain broker). `~/.claude.json` or `~/.claude/session.json` a
 neither does `ANTHROPIC_AUTH_TOKEN`; the hint names `CRYSK_CLAUDE_OAUTH_TOKEN` (from `claude setup-token`)
 and `CRYSK_CLAUDE_API_KEY`.
 
+The Claude CLI blocks only when the configuration sends some step to it: no `models`, or any role, fallback
+or judge (with `materiality_gate` on) that resolves to a `claude:` model. When every step, fallbacks
+included, resolves to an `opencode:` model (`models.default` covers the roles you do not list), a missing or signed-out Claude CLI is listed as not needed, and the probe
+checks only the OpenCode routes.
+
 ```
 $ crysk doctor
   [✓] claude: Claude Code CLI is installed and authenticated (2.1.281 (Claude Code))

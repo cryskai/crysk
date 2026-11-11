@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { CI_WORKFLOW_RELATIVE_PATH } from "#ci/setup";
 import { modelsNeedOpenCode } from "#model/model-name";
+import { buildResolvedRoutePlan } from "#model/routing";
 import {
   GOTCHAS_PLACEHOLDER_MARKER,
   GOTCHAS_TEMPLATE,
@@ -15,6 +16,7 @@ import {
   openCodeRoutingSdkCheck,
   PROVIDER_HINTS,
   renderDoctorReport,
+  reviewNeedsClaude,
   runDoctor,
 } from "../src/doctor";
 import type { ExactBindingCapabilityReport } from "../src/execution/contracts";
@@ -169,6 +171,54 @@ describe("doctor tri-state evaluation", () => {
       expect(report.exitCode).toBe(1);
       const claudeCheck = report.checks.find((c) => c.name === "claude");
       expect(claudeCheck?.severity).toBe("blocking");
+    });
+
+    // model-profiles S6: a configuration that sends no step to the Claude CLI
+    // reports the CLI but does not block on it. Absent `claudeRequired` is the
+    // two tests above.
+    test.each<[string, string | null, Record<string, string>]>([
+      ["missing", null, {}],
+      ["unauthenticated", "/bin/claude", {}],
+    ])(
+      "claude %s is not blocking when no step runs on it",
+      async (_l, claudeBin, env) => {
+        const report = await runDoctor({
+          cwd: "/repo",
+          home: "/home/user",
+          claudeRequired: false,
+          exists: (p) =>
+            p === "/repo/.crysk/gotchas.md" ||
+            p === "/home/user/.crysk/setup.json",
+          readFile: () => "## Gotchas\nContent",
+          checkToolsOptions: {
+            which: (bin) => (bin === "claude" ? claudeBin : `/bin/${bin}`),
+            exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+            env,
+            platform: "linux",
+            keychainProbe: () => false,
+          },
+        });
+        const claudeCheck = report.checks.find((c) => c.name === "claude");
+        expect(claudeCheck?.severity).toBe("healthy");
+        expect(claudeCheck?.message).toContain("not needed");
+      },
+    );
+
+    test("claude is still blocking when the configuration needs it", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        claudeRequired: true,
+        exists: () => false,
+        readFile: () => undefined,
+        checkToolsOptions: {
+          which: (bin) => (bin === "claude" ? null : `/bin/${bin}`),
+          exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+        },
+      });
+      expect(report.checks.find((c) => c.name === "claude")?.severity).toBe(
+        "blocking",
+      );
     });
 
     test("stale agents_dir pointing at missing path is blocking with fallback hint", async () => {
@@ -903,6 +953,80 @@ describe("doctor tri-state evaluation", () => {
         report.checks.find((c) => c.name === "provider:sdk_unavailable")
           ?.severity,
       ).toBe("blocking");
+    });
+
+    test("zero-config doctor route plan is the profile's sonnet hunter and opus refuter, as before profiles", () => {
+      // The plan 61587429 built from literal aliases, pinned by fingerprint.
+      const before = buildResolvedRoutePlan({
+        agents: [
+          { key: "reliability", role: "hunter", model: "sonnet" },
+          { key: "refuter", role: "refuter", model: "opus" },
+        ],
+      });
+      const plan = buildDoctorRoutePlan();
+      expect(plan.routeFingerprint).toBeDefined();
+      expect(plan.routeFingerprint).toBe(before.routeFingerprint);
+      expect(plan.steps.map((s) => s.routeFingerprint)).toEqual(
+        before.steps.map((s) => s.routeFingerprint),
+      );
+      expect(
+        plan.steps.map((s) => [s.stepKey, s.route.backend, s.logicalIdentity]),
+      ).toEqual(
+        before.steps.map((s) => [
+          s.stepKey,
+          s.route.backend,
+          s.logicalIdentity,
+        ]),
+      );
+      expect(plan.steps.map((s) => s.route.modelSnapshot)).toEqual([
+        "sonnet",
+        "opus",
+      ]);
+      // A Claude configuration keeps both profile steps ahead of its own.
+      const claude = buildDoctorRoutePlan(
+        { default: ["claude:opus-latest"] },
+        { claudeRequired: true },
+      );
+      expect(claude.steps.slice(0, 2).map((s) => s.stepKey)).toEqual(
+        before.steps.map((s) => s.stepKey),
+      );
+    });
+
+    test("doctor route plan probes no Claude route when the configuration needs none", () => {
+      const models = { default: ["opencode:openai/gpt-4o"] };
+      expect(reviewNeedsClaude({ models, env: {} })).toBe(false);
+      const plan = buildDoctorRoutePlan(models, { claudeRequired: false });
+      expect(plan.steps.map((s) => s.route.backend)).toEqual(["opencode"]);
+      // Without the answer the profile's steps stay, as before.
+      expect(
+        buildDoctorRoutePlan(models).steps.map((s) => s.route.backend),
+      ).toEqual(["claude-code", "claude-code", "opencode"]);
+    });
+
+    test("reviewNeedsClaude: required unless every resolved step leaves Claude", () => {
+      const oc = "opencode:openai/gpt-4o";
+      expect(reviewNeedsClaude({ models: undefined, env: {} })).toBe(true);
+      expect(
+        reviewNeedsClaude({
+          models: { default: ["claude:sonnet-latest"] },
+          env: {},
+        }),
+      ).toBe(true);
+      // The gate on puts an explicitly Claude judge in the plan; off, it never runs.
+      const judge = { default: [oc], judge: ["claude:sonnet-latest"] };
+      expect(
+        reviewNeedsClaude({ models: judge, materialityGate: true, env: {} }),
+      ).toBe(true);
+      expect(
+        reviewNeedsClaude({ models: judge, materialityGate: false, env: {} }),
+      ).toBe(false);
+      // A plan that does not build is not proof.
+      expect(
+        reviewNeedsClaude({
+          models: { default: [oc], "hunter.nope": [oc] },
+          env: {},
+        }),
+      ).toBe(true);
     });
 
     test("doctor route plan constructs an OpenCode binding from models", () => {

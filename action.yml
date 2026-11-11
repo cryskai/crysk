@@ -240,8 +240,14 @@ runs:
           cd "${{ github.action_path }}" && bun install --frozen-lockfile --omit=optional
         fi
 
+    # Installed unless the run is KNOWN to send no step to the Claude CLI
+    # (model-profiles S6): the connect step's routing-claude is exactly `false`
+    # (every platform model, fallbacks and judge included, is `opencode:`, with a
+    # `default`) and no `model` input overrides them. A missing or empty output
+    # (a standalone run, an empty person layer) installs it. This step runs
+    # before the setup step, so the setup step's outputs cannot decide it.
     - name: Install Claude Code CLI
-      if: steps.trigger.outputs.run == 'true'
+      if: ${{ steps.trigger.outputs.run == 'true' && (steps.platform.outputs.routing-claude != 'false' || inputs.model != '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).

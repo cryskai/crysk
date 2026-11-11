@@ -6,6 +6,7 @@ import {
   exactBindingCapabilityIssues,
   type ProviderCapabilityReport,
 } from "#model/provider-capabilities";
+import { buildResolvedRoutePlan, planRoutes } from "#model/routing";
 import {
   agentFilePath,
   GOTCHAS_PLACEHOLDER_MARKER,
@@ -93,6 +94,46 @@ export interface RunDoctorOptions {
   // Legacy injectable ProviderCapabilityReport. Ignored when
   // probeExactBindings is provided.
   produceCapabilityReport?: () => Promise<ProviderCapabilityReport>;
+  // Whether any step the configuration resolves runs on the Claude CLI
+  // (reviewNeedsClaude). Absent: required, as every caller that does not
+  // resolve the configuration (the updater, the menu) has always had it.
+  claudeRequired?: boolean;
+}
+
+// Whether a review under this configuration sends any step to the Claude CLI
+// (model-profiles S6): the route plan a review would build, every hunter of
+// the bundled spec, the refuter, consolidate, scout, summarizer and, with the
+// gate on, the materiality judge, resolved through `models` and the active
+// profile (`claude`). True whenever the answer is not proven: no `models`, a
+// plan that fails to build, or a bad CRYSK_EXTRA_HUNTERS. So zero-config and
+// every configuration naming a Claude model keep the CLI required.
+export function reviewNeedsClaude(input: {
+  models: ModelsConfig | undefined;
+  materialityGate?: boolean;
+  env?: Record<string, string | undefined>;
+}): boolean {
+  if (input.models === undefined) return true;
+  try {
+    const plan = buildResolvedRoutePlan({
+      agents: localReviewSpec(input.env ?? process.env).agents,
+      models: input.models,
+      bundledAgents: true,
+      summarizer: { bundled: true },
+      scout: { bundled: true },
+      consolidate: { bundled: true },
+      // Unknown counts as on: the judge then joins only when it shares a
+      // backend with another step or `models.judge` names it.
+      ...(input.materialityGate === false
+        ? {}
+        : { materiality: true as const }),
+    });
+    // Fallbacks included: a step that falls back to Claude can start the CLI.
+    return planRoutes(plan).some(
+      (step) => step.route.backend === "claude-code",
+    );
+  } catch {
+    return true;
+  }
 }
 
 // Remediation hints for the report's known non-blocking codes; blocking
@@ -254,8 +295,22 @@ export async function runDoctor(
     });
   }
 
-  // Claude (required + auth)
-  if (!tools.claude.installed) {
+  // Claude (required + auth). Required unless the caller resolved the
+  // configuration and found no step on the Claude CLI (model-profiles S6,
+  // reviewNeedsClaude): then a missing or signed-out CLI is reported, but it
+  // blocks nothing, because no review would start it.
+  const claudeRequired = options.claudeRequired !== false;
+  if (!claudeRequired && !(tools.claude.installed && tools.claude.authOk)) {
+    checks.push({
+      name: "claude",
+      severity: "healthy",
+      message: `${
+        tools.claude.installed
+          ? `Claude Code CLI is installed (${tools.claude.version ?? "unknown"}) but not authenticated`
+          : "Claude Code CLI is not installed"
+      }; not needed, since no configured step runs on it`,
+    });
+  } else if (!tools.claude.installed) {
     checks.push({
       name: "claude",
       severity: "blocking",

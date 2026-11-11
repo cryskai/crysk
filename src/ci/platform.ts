@@ -453,6 +453,11 @@ export async function runPlatformConnect(
         const opencode =
           models !== undefined && JSON.stringify(models).includes('"opencode:');
         deps.appendOutput(`routing-opencode=${opencode}\n`);
+        // Whether any step may run on the Claude CLI (model-profiles S6). The
+        // Install Claude Code CLI step skips only on exactly `false`, so an
+        // absent output (a standalone run, an empty person layer, an older
+        // engine) installs it, as every run always did.
+        deps.appendOutput(`routing-claude=${personMayNeedClaude(person)}\n`);
       }
     }
   } catch (error) {
@@ -463,6 +468,41 @@ export async function runPlatformConnect(
     return 1;
   }
   return 0;
+}
+
+// Whether the person layer's `models` may send any step to the Claude CLI.
+// `false` only when it is proven not to: a `default` list, so no role falls
+// through to the `claude` profile, and every entry of every role, fallbacks and
+// the judge included, an `opencode:` model. With no `models.judge` the judge
+// joins a plan only beside a step on its own backend (routing.ts), so it stays
+// off Claude here whatever `materiality_gate` says. Anything else, a shape this
+// walk does not know included, is `true`: the engine's parser stays the
+// authority (this step cannot import it), and a wrong `false` would leave a
+// Claude run without its CLI. src/doctor.ts reviewNeedsClaude answers the same
+// question from the real route plan; test/ci/platform.test.ts holds both to
+// one table.
+export function personModelsMayNeedClaude(models: unknown): boolean {
+  if (!isPlainObject(models)) return true;
+  if (!Array.isArray(models.default)) return true;
+  for (const list of Object.values(models)) {
+    if (!Array.isArray(list) || list.length === 0) return true;
+    for (const entry of list) {
+      const name = isPlainObject(entry) ? entry.model : entry;
+      if (typeof name !== "string" || !name.startsWith("opencode:")) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The person layer's answer: its `models`, plus the one other way a person
+// layer names a model. A legacy `summary.model` (only "haiku" parses) becomes
+// `models.summary: claude:haiku-latest` when `models.summary` is absent
+// (preflight.ts parseSummaryConfig), so any `summary.model` keeps the CLI.
+export function personMayNeedClaude(person: Record<string, unknown>): boolean {
+  if (isPlainObject(person.summary) && "model" in person.summary) return true;
+  return personModelsMayNeedClaude(person.models);
 }
 
 // Appends to the file the runner named in GITHUB_OUTPUT. Unset or empty is an

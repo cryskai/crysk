@@ -409,8 +409,8 @@ The Action is backend-agnostic: the next provider is data (a model name and a se
    gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash"]}'
    ```
 
-   That runs every step on DeepSeek, the refuter and the summarizer included (the materiality judge stays on
-   Claude). A mixed setup, with the hunters on DeepSeek falling back to Claude and the refuter on Claude:
+   That runs every step on DeepSeek, the refuter and the summarizer included. The materiality judge runs only
+   on Claude, so with no Claude step and no `models.judge` it stands down. A mixed setup, with the hunters on DeepSeek falling back to Claude and the refuter on Claude:
 
    ```bash
    gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash", "claude:sonnet-latest"], "refuter": ["claude:opus-latest"], "summary": ["claude:haiku-latest"]}'
@@ -456,6 +456,11 @@ credential, and a self-hosted runner may have its own login). It never uses `lat
 `$HOME/.opencode/bin` to `GITHUB_PATH` so a **later** step (Run Crysk) sees the binary — the install step
 itself is not the review. Claude-only CI (no `opencode:` model) skips this install and still starts.
 
+The Claude Code CLI is installed on every run that reviews, unless the run is known to send no step to it:
+a repository connected to the Crysk platform whose models have a `default` and name only `opencode:` models,
+fallbacks and `judge` included, with no `model` input. Every other run installs it, a standalone run with
+OpenCode-only `CRYSK_MODELS` included.
+
 ### openai vs deepseek
 
 | Secret | CI outcome |
@@ -473,8 +478,9 @@ itself is not the review. Claude-only CI (no `opencode:` model) skips this insta
   job `if` never reads `secrets`. A maintainer's `/crysk review` comment reviews a fork — see
   [Fork pull requests](#fork-pull-requests).
 - **OpenCode-only** (only `CRYSK_OPENCODE_*` secrets, no Claude secret) counts as a credential and
-  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge does (it runs
-  only on Claude), so keep a Claude secret for it. A plan that sends a step to the Claude CLI with no Claude
+  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge (which runs
+  only on Claude) joins the plan only when `models.judge` names it or another step runs on Claude, and then
+  needs a Claude secret. A plan that sends a step to the Claude CLI with no Claude
   credential stops before it spends.
 - **Mismatch fails closed:** an OpenCode model with no secret for its provider gets a notice at setup, and
   then the review **fails** for that provider's missing record ([`CRYSK-CRED-UNUSABLE`](#crysk-cred-unusable)),

@@ -8,6 +8,12 @@ import {
   type ModelVariantsProbe,
 } from "#model/free-discovery";
 import type { ModelsConfig } from "#model/model-name";
+import {
+  CLAUDE_PROFILE,
+  type ModelProfile,
+  profileModelAlias,
+  profileRoute,
+} from "#model/profiles";
 import type { ProviderCapabilityReport } from "#model/provider-capabilities";
 import {
   type CapabilityGateDecision,
@@ -874,20 +880,40 @@ export async function probeBindingsReadiness(
   };
 }
 
-// The plan `crysk doctor` probes: the two default models a zero-config review
-// runs (a sonnet hunter, an opus refuter), plus one step per distinct route
-// `models` names, fallbacks included, so every binding a configured review
-// could open is checked before a review needs it. Distinct by route, not by
-// entry: an OpenCode effort is the route's variant and so a binding of its own,
-// while a Claude effort is not part of the route and is probed once.
-export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
+// The plan `crysk doctor` probes: the active profile's hunter and refuter (on
+// `claude`, the sonnet hunter and opus refuter a zero-config review runs),
+// plus one step per distinct route `models` names, fallbacks included, so
+// every binding a configured review could open is checked before a review
+// needs it. Distinct by route, not by entry: an OpenCode effort is the route's
+// variant and so a binding of its own, while a Claude effort is not part of
+// the route and is probed once.
+//
+// `claudeRequired: false` (model-profiles S6, doctor.ts reviewNeedsClaude)
+// means `models` sends every step elsewhere, so the profile's two steps, which
+// no review would run, are left out: probing them would demand a Claude binding
+// the configuration never opens. Absent or true keeps them, as before.
+export function buildDoctorRoutePlan(
+  models?: ModelsConfig,
+  options: {
+    readonly claudeRequired?: boolean;
+    readonly profile?: ModelProfile;
+  } = {},
+): ResolvedRoutePlan {
+  const profile = options.profile ?? CLAUDE_PROFILE;
+  const profileAlias = (role: string) =>
+    profileModelAlias(profileRoute(profile, role).model);
   const base = buildResolvedRoutePlan({
     agents: [
-      { key: "reliability", role: "hunter", model: "sonnet" },
-      { key: "refuter", role: "refuter", model: "opus" },
+      {
+        key: "reliability",
+        role: "hunter",
+        model: profileAlias("hunter.reliability"),
+      },
+      { key: "refuter", role: "refuter", model: profileAlias("refuter") },
     ],
   });
   if (models === undefined) return base;
+  const baseSteps = options.claudeRequired === false ? [] : base.steps;
   const distinct = new Map<string, ResolvedStepRoute>();
   for (const entry of Object.values(models).flat()) {
     const step = resolveModelEntryRoute("doctor-model", "other", entry);
@@ -896,7 +922,7 @@ export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
     }
   }
   return createResolvedRoutePlan([
-    ...base.steps,
+    ...baseSteps,
     ...[...distinct.values()].map((step, i) => ({
       ...step,
       stepKey: `doctor-model-${i + 1}`,
@@ -907,6 +933,9 @@ export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
 export async function collectDoctorExactBindingReports(input: {
   readonly workspaceRoot: string;
   readonly models?: ModelsConfig;
+  // Whether any step the configuration resolves runs on the Claude CLI
+  // (doctor.ts reviewNeedsClaude). Absent: required, as before.
+  readonly claudeRequired?: boolean;
   readonly authorityDeps?: ResolveRunnerAuthorityDeps;
   readonly env?: RunnerAuthorityOptions["env"];
   readonly observeOpenCodeIdentity?: OpenCodeIdentityObserver;
@@ -914,7 +943,12 @@ export async function collectDoctorExactBindingReports(input: {
     import("./transports/opencode-client").OpenCodeSdkLike
   >;
 }): Promise<readonly ExactBindingCapabilityReport[]> {
-  const plan = buildDoctorRoutePlan(input.models);
+  const plan = buildDoctorRoutePlan(
+    input.models,
+    input.claudeRequired === undefined
+      ? {}
+      : { claudeRequired: input.claudeRequired },
+  );
   // U3: the doctor binds OpenCode routes the way a review's admission does, so
   // it reads the setup step's CRYSK_* manifest too.
   const openCodeSecretNames = planRoutes(plan).some(

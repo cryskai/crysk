@@ -250,3 +250,74 @@ describe("runDoctorCommand — an OpenCode model needs a resolvable SDK", () => 
     }
   });
 });
+
+// model-profiles S6: the command resolves the configuration and tells the
+// doctor whether any step runs on the Claude CLI. Required unless proven not.
+describe("runDoctorCommand — Claude CLI required only when a step uses it", () => {
+  const seen = async (
+    global: string | undefined,
+    repoConfig?: string,
+  ): Promise<boolean | undefined> => {
+    const home = await tmpHome(global);
+    const repo = await tmpRoot(repoConfig);
+    try {
+      let claudeRequired: boolean | undefined;
+      await runDoctorCommand({
+        repoRoot: repo.root,
+        workspaceRoot: repo.root,
+        home: home.home,
+        styles: false,
+        width: 80,
+        runDoctorFn: async (opts) => {
+          claudeRequired = opts?.claudeRequired;
+          return { overall: "healthy", exitCode: 0, checks: [] };
+        },
+        readSdkVersion: async () => "1.18.25",
+      });
+      return claudeRequired;
+    } finally {
+      await home.cleanup();
+      await repo.cleanup();
+    }
+  };
+
+  test("zero-config requires it", async () => {
+    expect(await seen(undefined)).toBe(true);
+  });
+
+  test("a Claude models config requires it", async () => {
+    expect(
+      await seen(
+        JSON.stringify({ models: { default: ["claude:opus-latest"] } }),
+      ),
+    ).toBe(true);
+  });
+
+  test("an all-OpenCode models config does not", async () => {
+    expect(
+      await seen(
+        JSON.stringify({ models: { default: ["opencode:openai/gpt-4o"] } }),
+      ),
+    ).toBe(false);
+  });
+
+  test("a legacy summary.model is a Claude summary model, so it requires it", async () => {
+    expect(
+      await seen(
+        JSON.stringify({
+          models: { default: ["opencode:openai/gpt-4o"] },
+          summary: { model: "haiku" },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("a config that fails to load still requires it", async () => {
+    expect(
+      await seen(
+        JSON.stringify({ models: { default: ["opencode:openai/gpt-4o"] } }),
+        "{ not valid json",
+      ),
+    ).toBe(true);
+  });
+});
