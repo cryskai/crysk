@@ -953,16 +953,17 @@ Re-scaffold with `crysk ci init --force` to switch to the comment trigger. It re
 the review workflow only (`pr-hero.yml` or `crysk.yml`, whichever the repository has) and leaves
 `pr-hero-force.yml` in place; delete that file yourself once the new workflow is on the default branch.
 
-In this repository, a comment run reviews with the pull request's own engine: `crysk.yml` is
-generated with `OWN_CI_WORKFLOW_OPTIONS`, so on a comment a first step resolves the PR head commit and
-checkout pins that commit before `uses: ./`. A comment run starts on the default branch, so without the
-pin it would run the default branch's engine instead of the one under review. Consumer workflows run
-the published `cryskai/crysk@v0`, where the checkout does not select the engine.
+This repository is reviewed through the Crysk platform, which configures its review, so it commits no
+`crysk.yml` or `.crysk/config.json` of its own. `OWN_CI_WORKFLOW_OPTIONS` still generates the workflow
+it used before: on a comment a first step resolves the PR head commit and checkout pins that commit
+before `uses: ./`, so a comment run reviews with the pull request's own engine rather than the default
+branch's. Consumer workflows run the published `cryskai/crysk@v0`, where the checkout does not select
+the engine.
 
 - **When it takes effect.** GitHub reads a comment-triggered workflow from the default branch, so the
   comment trigger works only once the workflow (`crysk.yml`, or `pr-hero.yml` in a repository set up before
   the rename) with its `issue_comment` trigger is on the default
-  branch; in this repository that means `main`, not `dev`. Until then a comment starts nothing. In a
+  branch (for example `main`, not an integration branch like `dev`). Until then a comment starts nothing. In a
   consumer repository, the comment handling also needs an action release that has it, reached through
   the `@v0` tag the workflow pins.
 - **Minimum action version.** This workflow listens to comments, and only an action release that ships
