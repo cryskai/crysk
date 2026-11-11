@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MATERIALITY_STEP_KEY } from "#model/routing";
+import { buildResolvedRoutePlan, MATERIALITY_STEP_KEY } from "#model/routing";
 import {
   type AgentsDirSource,
   type CliOptions,
@@ -8,6 +8,7 @@ import {
 import { parseAgentSource } from "#review/prompt-set";
 import {
   buildCliRoutePlan,
+  claudeAuthorityRequired,
   isBundledAgentsDir,
   pipelineMaterialityInput,
 } from "#review/route-preflight";
@@ -117,4 +118,42 @@ describe("the bundled-agents flag on the production plan (model-profiles S3)", (
       );
     });
   }
+});
+
+// PR mode resolves the Claude binary before every run. A plan with no
+// claude-code route never starts it, and CI skips the Claude install for
+// such runs (routing-claude=false), so its absence must not abort the run.
+describe("claudeAuthorityRequired", () => {
+  // No spec model: a spec's own model outranks `models` (S3).
+  const agents = [{ key: "reliability", role: "hunter" as const }];
+
+  test("no route plan: the legacy runner is the Claude CLI", () => {
+    expect(claudeAuthorityRequired(undefined)).toBe(true);
+  });
+
+  test("a plan with a claude-code route needs the binary", () => {
+    const plan = buildResolvedRoutePlan({
+      agents,
+      models: { default: ["claude:sonnet-latest"] },
+    });
+    expect(claudeAuthorityRequired(plan)).toBe(true);
+  });
+
+  test("a claude-code fallback needs the binary", () => {
+    const plan = buildResolvedRoutePlan({
+      agents,
+      models: {
+        default: ["opencode:openai/gpt-x", "claude:sonnet-latest"],
+      },
+    });
+    expect(claudeAuthorityRequired(plan)).toBe(true);
+  });
+
+  test("an all-opencode plan does not", () => {
+    const plan = buildResolvedRoutePlan({
+      agents,
+      models: { default: ["opencode:openai/gpt-x"] },
+    });
+    expect(claudeAuthorityRequired(plan)).toBe(false);
+  });
 });

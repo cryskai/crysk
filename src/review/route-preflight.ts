@@ -234,6 +234,19 @@ export async function buildCliRoutePlan(params: {
   });
 }
 
+// Whether a run needs the Claude binary's execution authority: always for the
+// legacy no-plan runner (it is the Claude CLI), otherwise only when some route
+// or fallback runs on claude-code. CI skips the Claude install exactly when no
+// step routes to it (routing-claude=false), so this check must agree.
+export function claudeAuthorityRequired(
+  routePlan: ResolvedRoutePlan | undefined,
+): boolean {
+  if (routePlan === undefined) return true;
+  return planRoutes(routePlan).some(
+    (step) => step.route.backend === "claude-code",
+  );
+}
+
 // Whether a plan that failed to build may fall back to the legacy no-plan
 // path (a prompt or `--model` naming a raw Claude id the CLI resolves itself).
 // Never when `models` is set, and never for a model written in the new form:
