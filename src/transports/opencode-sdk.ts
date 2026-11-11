@@ -2,6 +2,7 @@ import type { BucketScope } from "../execution/bucket-id";
 import { deriveBucketId } from "../execution/bucket-id";
 import type {
   AsyncEventSink,
+  OpenCodeFailureCredential,
   ProviderCapabilityReport,
   ProviderEvent,
   ProviderEventBase,
@@ -409,6 +410,12 @@ export interface OpenCodeSdkTransportOptions {
     readonly provider: string;
   };
   readonly defaultRoute?: ResolvedModelRoute;
+  // S7: the CRYSK_OPENCODE_* secret this transport's route runs on, named by the
+  // registry factory from the route's provider and credential kind (the transport
+  // holds neither credential nor kind). Stamped on every failed outcome as
+  // `failureCredential`, so a CI fix names the secret to replace or top up. Absent
+  // for a free route, an unknown kind, or a provider no secret name can carry.
+  readonly failureCredential?: OpenCodeFailureCredential;
 }
 
 const MARKER_ABORT_UNCONFIRMED =
@@ -708,6 +715,9 @@ export class OpenCodeSdkTransport implements ProviderTransport {
   // attempted.
   readonly credentialProjection = "server-lifetime" as const;
   readonly defaultRoute?: ResolvedModelRoute;
+  // Public and readonly for the same reason as usageBillingMode below: the factory
+  // derives it, and reading it is how a test observes that derivation.
+  readonly failureCredential?: OpenCodeFailureCredential;
   private readonly client: OpenCodeClientLike;
   private readonly stallDeadlineMs: number;
   private readonly abortConfirmMs: number;
@@ -739,6 +749,7 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     };
     this.cancellationSemantics = "provider-proof";
     this.defaultRoute = options.defaultRoute;
+    this.failureCredential = options.failureCredential;
     this.client = options.client;
     this.stallDeadlineMs = options.stallDeadlineMs ?? DEFAULT_STALL_DEADLINE_MS;
     this.abortConfirmMs = options.abortConfirmMs ?? SDK_ABORT_CONFIRM_MS;
@@ -878,7 +889,9 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     request: TransportRequest,
     context: { readonly signal: AbortSignal; readonly events: AsyncEventSink },
   ): Promise<TransportOutcome> {
-    const outcome = await this.executeAttempt(request, context);
+    const outcome = this.withFailureCredential(
+      await this.executeAttempt(request, context),
+    );
     try {
       const diagnosticEvidence = this.client.takeEvidence?.(
         request.sessionId,
@@ -888,6 +901,15 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     } catch {
       return outcome;
     }
+  }
+
+  // The secret only on a failed attempt, like the Claude transport: it is what the fix
+  // names, and a success or a cancellation has nothing to fix.
+  private withFailureCredential(outcome: TransportOutcome): TransportOutcome {
+    return outcome.completion === "failed" &&
+      this.failureCredential !== undefined
+      ? { ...outcome, failureCredential: this.failureCredential }
+      : outcome;
   }
 
   private async executeAttempt(
@@ -2254,6 +2276,16 @@ export class OpenCodeSdkTransport implements ProviderTransport {
       providerRefusalStatus(witness) === "404"
     ) {
       return "model_unavailable";
+    }
+    // S7, same slot rule: a 401 is the provider refusing the credential, whatever its
+    // words (OpenAI's "Incorrect API key provided" matches none of the auth patterns
+    // above). auth_invalid is terminal like runtime_unavailable, so the retry policy is
+    // unchanged; the cause lets the PR name the secret to replace (CRYSK-CRED-REJECTED).
+    if (
+      witness.includes(MARKER_PROVIDER_REFUSAL) &&
+      providerRefusalStatus(witness) === "401"
+    ) {
+      return "auth_invalid";
     }
     if (witness.includes(MARKER_PROVIDER_REFUSAL)) {
       return providerRefusalRetries(witness) === true

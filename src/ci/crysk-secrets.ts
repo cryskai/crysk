@@ -93,7 +93,8 @@ const CLAUDE_RESERVED_RE = /^CRYSK_CLAUDE_(?:OAUTH_TOKEN|API_KEY)_[A-Z0-9_]+$/;
 // <P> is exactly the image of opencodeSecretToken: one or more [A-Z0-9] runs
 // joined by single underscores. The provider runs up to the fixed suffix, so a
 // provider whose own name ends in `_API` still parses (FOO_API + _API_KEY).
-const OPENCODE_RE =
+// Exported for outcome.ts's copy (knownFailureCredential), which a test pins to it.
+export const OPENCODE_SECRET_NAME_RE =
   /^CRYSK_OPENCODE_([A-Z0-9]+(?:_[A-Z0-9]+)*)_(API_KEY|OAUTH)$/;
 // A line is NAME=value when it starts with an identifier and an `=`; the value
 // runs from the FIRST `=`, so base64 padding survives.
@@ -157,6 +158,20 @@ export function opencodeSecretToken(providerId: string): string | undefined {
   return providerId.toUpperCase().replace(/[.-]/g, "_");
 }
 
+// The name of an OpenCode provider's secret of one kind, or undefined when no secret
+// name can carry the provider id. The one builder: chooseOpenCodeSecret and the
+// transport factory (a failed attempt's failureCredential, S7) both use it.
+export function opencodeSecretName(
+  providerId: string,
+  kind: "api_key" | "oauth",
+): string | undefined {
+  const token = opencodeSecretToken(providerId);
+  if (token === undefined) return undefined;
+  return kind === "api_key"
+    ? `CRYSK_OPENCODE_${token}_API_KEY`
+    : `CRYSK_OPENCODE_${token}_OAUTH`;
+}
+
 export function opencodeSecretsFor(
   secrets: CryskSecrets,
   providerId: string,
@@ -195,10 +210,9 @@ export function chooseOpenCodeSecret(
   providerId: string,
   names: readonly string[],
 ): OpenCodeSecretChoice | undefined {
-  const token = opencodeSecretToken(providerId);
-  if (token === undefined) return undefined;
-  const apiKey = `CRYSK_OPENCODE_${token}_API_KEY`;
-  const oauth = `CRYSK_OPENCODE_${token}_OAUTH`;
+  const apiKey = opencodeSecretName(providerId, "api_key");
+  const oauth = opencodeSecretName(providerId, "oauth");
+  if (apiKey === undefined || oauth === undefined) return undefined;
   const hasApiKey = names.includes(apiKey);
   if (names.includes(oauth)) {
     if (providerId !== OPENCODE_OAUTH_SECRET_PROVIDER) {
@@ -364,7 +378,7 @@ export function parseCryskSecrets(raw: string): CryskSecretsParse {
     }
 
     const claudeKind = CLAUDE_NAMES[name];
-    const opencodeMatch = OPENCODE_RE.exec(name);
+    const opencodeMatch = OPENCODE_SECRET_NAME_RE.exec(name);
     if (claudeKind === undefined && opencodeMatch === null) {
       notices.push(`${name} is not a Crysk credential name; it is ignored.`);
       continue;

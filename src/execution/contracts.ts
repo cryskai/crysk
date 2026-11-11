@@ -237,12 +237,24 @@ export interface TransportOutcome {
   readonly exitCode?: number;
 }
 
-// The GitHub secrets a Claude review can run on (see TransportOutcome.failureCredential).
-// The CI record mirrors this list in src/ci/outcome.ts, tied by `satisfies`.
-export type FailureCredential =
+// The secret a failed attempt ran on (see TransportOutcome.failureCredential).
+//
+// A Claude route names the Claude CLI's own variable; in the action the CI texts map it
+// to the CRYSK_CLAUDE_* secret that filled it. The CI record mirrors this list in
+// src/ci/outcome.ts, tied by `satisfies`.
+export type ClaudeFailureCredential =
   | "ANTHROPIC_API_KEY"
   | "ANTHROPIC_AUTH_TOKEN"
   | "CLAUDE_CODE_OAUTH_TOKEN";
+// An OpenCode route names its CRYSK_OPENCODE_* secret directly (S7): the name is per
+// provider, built by opencodeSecretName (src/ci/crysk-secrets.ts) from the route's
+// provider and credential kind. The CI record checks it against that grammar.
+export type OpenCodeFailureCredential =
+  | `CRYSK_OPENCODE_${string}_API_KEY`
+  | `CRYSK_OPENCODE_${string}_OAUTH`;
+export type FailureCredential =
+  | ClaudeFailureCredential
+  | OpenCodeFailureCredential;
 
 export type TransportFailureCause =
   | "auth_invalid"

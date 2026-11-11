@@ -1647,7 +1647,9 @@ On a workflow set up before the rename, comment `/pr-hero review` instead. Its w
 When every failed hunter reports the secret it ran on, the fix starts with the one for that secret. In the
 action, `{secret}` is the `CRYSK_*` secret the workflow passes (`CRYSK_CLAUDE_API_KEY` or
 `CRYSK_CLAUDE_OAUTH_TOKEN`); a local run names the Claude CLI's own variable (`ANTHROPIC_API_KEY` or
-`CLAUDE_CODE_OAUTH_TOKEN`), which it exports itself.
+`CLAUDE_CODE_OAUTH_TOKEN`), which it exports itself. An OpenCode route names its own secret,
+`CRYSK_OPENCODE_<PROVIDER>_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and gets the OpenCode variants below. A provider
+that answers HTTP 401 is a rejected credential whatever its words.
 
 #### `api_key`
 
@@ -1683,6 +1685,57 @@ The rejected secret is the subscription token, `CRYSK_CLAUDE_OAUTH_TOKEN` in the
 
 ```bash
 claude setup-token && gh secret set {secret}
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+#### `opencode_api_key`
+
+**Why:** the provider refused the API key in that secret: it is invalid, expired or revoked
+
+The rejected secret is an OpenCode provider's key, `CRYSK_OPENCODE_<PROVIDER>_API_KEY`.
+
+**Fix:**
+
+Create a new key with the provider and set it:
+
+```bash
+gh secret set {secret}
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+#### `opencode_oauth`
+
+**Why:** the ChatGPT login recorded in that secret is expired or revoked
+
+The rejected secret is the OpenAI subscription record, `CRYSK_OPENCODE_OPENAI_OAUTH`.
+
+**Fix:**
+
+Log in again with `opencode auth login` and choose ChatGPT, then set the provider's record, base64 on one line (on macOS, drop -w0):
+
+```bash
+opencode auth login
+jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+```
+
+Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):
+
+```bash
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
 Then ask for a new review:
@@ -2099,6 +2152,54 @@ Or bill per token: set CRYSK_CLAUDE_API_KEY and put api_key first in `credential
 
 ```bash
 gh secret set CRYSK_CLAUDE_API_KEY
+```
+
+#### `opencode_api_key`
+
+**What:** the account behind {secret} reached a rate limit or quota
+
+**Why:** the provider refuses requests on this key until the limit resets or the account has credit again, so an immediate retry would fail the same way
+
+Every failed hunter ran on the same OpenCode provider key, `CRYSK_OPENCODE_<PROVIDER>_API_KEY`. The OpenCode transport does not report the provider's words, so the sentence names the secret instead.
+
+**Fix:**
+
+Wait for the limit to reset, or add credit or raise the quota on the provider account behind the key, then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+Or set a key from an account that has quota:
+
+```bash
+gh secret set {secret}
+```
+
+#### `opencode_oauth`
+
+**What:** the ChatGPT subscription behind {secret} reached its usage limit
+
+**Why:** the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way
+
+Every failed hunter ran on the OpenAI subscription record, `CRYSK_OPENCODE_OPENAI_OAUTH`.
+
+**Fix:**
+
+Re-run after the limit resets:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):
+
+```bash
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
 <a id="prh-provider-unavailable"></a>

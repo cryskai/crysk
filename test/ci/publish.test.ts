@@ -508,6 +508,29 @@ describe("decidePublication — the pure table", () => {
         },
       );
 
+      // S7: an OpenCode hunter records its CRYSK_OPENCODE_* secret, which the fix names as
+      // it is, with the OpenCode fix and no Claude step.
+      test.each([
+        ["deepseek", "CRYSK_OPENCODE_DEEPSEEK_API_KEY", "gh secret set"],
+        ["openai", "CRYSK_OPENCODE_OPENAI_OAUTH", "opencode auth login"],
+      ])(
+        "auth_invalid on an OpenCode %s route renders CRYSK-CRED-REJECTED naming %s",
+        (provider, secret, fix) => {
+          const entry = { cause: "auth_invalid", provider, credential: secret };
+          const p = plan([entry, entry]);
+          expect(p.rendered.code).toBe("CRYSK-CRED-REJECTED");
+          expect(p.rendered.annotation).toContain(
+            `rejected the credential in ${secret}`,
+          );
+          expect(p.rendered.annotation).toContain(fix);
+          expect(texts(p)).not.toContain("claude setup-token");
+          expect(p.status?.description).toStartWith(
+            `CRYSK-CRED-REJECTED: Provider ${provider} rejected the credential in ${secret}`,
+          );
+          expect(texts(p)).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+        },
+      );
+
       test("auth_invalid with a credential but no known provider keeps the generic code and the detail", () => {
         const entry = {
           cause: "auth_invalid",

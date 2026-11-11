@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { opencodeSecretName } from "#ci/crysk-secrets";
 import { capabilityGateDecision } from "#model/provider-capabilities";
 import {
   planRoutes,
@@ -15,6 +16,7 @@ import { type AssetMode, detectAssetMode } from "./assets";
 // step timeout and calls destroy on credential projection after transport returns).
 import type {
   CredentialKind,
+  OpenCodeFailureCredential,
   ProviderCapabilityReport,
   ProviderTransport,
   ResolvedModelRoute,
@@ -544,6 +546,27 @@ export interface CreateTransportRegistryOptions
   readonly mode?: "production" | "conformance";
 }
 
+// S7: the CRYSK_OPENCODE_* secret an OpenCode route runs on, as a failed attempt names
+// it. The kind decides the name the way chooseOpenCodeSecret decided the kind: the
+// ChatGPT OAuth kind is the `_OAUTH` record, a metered token the `_API_KEY`. A free
+// route runs on no secret, and an unknown kind or provider names none rather than guess.
+export function openCodeFailureCredential(
+  provider: string | undefined,
+  kind: CredentialKind | undefined,
+): OpenCodeFailureCredential | undefined {
+  if (provider === undefined) return undefined;
+  const secretKind =
+    kind === "opencode_chatgpt_oauth"
+      ? "oauth"
+      : kind === "provider_api_token"
+        ? "api_key"
+        : undefined;
+  if (secretKind === undefined) return undefined;
+  return opencodeSecretName(provider, secretKind) as
+    | OpenCodeFailureCredential
+    | undefined;
+}
+
 export class DefaultTransportRegistry implements TransportRegistry {
   private readonly factories = new Map<
     RunnerBackend,
@@ -672,6 +695,14 @@ export class DefaultTransportRegistry implements TransportRegistry {
         provider: route?.provider ?? "opencode",
       };
       const defaultRoute: ResolvedModelRoute | undefined = route;
+      // S7: the secret this route runs on, from the same kind the billing mode reads,
+      // computed above both construction branches for the same reason.
+      const failureCredential = openCodeFailureCredential(
+        route?.provider,
+        merged.credentialKind,
+      );
+      const credentialOption =
+        failureCredential === undefined ? {} : { failureCredential };
 
       if (merged.openCodeClient) {
         return new OpenCodeSdkTransport({
@@ -679,6 +710,7 @@ export class DefaultTransportRegistry implements TransportRegistry {
           billingMode: usageBillingMode,
           admissionIdentity,
           defaultRoute,
+          ...credentialOption,
         });
       }
 
@@ -745,6 +777,7 @@ export class DefaultTransportRegistry implements TransportRegistry {
         billingMode: usageBillingMode,
         admissionIdentity,
         defaultRoute,
+        ...credentialOption,
       });
     });
   }
