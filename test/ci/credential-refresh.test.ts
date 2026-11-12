@@ -32,7 +32,10 @@ const REFRESH = "(inputs.operation != 'review' && inputs.operation != '')";
 // REVIEW holds.
 const REVIEW_STEPS_BEFORE: ReadonlyArray<readonly [string, string | null]> = [
   ["Resolve trigger", null],
-  ["Install Claude Code CLI", "steps.trigger.outputs.run == 'true'"],
+  [
+    "Install Claude Code CLI",
+    `\${{ steps.trigger.outputs.run == 'true' && (steps.platform.outputs.routing-claude != 'false' || inputs.model != '') }}`,
+  ],
   ["Materialize OpenCode CI data", "steps.trigger.outputs.run == 'true'"],
   [
     "Install OpenCode CLI",

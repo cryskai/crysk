@@ -821,7 +821,7 @@ describe("action.yml platform wiring", () => {
     // an empty person layer) installs, as every run did before.
     expect((steps[install] as Step).if).toBe(
       expression(
-        "steps.trigger.outputs.run == 'true' && (steps.platform.outputs.routing-claude != 'false' || inputs.model != '')",
+        "steps.trigger.outputs.run == 'true' && (steps.platform.outputs.routing-claude != 'false' || inputs.model != '') && (inputs.operation == 'review' || inputs.operation == '')",
       ),
     );
   });
