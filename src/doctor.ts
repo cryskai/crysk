@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { loadEffectiveConfig } from "#config/config";
 import { type ModelsConfig, routingNeedsOpenCode } from "#model/model-name";
 import {
   FALLBACK_PROFILE,
@@ -18,6 +19,7 @@ import {
   gotchasUnusableReason,
   localReviewSpec,
   resolveAgentsDirSetting,
+  resolveMaterialityGate,
 } from "#review/preflight";
 import {
   REVIEW_MD_FILE_NAME,
@@ -141,6 +143,52 @@ export function reviewNeedsClaude(input: {
     );
   } catch {
     return true;
+  }
+}
+
+// What a doctor run reads from the configuration: whether any step needs the
+// Claude CLI, and the models and profile its binding probe resolves
+// (openai-profile S6). One reading for `crysk doctor`, `crysk update`, the
+// menu and the wizard, so none of them asks a person who chose a profile with
+// no Claude step for the Claude CLI. A config that fails to load keeps Claude
+// required on the fallback profile, and `error` says why.
+export interface DoctorRouting {
+  readonly claudeRequired: boolean;
+  readonly models?: ModelsConfig;
+  readonly profile: ModelProfile;
+  readonly warnings: readonly string[];
+  readonly error?: string;
+}
+
+export async function loadDoctorRouting(input: {
+  home: string;
+  repoRoot?: string | undefined;
+  configFlag?: string | undefined;
+}): Promise<DoctorRouting> {
+  try {
+    const loaded = await loadEffectiveConfig({
+      root: input.repoRoot,
+      home: input.home,
+      configFlag: input.configFlag,
+    });
+    const { models, profile } = loaded.effective;
+    return {
+      claudeRequired: reviewNeedsClaude({
+        models,
+        ...(profile === undefined ? {} : { profile }),
+        materialityGate: resolveMaterialityGate(loaded.effective),
+      }),
+      ...(models === undefined ? {} : { models }),
+      profile: resolveProfile(profile),
+      warnings: loaded.warnings,
+    };
+  } catch (error) {
+    return {
+      claudeRequired: true,
+      profile: FALLBACK_PROFILE,
+      warnings: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ModelsConfig } from "#model/model-name";
+import type { ModelProfile } from "#model/profiles";
 import {
   GOTCHAS_PLACEHOLDER_MARKER,
   initConfigTemplate,
@@ -16,6 +18,7 @@ import {
 } from "./agent-env";
 import { resolveEngineAssets, selfInvocation } from "./assets";
 import { REPO_DIR_NAME, resolveHomeDir, resolveRepoDir } from "./brand-paths";
+import { loadDoctorRouting } from "./doctor";
 import type {
   ExactBindingCapabilityReport,
   RunnerBackend,
@@ -341,6 +344,22 @@ function authProjectionDetail(
   return ` (auth projection: ${ready ? "ready" : "unavailable"})`;
 }
 
+// The routing the wizard's binding probe resolves, read like `crysk doctor`
+// reads it. A config that fails to load keeps the fallback profile with
+// Claude required, which is what the probe did before profiles existed.
+async function wizardDoctorRouting(home: string): Promise<{
+  claudeRequired: boolean;
+  models?: ModelsConfig;
+  profile: ModelProfile;
+}> {
+  const routing = await loadDoctorRouting({ home });
+  return {
+    claudeRequired: routing.claudeRequired,
+    ...(routing.models === undefined ? {} : { models: routing.models }),
+    profile: routing.profile,
+  };
+}
+
 export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
   // Step 1: System tools
   {
@@ -372,6 +391,10 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           ? await deps.probeExactBinding()
           : await collectDoctorExactBindingReports({
               workspaceRoot,
+              // What the person's config routes, as `crysk doctor` probes it
+              // (openai-profile S6): a profile with no Claude step is not
+              // probed on a Claude binding it never opens.
+              ...(await wizardDoctorRouting(deps.home ?? os.homedir())),
               authorityDeps: {
                 existsFn: deps.exists ?? deps.checkToolsOptions?.exists,
               },

@@ -24,7 +24,7 @@ import { type AssetMode, resolveEngineAssets, selfInvocation } from "./assets";
 import { BIN_NAME, LEGACY_BIN_NAME } from "./brand";
 import { LEGACY_HOME_DIR_NAME, resolveHomeDir } from "./brand-paths";
 import { loadGlobalConfigLayer } from "./config/config";
-import { runDoctor } from "./doctor";
+import { loadDoctorRouting, runDoctor } from "./doctor";
 import { prheroLayout } from "./home-preflight";
 import { type ModelsConfig, routingNeedsOpenCode } from "./model/model-name";
 import { resolveProfile } from "./model/profiles";
@@ -825,7 +825,13 @@ export async function reconcileUpgrade(
     }
   } else {
     try {
-      const doc = await runDoctor({ home });
+      // The person's profile decides whether the Claude CLI is required
+      // (openai-profile S6), as `crysk doctor` reads it.
+      const routing = await loadDoctorRouting({ home });
+      const doc = await runDoctor({
+        home,
+        claudeRequired: routing.claudeRequired,
+      });
       if (doc.overall === "blocking") {
         errors.push("Doctor check found blocking issues");
       }
