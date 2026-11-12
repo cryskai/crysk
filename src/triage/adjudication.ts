@@ -4,8 +4,9 @@
 // `dismissed` reply to a blocking finding, and posts the ruling as a reply on the
 // finding's thread. That reply is the only CI verdict the gate trusts, and only
 // when all of these hold:
-//   - GitHub says the reply's author is CI_ADJUDICATOR_LOGIN. The marker's own
-//     text proves nothing, since anyone can type it;
+//   - GitHub says the reply's author is CI_ADJUDICATOR_LOGIN, or the GitHub App bot
+//     that posted the finding itself (trustedAdjudicator). The marker's own text
+//     proves nothing, since anyone can type it;
 //   - its `reply=` names the comment id of the thread's LATEST triage reply, so a
 //     newer dismissal is pending again;
 //   - that triage reply is `dismissed`, and the verdict is `upheld` (D5: only a
@@ -20,6 +21,24 @@ export const ADJUDICATION_MARKER_PREFIX = `${MARKER_OPEN}adjudication `;
 
 // The login GitHub stamps on comments posted with the workflow's GITHUB_TOKEN.
 export const CI_ADJUDICATOR_LOGIN = "github-actions[bot]";
+
+// A GitHub App's bot login. A person's login can never end in `[bot]`.
+const APP_BOT_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\[bot\]$/;
+
+// Whether a ruling's author is the adjudicator the gate trusts. Standalone, every run posts as
+// github-actions[bot]. A run a Crysk platform dispatched posts as the platform App's bot, so both
+// the finding and the ruling on it carry that bot's login (odd/tasks/platform-commands.md in the
+// platform repo, S5). WHY the finding's own author and not any bot: another App installed on the
+// repository can post the marker too, but only the bot that posted the finding rules on it. A
+// person can type the marker under a finding they posted, so the author must be an App's bot.
+export function trustedAdjudicator(
+  rulingAuthor: string | undefined,
+  findingAuthor: string | undefined,
+): boolean {
+  if (rulingAuthor === undefined) return false;
+  if (rulingAuthor === CI_ADJUDICATOR_LOGIN) return true;
+  return rulingAuthor === findingAuthor && APP_BOT_LOGIN.test(rulingAuthor);
+}
 
 // The most adjudicator calls one run makes. A pending dismissal past the cap
 // stays pending, still counted, and the next recheck takes it.

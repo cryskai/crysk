@@ -119,6 +119,38 @@ describe("enrichPriorsFromThreads — CI adjudication", () => {
     expect(out?.triage?.ciVerdict).toBeNull();
   });
 
+  // odd/tasks/platform-commands.md (platform repo) S5: in platform mode the finding and the ruling are
+  // both posted as the platform App's bot.
+  const findingBy = (user: string) => ({
+    id: FINDING,
+    user,
+    in_reply_to_id: null,
+    body: "the finding",
+  });
+
+  test("the platform bot's verdict counts on a finding that same bot posted", () => {
+    const [out] = enrich([
+      findingBy("crysk-ai[bot]"),
+      dismissedReply,
+      adjudicatorReply({ user: "crysk-ai[bot]" }),
+    ]);
+    expect(out?.triage?.ciVerdict).toBe("upheld");
+  });
+
+  test("another bot's verdict, or a person's on their own finding, is ignored", () => {
+    for (const [poster, ruler] of [
+      ["crysk-ai[bot]", "other-app[bot]"],
+      ["mallory", "mallory"],
+    ]) {
+      const [out] = enrich([
+        findingBy(poster ?? ""),
+        dismissedReply,
+        adjudicatorReply({ user: ruler ?? "" }),
+      ]);
+      expect(out?.triage?.ciVerdict).toBeNull();
+    }
+  });
+
   test("a bot verdict on another head does not count (ciVerdict null)", () => {
     const [out] = enrich([dismissedReply, adjudicatorReply()], {
       headSha: OTHER_HEAD,

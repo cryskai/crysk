@@ -1510,6 +1510,46 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
     expect(status.next_action).toBe("recheck");
   });
 
+  // odd/tasks/platform-commands.md (platform repo) S5: in platform mode the run posts as the platform
+  // App's bot, so its ruling counts when that same bot posted the finding it rules on.
+  function postedBy(
+    login: string,
+    extra: PrStatusReviewComment[],
+  ): PrStatusInput {
+    const base = dismissed(extra);
+    return {
+      ...base,
+      reviewComments: base.reviewComments.map((c) =>
+        c.id === 1 ? { ...c, user: login } : c,
+      ),
+    };
+  }
+
+  test("(c2) the platform bot's ruling on a finding that bot posted counts", () => {
+    const status = buildPrStatus(
+      postedBy("crysk-ai[bot]", [
+        ruling({ id: 3, user: "crysk-ai[bot]", reply: 2, verdict: "upheld" }),
+      ]),
+    );
+    expect(status.findings[0]?.ci_verdict).toBe("upheld");
+    expect(status.next_action).toBe("review");
+  });
+
+  test("(c3) another bot's ruling does not count, nor a person's on a finding they posted", () => {
+    for (const [poster, ruler] of [
+      ["crysk-ai[bot]", "other-app[bot]"],
+      ["mallory", "mallory"],
+    ] as const) {
+      const status = buildPrStatus(
+        postedBy(poster, [
+          ruling({ id: 3, user: ruler, reply: 2, verdict: "upheld" }),
+        ]),
+      );
+      expect(status.findings[0]?.ci_verdict).toBeNull();
+      expect(status.next_action).toBe("recheck");
+    }
+  });
+
   test("(d) a bot ruling on another head is not counted", () => {
     const status = buildPrStatus(
       dismissed([
