@@ -475,6 +475,35 @@ describe("credential-refresh.ts — renewing a subscription login", () => {
     expect(record.accountId).toBe("acct-stored");
   });
 
+  test("an expiry beyond a year is not believed: the JWT's, then the default, and the result is still posted", async () => {
+    // A lifetime past what Date can print would throw after the stored token was spent.
+    const absurd = await runRefresh({
+      answers: {
+        [TOKEN_URL]: [
+          json({
+            access_token: jwt({ exp: NOW / 1000 + 7200 }),
+            expires_in: 1e13,
+          }),
+        ],
+      },
+    });
+    expect(absurd.exitCode).toBe(0);
+    expect(resultBodies(absurd.calls)[0]?.expires_at).toBe(
+      new Date(NOW + 7200 * 1000).toISOString(),
+    );
+    const both = await runRefresh({
+      answers: {
+        [TOKEN_URL]: [
+          json({ access_token: jwt({ exp: 1e15 }), expires_in: 1e13 }),
+        ],
+      },
+    });
+    expect(both.exitCode).toBe(0);
+    expect(resultBodies(both.calls)[0]?.expires_at).toBe(
+      new Date(NOW + 3600 * 1000).toISOString(),
+    );
+  });
+
   for (const code of [
     "refresh_token_reused",
     "refresh_token_expired",

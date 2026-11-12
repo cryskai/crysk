@@ -103,6 +103,10 @@ const RESULT_RETRY_MAX_DELAY_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 // OpenCode's own fallback when the token response states no `expires_in`.
 const DEFAULT_EXPIRES_IN_S = 3600;
+// The longest lifetime believed from a provider's answer. OpenAI's tokens live
+// 240 hours; a stated expiry past a year is a malformed answer, and one past what
+// Date can print would throw after the stored refresh token was spent.
+const MAX_EXPIRES_IN_MS = 366 * 24 * 60 * 60 * 1000;
 
 export const REFRESH_OPERATION = "refresh-credential";
 
@@ -440,12 +444,16 @@ export async function runCredentialRefresh(
       : storedRefresh;
   const expiresIn = tokens.expires_in;
   const jwtExp = jwtClaims(access)?.exp;
-  const expires =
-    typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0
-      ? issuedAt + expiresIn * 1000
-      : typeof jwtExp === "number" && Number.isFinite(jwtExp)
-        ? jwtExp * 1000
-        : issuedAt + DEFAULT_EXPIRES_IN_S * 1000;
+  const believable = (at: number) =>
+    Number.isFinite(at) && at > issuedAt && at <= issuedAt + MAX_EXPIRES_IN_MS;
+  const fromAnswer =
+    typeof expiresIn === "number" ? issuedAt + expiresIn * 1000 : Number.NaN;
+  const fromJwt = typeof jwtExp === "number" ? jwtExp * 1000 : Number.NaN;
+  const expires = believable(fromAnswer)
+    ? fromAnswer
+    : believable(fromJwt)
+      ? fromJwt
+      : issuedAt + DEFAULT_EXPIRES_IN_S * 1000;
   const accountId = accountIdFor(descriptor, tokens, record);
   const recordField = descriptor.accountId?.recordField;
   const renewed: Record<string, unknown> = {
