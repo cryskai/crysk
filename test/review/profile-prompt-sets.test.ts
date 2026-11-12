@@ -33,6 +33,7 @@ import {
   pipelineMaterialityInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
+  type RunPromptOptions,
 } from "#review/route-preflight";
 import { resolvePromptSet } from "#review/run";
 import { resolveEngineAssets } from "../../src/assets";
@@ -230,7 +231,9 @@ if (zeroConfig === undefined) throw new Error("no zero-config case");
 
 // The production marking: the agents resolved as the bundled set, the four
 // root prompts as engine-owned.
-function bundledInputs(options: Parameters<typeof enginePromptPath>[1] = {}) {
+function bundledInputs(
+  options: RunPromptOptions = { profile: CLAUDE_PROFILE },
+) {
   return {
     bundledAgents: true,
     ...pipelineSummarizerInput({ enabled: true }, options),
@@ -350,7 +353,11 @@ describe("buildCliRoutePlan: engine-owned prompts take the profile's seat (S3)",
 // default directory does; a profile's merged set is a different set, so it
 // carries its own name and a different fingerprint.
 describe("resolvePromptSet: the prompt set's identity under a profile (S4)", () => {
-  async function identity(prompts?: Parameters<typeof resolvePromptSet>[2]) {
+  async function identity(
+    prompts: Parameters<typeof resolvePromptSet>[2] = {
+      profile: CLAUDE_PROFILE,
+    },
+  ) {
     const root = await mkdtemp(path.join(tmpdir(), "crysk-profile-set-"));
     const names = ["CRYSK_AGENTS_DIR", "PRHERO_AGENTS_DIR"] as const;
     const previous = names.map((name) => process.env[name]);

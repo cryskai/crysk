@@ -91,6 +91,20 @@ export function modelProfile(id: string): ModelProfile {
 
 export const FALLBACK_PROFILE: ModelProfile = modelProfile(FALLBACK_PROFILE_ID);
 
+// The active profile for a config's `profile` value (openai-profile S1, S3):
+// the registered one, or the fallback when the config names none. The parser
+// already refused an unknown id, so one here is a programming error.
+export function resolveProfile(id: string | undefined): ModelProfile {
+  return id === undefined ? FALLBACK_PROFILE : modelProfile(id);
+}
+
+// What the `profile` key accepts, for the config parser and `crysk config`.
+export function profileIdProblem(value: unknown): string | undefined {
+  const known = `profile must be one of ${Object.keys(MODEL_PROFILES).join(", ")}`;
+  if (typeof value !== "string") return known;
+  return Object.hasOwn(MODEL_PROFILES, value) ? undefined : known;
+}
+
 // The route a profile gives a step role: `hunter.<key>`, or a fixed role. A
 // role the profile leaves out falls back to the fallback profile's (S3's last
 // seat).

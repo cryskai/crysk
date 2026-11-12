@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { FALLBACK_PROFILE } from "#model/profiles";
 import { buildResolvedRoutePlan, MATERIALITY_STEP_KEY } from "#model/routing";
 import {
   type AgentsDirSource,
@@ -15,14 +16,20 @@ import {
 import { defaultReviewSpec } from "#review/spec";
 import { resolveEngineAssets } from "../../src/assets";
 
+const RUN_PROMPTS = { profile: FALLBACK_PROFILE };
+
 describe("pipelineMaterialityInput (odd/tasks/materiality-gate.md S2)", () => {
   test("absent or false: no materiality input, today's pipeline", () => {
-    expect(pipelineMaterialityInput({})).toEqual({});
-    expect(pipelineMaterialityInput({ materiality_gate: false })).toEqual({});
+    expect(pipelineMaterialityInput({}, RUN_PROMPTS)).toEqual({});
+    expect(
+      pipelineMaterialityInput({ materiality_gate: false }, RUN_PROMPTS),
+    ).toEqual({});
   });
 
   test("true: the engine-owned prompt path and nothing else", () => {
-    expect(pipelineMaterialityInput({ materiality_gate: true })).toEqual({
+    expect(
+      pipelineMaterialityInput({ materiality_gate: true }, RUN_PROMPTS),
+    ).toEqual({
       materiality: { promptPath: resolveEngineAssets().materialityPromptPath },
     });
   });
@@ -35,6 +42,7 @@ describe("buildCliRoutePlan: the materiality judge key (S14)", () => {
     agentFiles: new Map(),
     bundledAgents: false,
     summary: { enabled: false },
+    profile: FALLBACK_PROFILE,
   };
   const keys = (plan: { steps: readonly { stepKey: string }[] }) =>
     plan.steps.map((s) => s.stepKey);
@@ -103,6 +111,7 @@ describe("the bundled-agents flag on the production plan (model-profiles S3)", (
         options: { scout: false } as CliOptions,
         agentFiles: haiku,
         bundledAgents: bundled,
+        profile: FALLBACK_PROFILE,
         summary: { enabled: false },
         consolidateEnabled: false,
       });

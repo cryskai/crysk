@@ -2579,6 +2579,7 @@ describe("assembly", () => {
         summary: { enabled: "capped" as const },
         models: "default" as const,
         credentials: "default" as const,
+        profile: "default" as const,
         max_verification_steps: "capped" as const,
         max_concurrent_steps: "default" as const,
         max_changed_lines: "default" as const,

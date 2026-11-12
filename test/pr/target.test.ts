@@ -111,7 +111,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
   async function limitsFor(argv: string[], isCi = true) {
     const repo = path.join(dir, "repo");
     const { options } = parseArgs(["review", "--pr", "1", ...argv]);
-    const { loaded, config, summary } = await loadRunConfig({
+    const { loaded, config, summary, profile } = await loadRunConfig({
       root: repo,
       home: path.join(dir, "home"),
       configFlag: undefined,
@@ -122,6 +122,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
       loaded,
       config,
       summary,
+      profile,
       isCi,
       operatorRoot: repo,
     });
@@ -165,7 +166,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     writeFileSync(path.join(authDir, "auth.json"), "{}");
     const repo = path.join(dir, "repo");
     const { options } = parseArgs(["review", "--pr", "1", "--ci", ...argv]);
-    const { loaded, config, summary } = await loadRunConfig({
+    const { loaded, config, summary, profile } = await loadRunConfig({
       root: repo,
       home: path.join(dir, "home"),
       configFlag: undefined,
@@ -176,6 +177,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
       loaded,
       config,
       summary,
+      profile,
       isCi: true,
       operatorRoot: repo,
     });
@@ -215,7 +217,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
   ) {
     const repo = path.join(dir, "repo");
     const { options } = parseArgs(["review", "--pr", "1", "--ci"]);
-    const { loaded, config, summary } = await loadRunConfig({
+    const { loaded, config, summary, profile } = await loadRunConfig({
       root: repo,
       home: path.join(dir, "home"),
       configFlag: undefined,
@@ -226,6 +228,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
       loaded,
       config,
       summary,
+      profile,
       isCi: true,
       operatorRoot: repo,
       claudeRun: resolveRunClaudeCredential({

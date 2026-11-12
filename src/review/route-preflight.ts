@@ -66,6 +66,11 @@ export interface EnginePromptOptions {
   assets?: EngineAssets;
 }
 
+// What a production caller hands the pipeline*Input helpers: the run's
+// profile is required (openai-profile S3), so a caller cannot forget it and
+// silently read the fallback profile's prompts.
+export type RunPromptOptions = EnginePromptOptions & { profile: ModelProfile };
+
 // THE read site for an engine-owned root prompt: the active profile's set,
 // falling back to the default file. A user `agents_dir` never reaches here:
 // it covers the five agent files only, as it always did.
@@ -99,7 +104,7 @@ export function enginePromptPath(
 // was never read for routing.
 export function pipelineSummarizerInput(
   summary: SummarySettings,
-  prompts: EnginePromptOptions = {},
+  prompts: RunPromptOptions,
 ):
   | { summarizer: { promptPath: string; model?: string; bundled: true } }
   | Record<string, never> {
@@ -122,7 +127,7 @@ export function pipelineSummarizerInput(
 // than argued. `prompts/` is the door the summarizer already walked through.
 export function pipelineScoutInput(
   options: Pick<CliOptions, "scout" | "scoutModel">,
-  prompts: EnginePromptOptions = {},
+  prompts: RunPromptOptions,
 ):
   | { scout: { promptPath: string; model?: string; bundled: true } }
   | Record<string, never> {
@@ -144,7 +149,7 @@ export function pipelineScoutInput(
 // gain on the Martian 50 (lab bench/METRICS.md 2026-10-27), and a failed pass
 // falls back to the unconsolidated findings. The lab's direct `runPipeline`
 // callers do not go through here, so their pipeline is unchanged.
-export function pipelineConsolidateInput(prompts: EnginePromptOptions = {}): {
+export function pipelineConsolidateInput(prompts: RunPromptOptions): {
   consolidate: { promptPath: string; model?: string; bundled: true };
 } {
   return {
@@ -162,7 +167,7 @@ export function pipelineConsolidateInput(prompts: EnginePromptOptions = {}): {
 // travels here.
 export function pipelineMaterialityInput(
   config: Pick<ConfigLayer, "materiality_gate">,
-  prompts: EnginePromptOptions = {},
+  prompts: RunPromptOptions,
 ): { materiality: { promptPath: string } } | Record<string, never> {
   return resolveMaterialityGate(config)
     ? {
@@ -204,9 +209,10 @@ export async function buildCliRoutePlan(params: {
   // Defaults OFF, unlike consolidation: the gate is opt-in, and a judge key in
   // the plan changes its fingerprint, so absent must mean today's plan.
   materialityEnabled?: boolean;
-  // The active model profile (S1). Absent: `claude`. Phase 1 has no config
-  // key for it; tests pass a fixture profile.
-  profile?: ModelProfile;
+  // The active model profile (openai-profile S3): the config's `profile`,
+  // resolved once (resolveProfile). Required so the compiler finds every
+  // caller: a missed one would silently plan the fallback profile.
+  profile: ModelProfile;
 }): Promise<ResolvedRoutePlan> {
   const summarizerEnabled = params.summarizerEnabled ?? params.summary.enabled;
   const scoutEnabled = params.scoutEnabled ?? params.options.scout;
@@ -218,7 +224,7 @@ export async function buildCliRoutePlan(params: {
     agents: params.spec.agents,
     cliModel: params.options.model,
     models: params.models,
-    profile: params.profile ?? FALLBACK_PROFILE,
+    profile: params.profile,
     ...(params.bundledAgents ? { bundledAgents: true } : {}),
     frontmatterModel: (agentKey) => params.agentFiles.get(agentKey)?.model,
     ...(summarizerEnabled
