@@ -487,9 +487,9 @@ OpenCode-only `CRYSK_MODELS` included.
   job `if` never reads `secrets`. A maintainer's `/crysk review` comment reviews a fork — see
   [Fork pull requests](#fork-pull-requests).
 - **OpenCode-only** (only `CRYSK_OPENCODE_*` secrets, no Claude secret) counts as a credential and
-  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge (which runs
-  only on Claude) joins the plan only when `models.judge` names it or another step runs on Claude, and then
-  needs a Claude secret. A plan that sends a step to the Claude CLI with no Claude
+  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge runs on its
+  profile's judge model: on `claude` it joins the plan only when `models.judge` names it or another step runs
+  on Claude, and then needs a Claude secret; on `openai` it runs on Terra with the OpenAI secret. A plan that sends a step to the Claude CLI with no Claude
   credential stops before it spends.
 - **`profile: openai`** (the `profile` input from `vars.CRYSK_PROFILE`, or the platform, which sends it only
   to an engine that lists `profile` in `X-Crysk-Capabilities`) runs every step on OpenAI through OpenCode. It needs

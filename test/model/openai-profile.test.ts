@@ -3,7 +3,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { MODEL_PROFILES, profileRoute, resolveProfile } from "#model/profiles";
+import {
+  MODEL_PROFILES,
+  profileJudgeModels,
+  profileRoute,
+  resolveProfile,
+} from "#model/profiles";
 import {
   MATERIALITY_STEP_KEY,
   planRoutes,
@@ -111,11 +116,31 @@ describe("a zero-config openai plan (S4, S5, S9)", () => {
     expect(byKey.get("summarizer")?.modelVariant).toBeUndefined();
   });
 
-  test("the judge stands down: nothing was measured on terra", async () => {
+  test("the judge joins on Terra, Juanma's choice without measurement (S9, L8)", async () => {
     const plan = await openaiPlan();
-    expect(plan.steps.map((s) => s.stepKey)).not.toContain(
-      MATERIALITY_STEP_KEY,
-    );
+    const judge = plan.steps.find((s) => s.stepKey === MATERIALITY_STEP_KEY);
+    expect(judge?.route).toMatchObject({
+      backend: "opencode",
+      provider: "openai",
+      modelSnapshot: "gpt-6.1-terra",
+    });
+    expect(judge?.route.modelVariant).toBeUndefined();
+    // Terra first; the models measured on Claude stay pickable.
+    expect(profileJudgeModels(OPENAI)).toEqual([
+      "opencode:openai/gpt-6.1-terra",
+      "claude:sonnet-latest",
+      "claude:opus-latest",
+    ]);
+    // Off by default: the gate is opt-in, so no judge without it.
+    const off = await openaiPlan({ materialityEnabled: false });
+    expect(off.steps.map((s) => s.stepKey)).not.toContain(MATERIALITY_STEP_KEY);
+  });
+
+  test("the claude profile's judge list is unchanged", () => {
+    expect(profileJudgeModels(resolveProfile("claude"))).toEqual([
+      "claude:sonnet-latest",
+      "claude:opus-latest",
+    ]);
   });
 
   test("a models override on another model does not inherit the profile's effort", async () => {
@@ -167,7 +192,7 @@ describe("a pipeline run on the openai profile (S5)", () => {
     }
   });
 
-  test("with the gate on, the judge stands down and records the profile's judge", async () => {
+  test("with the gate on, the judge runs on Terra through OpenCode and is recorded", async () => {
     const prompts = { profile: OPENAI };
     let materiality: Record<string, unknown> | undefined;
     await captureBaseline(
@@ -182,7 +207,9 @@ describe("a pipeline run on the openai profile (S5)", () => {
         materiality = json.materiality as Record<string, unknown> | undefined;
       },
     );
-    expect(materiality?.model).toBe("opencode:openai/gpt-6.1-terra");
+    // The route's model, as the claude profile records `sonnet`.
+    expect(materiality?.model).toBe("gpt-6.1-terra");
+    expect(materiality?.status).not.toBe("unsupported_route");
   });
 
   test("the openai plan is pinned byte for byte", async () => {

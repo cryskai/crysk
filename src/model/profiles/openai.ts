@@ -9,11 +9,11 @@ import type { ModelProfile } from "../profiles";
 // none..xhigh). A role with no effort sends no variant, so it runs at the
 // provider's default level.
 //
-// Nothing was measured on these models yet (S10). So no `promptSet` (the
-// default prompts) and no `measured`: the judge list is the fallback
-// profile's, which holds no OpenAI model, so the materiality judge stands down
-// on this profile until a measurement adds Terra (S9). A person can still
-// pick a measured judge explicitly with `models.judge`.
+// Nothing was measured on these models, and no measurement is planned (S10),
+// so no `promptSet` (the default prompts) and no `measured`. The materiality
+// judge runs on Terra by Juanma's choice, not a measurement (S9, L8: "yo
+// dejaria encendido el juez pero es opcional"). The gate stays opt-in
+// (`materiality_gate`, off by default).
 export const OPENAI_PROFILE: ModelProfile = Object.freeze({
   id: "openai",
   roles: Object.freeze({
@@ -33,4 +33,12 @@ export const OPENAI_PROFILE: ModelProfile = Object.freeze({
     summary: Object.freeze({ model: "opencode:openai/gpt-6-luna" }),
     judge: Object.freeze({ model: "opencode:openai/gpt-6.1-terra" }),
   }),
+  // Terra first, the judge a plan with no `models.judge` runs. Then the two
+  // models the judge was measured on through Claude Code: this profile runs
+  // the same default prompts, so `models.judge` may still pick them.
+  judgeModels: Object.freeze([
+    "opencode:openai/gpt-6.1-terra",
+    "claude:sonnet-latest",
+    "claude:opus-latest",
+  ]),
 } satisfies ModelProfile);

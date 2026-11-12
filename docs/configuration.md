@@ -78,7 +78,7 @@ A **profile** is a ready-made set of models for every role. Pick one in your per
 | Profile | Hunters | Refuter | Consolidate | Scout | Summary | Judge |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude` (the default) | `claude:sonnet-latest`, `xhigh` | `claude:opus-latest`, `high` | `claude:sonnet-latest`, `high` | `claude:sonnet-latest` | `claude:haiku-latest` | `claude:sonnet-latest` |
-| `openai` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.1-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6.1-terra` | `opencode:openai/gpt-6-luna` | none yet, see below |
+| `openai` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.1-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6.1-terra` | `opencode:openai/gpt-6-luna` | `opencode:openai/gpt-6.1-terra` |
 
 - `profile` is person-only, like `models`: it chooses the model and the bill, so a repo file cannot set it. An
   unknown value is refused and the message names the known profiles.
@@ -88,9 +88,10 @@ A **profile** is a ready-made set of models for every role. Pick one in your per
   runs everything on OpenAI except the summary.
 - On `openai`, an effort becomes the OpenCode variant. A role with no effort in the table sends none and runs
   at the provider's default level.
-- The materiality judge runs only on a model it was measured on. Nothing was measured on OpenAI yet, so with
-  `openai` the judge stands down and `materiality_gate` changes nothing, unless `models.judge` names a measured
-  model (`claude:sonnet-latest` or `claude:opus-latest`, which then needs Claude).
+- The materiality judge runs only on the models its profile allows. On `claude` those are the ones it was
+  measured on (`claude:sonnet-latest`, `claude:opus-latest`). On `openai` it runs on
+  `opencode:openai/gpt-6.1-terra`, a choice made without a measurement; `models.judge` may also pick one of the
+  two measured Claude models, which then needs Claude. Either way the judge runs only with `materiality_gate` on.
 - On `openai` the runner needs `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and no Claude
   CLI unless a `models` entry names a Claude model.
 - If a profile is set and its route plan cannot be built, the review fails. It never falls back to another
@@ -121,7 +122,7 @@ it runs on, in the order to try them:
 | `consolidate` | the consolidation pass after the refuter | `default` |
 | `scout` | the experimental diff-only scout | `default` |
 | `summary` | the summarizer | `default` |
-| `judge` | the materiality judge (`materiality_gate`) | `claude:sonnet-latest`, never `default` |
+| `judge` | the materiality judge (`materiality_gate`) | the profile's judge (`claude:sonnet-latest` on `claude`), never `default` |
 | `default` | every role above that is not listed, the judge excepted | the model the step's prompt declares |
 
 With no `models` at all, each step runs its [profile](#profiles)'s model. Under `claude`, the default, that is the model its prompt declares, as `claude:<alias>-latest`: the
@@ -165,11 +166,13 @@ at the provider, not at Crysk. A name that looks like a credential is refused un
 
 ### The materiality judge
 
-The judge was measured on `claude:sonnet-latest` and `claude:opus-latest` only, so `models.judge` may
-choose between those two and nothing else. Any other model in its list is dropped with a warning, and when
-none is left the judge stands down (findings stay blocking). It takes model names only, never an effort, and
-neither `--model` nor `models.default` ever moves it. Without `models.judge` it runs on
-`claude:sonnet-latest`. It has no fallback: it keeps the first model of its list.
+The judge was measured on `claude:sonnet-latest` and `claude:opus-latest` only. Each [profile](#profiles)
+allows a list of judge models, and `models.judge` may choose among them and nothing else: on `claude`, those
+two; on `openai`, `opencode:openai/gpt-6.1-terra` (chosen without a measurement) and the same two. Any other
+model in its list is dropped with a warning, and when none is left the judge stands down (findings stay
+blocking). It takes model names only, never an effort, and neither `--model` nor `models.default` ever moves
+it. Without `models.judge` it runs on the profile's judge: `claude:sonnet-latest` on `claude`,
+`opencode:openai/gpt-6.1-terra` on `openai`. It has no fallback: it keeps the first model of its list.
 
 ### What changed from `routing`
 

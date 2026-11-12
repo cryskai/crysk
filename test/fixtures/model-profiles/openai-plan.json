@@ -1,5 +1,5 @@
 {
-  "routeFingerprint": "4560fd5900f5de587e588918873cb7d162229cf87850cd9eb0964e5501f73730",
+  "routeFingerprint": "929550292b00a5ff4e82cb91e529dc2fe0ea7b890ab01abd9df59e13761466ba",
   "steps": [
     {
       "stepKey": "hunter-reliability",
@@ -96,6 +96,19 @@
       },
       "effort": "high",
       "routeFingerprint": "1125e9d082c08c4b1385a10b6c69429641c77118d308e72cacc02f2f71f8633d"
+    },
+    {
+      "stepKey": "materiality",
+      "role": "other",
+      "logicalIdentity": "opencode:openai/gpt-6.1-terra",
+      "route": {
+        "backend": "opencode",
+        "provider": "openai",
+        "modelFamily": "gpt-6.1-terra",
+        "modelSnapshot": "gpt-6.1-terra"
+      },
+      "effort": null,
+      "routeFingerprint": "2fc575874816a45da3ebb6b780cf6325f9577de0362d4c821328827e81be869e"
     }
   ]
 }

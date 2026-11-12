@@ -57,6 +57,11 @@ export interface ModelProfile {
   // What was measured on the profile's models (S5). Absent: the fallback
   // profile's measurements, as a role the profile leaves out takes its route.
   readonly measured?: MeasuredFacts;
+  // The models the materiality judge may run on when nothing was measured on
+  // the profile's models: an owner's choice, recorded as one and never as a
+  // measurement (openai-profile S9). `measured.judgeModels` wins when both
+  // are set. Absent: the measured list, else the fallback profile's.
+  readonly judgeModels?: readonly string[];
 }
 
 // Facts a lab run established for a profile, read by the gates that may only
@@ -157,12 +162,13 @@ export function profileModels(profile: ModelProfile): string[] {
   ];
 }
 
-// The models a profile's materiality judge was measured on (S5). A profile
-// that measured nothing inherits the fallback profile's list, so it judges
-// only where the fallback would: a judge on an unmeasured model is a
-// different judge.
+// The models a profile's materiality judge may run on (S5): what was measured
+// on it, else the models its owner chose without a measurement (openai-profile
+// S9), else the fallback profile's list, so a profile with neither judges only
+// where the fallback would: a judge on an unmeasured model is a different
+// judge.
 export function profileJudgeModels(profile: ModelProfile): readonly string[] {
-  const own = profile.measured?.judgeModels;
+  const own = profile.measured?.judgeModels ?? profile.judgeModels;
   if (own !== undefined) return own;
   const fallback = FALLBACK_PROFILE.measured?.judgeModels;
   if (fallback === undefined) {
