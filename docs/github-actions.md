@@ -358,8 +358,10 @@ with mode `0600` (`$XDG_DATA_HOME/opencode/auth.json`, or
   writes nothing from these secrets. An OpenCode model given only in the `model` input gets no record:
   name it in `models`.
 - **`_API_KEY`** becomes OpenCode's own API record, `{"type": "api", "key": "…"}`.
-- **`_OAUTH`** is the provider's login record, decoded and written whole, except that a provider which
-  rotates its refresh token gets an empty one (see "A review never renews the login" below).
+- **`_OAUTH`** is the provider's login record, decoded and written whole, refresh token included. A review's
+  OpenCode never reads that file: the credential broker hands it a copy of the record in a directory of its
+  own, and for a provider which rotates its refresh token that copy's refresh token is empty (see "A review
+  never renews the login" below).
 - **`_OAUTH` is read for `openai` only, for now.** That is the one subscription Crysk can project. An
   `_OAUTH` secret for another provider your models use fails the step with `CRYSK-CRED-UNUSABLE`, naming
   the secret and telling you to set that provider's `_API_KEY` instead.
@@ -786,7 +788,11 @@ value, and then:
    `expires_at` the record's `expires`, both ISO 8601 in UTC; `provider_account_id` is null when the provider
    has none. Once the provider has answered with new tokens the stored refresh token is spent, so this POST is
    retried on a network error, a 5xx or a 429, with backoff from 5 seconds up to a minute, for up to 10
-   minutes; any other 4xx stops it. A refresh job's `timeout-minutes` and the platform's lease must outlast
+   minutes; any other 4xx stops it. Every retry sends the same body, sealed once, and the platform answers a
+   repeat of a result it already recorded with 200 and `{"recorded": false}`, so a retry after a lost response
+   is not an error. `expires_at` comes from the answer's `expires_in`, else the access token's `exp`, each
+   believed only when it is after `issued_at` and at most a year later, else `issued_at` plus an hour (as
+   OpenCode does). A refresh job's `timeout-minutes` and the platform's lease must outlast
    that.
 
 When the provider refuses the login with one of its permanent codes (for OpenAI `refresh_token_reused`,
@@ -1632,6 +1638,8 @@ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 **Why:** A review never renews a subscription login whose provider rotates its refresh token: renewing it inside the run would spend the stored login and lose the new one with the run's copy
 
 On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.
+
+On a workflow you manage yourself, run `opencode auth login` again and set the `CRYSK_OPENCODE_<PROVIDER>_OAUTH` secret from its new record: the secret is a snapshot, and nothing renews it for you.
 
 Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.
 

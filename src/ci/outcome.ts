@@ -1481,10 +1481,11 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         why: "A review never renews a subscription login whose provider rotates its refresh token: renewing it inside the run would spend the stored login and lose the new one with the run's copy",
         fixes: [
           "On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.",
+          "On a workflow you manage yourself, run `opencode auth login` again and set the `CRYSK_OPENCODE_<PROVIDER>_OAUTH` secret from its new record: the secret is a snapshot, and nothing renews it for you.",
           "Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.",
         ],
         annotationFix:
-          "reconnect {provider} in the Crysk dashboard, or locally renew it with any `opencode` request",
+          "reconnect {provider} in the Crysk dashboard, or on a self-managed workflow run `opencode auth login` and set its `_OAUTH` secret again",
       },
       malformed_payload: {
         // WHY no route in the sentence: this class is raised for the OpenCode auth
