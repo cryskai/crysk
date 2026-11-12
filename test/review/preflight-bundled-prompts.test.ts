@@ -258,7 +258,9 @@ describe("the claude profile holds the intended model split", () => {
         );
       }
       if (parsed.effort !== undefined) {
-        expect(parsed.effort, `${file} effort`).toBe(route.effort);
+        expect(parsed.effort, `${file} effort`).toBe(
+          route.effort as typeof parsed.effort,
+        );
       }
     }
   });

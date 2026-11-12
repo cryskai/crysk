@@ -1,5 +1,6 @@
 import type { Effort } from "./catalog";
 import { CLAUDE_PROFILE } from "./profiles/claude";
+import { OPENAI_PROFILE } from "./profiles/openai";
 
 // Model profiles (odd/tasks/model-profiles.md S1-S3): which model and effort
 // each step role runs, as data. Claude is one profile among others and the
@@ -35,7 +36,9 @@ export interface ProfileRoute {
   // A model name in the new form (`claude:sonnet-latest`,
   // `opencode:openai/gpt-5`), the same names `models` takes.
   readonly model: string;
-  readonly effort: Effort;
+  // Absent: no effort is sent, so the model runs at its provider's default
+  // level (an OpenCode route gets no variant).
+  readonly effort?: Effort;
 }
 
 export interface ModelProfile {
@@ -72,7 +75,10 @@ export interface MeasuredFacts {
 // test/architecture/profile-registry.test.ts). Adding a profile is one module
 // plus one line here.
 export const MODEL_PROFILES: Readonly<Record<string, ModelProfile>> =
-  Object.freeze({ [CLAUDE_PROFILE.id]: CLAUDE_PROFILE });
+  Object.freeze({
+    [CLAUDE_PROFILE.id]: CLAUDE_PROFILE,
+    [OPENAI_PROFILE.id]: OPENAI_PROFILE,
+  });
 
 // The profile a run uses when nothing chooses one, and the one that fills a
 // role another profile leaves out. Being the fallback is the only thing that
@@ -122,6 +128,23 @@ export function profileRoute(
     throw new Error(`no profile role "${role}"`);
   }
   return profile.roles[role] ?? fallbackRoute(role);
+}
+
+// The effort a role runs at wherever an engine path needs one: the Claude Code
+// launch flag and the recorded step. The profile's own, else the fallback
+// profile's for the role. An OpenCode route never gets this one: there only
+// the profile's own effort becomes the variant (routing.ts, profileSeat), so a
+// role the profile gives no effort runs at the provider's default level.
+export function profileRoleEffort(profile: ModelProfile, role: string): Effort {
+  const own = profileRoute(profile, role).effort;
+  if (own !== undefined) return own;
+  const fallback = profileRoute(FALLBACK_PROFILE, role).effort;
+  if (fallback === undefined) {
+    throw new Error(
+      `${FALLBACK_PROFILE.id} profile lacks an effort for ${role}`,
+    );
+  }
+  return fallback;
 }
 
 // The models a profile's materiality judge was measured on (S5). A profile

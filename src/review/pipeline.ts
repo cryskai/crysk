@@ -17,6 +17,7 @@ import {
   FALLBACK_PROFILE,
   type ModelProfile,
   profileModelAlias,
+  profileRoleEffort,
   profileRoute,
 } from "#model/profiles";
 import {
@@ -1101,7 +1102,10 @@ function agentPromptChoice(
   const role = agentModelRole(agent);
   if (role === undefined) return {};
   const route = profileRoute(activeProfile(input), role);
-  return { model: profileModelAlias(route.model), effort: route.effort };
+  return {
+    model: profileModelAlias(route.model),
+    effort: profileRoleEffort(activeProfile(input), role),
+  };
 }
 
 // The effort a step runs at when neither a `models` entry nor its prompt sets
@@ -1111,7 +1115,7 @@ function agentRoleEffort(input: PipelineInput, agent: AgentSpec): Effort {
   const role = agentModelRole(agent);
   return role === undefined
     ? defaultEffortForRole("other")
-    : profileRoute(activeProfile(input), role).effort;
+    : profileRoleEffort(activeProfile(input), role);
 }
 
 // The model and effort an engine-owned root prompt contributes, the seats
@@ -1131,7 +1135,10 @@ function enginePromptChoice(
 ): { model?: string; effort?: Effort } {
   const route = profileRoute(activeProfile(input), role);
   if (prompt.bundled === true) {
-    return { model: profileModelAlias(route.model), effort: route.effort };
+    return {
+      model: profileModelAlias(route.model),
+      effort: profileRoleEffort(activeProfile(input), role),
+    };
   }
   const model =
     parsed.model ??
@@ -2008,7 +2015,7 @@ async function execute(
     summarizerMeta = {
       name,
       model: input.summarizer.model ?? input.model ?? "unresolved",
-      effort: profileRoute(activeProfile(input), "summary").effort,
+      effort: profileRoleEffort(activeProfile(input), "summary"),
       tools: [],
       systemPromptPath,
       outPath,
@@ -2034,7 +2041,7 @@ async function execute(
         routePlan,
         name,
         own.effort,
-        profileRoute(activeProfile(input), "summary").effort,
+        profileRoleEffort(activeProfile(input), "summary"),
       );
       summarizerMeta.effort = summarizerEffort.effort;
       summarizerMeta.tools = agent.tools;
@@ -3205,7 +3212,7 @@ async function runScout(
   const meta: StepMeta = {
     name,
     model: input.scout.model ?? input.model ?? "unresolved",
-    effort: profileRoute(activeProfile(input), "scout").effort,
+    effort: profileRoleEffort(activeProfile(input), "scout"),
     // FORCED to empty here, never read from the prompt file's frontmatter.
     // §3.5 mechanism 1 — "the scout cannot open a file, grep, or walk a call
     // graph" — is the guarantee this whole design rests on, and a guarantee a
@@ -3272,7 +3279,6 @@ async function runScout(
     // the prompt's frontmatter > the active profile's scout. The profile sits
     // LAST so a frontmatter model added later still outranks it, unless the
     // prompt is the engine's own (`bundled`), whose seat is the profile's.
-    const scoutRoute = profileRoute(activeProfile(input), "scout");
     const own = enginePromptChoice(input, input.scout, "scout", agent, true);
     meta.model = resolveModel(
       input,
@@ -3285,7 +3291,7 @@ async function runScout(
       state.routePlan,
       name,
       own.effort,
-      scoutRoute.effort,
+      profileRoleEffort(activeProfile(input), "scout"),
     );
     meta.effort = scoutEffort.effort;
     // FULL sha256, not the 12 chars the probe prints: the probe's artifact
@@ -3544,7 +3550,6 @@ async function runConsolidation(
     // default, so a prompt edit that drops `effort:` cannot move the stage to
     // an unmeasured level if that role default ever changes.
     // A `bundled` prompt (the engine's own) takes both from the profile.
-    const consolidateRoute = profileRoute(activeProfile(input), "consolidate");
     const own = enginePromptChoice(
       input,
       input.consolidate,
@@ -3563,7 +3568,7 @@ async function runConsolidation(
       state.routePlan,
       name,
       own.effort,
-      consolidateRoute.effort,
+      profileRoleEffort(activeProfile(input), "consolidate"),
     );
     meta.effort = consolidateEffort.effort;
     record.prompt_sha256 = new Bun.CryptoHasher("sha256")
@@ -3847,7 +3852,7 @@ async function runMaterialityJudge(
     state.routePlan,
     MATERIALITY_STEP_KEY,
     undefined,
-    profileRoute(activeProfile(input), "judge").effort,
+    profileRoleEffort(activeProfile(input), "judge"),
   );
   const specs: Array<{ id: string; spec: StepSpec; meta: StepMeta }> = [];
   // The owner's file as posting policy, or undefined when it holds nothing of
