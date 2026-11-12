@@ -3,7 +3,7 @@
 // routes across Claude and OpenCode runners before confirming or spending tokens.
 
 import type { ModelsConfig } from "#model/model-name";
-import { CLAUDE_PROFILE, type ModelProfile } from "#model/profiles";
+import { FALLBACK_PROFILE, type ModelProfile } from "#model/profiles";
 import {
   capabilityGateDecision,
   produceClaudeCapabilityReport,
@@ -75,7 +75,7 @@ export function enginePromptPath(
 ): string {
   const assets = options.assets ?? resolveEngineAssets();
   const override = profilePromptSet(
-    options.profile ?? CLAUDE_PROFILE,
+    options.profile ?? FALLBACK_PROFILE,
     Object.keys(assets.bundledAgentFiles),
     options.promptSets,
   ).engine[file];
@@ -218,7 +218,7 @@ export async function buildCliRoutePlan(params: {
     agents: params.spec.agents,
     cliModel: params.options.model,
     models: params.models,
-    profile: params.profile ?? CLAUDE_PROFILE,
+    profile: params.profile ?? FALLBACK_PROFILE,
     ...(params.bundledAgents ? { bundledAgents: true } : {}),
     frontmatterModel: (agentKey) => params.agentFiles.get(agentKey)?.model,
     ...(summarizerEnabled

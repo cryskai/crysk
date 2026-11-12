@@ -1,6 +1,6 @@
 import anthropicCatalog from "../../config/models/anthropic.json";
 import type { RunnerBackend } from "../execution/contracts";
-import { CLAUDE_PROFILE, profileRoute } from "./profiles";
+import { FALLBACK_PROFILE, profileRoute } from "./profiles";
 
 // #175, 2026-09-02. This catalogue holds ALIAS NAMES and nothing else.
 //
@@ -211,10 +211,10 @@ export type StepRole =
 //   - everything else high: unmeasured, so it keeps what every model ran at
 //     before the 5.5 family, i.e. the behavior those roles were validated under.
 const ROLE_EFFORT: Readonly<Record<StepRole, Effort>> = Object.freeze({
-  hunter: profileRoute(CLAUDE_PROFILE, "hunter").effort,
-  refuter: profileRoute(CLAUDE_PROFILE, "refuter").effort,
-  summarizer: profileRoute(CLAUDE_PROFILE, "summary").effort,
-  scout: profileRoute(CLAUDE_PROFILE, "scout").effort,
+  hunter: profileRoute(FALLBACK_PROFILE, "hunter").effort,
+  refuter: profileRoute(FALLBACK_PROFILE, "refuter").effort,
+  summarizer: profileRoute(FALLBACK_PROFILE, "summary").effort,
+  scout: profileRoute(FALLBACK_PROFILE, "scout").effort,
   verifier: "high",
   other: "high",
 });

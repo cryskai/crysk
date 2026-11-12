@@ -3,11 +3,8 @@
 // sonnet and opus on the Claude CLI; a fixture profile whose measured judge is
 // an OpenCode model admits the judge on that route, and only under it.
 import { describe, expect, test } from "bun:test";
-import {
-  CLAUDE_PROFILE,
-  type ModelProfile,
-  profileJudgeModels,
-} from "#model/profiles";
+import { type ModelProfile, profileJudgeModels } from "#model/profiles";
+import { CLAUDE_PROFILE } from "#model/profiles/claude";
 import {
   buildResolvedRoutePlan,
   isMeasuredJudgeRoute,

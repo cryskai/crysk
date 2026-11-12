@@ -4,11 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadEffectiveConfig } from "#config/config";
-import {
-  CLAUDE_PROFILE,
-  profileModelAlias,
-  profileRoute,
-} from "#model/profiles";
+import { profileModelAlias, profileRoute } from "#model/profiles";
+import { CLAUDE_PROFILE } from "#model/profiles/claude";
 import {
   type AgentsDirConfigSeat,
   agentFilePath,

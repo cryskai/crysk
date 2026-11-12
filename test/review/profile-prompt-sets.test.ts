@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadEffectiveConfig } from "#config/config";
 import type { ModelProfile } from "#model/profiles";
-import { CLAUDE_PROFILE } from "#model/profiles";
+import { CLAUDE_PROFILE } from "#model/profiles/claude";
 import {
   type AgentsDirConfigSeat,
   localReviewSpec,

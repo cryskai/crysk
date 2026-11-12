@@ -9,7 +9,7 @@ import {
 } from "#model/free-discovery";
 import type { ModelsConfig } from "#model/model-name";
 import {
-  CLAUDE_PROFILE,
+  FALLBACK_PROFILE,
   type ModelProfile,
   profileModelAlias,
   profileRoute,
@@ -903,7 +903,7 @@ export function buildDoctorRoutePlan(
     readonly profile?: ModelProfile;
   } = {},
 ): ResolvedRoutePlan {
-  const profile = options.profile ?? CLAUDE_PROFILE;
+  const profile = options.profile ?? FALLBACK_PROFILE;
   const profileAlias = (role: string) =>
     profileModelAlias(profileRoute(profile, role).model);
   const base = buildResolvedRoutePlan({

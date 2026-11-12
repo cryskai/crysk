@@ -12,7 +12,7 @@ import {
   parseModelName,
 } from "./model-name";
 import {
-  CLAUDE_PROFILE,
+  FALLBACK_PROFILE,
   type ModelProfile,
   profileJudgeModels,
   profileModelAlias,
@@ -460,17 +460,17 @@ export const MATERIALITY_STEP_KEY = "materiality";
 // the alias a run with no route plan sends, read from the `claude` profile's
 // judge.
 export const MATERIALITY_JUDGE_MODEL = profileModelAlias(
-  profileRoute(CLAUDE_PROFILE, "judge").model,
+  profileRoute(FALLBACK_PROFILE, "judge").model,
 );
 // The `claude` profile's measured judge models, for callers with no profile.
 export const MEASURED_JUDGE_MODELS: readonly string[] =
-  profileJudgeModels(CLAUDE_PROFILE);
+  profileJudgeModels(FALLBACK_PROFILE);
 
 // The judge's model, and what `models.judge` listed that it cannot use. With no
 // `models.judge`, the active profile's judge, held to the same measured list.
 export function judgeModelChoice(
   models: ModelsConfig | undefined,
-  profile: ModelProfile = CLAUDE_PROFILE,
+  profile: ModelProfile = FALLBACK_PROFILE,
 ): {
   model?: string;
   dropped: string[];
@@ -493,7 +493,7 @@ export function judgeModelChoice(
 // keeps route admission from gating the run on a step that will never spawn.
 export function resolveMaterialityJudgeRoute(
   models: ModelsConfig | undefined,
-  profile: ModelProfile = CLAUDE_PROFILE,
+  profile: ModelProfile = FALLBACK_PROFILE,
 ): ResolvedStepRoute | undefined {
   const { model } = judgeModelChoice(models, profile);
   if (model === undefined) return undefined;
@@ -509,7 +509,7 @@ export function resolveMaterialityJudgeRoute(
 // the judge takes no effort (D3), so its route carries none.
 export function isMeasuredJudgeRoute(
   route: ResolvedModelRoute,
-  profile: ModelProfile = CLAUDE_PROFILE,
+  profile: ModelProfile = FALLBACK_PROFILE,
 ): boolean {
   return profileJudgeModels(profile).some((name) => {
     const measured = resolveModelRoute(name);
@@ -525,7 +525,7 @@ export function buildResolvedRoutePlan(
   input: BuildRoutePlanInput,
 ): ResolvedRoutePlan {
   assertHunterRolesExist(input.models, input.agents);
-  const profile = input.profile ?? CLAUDE_PROFILE;
+  const profile = input.profile ?? FALLBACK_PROFILE;
   const profileModel = (role: string) => profileRoute(profile, role).model;
   const stepRoutes: ResolvedStepRoute[] = [];
   for (const agent of input.agents) {

@@ -3,14 +3,14 @@
 import { describe, expect, test } from "bun:test";
 import { defaultEffortForRole } from "#model/catalog";
 import {
-  CLAUDE_PROFILE,
-  DEFAULT_PROFILE_ID,
+  FALLBACK_PROFILE_ID,
   MODEL_PROFILES,
   type ModelProfile,
   modelProfile,
   profileModelAlias,
   profileRoute,
 } from "#model/profiles";
+import { CLAUDE_PROFILE } from "#model/profiles/claude";
 import {
   buildResolvedRoutePlan,
   judgeModelChoice,
@@ -22,8 +22,8 @@ import { DEFAULT_SCOUT_MODEL } from "#review/pipeline";
 import { DEFAULT_SUMMARY_MODEL } from "#review/preflight";
 
 describe("the registry (S1)", () => {
-  test("claude is registered and is the default profile", () => {
-    expect(DEFAULT_PROFILE_ID).toBe("claude");
+  test("claude is registered and is the fallback profile", () => {
+    expect(FALLBACK_PROFILE_ID).toBe("claude");
     expect(MODEL_PROFILES.claude).toBe(CLAUDE_PROFILE);
     expect(modelProfile("claude")).toBe(CLAUDE_PROFILE);
   });

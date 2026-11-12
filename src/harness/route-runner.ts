@@ -14,7 +14,7 @@
 // no route to its Claude binding. Each is a refusal here, so a harness
 // measuring an OpenCode model can never record a Claude run under its name.
 import type { ModelsConfig } from "#model/model-name";
-import { CLAUDE_PROFILE, profileRoute } from "#model/profiles";
+import { FALLBACK_PROFILE, profileRoute } from "#model/profiles";
 import {
   type BuildRoutePlanInput,
   buildResolvedRoutePlan,
@@ -90,7 +90,7 @@ export function buildHarnessRoutePlan(
   input: HarnessRoutePlanInput,
 ): ResolvedRoutePlan {
   const agents = input.agents ?? [];
-  const profile = input.profile ?? CLAUDE_PROFILE;
+  const profile = input.profile ?? FALLBACK_PROFILE;
   let models = modelsForAgents(input.models, agents);
   // Production adds the judge only beside a step that shares its credential,
   // so a judge alone would silently vanish. A harness that asks for the judge

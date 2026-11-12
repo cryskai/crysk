@@ -19,7 +19,7 @@ import {
   parseModelsConfig,
 } from "#model/model-name";
 import {
-  CLAUDE_PROFILE,
+  FALLBACK_PROFILE,
   type ModelProfile,
   profileModelAlias,
   profileRoute,
@@ -74,7 +74,7 @@ export const DEFAULT_HEAD_REF = "HEAD";
 // which prompts/summarizer.md's frontmatter also names while it keeps the
 // line. This value is only the honest model label shown in a preflight plan.
 export const DEFAULT_SUMMARY_MODEL = profileModelAlias(
-  profileRoute(CLAUDE_PROFILE, "summary").model,
+  profileRoute(FALLBACK_PROFILE, "summary").model,
 );
 
 export interface CliOptions {
@@ -1737,11 +1737,11 @@ export function resolveAgentsDirSetting(input: {
   // agent override (`claude`, or a set that only changes root prompts) the
   // resolution below is today's, byte for byte.
   const overrides = profilePromptSet(
-    input.profile ?? CLAUDE_PROFILE,
+    input.profile ?? FALLBACK_PROFILE,
     Object.keys(assets.bundledAgentFiles),
     input.promptSets,
   ).agents;
-  const setName = (input.profile ?? CLAUDE_PROFILE).promptSet;
+  const setName = (input.profile ?? FALLBACK_PROFILE).promptSet;
   if (Object.keys(overrides).length > 0 && setName !== undefined) {
     // A MAP, like the compiled binary's: the files now live in two places, so
     // there is no single directory to join a basename onto.

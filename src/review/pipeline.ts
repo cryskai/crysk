@@ -14,7 +14,7 @@ import {
 import { defaultEffortForRole, type Effort, isEffort } from "#model/catalog";
 import type { ModelsConfig } from "#model/model-name";
 import {
-  CLAUDE_PROFILE,
+  FALLBACK_PROFILE,
   type ModelProfile,
   profileModelAlias,
   profileRoute,
@@ -1078,7 +1078,7 @@ function agentPromptPath(input: PipelineInput, file: string): string {
 }
 
 function activeProfile(input: PipelineInput): ModelProfile {
-  return input.modelProfile ?? CLAUDE_PROFILE;
+  return input.modelProfile ?? FALLBACK_PROFILE;
 }
 
 // The model and effort a spec agent's prompt contributes, in the seats its
@@ -3159,7 +3159,7 @@ const SCOUT_TIMEOUT_MS = 15 * 60 * 1000;
 // tier is its own later experiment (§3.13), not a variable inside M6. Read
 // from the `claude` profile, which holds the value now (model-profiles S2).
 export const DEFAULT_SCOUT_MODEL = profileModelAlias(
-  profileRoute(CLAUDE_PROFILE, "scout").model,
+  profileRoute(FALLBACK_PROFILE, "scout").model,
 );
 
 // Runs the scout and returns the block to append to every hunter prompt —
