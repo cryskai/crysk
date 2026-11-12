@@ -296,7 +296,12 @@ describe("prepareHarnessRunner", () => {
     await writeFile(
       authFile,
       JSON.stringify({
-        openai: { type: "oauth", refresh: "r", access: "a", expires: 0 },
+        openai: {
+          type: "oauth",
+          refresh: "r",
+          access: "a",
+          expires: Date.now() + 240 * 60 * 60 * 1000,
+        },
       }),
     );
     env = { PATH: tmpDir, XDG_DATA_HOME: dataHome };

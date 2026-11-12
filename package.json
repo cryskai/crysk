@@ -70,7 +70,8 @@
     "check": "biome check src test benchmarks"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.25"
+    "@opencode-ai/sdk": "1.18.25",
+    "libsodium-wrappers": "0.8.4"
   },
   "devDependencies": {
     "@biomejs/biome": "^2",

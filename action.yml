@@ -32,7 +32,7 @@ inputs:
     required: false
     default: ''
   crysk-secrets:
-    description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _. A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). The input is read on stdin by those three steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
+    description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _. A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). With operation: refresh-credential, the refresh step reads the CRYSK_OPENCODE_<P>_OAUTH record it renews. The input is read on stdin by those four steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
     required: false
     default: ''
   pr-number:
@@ -75,6 +75,14 @@ inputs:
     description: 'On a re-review, widen discovery to the full pull request range instead of only the commits since the last completed review. Use it when a prior review of the same head was hollow or wrong and later runs report "No changes to discover"; `force` alone never widens discovery. A `/crysk review --full` comment sets it on its own.'
     required: false
     default: 'false'
+  operation:
+    description: 'What this run does: review (the default) reviews a pull request; refresh-credential renews the subscription login named by refresh-provider and hands the Crysk platform only the sealed record, which it writes back as the same secret. Only the Crysk platform dispatches a refresh (it needs the connect step''s run token and id-token: write); every review step is skipped for it. An empty value is a review, and any other value fails the refresh step.'
+    required: false
+    default: 'review'
+  refresh-provider:
+    description: 'With operation: refresh-credential, the OpenCode provider id whose subscription login is renewed (openai), read from its CRYSK_OPENCODE_<P>_OAUTH line in crysk-secrets. Ignored by a review.'
+    required: false
+    default: ''
 
 outputs:
   status:
@@ -174,6 +182,7 @@ runs:
     # it), and the trigger keeps only whether a CRYSK_* credential is there.
     - name: Resolve trigger
       id: trigger
+      if: (inputs.operation == 'review' || inputs.operation == '')
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -224,7 +233,7 @@ runs:
       run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin
 
     - name: Install dependencies
-      if: steps.trigger.outputs.run == 'true'
+      if: steps.trigger.outputs.run == 'true' || (inputs.operation != 'review' && inputs.operation != '')
       shell: bash
       # --omit=optional skips the `bun` npm package (the npx launcher's Bun, about 85 MiB):
       # setup-bun already put Bun on PATH, and the engine's own dependencies are not optional.
@@ -240,6 +249,37 @@ runs:
           cd "${{ github.action_path }}" && bun install --frozen-lockfile --omit=optional
         fi
 
+    # operation: refresh-credential (cryskai/platform odd/tasks/openai-oauth.md,
+    # E2-E3). The platform dispatched this run to renew a subscription login
+    # before its access token expires; reviews never renew one (a rotating
+    # refresh token is spent on use). Only Setup Bun, Connect to Crysk, Install
+    # dependencies and this step run: every review step above and below is gated
+    # on the operation being review (or empty). The step renews the login, seals
+    # the new record with the target's GitHub public key (libsodium, hence after
+    # the install) and posts only the ciphertext to the platform, with the run
+    # token of the connect step. It writes no file and no output. Any operation
+    # value but review or empty lands here, and the script refuses all but
+    # refresh-credential, so a typo is red instead of a skipped run. No `if` on
+    # the run token: a refresh outside platform mode must fail, not skip.
+    - name: Refresh the subscription login
+      id: credential-refresh
+      if: (inputs.operation != 'review' && inputs.operation != '')
+      shell: bash
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
+        CRYSK_OPERATION: ${{ inputs.operation }}
+        CRYSK_REFRESH_PROVIDER: ${{ inputs.refresh-provider }}
+        CRYSK_RUN_TOKEN: ${{ steps.platform.outputs.run-token }}
+        CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
+        # Piped on stdin, never left in bun's environment (see Resolve trigger).
+        CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/credential-refresh.ts" --crysk-secrets-stdin
+
     # Installed unless the run is KNOWN to send no step to the Claude CLI
     # (model-profiles S6): the connect step's routing-claude is exactly `false`
     # (every platform model, fallbacks and judge included, is `opencode:`, with a
@@ -247,7 +287,7 @@ runs:
     # (a standalone run, an empty person layer) installs it. This step runs
     # before the setup step, so the setup step's outputs cannot decide it.
     - name: Install Claude Code CLI
-      if: ${{ steps.trigger.outputs.run == 'true' && (steps.platform.outputs.routing-claude != 'false' || inputs.model != '') }}
+      if: ${{ steps.trigger.outputs.run == 'true' && (steps.platform.outputs.routing-claude != 'false' || inputs.model != '') && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -263,7 +303,7 @@ runs:
 
     - name: Materialize OpenCode CI data
       id: materialize
-      if: steps.trigger.outputs.run == 'true'
+      if: steps.trigger.outputs.run == 'true' && (inputs.operation == 'review' || inputs.operation == '')
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -319,7 +359,7 @@ runs:
     # step's reading of the models in effect, the platform's or the models
     # input's (E-f F3).
     - name: Install OpenCode CLI
-      if: ${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') }}
+      if: ${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -334,7 +374,7 @@ runs:
 
     - name: Run Crysk
       id: run-crysk
-      if: steps.trigger.outputs.run == 'true'
+      if: steps.trigger.outputs.run == 'true' && (inputs.operation == 'review' || inputs.operation == '')
       shell: bash
       env:
         # The Claude variables, emptied for the whole CLI process (E-f F5, see
@@ -455,7 +495,7 @@ runs:
     # with: an action.yml step cannot swap its own env mid-run.
     - name: Refresh the Crysk token
       id: platform-publish
-      if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
+      if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -501,7 +541,7 @@ runs:
     - name: Publish Crysk outcome
       id: publish
       # Wrapped in ${{ }}: a bare `!cancelled()` is a YAML tag, not an expression.
-      if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' }}
+      if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -540,7 +580,7 @@ runs:
     # publish: it runs even when nothing installed.
     - name: Report to Crysk
       id: report
-      if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
+      if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -568,7 +608,7 @@ runs:
     # platform exchanges it again.
     - name: Refresh the Crysk token (cancelled run)
       id: platform-settle
-      if: ${{ cancelled() && steps.trigger.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
+      if: ${{ cancelled() && steps.trigger.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -588,7 +628,7 @@ runs:
     # the CLI locked, as CRYSK-CANCELLED.
     - name: Settle a cancelled review
       id: cancel-settle
-      if: ${{ cancelled() && steps.trigger.outputs.run == 'true' }}
+      if: ${{ cancelled() && steps.trigger.outputs.run == 'true' && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -631,7 +671,7 @@ runs:
     - name: Upload the Crysk trace
       id: trace
       continue-on-error: true
-      if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
+      if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -699,7 +739,7 @@ runs:
       # A size-gated, budget-gated or concurrent review writes no run
       # directory and publishes no outputs; the emptiness check keeps
       # upload-artifact from being handed an empty `path:` in that case.
-      if: always() && steps.trigger.outputs.run == 'true' && steps.run-crysk.outputs.run_dir != ''
+      if: always() && steps.trigger.outputs.run == 'true' && steps.run-crysk.outputs.run_dir != '' && (inputs.operation == 'review' || inputs.operation == '')
       uses: actions/upload-artifact@v4
       with:
         # Both the PR number and the head sha, so a download is unambiguous
