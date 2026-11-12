@@ -66,7 +66,7 @@ exactly two ways:
 - **A fix**, pushed to the head and verified gone by the next review.
 - **A dismissal the CI adjudicator upholds.** You reply `dismissed`, comment `/crysk recheck`, an
   adjudicator running in CI rules on your argument, and only its `upheld` (posted by
-  `github-actions[bot]` on that head) lets the next review stop counting the finding. See
+  `github-actions[bot]`, or by the Crysk App's bot on a platform-managed repository, on that head) lets the next review stop counting the finding. See
   "Closing a dismissal" below.
 
 **When no review is left, answers unlock the gate.** Every review rule that skips a push (the
@@ -297,7 +297,7 @@ adjudicator. When step 0 says `recheck`:
    reads your argument and the repository at that head. You may comment it yourself: you only supply
    the argument, the CI adjudicator rules. (`/crysk override` is the opposite: never yours to post.)
 2. Wait with `npx -y crysk status --pr <n> --wait --json` until the run settles. Each ruling is a reply on the finding's thread,
-   from `github-actions[bot]`, whose first line is
+   from `github-actions[bot]` (the Crysk App's bot on a platform-managed repository), whose first line is
    `<!-- crysk-adjudication verdict=<v> reply=<your reply's id> head=<sha> -->`. Step 0's
    `ci_verdict` reads it for you.
 3. Act on the verdict:

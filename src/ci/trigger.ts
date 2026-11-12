@@ -206,7 +206,19 @@ export interface CiTriggerInput {
   // EVENT_COMMENT_ID when it is all digits: the comment that triggered the run,
   // which the reaction names. Absent for any other event, or any other value.
   commentId?: string;
+  // The command a Crysk platform dispatched (odd/tasks/platform-commands.md in the platform
+  // repo, S2-S4). A platform-managed repository has no issue_comment trigger, so the platform
+  // checks the comment and its author's permission and names the command in its token exchange
+  // (src/ci/platform.ts). Read only on a workflow_dispatch, and only from the Connect step's
+  // outputs, never from a dispatch input, which anyone with write access can set by hand.
+  platformCommand?: PlatformCommand;
 }
+
+export type PlatformCommand =
+  | { kind: "recheck" }
+  | { kind: "override"; actor: string; headSha: string }
+  // An override the platform named without a usable actor or head: refused, never recorded.
+  | { kind: "malformed-override" };
 
 export type CiTriggerDecision =
   | { kind: "review"; force: boolean; full: boolean; adjudicate: boolean }
@@ -434,6 +446,21 @@ export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
   const event = classifyEvent(input);
   if (event.kind === "ignore") return event;
 
+  // WHY no permission lookup: the platform looked up the commenter's permission before it
+  // dispatched, and the dispatch carries no comment to look one up for.
+  const platform = event.kind === "event" ? input.platformCommand : undefined;
+  if (platform?.kind === "malformed-override") {
+    return {
+      kind: "denied",
+      reason:
+        "The Crysk platform asked for an override without a valid login or head, so " +
+        "nothing was recorded.",
+    };
+  }
+  if (platform?.kind === "override") {
+    return overrideDecision({ ...input, commenterLogin: platform.actor });
+  }
+
   if (event.kind === "comment") {
     const verdict = commenterVerdict(input, event.command);
     if (verdict !== undefined) return verdict;
@@ -475,12 +502,13 @@ export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
     event.command.kind === "review" &&
     event.command.full;
   const commentAdjudicate =
-    event.kind === "comment" &&
-    event.command.kind === "review" &&
-    event.command.adjudicate;
+    (event.kind === "comment" &&
+      event.command.kind === "review" &&
+      event.command.adjudicate) ||
+    platform?.kind === "recheck";
   return {
     kind: "review",
-    force: input.forceInput || fromComment,
+    force: input.forceInput || fromComment || platform?.kind === "recheck",
     full: input.fullInput || commentFull,
     adjudicate: commentAdjudicate,
   };
@@ -952,7 +980,25 @@ function readTriggerInput(
     fullInput: flag("FULL_INPUT"),
     ...(runAttempt === undefined ? {} : { runAttempt }),
     ...(commentId === undefined ? {} : { commentId }),
+    ...platformCommandOf(text),
   };
+}
+
+// PLATFORM_COMMAND* are bound in action.yml only from the Connect step's outputs, and that step
+// runs only on a workflow_dispatch with a dispatch id. An unknown command is no command.
+function platformCommandOf(text: (name: string) => string): {
+  platformCommand?: PlatformCommand;
+} {
+  if (text("EVENT_NAME") !== "workflow_dispatch") return {};
+  const command = text("PLATFORM_COMMAND");
+  if (command === "recheck") return { platformCommand: { kind: "recheck" } };
+  if (command !== "override") return {};
+  const actor = text("PLATFORM_COMMAND_ACTOR");
+  const headSha = validSha(text("PLATFORM_COMMAND_HEAD"));
+  if (!GITHUB_LOGIN.test(actor) || headSha === undefined) {
+    return { platformCommand: { kind: "malformed-override" } };
+  }
+  return { platformCommand: { kind: "override", actor, headSha } };
 }
 
 // The reaction a comment earns. Best effort: it runs only on an issue_comment with an
@@ -1139,6 +1185,7 @@ const OVERRIDE_UNKNOWN_FORK_REFUSAL = `The override could not confirm whether th
 // with the adjudicator's reason. The unknown answer gets its own text, as the override does.
 const RECHECK_FORK_REFUSAL =
   "A recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
+const OVERRIDE_HEAD_MOVED = `Crysk did not override the gate: the pull request has new commits since the override was asked, and an override applies to the head at the time of the comment; comment ${commandHint(OVERRIDE_COMMAND)} again.`;
 const RECHECK_UNKNOWN_FORK_REFUSAL = `The recheck could not confirm whether this pull request comes from a fork, so it was refused; comment ${commandHint(RECHECK_COMMAND)} again.`;
 
 // What the override's one lookup says. `crossRepository` is undefined when the
@@ -1403,6 +1450,19 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
         ),
       );
       react(deps, base, "-1");
+      return 0;
+    }
+    // WHY refused when the head moved: an override applies to the head at the time of the
+    // comment. On a comment event the job resolves the head moments later; a platform dispatch
+    // can start minutes later, so it carries the head the platform saw and must still match.
+    const asked =
+      input.platformCommand?.kind === "override"
+        ? input.platformCommand.headSha
+        : undefined;
+    if (asked !== undefined && answer.head !== asked) {
+      writeRecord(deps, run, { decision: "denied", params: {} });
+      deps.appendOutput(formatTriggerOutputs(NO_RUN));
+      deps.stdout(workflowCommand("notice", OVERRIDE_HEAD_MOVED));
       return 0;
     }
     react(deps, base, "eyes");

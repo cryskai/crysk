@@ -91,6 +91,7 @@ function adjudicatorReply(
 function enrich(
   replies: Parameters<typeof enrichPriorsFromThreads>[0]["replies"],
   headSha: { headSha?: string } = { headSha: HEAD },
+  platformActor?: string,
 ) {
   return enrichPriorsFromThreads({
     priors: [prior()],
@@ -98,6 +99,7 @@ function enrich(
     replies,
     summaryUpdatedAt: null,
     ...headSha,
+    ...(platformActor === undefined ? {} : { platformActor }),
   });
 }
 
@@ -117,6 +119,48 @@ describe("enrichPriorsFromThreads — CI adjudication", () => {
       adjudicatorReply({ user: "mallory" }),
     ]);
     expect(out?.triage?.ciVerdict).toBeNull();
+  });
+
+  // odd/tasks/platform-commands.md (platform repo) S5: in platform mode the finding and the ruling are
+  // both posted as the platform App's bot.
+  const findingBy = (user: string) => ({
+    id: FINDING,
+    user,
+    in_reply_to_id: null,
+    body: "the finding",
+  });
+
+  test("the platform bot's verdict counts on a finding that same bot posted", () => {
+    const [out] = enrich(
+      [
+        findingBy("crysk-ai[bot]"),
+        dismissedReply,
+        adjudicatorReply({ user: "crysk-ai[bot]" }),
+      ],
+      { headSha: HEAD },
+      "crysk-ai[bot]",
+    );
+    expect(out?.triage?.ciVerdict).toBe("upheld");
+  });
+
+  test("any other bot is ignored, even on its own finding, and a standalone run trusts no bot but github-actions", () => {
+    for (const [poster, ruler, actor] of [
+      ["other-app[bot]", "other-app[bot]", "crysk-ai[bot]"],
+      ["crysk-ai[bot]", "other-app[bot]", "crysk-ai[bot]"],
+      ["crysk-ai[bot]", "crysk-ai[bot]", undefined],
+      ["mallory", "mallory", "mallory"],
+    ]) {
+      const [out] = enrich(
+        [
+          findingBy(poster ?? ""),
+          dismissedReply,
+          adjudicatorReply({ user: ruler ?? "" }),
+        ],
+        { headSha: HEAD },
+        actor,
+      );
+      expect(out?.triage?.ciVerdict).toBeNull();
+    }
   });
 
   test("a bot verdict on another head does not count (ciVerdict null)", () => {

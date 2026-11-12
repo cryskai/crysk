@@ -707,6 +707,12 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
+        // The command a platform dispatched (src/ci/platform.ts): unset in a standalone run.
+        if (/^steps\.platform\.outputs\.command(-actor|-head)?$/.test(expr)) {
+          return (
+            ctx.platform?.[expr.slice("steps.platform.outputs.".length)] ?? ""
+          );
+        }
         if (expr === "steps.platform.outputs.estimate") {
           return ctx.platform?.estimate ?? "";
         }
