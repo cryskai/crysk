@@ -195,6 +195,7 @@ export async function benchmarkRoutePlan(input: {
   const { validateReviewSpec } = await import("#review/spec");
   const { agentModelRole } = await import("#model/routing");
   const { modelNameFromAlias } = await import("#model/model-name");
+  const { resolveProfile } = await import("#model/profiles");
   const { buildCliRoutePlan, isBundledAgentsDir } = await import(
     "#review/route-preflight"
   );
@@ -232,6 +233,8 @@ export async function benchmarkRoutePlan(input: {
         ? input.config.models
         : { ...input.config.models, ...overlay },
     summary: resolveSummary(options, input.config),
+    // The profile the review subprocess resolves from the same config.
+    profile: resolveProfile(input.config.profile),
     materialityEnabled: resolveMaterialityGate(input.config),
   });
 }

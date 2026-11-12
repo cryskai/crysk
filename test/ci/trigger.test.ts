@@ -1631,6 +1631,38 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     ).toEqual({ backend: "opencode" });
   });
 
+  // PR #521 R001: a standalone `profile` input whose every route is OpenCode
+  // names the OpenCode fix, unless a models default sends every role elsewhere.
+  test("no-credentials names the OpenCode route for a standalone OpenCode-only profile", () => {
+    const backend = (env: Record<string, string>) =>
+      outcomeRun(baseEnv({ [STDIN_SECRETS]: "", ...env })).record?.params;
+    expect(backend({ STANDALONE_PROFILE: "openai" })).toEqual({
+      backend: "opencode",
+    });
+    expect(backend({ STANDALONE_PROFILE: " openai " })).toEqual({
+      backend: "opencode",
+    });
+    expect(
+      backend({
+        STANDALONE_PROFILE: "openai",
+        STANDALONE_MODELS_DEFAULT: "true",
+      }),
+    ).toEqual({ backend: "claude" });
+    // A platform answer wins whole over the input.
+    expect(
+      backend({
+        STANDALONE_PROFILE: "openai",
+        PLATFORM_ROUTING_OPENCODE: "false",
+      }),
+    ).toEqual({ backend: "claude" });
+    expect(backend({ STANDALONE_PROFILE: "claude" })).toEqual({
+      backend: "claude",
+    });
+    expect(backend({ STANDALONE_PROFILE: "SENTINEL-unknown" })).toEqual({
+      backend: "claude",
+    });
+  });
+
   test("publish is true for review, no-credentials and unverifiable, and false otherwise", () => {
     const publish = (
       env: Record<string, string>,
@@ -2141,7 +2173,10 @@ describe("trigger.ts runs before `bun install`", () => {
   // `../brand` and `./crysk-secrets` are the non-builtins: neither has an import
   // of its own, so both resolve before `bun install` (the same exception
   // publish.ts and outcome.ts make for ../brand).
-  test("it imports only runtime builtins, plus the import-free ../brand and ./crysk-secrets", () => {
+  // `../model/profiles` is the profile registry, whose only value imports are
+  // its type-only profile modules (profile-registry.test.ts), as platform.ts
+  // already relies on.
+  test("it imports only runtime builtins, plus the import-free ../brand, ./crysk-secrets and profile registry", () => {
     const source = readFileSync(MODULE_PATH, "utf-8");
     const specifiers = [
       ...source.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gms),
@@ -2149,7 +2184,7 @@ describe("trigger.ts runs before `bun install`", () => {
     expect(specifiers.length).toBeGreaterThan(0);
     for (const specifier of specifiers) {
       expect(specifier).toMatch(
-        /^(node:|bun$|bun:|\.\.\/brand$|\.\/crysk-secrets$)/,
+        /^(node:|bun$|bun:|\.\.\/brand$|\.\/crysk-secrets$|\.\.\/model\/profiles$)/,
       );
     }
     for (const file of ["../../brand.ts", "../crysk-secrets.ts"]) {

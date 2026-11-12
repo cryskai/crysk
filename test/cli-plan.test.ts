@@ -683,6 +683,7 @@ const provenance = (
     summary: { enabled: "repo" },
     models: "default",
     credentials: "default",
+    profile: "default",
     max_verification_steps: "default",
     max_concurrent_steps: "default",
     max_changed_lines: "default",

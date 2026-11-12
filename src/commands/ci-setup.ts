@@ -19,7 +19,7 @@ import {
   appendIgnorePatterns,
   ignorePatternsError,
   OPENCODE_PROVIDERS_VARIABLE,
-  openCodeProvidersOfModels,
+  openCodeProvidersOfPerson,
   runCiSetup,
   writeRepoReviewConfig,
 } from "#ci/setup";
@@ -186,6 +186,8 @@ interface WorkflowVariables {
   readonly configLabel: string;
   readonly hasModels: boolean;
   readonly hasCredentials: boolean;
+  // The person's `profile` (openai-profile S6), set as vars.CRYSK_PROFILE.
+  readonly profile?: string;
   // The OpenCode providers the models name, as secret tokens (DEEPSEEK), sorted.
   readonly openCodeTokens: readonly string[];
 }
@@ -202,8 +204,9 @@ async function readWorkflowVariables(
     ? `~/${path.relative(home, filePath)}`
     : filePath;
   // The judge is skipped and every fallback counts, the providers the setup step
-  // builds the auth file for (openCodeProvidersOfModels).
-  const providers = openCodeProvidersOfModels(layer?.models);
+  // builds the auth file for (openCodeProvidersOfPerson): the models', and the
+  // profile's for the roles models does not set.
+  const providers = openCodeProvidersOfPerson(layer ?? {});
   const unnamed = providers.filter(
     (provider) => opencodeSecretToken(provider) === undefined,
   );
@@ -229,6 +232,7 @@ async function readWorkflowVariables(
     variables: {
       configLabel,
       hasModels: layer?.models !== undefined,
+      ...(layer?.profile === undefined ? {} : { profile: layer.profile }),
       hasCredentials: layer?.credentials !== undefined,
       openCodeTokens,
     },
@@ -245,6 +249,11 @@ export function workflowVariableCommands(
   if (variables.hasModels) {
     commands.push(
       `$ gh variable set CRYSK_MODELS --body "$(jq -c .models ${variables.configLabel})"`,
+    );
+  }
+  if (variables.profile !== undefined) {
+    commands.push(
+      `$ gh variable set CRYSK_PROFILE --body ${variables.profile}`,
     );
   }
   if (variables.hasCredentials) {

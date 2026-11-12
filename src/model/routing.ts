@@ -12,7 +12,7 @@ import {
   parseModelName,
 } from "./model-name";
 import {
-  CLAUDE_PROFILE,
+  FALLBACK_PROFILE,
   type ModelProfile,
   profileJudgeModels,
   profileModelAlias,
@@ -183,6 +183,11 @@ export interface ResolveStepRouteInput {
   // seat after the prompt's own. Absent: no profile seat, so a step with no
   // other model fails as it always did.
   readonly profileModel?: string;
+  // That profile route's effort (openai-profile S4). It becomes the OpenCode
+  // variant only on an OpenCode route, exactly as a `models` entry's effort
+  // does; a Claude route's effort keeps riding the role effort as before, so
+  // the `claude` profile's plans do not change.
+  readonly profileEffort?: string;
   readonly models?: ModelsConfig;
 }
 
@@ -242,8 +247,11 @@ function resolveStepChoices(
     ];
   }
   if (input.profileModel !== undefined) {
+    const name = toModelName(input.profileModel, "profile", input.stepKey);
     return [
-      { name: toModelName(input.profileModel, "profile", input.stepKey) },
+      name.backend === "opencode" && input.profileEffort !== undefined
+        ? { name, effort: input.profileEffort }
+        : { name },
     ];
   }
   throw new ModelRoutingError(
@@ -460,17 +468,17 @@ export const MATERIALITY_STEP_KEY = "materiality";
 // the alias a run with no route plan sends, read from the `claude` profile's
 // judge.
 export const MATERIALITY_JUDGE_MODEL = profileModelAlias(
-  profileRoute(CLAUDE_PROFILE, "judge").model,
+  profileRoute(FALLBACK_PROFILE, "judge").model,
 );
 // The `claude` profile's measured judge models, for callers with no profile.
 export const MEASURED_JUDGE_MODELS: readonly string[] =
-  profileJudgeModels(CLAUDE_PROFILE);
+  profileJudgeModels(FALLBACK_PROFILE);
 
 // The judge's model, and what `models.judge` listed that it cannot use. With no
 // `models.judge`, the active profile's judge, held to the same measured list.
 export function judgeModelChoice(
   models: ModelsConfig | undefined,
-  profile: ModelProfile = CLAUDE_PROFILE,
+  profile: ModelProfile = FALLBACK_PROFILE,
 ): {
   model?: string;
   dropped: string[];
@@ -493,7 +501,7 @@ export function judgeModelChoice(
 // keeps route admission from gating the run on a step that will never spawn.
 export function resolveMaterialityJudgeRoute(
   models: ModelsConfig | undefined,
-  profile: ModelProfile = CLAUDE_PROFILE,
+  profile: ModelProfile = FALLBACK_PROFILE,
 ): ResolvedStepRoute | undefined {
   const { model } = judgeModelChoice(models, profile);
   if (model === undefined) return undefined;
@@ -509,7 +517,7 @@ export function resolveMaterialityJudgeRoute(
 // the judge takes no effort (D3), so its route carries none.
 export function isMeasuredJudgeRoute(
   route: ResolvedModelRoute,
-  profile: ModelProfile = CLAUDE_PROFILE,
+  profile: ModelProfile = FALLBACK_PROFILE,
 ): boolean {
   return profileJudgeModels(profile).some((name) => {
     const measured = resolveModelRoute(name);
@@ -525,8 +533,16 @@ export function buildResolvedRoutePlan(
   input: BuildRoutePlanInput,
 ): ResolvedRoutePlan {
   assertHunterRolesExist(input.models, input.agents);
-  const profile = input.profile ?? CLAUDE_PROFILE;
-  const profileModel = (role: string) => profileRoute(profile, role).model;
+  const profile = input.profile ?? FALLBACK_PROFILE;
+  // A role's profile seat: its model, and its effort when it has one. Reached
+  // only when no `models` entry and no prompt names the step's model, so an
+  // override on another model never inherits the profile's effort.
+  const profileSeat = (role: string) => {
+    const { model, effort } = profileRoute(profile, role);
+    return effort === undefined
+      ? { profileModel: model }
+      : { profileModel: model, profileEffort: effort };
+  };
   const stepRoutes: ResolvedStepRoute[] = [];
   for (const agent of input.agents) {
     const modelRole = agentModelRole(agent);
@@ -534,7 +550,7 @@ export function buildResolvedRoutePlan(
       input.bundledAgents === true
         ? modelRole === undefined
           ? {}
-          : { profileModel: profileModel(modelRole) }
+          : profileSeat(modelRole)
         : { frontmatterModel: input.frontmatterModel?.(agent.key) };
     stepRoutes.push(
       resolveStepRoute({
@@ -557,7 +573,7 @@ export function buildResolvedRoutePlan(
         cliModel: input.cliModel,
         specModel: input.summarizer.model,
         ...(input.summarizer.bundled === true
-          ? { profileModel: profileModel("summary") }
+          ? profileSeat("summary")
           : // No profile seat for an unmarked prompt: the summarizer never had
             // a default, so one without `model:` keeps failing the plan.
             { frontmatterModel: input.summarizer.frontmatterModel }),
@@ -579,7 +595,7 @@ export function buildResolvedRoutePlan(
               frontmatterModel:
                 input.scout.frontmatterModel ?? input.scout.defaultModel,
             }),
-        profileModel: profileModel("scout"),
+        ...profileSeat("scout"),
         models: input.models,
       }),
     );
@@ -598,7 +614,7 @@ export function buildResolvedRoutePlan(
                 input.consolidate.frontmatterModel ??
                 input.consolidate.defaultModel,
             }),
-        profileModel: profileModel("consolidate"),
+        ...profileSeat("consolidate"),
         models: input.models,
       }),
     );

@@ -16,7 +16,7 @@ covers the two things that section does not: `models` and credentials.
 
 | Layer | File | Holds |
 | --- | --- | --- |
-| Global / per-person | `~/.crysk/config.json` (or `~/.prhero/config.json`, see below) | `models`, `credentials`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
+| Global / per-person | `~/.crysk/config.json` (or `~/.prhero/config.json`, see below) | `profile`, `models`, `credentials`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
 | Repo | `<repo>/.crysk/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors` |
 | Repo, review instructions | `<repo>/REVIEW.md`, else `<repo>/.crysk/gotchas.md` (optional) | facts the hunters and the refuter read; with `materiality_gate` on, the judge also reads it as owner policy for style, test, generated-code and dev-script findings only; see the README's `REVIEW.md` and `gotchas.md` section |
 
@@ -32,7 +32,7 @@ and for a repo `git mv .prhero .crysk` (plain `mv` plus a `.gitignore` edit if t
 `gotchas.md`), so an empty `~/.crysk` never hides a `~/.prhero` in use. Do not create `~/.crysk` by hand while
 `~/.prhero` is in use. When both hold files, the `.crysk` one wins and the old one is ignored.
 
-`models` and `credentials` are **person-layer-only** keys: they pick what a review spends, so a committed file
+`profile`, `models` and `credentials` are **person-layer-only** keys: they pick what a review spends, so a committed file
 cannot set them. Put one in a repo file and the parser refuses it by name:
 
 ```
@@ -67,6 +67,37 @@ secrets, the OpenCode provider slots, the pinned OpenCode CLI version, budget ce
 commands that set each variable and secret from your person config, and
 [`skills/crysk-ci-setup/SKILL.md`](../skills/crysk-ci-setup/SKILL.md) walks an agent through it.
 
+## Profiles
+
+A **profile** is a ready-made set of models for every role. Pick one in your person config:
+
+```json
+{ "profile": "openai" }
+```
+
+| Profile | Hunters | Refuter | Consolidate | Scout | Summary | Judge |
+| --- | --- | --- | --- | --- | --- | --- |
+| `claude` (the default) | `claude:sonnet-latest`, `xhigh` | `claude:opus-latest`, `high` | `claude:sonnet-latest`, `high` | `claude:sonnet-latest` | `claude:haiku-latest` | `claude:sonnet-latest` |
+| `openai` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.1-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6.1-terra` | `opencode:openai/gpt-6-luna` | `opencode:openai/gpt-6.1-terra` |
+
+- `profile` is person-only, like `models`: it chooses the model and the bill, so a repo file cannot set it. An
+  unknown value is refused and the message names the known profiles.
+- With no `profile`, a review runs `claude`, exactly as before. `claude` is also the fallback for a role a
+  profile leaves out.
+- `models` still wins role by role. `{"profile": "openai", "models": {"summary": ["claude:haiku-latest"]}}`
+  runs everything on OpenAI except the summary.
+- On `openai`, an effort becomes the OpenCode variant. A role with no effort in the table sends none and runs
+  at the provider's default level.
+- The materiality judge runs only on the models its profile allows. On `claude` those are the ones it was
+  measured on (`claude:sonnet-latest`, `claude:opus-latest`). On `openai` it runs on
+  `opencode:openai/gpt-6.1-terra`, a choice made without a measurement; `models.judge` may also pick one of the
+  two measured Claude models, which then needs Claude. Either way the judge runs only with `materiality_gate` on.
+- On `openai` the runner needs `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and no Claude
+  CLI unless a `models` entry, or a prompt in a custom `agents_dir` (whose `model:` outranks the profile),
+  names a Claude model.
+- If a profile is set and its route plan cannot be built, the review fails. It never falls back to another
+  profile's models.
+
 ## Models
 
 Every step of a review runs under a **role**, and `models` in your person config gives a role the models
@@ -92,10 +123,10 @@ it runs on, in the order to try them:
 | `consolidate` | the consolidation pass after the refuter | `default` |
 | `scout` | the experimental diff-only scout | `default` |
 | `summary` | the summarizer | `default` |
-| `judge` | the materiality judge (`materiality_gate`) | `claude:sonnet-latest`, never `default` |
+| `judge` | the materiality judge (`materiality_gate`) | the profile's judge (`claude:sonnet-latest` on `claude`), never `default` |
 | `default` | every role above that is not listed, the judge excepted | the model the step's prompt declares |
 
-With no `models` at all, each step runs the model its prompt declares, as `claude:<alias>-latest`: the
+With no `models` at all, each step runs its [profile](#profiles)'s model. Under `claude`, the default, that is the model its prompt declares, as `claude:<alias>-latest`: the
 bundled hunters, the consolidation pass and the scout declare `sonnet`, the refuter `opus`, the summarizer
 `haiku`. A `hunter.<key>` that no hunter of the review declares fails when the plan is built, so a typo never
 goes unnoticed; `hunter.parity` is accepted on the runs where the parity hunter does not fire.
@@ -136,11 +167,13 @@ at the provider, not at Crysk. A name that looks like a credential is refused un
 
 ### The materiality judge
 
-The judge was measured on `claude:sonnet-latest` and `claude:opus-latest` only, so `models.judge` may
-choose between those two and nothing else. Any other model in its list is dropped with a warning, and when
-none is left the judge stands down (findings stay blocking). It takes model names only, never an effort, and
-neither `--model` nor `models.default` ever moves it. Without `models.judge` it runs on
-`claude:sonnet-latest`. It has no fallback: it keeps the first model of its list.
+The judge was measured on `claude:sonnet-latest` and `claude:opus-latest` only. Each [profile](#profiles)
+allows a list of judge models, and `models.judge` may choose among them and nothing else: on `claude`, those
+two; on `openai`, `opencode:openai/gpt-6.1-terra` (chosen without a measurement) and the same two. Any other
+model in its list is dropped with a warning, and when none is left the judge stands down (findings stay
+blocking). It takes model names only, never an effort, and neither `--model` nor `models.default` ever moves
+it. Without `models.judge` it runs on the profile's judge: `claude:sonnet-latest` on `claude`,
+`opencode:openai/gpt-6.1-terra` on `openai`. It has no fallback: it keeps the first model of its list.
 
 ### What changed from `routing`
 

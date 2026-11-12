@@ -840,7 +840,7 @@ test("frozen route plan fingerprint equals the one the review command builds", a
       ...(c.model === undefined ? [] : ["--model", c.model]),
     ];
     let { options } = parseArgs(argv);
-    const { loaded, config, summary, scout } = await loadRunConfig({
+    const { loaded, config, summary, scout, profile } = await loadRunConfig({
       root,
       home,
       configFlag: undefined,
@@ -852,6 +852,7 @@ test("frozen route plan fingerprint equals the one the review command builds", a
     const { agents, spec, agentFiles } = await resolvePromptSet(
       options,
       loaded,
+      { profile },
     );
     const review = await buildCliRoutePlan({
       spec,
@@ -859,6 +860,7 @@ test("frozen route plan fingerprint equals the one the review command builds", a
       agentFiles,
       bundledAgents: isBundledAgentsDir(agents),
       models: config.models,
+      profile,
       summary,
       materialityEnabled: resolveMaterialityGate(config),
     });

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { FALLBACK_PROFILE } from "#model/profiles";
 import { GOTCHAS_PLACEHOLDER_MARKER, localReviewSpec } from "#review/preflight";
 import {
   admissionGateFor,
@@ -329,9 +330,9 @@ describe("resolvePromptSet: an agent file that does not parse (T2d-1)", () => {
     await Bun.write(broken, "no frontmatter block here\n");
     const loaded = await loadEffectiveConfig({ root: dir, home: dir });
 
-    const error = await resolvePromptSet({ agents: agentsDir }, loaded).catch(
-      (e) => e,
-    );
+    const error = await resolvePromptSet({ agents: agentsDir }, loaded, {
+      profile: FALLBACK_PROFILE,
+    }).catch((e) => e);
     expect(error).toBeInstanceOf(Error);
     // WHY not a CliError: main() in src/cli.ts prints a CliError as one line, and a
     // local run has always let this failure take the uncaught path.

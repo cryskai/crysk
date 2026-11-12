@@ -22,6 +22,7 @@ import {
   notionalCostInput,
 } from "#config/config";
 import type { ModelsConfig } from "#model/model-name";
+import { type ModelProfile, resolveProfile } from "#model/profiles";
 import type { ResolvedRoutePlan } from "#model/routing";
 import type { CiMode } from "#pr/preflight";
 import {
@@ -117,6 +118,10 @@ export interface LoadedRunConfig {
   summary: SummarySettings;
   scout: boolean;
   post: boolean;
+  // The run's model profile, resolved once here from `config.profile`
+  // (openai-profile S3). Every route, prompt and pipeline input of the run
+  // reads this one value.
+  profile: ModelProfile;
 }
 
 // Config load + the three per-run resolvers read right after it: identical
@@ -148,7 +153,8 @@ export async function loadRunConfig(params: {
   const summary = resolveSummary(params.options, config);
   const scout = resolveScout(params.options, config);
   const post = resolvePost(params.options, config);
-  return { loaded, config, summary, scout, post };
+  const profile = resolveProfile(config.profile);
+  return { loaded, config, summary, scout, post, profile };
 }
 
 // Shared range guard. Both orchestrators check the same thing right after
@@ -450,9 +456,12 @@ export interface ResolvedPromptSet {
 export async function resolvePromptSet(
   options: Pick<CliOptions, "agents">,
   loaded: EffectiveConfig,
-  // The active model profile's prompt set (model-profiles S4). Absent:
-  // `claude`, the default set. Phase 1 has no config key, so only tests pass it.
-  prompts?: Parameters<typeof resolveAgentsDir>[3],
+  // The run's profile (openai-profile S3), whose prompt set the agents come
+  // from (model-profiles S4). Required, so no caller reads the fallback's set
+  // by forgetting it; tests may add `promptSets`.
+  prompts: NonNullable<Parameters<typeof resolveAgentsDir>[3]> & {
+    profile: ModelProfile;
+  },
 ): Promise<ResolvedPromptSet> {
   const agents = resolveAgentsDir(options, loaded, undefined, prompts);
   const spec = validateReviewSpec(localReviewSpec());
@@ -514,6 +523,16 @@ export async function writeMcpConfig(
   );
 }
 
+// Whether the person chose the routing (openai-profile S5): `models` or a
+// `profile`. Either one makes a route plan that fails to build fatal, rather
+// than a fallback to the no-plan run, which runs the fallback profile's
+// models: a person who chose a profile must never get another one silently.
+export function routingConfigured(
+  config: Pick<LocalConfig, "models" | "profile">,
+): boolean {
+  return config.models !== undefined || config.profile !== undefined;
+}
+
 // Production route resolution: identical in both orchestrators except the
 // workspace root and (reviewPr()'s skipped-discovery re-review only) the
 // summarizer/scout enable overrides. Named distinctly from
@@ -529,6 +548,8 @@ export async function resolvePipelineRoute(params: {
   // isBundledAgentsDir (#review/route-preflight) of the run's agents.
   bundledAgents: boolean;
   models: ModelsConfig | undefined;
+  // The run's profile, resolved once from the config (openai-profile S3).
+  profile: ModelProfile;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
   scoutEnabled?: boolean;
@@ -554,6 +575,7 @@ export async function resolvePipelineRoute(params: {
         agentFiles: params.agentFiles,
         bundledAgents: params.bundledAgents,
         models: params.models,
+        profile: params.profile,
         summary: params.summary,
         summarizerEnabled: params.summarizerEnabled,
         scoutEnabled: params.scoutEnabled,

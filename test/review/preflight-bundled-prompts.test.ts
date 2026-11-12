@@ -4,11 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadEffectiveConfig } from "#config/config";
-import {
-  CLAUDE_PROFILE,
-  profileModelAlias,
-  profileRoute,
-} from "#model/profiles";
+import { profileModelAlias, profileRoute } from "#model/profiles";
+import { CLAUDE_PROFILE } from "#model/profiles/claude";
 import {
   type AgentsDirConfigSeat,
   agentFilePath,
@@ -261,7 +258,9 @@ describe("the claude profile holds the intended model split", () => {
         );
       }
       if (parsed.effort !== undefined) {
-        expect(parsed.effort, `${file} effort`).toBe(route.effort);
+        expect(parsed.effort, `${file} effort`).toBe(
+          route.effort as typeof parsed.effort,
+        );
       }
     }
   });

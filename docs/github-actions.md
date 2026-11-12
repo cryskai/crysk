@@ -117,6 +117,7 @@ jobs:
             CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[4] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[4])] }}
           models: ${{ vars.CRYSK_MODELS }}
           credentials: ${{ vars.CRYSK_CREDENTIALS }}
+          profile: ${{ vars.CRYSK_PROFILE }}
           mode: gate
 ```
 
@@ -187,11 +188,12 @@ commands that put your setup where the workflow reads it. It reads your person c
 (`~/.crysk/config.json`) first, and prints, never runs:
 
 - `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY` with `--billing api`);
-- one `gh secret set CRYSK_OPENCODE_<P>_API_KEY` per OpenCode provider your `models` name (fallbacks
-  included, the judge's list skipped), and for `openai` also the line that sets
+- one `gh secret set CRYSK_OPENCODE_<P>_API_KEY` per OpenCode provider your `models` or your `profile` name
+  (fallbacks included, the judge's list skipped), and for `openai` also the line that sets
   `CRYSK_OPENCODE_OPENAI_OAUTH` from your OpenCode login for a ChatGPT subscription;
 - `gh variable set CRYSK_MODELS --body "$(jq -c .models ~/.crysk/config.json)"` when your config has
-  `models`, the same for `CRYSK_CREDENTIALS` when it has `credentials`, and
+  `models`, the same for `CRYSK_CREDENTIALS` when it has `credentials`,
+  `gh variable set CRYSK_PROFILE --body openai` when it has `profile`, and
   `gh variable set CRYSK_OPENCODE_PROVIDERS --body '["DEEPSEEK"]'` with the `<P>` token of each OpenCode
   provider.
 
@@ -485,10 +487,16 @@ OpenCode-only `CRYSK_MODELS` included.
   job `if` never reads `secrets`. A maintainer's `/crysk review` comment reviews a fork — see
   [Fork pull requests](#fork-pull-requests).
 - **OpenCode-only** (only `CRYSK_OPENCODE_*` secrets, no Claude secret) counts as a credential and
-  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge (which runs
-  only on Claude) joins the plan only when `models.judge` names it or another step runs on Claude, and then
-  needs a Claude secret. A plan that sends a step to the Claude CLI with no Claude
+  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge runs on its
+  profile's judge model: on `claude` it joins the plan only when `models.judge` names it or another step runs
+  on Claude, and then needs a Claude secret; on `openai` it runs on Terra with the OpenAI secret. A plan that sends a step to the Claude CLI with no Claude
   credential stops before it spends.
+- **`profile: openai`** (the `profile` input from `vars.CRYSK_PROFILE`, or the platform, which sends it only
+  to an engine that lists `profile` in `X-Crysk-Capabilities`) runs every step on OpenAI through OpenCode. It needs
+  `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH` and installs the OpenCode CLI. On a
+  repository connected to the platform it also skips the Claude CLI, unless a `models` entry names a Claude
+  model or a custom `agents_dir` may apply; a standalone workflow still installs the Claude CLI, unused. See
+  [Profiles](configuration.md#profiles).
 - **Mismatch fails closed:** an OpenCode model with no secret for its provider gets a notice at setup, and
   then the review **fails** for that provider's missing record ([`CRYSK-CRED-UNUSABLE`](#crysk-cred-unusable)),
   rather than skipping as a clean review, unless the provider serves that model free.
@@ -815,7 +823,7 @@ message. The provider's endpoints, client id, permanent codes and where its acco
 In GitHub Actions, pull requests originating from forks do not receive repository secrets (the
 `CRYSK_*` secrets). This is GitHub's intentional security boundary to prevent untrusted pull requests from
 exfiltrating credentials or consuming API budget. Repository **variables** (`CRYSK_MODELS`,
-`CRYSK_CREDENTIALS`, `CRYSK_OPENCODE_PROVIDERS`) are visible; that is why they must not contain credentials,
+`CRYSK_CREDENTIALS`, `CRYSK_PROFILE`, `CRYSK_OPENCODE_PROVIDERS`) are visible; that is why they must not contain credentials,
 and why a model name or effort that looks like a credential is refused.
 
 So the generated workflow skips a fork's `pull_request` runs: they could never authenticate. To review
@@ -1468,6 +1476,7 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `operation` | `review` | `review` reviews a pull request; `refresh-credential` renews a subscription login, and only the Crysk platform dispatches it. See [Subscription logins](#subscription-logins). Empty is a review. |
 | `refresh-provider` | empty | With `operation: refresh-credential`, the OpenCode provider id whose login is renewed (`openai`). |
 | `credentials` | empty | The Claude credential order, as JSON (`{"claude": ["subscription", "api_key"]}`), from `vars.CRYSK_CREDENTIALS`. Empty: the subscription first. Ignored like `models`. |
+| `profile` | empty | The model profile, `claude` or `openai`, from `vars.CRYSK_PROFILE`. `models` still wins role by role. An unknown profile fails the run (`CRYSK-CONFIG-INVALID`). Empty: `claude`. Ignored like `models`. |
 
 ## Error codes
 
@@ -1958,6 +1967,30 @@ gh variable set CRYSK_CREDENTIALS --body "$(jq -c . credentials.json)"
 ```
 
 The workflow passes it as `credentials: ${{ vars.CRYSK_CREDENTIALS }}`.
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+#### `profile-input`
+
+The workflow's `profile` input, filled from the `CRYSK_PROFILE` variable, is not a known profile. Crysk names the input and never echoes its value.
+
+**What:** The profile input is invalid: {detail}
+
+**Why:** Crysk refuses to guess which models the review should run
+
+**Fix:**
+
+Set the variable to a known profile, for example:
+
+```bash
+gh variable set CRYSK_PROFILE --body openai
+```
+
+The workflow passes it as `profile: ${{ vars.CRYSK_PROFILE }}`.
 
 Then re-run the workflow:
 

@@ -47,11 +47,12 @@ export type ErrorClass =
     }
   | {
       kind: "config-parse";
-      // `models-input` and `credentials-input`: the setup step's reading of the
-      // `models` and `credentials` inputs (D1), never the CLI's.
+      // `models-input`, `credentials-input` and `profile-input`: the setup
+      // step's reading of those inputs (D1), never the CLI's.
       source:
         | "models-input"
         | "credentials-input"
+        | "profile-input"
         | "repo-config"
         | "person-config"
         | "extra-hunters";
@@ -508,7 +509,9 @@ function parseSetupClass(value: unknown): ErrorClass | undefined {
   if (!isRecordObject(value)) return undefined;
   if (
     value.kind === "config-parse" &&
-    (value.source === "models-input" || value.source === "credentials-input")
+    (value.source === "models-input" ||
+      value.source === "credentials-input" ||
+      value.source === "profile-input")
   ) {
     return { kind: "config-parse", source: value.source };
   }
@@ -864,6 +867,7 @@ export function codeOf(cls: ErrorClass): ErrorCode {
       switch (cls.source) {
         case "models-input":
         case "credentials-input":
+        case "profile-input":
         case "repo-config":
         case "person-config":
           return "CRYSK-CONFIG-INVALID";
@@ -999,6 +1003,7 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
       switch (cls.source) {
         case "models-input":
         case "credentials-input":
+        case "profile-input":
         case "repo-config":
         case "person-config":
         case "extra-hunters":
@@ -1350,6 +1355,7 @@ const OPENCODE_CREDENTIAL_FIXES = [
 // the inputs above. The scaffolded workflow (src/ci/setup.ts) writes these lines, so
 // a fix that quotes them cannot disagree with the file the person has.
 export const MODELS_INPUT_LINE = "models: $" + "{{ vars.CRYSK_MODELS }}";
+export const PROFILE_INPUT_LINE = "profile: $" + "{{ vars.CRYSK_PROFILE }}";
 export const CREDENTIALS_INPUT_LINE =
   "credentials: $" + "{{ vars.CRYSK_CREDENTIALS }}";
 // One line of the crysk-secrets input as a workflow writes it, spliced like the
@@ -1674,6 +1680,20 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         ],
         annotationFix:
           "fix the credentials JSON ({detail}) and set it again with `gh variable set CRYSK_CREDENTIALS`, the variable the workflow passes as `vars.CRYSK_CREDENTIALS`",
+      },
+      // The `profile` input, from vars.CRYSK_PROFILE (openai-profile S6).
+      "profile-input": {
+        what: "The profile input is invalid: {detail}",
+        why: "Crysk refuses to guess which models the review should run",
+        fixes: [
+          "Set the variable to a known profile, for example:",
+          "$ gh variable set CRYSK_PROFILE --body openai",
+          `The workflow passes it as \`${PROFILE_INPUT_LINE}\`.`,
+          "Then re-run the workflow:",
+          "$ gh run rerun {runId}",
+        ],
+        annotationFix:
+          "set a known profile ({detail}) with `gh variable set CRYSK_PROFILE`, the variable the workflow passes as `vars.CRYSK_PROFILE`",
       },
     },
   },

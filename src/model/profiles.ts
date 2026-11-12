@@ -1,4 +1,6 @@
 import type { Effort } from "./catalog";
+import { CLAUDE_PROFILE } from "./profiles/claude";
+import { OPENAI_PROFILE } from "./profiles/openai";
 
 // Model profiles (odd/tasks/model-profiles.md S1-S3): which model and effort
 // each step role runs, as data. Claude is one profile among others and the
@@ -7,14 +9,15 @@ import type { Effort } from "./catalog";
 //
 // Resolution per step (routing.ts, resolveStepChoices): `--model` > the spec's
 // own model > `models[role]` > `models.default` > a user or lab prompt set's
-// frontmatter > the active profile > `claude`. A prompt set its caller marks
-// as the bundled one (`bundledAgents`) takes its routing from the profile,
+// frontmatter > the active profile > the fallback profile. A prompt set its
+// caller marks as the bundled one (`bundledAgents`) takes its routing from the profile,
 // never from its own frontmatter. Phase 1: no production caller sets that
 // flag yet, so production still reads the bundled frontmatter, which equals
 // this profile (test/fixtures/model-profiles/baseline proves both paths).
 //
-// No value import on purpose: catalog.ts reads its role efforts from the
-// `claude` profile, so a value import back from there would be a load cycle.
+// Only a type import from catalog.ts on purpose: catalog.ts reads its role
+// efforts from the fallback profile, so a value import back from there would
+// be a load cycle. Profile modules import only types from this file.
 
 // The roles a profile assigns. `hunter` covers every `hunter.<key>` the
 // profile does not name in `hunters`. `refuter` covers the verifier and the
@@ -33,12 +36,14 @@ export interface ProfileRoute {
   // A model name in the new form (`claude:sonnet-latest`,
   // `opencode:openai/gpt-5`), the same names `models` takes.
   readonly model: string;
-  readonly effort: Effort;
+  // Absent: no effort is sent, so the model runs at its provider's default
+  // level (an OpenCode route gets no variant).
+  readonly effort?: Effort;
 }
 
 export interface ModelProfile {
   readonly id: string;
-  // A role the profile leaves out falls back to the `claude` profile's.
+  // A role the profile leaves out falls back to the fallback profile's.
   readonly roles: Readonly<Partial<Record<ProfileRole, ProfileRoute>>>;
   // Per-hunter overrides, keyed by specialty (`logic`, `parity`, ...).
   readonly hunters?: Readonly<Record<string, ProfileRoute>>;
@@ -49,9 +54,14 @@ export interface ModelProfile {
   // `claude` uses it. A user `agents_dir` still outranks it for the five
   // agent files.
   readonly promptSet?: string;
-  // What was measured on the profile's models (S5). Absent: `claude`'s
-  // measurements, as a role the profile leaves out takes `claude`'s route.
+  // What was measured on the profile's models (S5). Absent: the fallback
+  // profile's measurements, as a role the profile leaves out takes its route.
   readonly measured?: MeasuredFacts;
+  // The models the materiality judge may run on when nothing was measured on
+  // the profile's models: an owner's choice, recorded as one and never as a
+  // measurement (openai-profile S9). `measured.judgeModels` wins when both
+  // are set. Absent: the measured list, else the fallback profile's.
+  readonly judgeModels?: readonly string[];
 }
 
 // Facts a lab run established for a profile, read by the gates that may only
@@ -60,45 +70,25 @@ export interface MeasuredFacts {
   // The model names (as `models` writes them) the materiality judge was
   // measured on. `models.judge` may pick among these only, and a plan's judge
   // runs only on one of their routes (routing.ts, judgeModelChoice and
-  // isMeasuredJudgeRoute). Absent: `claude`'s list.
+  // isMeasuredJudgeRoute). Absent: the fallback profile's list.
   readonly judgeModels?: readonly string[];
 }
 
-// Exactly what 4898e1b4 runs with no configuration, read off the bundled
-// prompts' frontmatter (prompts/default/*.md, consolidate.md, summarizer.md),
-// the old DEFAULT_SCOUT_MODEL / DEFAULT_CONSOLIDATE_MODEL /
-// DEFAULT_CONSOLIDATE_EFFORT / DEFAULT_SUMMARY_MODEL / MATERIALITY_JUDGE_MODEL
-// constants and ROLE_EFFORT (catalog.ts, where the #299 evidence for the
-// hunter and refuter levels lives). Pinned by
-// test/fixtures/model-profiles/baseline and preflight-bundled-prompts.test.ts.
-export const CLAUDE_PROFILE: ModelProfile = Object.freeze({
-  id: "claude",
-  roles: Object.freeze({
-    hunter: Object.freeze({ model: "claude:sonnet-latest", effort: "xhigh" }),
-    refuter: Object.freeze({ model: "claude:opus-latest", effort: "high" }),
-    consolidate: Object.freeze({
-      model: "claude:sonnet-latest",
-      effort: "high",
-    }),
-    scout: Object.freeze({ model: "claude:sonnet-latest", effort: "high" }),
-    summary: Object.freeze({ model: "claude:haiku-latest", effort: "high" }),
-    judge: Object.freeze({ model: "claude:sonnet-latest", effort: "high" }),
-  }),
-  // The judge was measured on Claude sonnet and opus through the Claude Code
-  // CLI (same bundled prompt, same bar; both passed, lab bench/METRICS.md
-  // 2026-11-01); sonnet was chosen because it costs half for a difference
-  // within one run's noise.
-  measured: Object.freeze({
-    judgeModels: Object.freeze(["claude:sonnet-latest", "claude:opus-latest"]),
-  }),
-} satisfies ModelProfile);
-
-export const DEFAULT_PROFILE_ID = CLAUDE_PROFILE.id;
-
-// THE registry. Phase 1 has no user-facing `profile` key, so `claude` is always
-// the active profile outside tests.
+// THE registry: every profile the engine knows, each one data in its own
+// module under src/model/profiles/. Engine code reads the active profile and
+// never imports a profile module; only this file does (pinned by
+// test/architecture/profile-registry.test.ts). Adding a profile is one module
+// plus one line here.
 export const MODEL_PROFILES: Readonly<Record<string, ModelProfile>> =
-  Object.freeze({ [CLAUDE_PROFILE.id]: CLAUDE_PROFILE });
+  Object.freeze({
+    [CLAUDE_PROFILE.id]: CLAUDE_PROFILE,
+    [OPENAI_PROFILE.id]: OPENAI_PROFILE,
+  });
+
+// The profile a run uses when nothing chooses one, and the one that fills a
+// role another profile leaves out. Being the fallback is the only thing that
+// sets it apart from any other profile.
+export const FALLBACK_PROFILE_ID = "claude";
 
 export function modelProfile(id: string): ModelProfile {
   const profile = MODEL_PROFILES[id];
@@ -110,8 +100,25 @@ export function modelProfile(id: string): ModelProfile {
   return profile;
 }
 
+export const FALLBACK_PROFILE: ModelProfile = modelProfile(FALLBACK_PROFILE_ID);
+
+// The active profile for a config's `profile` value (openai-profile S1, S3):
+// the registered one, or the fallback when the config names none. The parser
+// already refused an unknown id, so one here is a programming error.
+export function resolveProfile(id: string | undefined): ModelProfile {
+  return id === undefined ? FALLBACK_PROFILE : modelProfile(id);
+}
+
+// What the `profile` key accepts, for the config parser and `crysk config`.
+export function profileIdProblem(value: unknown): string | undefined {
+  const known = `profile must be one of ${Object.keys(MODEL_PROFILES).join(", ")}`;
+  if (typeof value !== "string") return known;
+  return Object.hasOwn(MODEL_PROFILES, value) ? undefined : known;
+}
+
 // The route a profile gives a step role: `hunter.<key>`, or a fixed role. A
-// role the profile leaves out falls back to `claude` (S3's last seat).
+// role the profile leaves out falls back to the fallback profile's (S3's last
+// seat).
 export function profileRoute(
   profile: ModelProfile,
   role: string,
@@ -120,32 +127,79 @@ export function profileRoute(
     const key = role.slice("hunter.".length);
     const own = profile.hunters?.[key] ?? profile.roles.hunter;
     if (own !== undefined) return own;
-    return CLAUDE_PROFILE.hunters?.[key] ?? claudeRoute("hunter");
+    return FALLBACK_PROFILE.hunters?.[key] ?? fallbackRoute("hunter");
   }
   if (!isProfileRole(role)) {
     throw new Error(`no profile role "${role}"`);
   }
-  return profile.roles[role] ?? claudeRoute(role);
+  return profile.roles[role] ?? fallbackRoute(role);
 }
 
-// The models a profile's materiality judge was measured on (S5). A profile
-// that measured nothing inherits `claude`'s list, so it judges only where
-// `claude` would: a judge on an unmeasured model is a different judge.
-export function profileJudgeModels(profile: ModelProfile): readonly string[] {
-  const own = profile.measured?.judgeModels;
+// The effort a role runs at wherever an engine path needs one: the Claude Code
+// launch flag and the recorded step. The profile's own, else the fallback
+// profile's for the role. An OpenCode route never gets this one: there only
+// the profile's own effort becomes the variant (routing.ts, profileSeat), so a
+// role the profile gives no effort runs at the provider's default level.
+export function profileRoleEffort(profile: ModelProfile, role: string): Effort {
+  const own = profileRoute(profile, role).effort;
   if (own !== undefined) return own;
-  const claude = CLAUDE_PROFILE.measured?.judgeModels;
-  if (claude === undefined) throw new Error("claude profile lacks judgeModels");
-  return claude;
+  const fallback = profileRoute(FALLBACK_PROFILE, role).effort;
+  if (fallback === undefined) {
+    throw new Error(
+      `${FALLBACK_PROFILE.id} profile lacks an effort for ${role}`,
+    );
+  }
+  return fallback;
+}
+
+// Every model a profile's routes name, the fallback profile's for a role it
+// leaves out: what the CI steps and the doctor read to decide which CLIs a run
+// may need (openai-profile S6). The judge is included: it may join a plan.
+export function profileModels(profile: ModelProfile): string[] {
+  return [
+    ...PROFILE_ROLES.map((role) => profileRoute(profile, role).model),
+    ...Object.values(profile.hunters ?? {}).map((route) => route.model),
+  ];
+}
+
+// Whether a profile id names a registered profile whose every route runs on
+// OpenCode: what the CI steps that run before `bun install` read to name the
+// backend of a standalone `profile` input, with no profile named here.
+export function profileRunsOnlyOnOpenCode(id: unknown): boolean {
+  if (typeof id !== "string") return false;
+  const trimmed = id.trim();
+  if (!Object.hasOwn(MODEL_PROFILES, trimmed)) return false;
+  const profile = MODEL_PROFILES[trimmed];
+  return (
+    profile !== undefined &&
+    profileModels(profile).every((model) => model.startsWith("opencode:"))
+  );
+}
+
+// The models a profile's materiality judge may run on (S5): what was measured
+// on it, else the models its owner chose without a measurement (openai-profile
+// S9), else the fallback profile's list, so a profile with neither judges only
+// where the fallback would: a judge on an unmeasured model is a different
+// judge.
+export function profileJudgeModels(profile: ModelProfile): readonly string[] {
+  const own = profile.measured?.judgeModels ?? profile.judgeModels;
+  if (own !== undefined) return own;
+  const fallback = FALLBACK_PROFILE.measured?.judgeModels;
+  if (fallback === undefined) {
+    throw new Error(`${FALLBACK_PROFILE.id} profile lacks judgeModels`);
+  }
+  return fallback;
 }
 
 function isProfileRole(role: string): role is ProfileRole {
   return (PROFILE_ROLES as readonly string[]).includes(role);
 }
 
-function claudeRoute(role: ProfileRole): ProfileRoute {
-  const route = CLAUDE_PROFILE.roles[role];
-  if (route === undefined) throw new Error(`claude profile lacks ${role}`);
+function fallbackRoute(role: ProfileRole): ProfileRoute {
+  const route = FALLBACK_PROFILE.roles[role];
+  if (route === undefined) {
+    throw new Error(`${FALLBACK_PROFILE.id} profile lacks ${role}`);
+  }
   return route;
 }
 

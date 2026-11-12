@@ -9,7 +9,7 @@ import {
 } from "#model/free-discovery";
 import type { ModelsConfig } from "#model/model-name";
 import {
-  CLAUDE_PROFILE,
+  FALLBACK_PROFILE,
   type ModelProfile,
   profileModelAlias,
   profileRoute,
@@ -903,21 +903,31 @@ export function buildDoctorRoutePlan(
     readonly profile?: ModelProfile;
   } = {},
 ): ResolvedRoutePlan {
-  const profile = options.profile ?? CLAUDE_PROFILE;
-  const profileAlias = (role: string) =>
-    profileModelAlias(profileRoute(profile, role).model);
+  const profile = options.profile ?? FALLBACK_PROFILE;
+  // A Claude route keeps the alias it always probed. Any other route takes the
+  // profile's seat (bundled), so its effort becomes the same OpenCode variant a
+  // review's route carries and the probe checks the binding the review opens.
+  const agent = (key: string, role: "hunter" | "refuter", seat: string) => {
+    const model = profileRoute(profile, seat).model;
+    return model.startsWith("claude:")
+      ? { key, role, model: profileModelAlias(model) }
+      : { key, role };
+  };
   const base = buildResolvedRoutePlan({
     agents: [
-      {
-        key: "reliability",
-        role: "hunter",
-        model: profileAlias("hunter.reliability"),
-      },
-      { key: "refuter", role: "refuter", model: profileAlias("refuter") },
+      agent("reliability", "hunter", "hunter.reliability"),
+      agent("refuter", "refuter", "refuter"),
     ],
+    bundledAgents: true,
+    profile,
   });
   if (models === undefined) return base;
-  const baseSteps = options.claudeRequired === false ? [] : base.steps;
+  // A profile step stays when it is not on Claude (openai-profile S6): under
+  // `openai` the profile's own steps are the routes a review runs.
+  const baseSteps =
+    options.claudeRequired === false
+      ? base.steps.filter((step) => step.route.backend !== "claude-code")
+      : base.steps;
   const distinct = new Map<string, ResolvedStepRoute>();
   for (const entry of Object.values(models).flat()) {
     const step = resolveModelEntryRoute("doctor-model", "other", entry);
@@ -949,6 +959,8 @@ export async function collectDoctorExactBindingReports(input: {
   // Whether any step the configuration resolves runs on the Claude CLI
   // (doctor.ts reviewNeedsClaude). Absent: required, as before.
   readonly claudeRequired?: boolean;
+  // The configuration's profile (openai-profile S6). Absent: the fallback.
+  readonly profile?: ModelProfile;
   readonly authorityDeps?: ResolveRunnerAuthorityDeps;
   readonly env?: RunnerAuthorityOptions["env"];
   readonly observeOpenCodeIdentity?: OpenCodeIdentityObserver;
@@ -956,12 +968,12 @@ export async function collectDoctorExactBindingReports(input: {
     import("./transports/opencode-client").OpenCodeSdkLike
   >;
 }): Promise<readonly ExactBindingCapabilityReport[]> {
-  const plan = buildDoctorRoutePlan(
-    input.models,
-    input.claudeRequired === undefined
+  const plan = buildDoctorRoutePlan(input.models, {
+    ...(input.claudeRequired === undefined
       ? {}
-      : { claudeRequired: input.claudeRequired },
-  );
+      : { claudeRequired: input.claudeRequired }),
+    ...(input.profile === undefined ? {} : { profile: input.profile }),
+  });
   // U3: the doctor binds OpenCode routes the way a review's admission does, so
   // it reads the setup step's CRYSK_* manifest too.
   const openCodeSecretNames = planRoutes(plan).some(

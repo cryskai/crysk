@@ -53,22 +53,25 @@ describe("workflow variants: the real scaffold", () => {
     }
   });
 
-  test("no-credential: no credential input reaches the action, and models and credentials are kept", () => {
+  test("no-credential: no credential input reaches the action, and models, credentials and profile are kept", () => {
     const inputs = actionWith(workflowVariant("no-credential", REF));
     // github-token stays: it is the runner's own GITHUB_TOKEN, which the
     // publisher uses to post the outcome comment and the status. It names no
     // model route, so it is not a credential the variant is testing.
     // `mode` is the scaffold's explicit gate mode (S4): not a credential, kept.
-    // `models` and `credentials` name models and an order, never a credential.
+    // `models`, `credentials` and `profile` name models, an order and a
+    // profile id, never a credential.
     expect(Object.keys(inputs).sort()).toEqual([
       "budget-usd",
       "credentials",
       "github-token",
       "mode",
       "models",
+      "profile",
     ]);
     expect(inputs.models).toBe(`\${{ vars.CRYSK_MODELS }}`);
     expect(inputs.credentials).toBe(`\${{ vars.CRYSK_CREDENTIALS }}`);
+    expect(inputs.profile).toBe(`\${{ vars.CRYSK_PROFILE }}`);
   });
 
   test("no-credential removes exactly the crysk-secrets input and its CRYSK_* lines, and nothing else", () => {

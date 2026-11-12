@@ -19,12 +19,15 @@ import {
   parseModelsConfig,
 } from "#model/model-name";
 import {
-  CLAUDE_PROFILE,
+  FALLBACK_PROFILE,
   type ModelProfile,
+  profileIdProblem,
+  profileJudgeModels,
   profileModelAlias,
   profileRoute,
+  resolveProfile,
 } from "#model/profiles";
-import { judgeModelChoice, MEASURED_JUDGE_MODELS } from "#model/routing";
+import { judgeModelChoice } from "#model/routing";
 import { POST_MIN_SEVERITIES, type PostMinSeverity } from "#pr/post-floor";
 import {
   type ProfilePromptSets,
@@ -74,7 +77,7 @@ export const DEFAULT_HEAD_REF = "HEAD";
 // which prompts/summarizer.md's frontmatter also names while it keeps the
 // line. This value is only the honest model label shown in a preflight plan.
 export const DEFAULT_SUMMARY_MODEL = profileModelAlias(
-  profileRoute(CLAUDE_PROFILE, "summary").model,
+  profileRoute(FALLBACK_PROFILE, "summary").model,
 );
 
 export interface CliOptions {
@@ -1737,11 +1740,11 @@ export function resolveAgentsDirSetting(input: {
   // agent override (`claude`, or a set that only changes root prompts) the
   // resolution below is today's, byte for byte.
   const overrides = profilePromptSet(
-    input.profile ?? CLAUDE_PROFILE,
+    input.profile ?? FALLBACK_PROFILE,
     Object.keys(assets.bundledAgentFiles),
     input.promptSets,
   ).agents;
-  const setName = (input.profile ?? CLAUDE_PROFILE).promptSet;
+  const setName = (input.profile ?? FALLBACK_PROFILE).promptSet;
   if (Object.keys(overrides).length > 0 && setName !== undefined) {
     // A MAP, like the compiled binary's: the files now live in two places, so
     // there is no single directory to join a basename onto.
@@ -2244,6 +2247,9 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   // model or another bill. Both are PERSON_ONLY_KEYS, refused in a repo file.
   models: "person",
   credentials: "person",
+  // Which model profile the review runs (openai-profile S1): it picks every
+  // step's model and so the bill, like `models`, so it is person-only too.
+  profile: "person",
   max_verification_steps: "capped",
   max_concurrent_steps: "capped",
   max_changed_lines: "capped",
@@ -2289,6 +2295,9 @@ export interface LocalConfig {
   models?: ModelsConfig;
   // Which Claude credential is used, in order (S5).
   credentials?: CredentialsConfig;
+  // The model profile id (openai-profile S1). Absent: the fallback profile.
+  // `models` still outranks it role by role.
+  profile?: string;
   // Item 7: unattended bound on the verify queue. Absent means
   // DEFAULT_MAX_VERIFICATION_STEPS. 0 is legal — every queued prior lands
   // `unconfirmed` (the pause switch, same shape as watch daily_cap).
@@ -2366,8 +2375,8 @@ const KNOWN_CONFIG_KEYS = new Set<string>(Object.keys(CONFIG_DIRECTION));
 
 // Keys a committed repo file may never set. Wider than "direction is person":
 // `agents_dir` and `post_min_severity` are person-direction keys a repo file
-// may still name. These two choose a model or a bill.
-const PERSON_ONLY_KEYS = new Set<string>(["models", "credentials"]);
+// may still name. These three choose a model or a bill.
+const PERSON_ONLY_KEYS = new Set<string>(["models", "credentials", "profile"]);
 
 const LOCAL_CONFIG_KEYS = new Set<string>(
   Object.keys(CONFIG_DIRECTION).filter((key) => !PERSON_ONLY_KEYS.has(key)),
@@ -2544,6 +2553,7 @@ function parseConfigLayer(
       throw new CliUsageError(`suspicion_priors[${i}].reason required`);
     }
   }
+  const profile = parseProfile(config.profile, file);
   const summaryParse = parseSummaryConfig(config.summary, file);
   const summary = summaryParse?.summary;
   let models = parseModels(config.models, file);
@@ -2568,13 +2578,14 @@ function parseConfigLayer(
   }
   // The judge's list is kept as written (the plan skips what it cannot
   // use), but a model it will never run on is said out loud here, once.
-  // Checked against the `claude` profile: phase 1 has no `profile` key, so
-  // it is the active one for every config read here (model-profiles S5).
+  // Checked against this file's own profile: `profile` and `models` are both
+  // person-only, so they are always read from the same file.
   if (models?.judge !== undefined) {
-    const { model, dropped } = judgeModelChoice(models);
+    const active = resolveProfile(profile);
+    const { model, dropped } = judgeModelChoice(models, active);
     if (dropped.length > 0) {
       warnings?.push(
-        `${file}: models.judge skips ${dropped.join(", ")}: the materiality judge runs only on ${MEASURED_JUDGE_MODELS.join(" or ")}${model === undefined ? ", so it stands down" : ""}.`,
+        `${file}: models.judge skips ${dropped.join(", ")}: the materiality judge runs only on ${profileJudgeModels(active).join(" or ")}${model === undefined ? ", so it stands down" : ""}.`,
       );
     }
   }
@@ -2664,6 +2675,7 @@ function parseConfigLayer(
     ...(summary === undefined ? {} : { summary }),
     ...(models === undefined ? {} : { models }),
     ...(credentials === undefined ? {} : { credentials }),
+    ...(profile === undefined ? {} : { profile }),
     ...(maxVerificationSteps === undefined
       ? {}
       : { max_verification_steps: maxVerificationSteps }),
@@ -2705,6 +2717,16 @@ function parseConfigLayer(
       ? {}
       : { ci_admission_observe_only: ciAdmissionObserveOnly }),
   };
+}
+
+// The `profile` id (openai-profile S1): one of the registered profiles.
+function parseProfile(value: unknown, file: string): string | undefined {
+  if (value === undefined) return undefined;
+  const problem = profileIdProblem(value);
+  if (problem === undefined) return value as string;
+  const got =
+    typeof value === "string" ? ` (got "${redactConfigValue(value)}")` : "";
+  throw new CliUsageError(`${file} ${problem}${got}`);
 }
 
 // The `models` object (S1, S3). Its rules live in model/model-name.ts; this
@@ -3125,6 +3147,11 @@ export function mergeConfig(
     CONFIG_DIRECTION.credentials,
     (layer) => layer.credentials,
   );
+  const profile = foldKey(
+    layers,
+    CONFIG_DIRECTION.profile,
+    (layer) => layer.profile,
+  );
   const ciReviewPolicy = foldKey(
     layers,
     CONFIG_DIRECTION.ci_review_policy,
@@ -3190,6 +3217,7 @@ export function mergeConfig(
     ...(credentials.value === undefined
       ? {}
       : { credentials: credentials.value }),
+    ...(profile.value === undefined ? {} : { profile: profile.value }),
     ...(maxSteps.value === undefined
       ? {}
       : { max_verification_steps: maxSteps.value }),
@@ -3245,6 +3273,7 @@ export function mergeConfig(
     summary: { enabled: summaryEnabled.source },
     models: models.source,
     credentials: credentials.source,
+    profile: profile.source,
     max_verification_steps: maxSteps.source,
     max_concurrent_steps: maxConcurrentSteps.source,
     max_changed_lines: maxLines.source,

@@ -1197,6 +1197,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
           CRYSK_SECRETS_INPUT: "",
           MODELS_INPUT: "",
           CREDENTIALS_INPUT: "",
+          PROFILE_INPUT: "",
           // Empty, so the OpenCode auth file resolves under this test's HOME
           // and never at a data home the host may have set.
           XDG_DATA_HOME: "",
@@ -1627,6 +1628,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
             value !== undefined &&
             ("models" in value ||
               "credentials" in value ||
+              "profile" in value ||
               "max_changed_lines" in value),
         );
     const outputLines = (result: { output: string }) =>
@@ -1787,6 +1789,35 @@ describe("setup.ts reads the crysk-secrets input", () => {
       }
     });
 
+    // openai-profile S6: the profile input, from vars.CRYSK_PROFILE.
+    test("a profile input reaches the personal file and builds its providers' auth", async () => {
+      const result = await runSetup({
+        PROFILE_INPUT: " openai ",
+        CRYSK_SECRETS_INPUT:
+          "CRYSK_OPENCODE_OPENAI_API_KEY=SENTINEL-OPENAI-55aa",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(personOf(result)).toEqual({ profile: "openai" });
+      expect(Object.keys(result.auth ?? {})).toEqual(["openai"]);
+      expect(result.auth?.openai?.type).toBe("api");
+      expect(outputLines(result)).toContain("opencode-auth-file=true");
+      expect(outputLines(result)).toContain("opencode-models=true");
+      expect(result.record).toBeUndefined();
+    });
+
+    test("an unknown profile input fails as profile-input, never echoing it", async () => {
+      const result = await runSetup({ PROFILE_INPUT: "SENTINEL-PROFILE-55aa" });
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.record ?? "null")).toEqual({
+        v: 1,
+        cls: { kind: "config-parse", source: "profile-input" },
+        detail:
+          "the profile input is not a known profile (the setup step's log names the known ones)",
+      });
+      expect((result.record ?? "").includes("SENTINEL")).toBe(false);
+      expect(personOf(result)).toBeUndefined();
+    });
+
     test("with a platform person layer, the platform wins whole and the inputs are ignored with a warning", async () => {
       const result = await runSetup(
         {
@@ -1799,7 +1830,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
       );
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toContain(
-        "::warning::The models and credentials inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.",
+        "::warning::The models, credentials and profile inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.",
       );
       expect(result.stderr.includes("SENTINEL")).toBe(false);
       expect(personOf(result)).toEqual({
@@ -2071,6 +2102,18 @@ describe("ci init prints the CRYSK_* secrets and the workflow variables (CLI)", 
     expect(output).not.toMatch(
       /ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|OPENCODE_AUTH_JSON/,
     );
+  });
+
+  // openai-profile S6: a profile alone sets CRYSK_PROFILE and its providers.
+  test("a person config with profile openai gets the profile variable and the OpenAI secret", async () => {
+    const { output, code } = await runInit({}, { profile: "openai" });
+    expect(code).toBe(0);
+    expect(output).toContain("$ gh variable set CRYSK_PROFILE --body openai");
+    expect(output).toContain("$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY");
+    expect(output).toContain(
+      `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,
+    );
+    expect(output).not.toContain("CRYSK_MODELS");
   });
 
   test("the judge's models are not forwarded, and OpenAI also gets its subscription command", async () => {
