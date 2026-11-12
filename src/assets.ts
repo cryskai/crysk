@@ -83,12 +83,19 @@ export function resolveBundledFilePath(
   filePath: string,
   moduleDir: string = import.meta.dir,
 ): string {
-  return path.isAbsolute(filePath) ? filePath : path.resolve(moduleDir, filePath);
+  return path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(moduleDir, filePath);
 }
 
-function resolveBundledFileMap(files: Record<string, string>): Record<string, string> {
+function resolveBundledFileMap(
+  files: Record<string, string>,
+): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(files).map(([name, file]) => [name, resolveBundledFilePath(file)]),
+    Object.entries(files).map(([name, file]) => [
+      name,
+      resolveBundledFilePath(file),
+    ]),
   );
 }
 

@@ -16,7 +16,7 @@ describe("bundled engine assets", () => {
       writeFileSync(
         probeSource,
         [
-          'import { resolveEngineAssets } from ' + JSON.stringify(path.join(repo, "src/assets.ts")) + ';',
+          `import { resolveEngineAssets } from ${JSON.stringify(path.join(repo, "src/assets.ts"))};`,
           'import { existsSync } from "node:fs";',
           'import path from "node:path";',
           "const assets = resolveEngineAssets();",
@@ -32,22 +32,34 @@ describe("bundled engine assets", () => {
       );
 
       const build = Bun.spawnSync(
-        [process.execPath, "build", probeSource, "--target=bun", "--outdir", dist],
+        [
+          process.execPath,
+          "build",
+          probeSource,
+          "--target=bun",
+          "--outdir",
+          dist,
+        ],
         { cwd: repo, stdout: "pipe", stderr: "pipe" },
       );
       expect(build.exitCode, new TextDecoder().decode(build.stderr)).toBe(0);
 
-      const run = Bun.spawnSync([process.execPath, path.join(dist, "probe.js")], {
-        cwd: consumer,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const run = Bun.spawnSync(
+        [process.execPath, path.join(dist, "probe.js")],
+        {
+          cwd: consumer,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
       expect(run.exitCode, new TextDecoder().decode(run.stderr)).toBe(0);
       const files: Array<{ absolute: boolean; exists: boolean }> = JSON.parse(
         new TextDecoder().decode(run.stdout).trim(),
       );
       expect(files.length).toBeGreaterThan(5);
-      expect(files.every(({ absolute, exists }) => absolute && exists)).toBe(true);
+      expect(files.every(({ absolute, exists }) => absolute && exists)).toBe(
+        true,
+      );
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }
