@@ -1,7 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type ModelsConfig, modelsNeedOpenCode } from "#model/model-name";
+import { type ModelsConfig, routingNeedsOpenCode } from "#model/model-name";
+import {
+  FALLBACK_PROFILE,
+  type ModelProfile,
+  resolveProfile,
+} from "#model/profiles";
 import {
   exactBindingCapabilityIssues,
   type ProviderCapabilityReport,
@@ -104,19 +109,22 @@ export interface RunDoctorOptions {
 // (model-profiles S6): the route plan a review would build, every hunter of
 // the bundled spec, the refuter, consolidate, scout, summarizer and, with the
 // gate on, the materiality judge, resolved through `models` and the active
-// profile (`claude`). True whenever the answer is not proven: no `models`, a
-// plan that fails to build, or a bad CRYSK_EXTRA_HUNTERS. So zero-config and
+// profile. True whenever the answer is not proven: neither `models` nor a
+// `profile`, a plan that fails to build, or a bad CRYSK_EXTRA_HUNTERS. So zero-config and
 // every configuration naming a Claude model keep the CLI required.
 export function reviewNeedsClaude(input: {
   models: ModelsConfig | undefined;
+  // The config's `profile` (openai-profile S6). Absent: the fallback profile.
+  profile?: string;
   materialityGate?: boolean;
   env?: Record<string, string | undefined>;
 }): boolean {
-  if (input.models === undefined) return true;
+  if (input.models === undefined && input.profile === undefined) return true;
   try {
     const plan = buildResolvedRoutePlan({
       agents: localReviewSpec(input.env ?? process.env).agents,
       models: input.models,
+      profile: resolveProfile(input.profile),
       bundledAgents: true,
       summarizer: { bundled: true },
       scout: { bundled: true },
@@ -203,9 +211,13 @@ function pushProviderIssues(
 
 export function openCodeRoutingSdkCheck(input: {
   models: ModelsConfig | undefined;
+  // The configuration's profile (openai-profile S6). Absent: the fallback.
+  profile?: ModelProfile;
   sdkVersion: string | undefined;
 }): DoctorCheckItem | undefined {
-  if (!modelsNeedOpenCode(input.models)) return undefined;
+  if (!routingNeedsOpenCode(input.models, input.profile ?? FALLBACK_PROFILE)) {
+    return undefined;
+  }
   const version =
     typeof input.sdkVersion === "string" ? input.sdkVersion.trim() : "";
   if (version === SUPPORTED_OPENCODE_SDK_VERSION) return undefined;

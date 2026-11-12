@@ -26,7 +26,8 @@ import { LEGACY_HOME_DIR_NAME, resolveHomeDir } from "./brand-paths";
 import { loadGlobalConfigLayer } from "./config/config";
 import { runDoctor } from "./doctor";
 import { prheroLayout } from "./home-preflight";
-import { type ModelsConfig, modelsNeedOpenCode } from "./model/model-name";
+import { type ModelsConfig, routingNeedsOpenCode } from "./model/model-name";
+import { resolveProfile } from "./model/profiles";
 import {
   readInstalledOpenCodeSdkVersion,
   SUPPORTED_OPENCODE_SDK_VERSION,
@@ -656,14 +657,15 @@ export function spawnOpenCodeSdkInstaller(
   });
 }
 
-// The person file's `models`, the only layer that may hold them. A person
-// file that no longer parses (a removed `routing` key) throws here, and the
-// reconcile step records that message instead of crashing.
-async function readReconcileModels(
-  home: string,
-): Promise<ModelsConfig | undefined> {
+// The person file's `models` and `profile`, the only layer that may hold them.
+// A person file that no longer parses (a removed `routing` key) throws here,
+// and the reconcile step records that message instead of crashing.
+async function readReconcileModels(home: string): Promise<{
+  models: ModelsConfig | undefined;
+  profile: string | undefined;
+}> {
   const loaded = await loadGlobalConfigLayer(home);
-  return loaded.layer?.models;
+  return { models: loaded.layer?.models, profile: loaded.layer?.profile };
 }
 
 async function ensureOpenCodeSdkInstalled(options: {
@@ -673,8 +675,8 @@ async function ensureOpenCodeSdkInstalled(options: {
   which?: (bin: string) => string | null;
   spawnInstaller?: (argv: readonly string[]) => Promise<OpenCodeSdkSpawnResult>;
 }): Promise<void> {
-  const models = await readReconcileModels(options.home);
-  if (!modelsNeedOpenCode(models)) return;
+  const { models, profile } = await readReconcileModels(options.home);
+  if (!routingNeedsOpenCode(models, resolveProfile(profile))) return;
   // Install and the version check share this home. The no-arg reader uses
   // os.homedir(), which is a different tree whenever reconcile was given one.
   const nodeModulesDir = prheroLayout(options.home).nodeModulesDir;

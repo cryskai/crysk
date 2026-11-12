@@ -621,6 +621,64 @@ describe("platform review configuration", () => {
     );
   });
 
+  // openai-profile S6: the same table with a `profile`. A role `models` does
+  // not set runs the profile's model, so `openai` alone needs no Claude.
+  test.each<[string, unknown, unknown, boolean]>([
+    ["openai alone", undefined, "openai", false],
+    [
+      "openai with an OpenCode hunter",
+      { "hunter.logic": [OC] },
+      "openai",
+      false,
+    ],
+    [
+      "openai with a Claude summary",
+      { summary: ["claude:haiku-latest"] },
+      "openai",
+      true,
+    ],
+    [
+      "openai with a Claude fallback",
+      { refuter: ["opencode:openai/gpt-6.1-sol", "claude:opus-latest"] },
+      "openai",
+      true,
+    ],
+    [
+      "openai with a Claude judge",
+      { judge: ["claude:sonnet-latest"] },
+      "openai",
+      true,
+    ],
+    ["claude named", undefined, "claude", true],
+    ["claude with an OpenCode default", { default: [OC] }, "claude", false],
+    ["an unknown profile", undefined, "gemini", true],
+    ["a profile that is not a string", undefined, 3, true],
+  ])("%s: Claude route needed is %p", (_l, models, profile, expected) => {
+    expect(personModelsMayNeedClaude(models, profile)).toBe(expected);
+    if (typeof profile === "string" && profile !== "gemini") {
+      expect(
+        reviewNeedsClaude({ models: models as never, profile, env: {} }),
+      ).toBe(expected);
+    }
+  });
+
+  test("routing-opencode and routing-claude read the profile", async () => {
+    const dir = path.join(
+      mkdtempSync(path.join(tmpdir(), "platform-profile-")),
+      "crysk-platform",
+    );
+    const h = connect(
+      { person: { profile: "openai" }, repo: {} },
+      { configDir: dir },
+    );
+    expect(await h.run()).toBe(0);
+    const outputs = h.events.filter((e) => e.startsWith("output:routing-"));
+    expect(outputs).toEqual([
+      "output:routing-opencode=true\n",
+      "output:routing-claude=false\n",
+    ]);
+  });
+
   test.each<[string, unknown]>([
     ["a string", "opencode:x/y"],
     ["an array", [OC]],

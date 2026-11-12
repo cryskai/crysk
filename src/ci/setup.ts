@@ -74,6 +74,7 @@ import {
   parseModelName,
   parseModelsConfig,
 } from "#model/model-name";
+import { MODEL_PROFILES, profileModels } from "#model/profiles";
 import { parseGlobalConfig, parseLocalConfig } from "#review/preflight";
 import { commandForms } from "../brand";
 import {
@@ -853,6 +854,30 @@ export function openCodeProvidersOfModels(models: unknown): string[] {
   return [...providers].sort();
 }
 
+// The OpenCode providers the person layer's routing runs on (openai-profile
+// S6): its models', plus, for the roles `models` does not set (no `default`),
+// its `profile`'s. A profile the parser refused never reaches here.
+export function openCodeProvidersOfPerson(person: {
+  models?: unknown;
+  profile?: unknown;
+}): string[] {
+  const providers = new Set(openCodeProvidersOfModels(person.models));
+  const models = person.models as Record<string, unknown> | undefined;
+  const coversEveryRole = models !== undefined && models.default !== undefined;
+  const profile =
+    typeof person.profile === "string" &&
+    Object.hasOwn(MODEL_PROFILES, person.profile)
+      ? MODEL_PROFILES[person.profile]
+      : undefined;
+  if (!coversEveryRole && profile !== undefined) {
+    for (const model of profileModels(profile)) {
+      const parsed = parseModelName(model);
+      if (parsed.backend === "opencode") providers.add(parsed.provider);
+    }
+  }
+  return [...providers].sort();
+}
+
 // Whether an OpenCode route this run takes bills per token (cryskai/platform#12
 // item 5): an auth file exists AND some OpenCode provider among the run's
 // resolved routes, any step or fallback, binds an API key, by the same rule the
@@ -1040,7 +1065,7 @@ export async function materializeCiOpenCodeData(
     };
   }
 
-  const providers = openCodeProvidersOfModels(personBody.models);
+  const providers = openCodeProvidersOfPerson(personBody);
   const notices: string[] = [];
   const assembly =
     options.cryskSecrets === undefined

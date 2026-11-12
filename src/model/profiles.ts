@@ -147,6 +147,16 @@ export function profileRoleEffort(profile: ModelProfile, role: string): Effort {
   return fallback;
 }
 
+// Every model a profile's routes name, the fallback profile's for a role it
+// leaves out: what the CI steps and the doctor read to decide which CLIs a run
+// may need (openai-profile S6). The judge is included: it may join a plan.
+export function profileModels(profile: ModelProfile): string[] {
+  return [
+    ...PROFILE_ROLES.map((role) => profileRoute(profile, role).model),
+    ...Object.values(profile.hunters ?? {}).map((route) => route.model),
+  ];
+}
+
 // The models a profile's materiality judge was measured on (S5). A profile
 // that measured nothing inherits the fallback profile's list, so it judges
 // only where the fallback would: a judge on an unmeasured model is a

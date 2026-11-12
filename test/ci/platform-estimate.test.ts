@@ -48,7 +48,10 @@ describe("the estimate at the token exchange", () => {
       baseUrl: "https://platform.test",
       mask: () => {},
     });
-    expect(capability(platformCalls[0])).toBe("estimate");
+    expect(capability(platformCalls[0])?.split(",")).toEqual([
+      "estimate",
+      "profile",
+    ]);
     expect(result).toMatchObject({
       ok: true,
       estimate: { usdLow: 0.41, usdHigh: 0.87, basis: "history" },
@@ -160,18 +163,32 @@ describe("the plan's estimate line", () => {
 describe("platform.ts runs before `bun install`", () => {
   // ./platform-estimate is the one non-builtin: it imports nothing itself, so the
   // connect step still loads before `bun install` (as trigger.ts does ../brand).
-  test("it imports only runtime builtins, plus the import-free ./platform-estimate", () => {
+  test("it imports only runtime builtins, plus the import-free ./platform-estimate and profile registry", () => {
     const source = readFileSync(path.join(SRC_CI, "platform.ts"), "utf-8");
     const specifiers = [
       ...source.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gms),
     ].map((match) => match[1]);
     expect(specifiers.length).toBeGreaterThan(0);
     for (const specifier of specifiers) {
-      expect(specifier).toMatch(/^(node:|bun$|bun:|\.\/platform-estimate$)/);
+      expect(specifier).toMatch(
+        /^(node:|bun$|bun:|\.\/platform-estimate$|\.\.\/model\/profiles$)/,
+      );
     }
     expect(
       readFileSync(path.join(SRC_CI, "platform-estimate.ts"), "utf-8"),
     ).not.toMatch(/^\s*import\b/m);
+    // The profile registry's only value imports are its own profile modules,
+    // which import types alone (profile-registry.test.ts).
+    const registry = readFileSync(
+      path.join(SRC_CI, "..", "model", "profiles.ts"),
+      "utf-8",
+    );
+    const valueImports = [
+      ...registry.matchAll(/^import\s(?!type\s)[^;]*?from\s+"([^"]+)"/gms),
+    ].map((match) => match[1]);
+    for (const specifier of valueImports) {
+      expect(specifier).toMatch(/^\.\/profiles\/[a-z-]+$/);
+    }
   });
 });
 

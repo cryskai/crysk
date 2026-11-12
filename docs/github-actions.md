@@ -489,6 +489,11 @@ OpenCode-only `CRYSK_MODELS` included.
   only on Claude) joins the plan only when `models.judge` names it or another step runs on Claude, and then
   needs a Claude secret. A plan that sends a step to the Claude CLI with no Claude
   credential stops before it spends.
+- **`profile: openai`** in the person config (the platform sends it only to an engine that lists `profile`
+  in `X-Crysk-Capabilities`) runs every step on OpenAI through OpenCode. It needs
+  `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, installs the OpenCode CLI and skips the
+  Claude CLI unless a `models` entry names a Claude model. See
+  [Profiles](configuration.md#profiles).
 - **Mismatch fails closed:** an OpenCode model with no secret for its provider gets a notice at setup, and
   then the review **fails** for that provider's missing record ([`CRYSK-CRED-UNUSABLE`](#crysk-cred-unusable)),
   rather than skipping as a clean review, unless the provider serves that model free.

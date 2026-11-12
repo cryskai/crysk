@@ -917,7 +917,12 @@ export function buildDoctorRoutePlan(
     ],
   });
   if (models === undefined) return base;
-  const baseSteps = options.claudeRequired === false ? [] : base.steps;
+  // A profile step stays when it is not on Claude (openai-profile S6): under
+  // `openai` the profile's own steps are the routes a review runs.
+  const baseSteps =
+    options.claudeRequired === false
+      ? base.steps.filter((step) => step.route.backend !== "claude-code")
+      : base.steps;
   const distinct = new Map<string, ResolvedStepRoute>();
   for (const entry of Object.values(models).flat()) {
     const step = resolveModelEntryRoute("doctor-model", "other", entry);
@@ -949,6 +954,8 @@ export async function collectDoctorExactBindingReports(input: {
   // Whether any step the configuration resolves runs on the Claude CLI
   // (doctor.ts reviewNeedsClaude). Absent: required, as before.
   readonly claudeRequired?: boolean;
+  // The configuration's profile (openai-profile S6). Absent: the fallback.
+  readonly profile?: ModelProfile;
   readonly authorityDeps?: ResolveRunnerAuthorityDeps;
   readonly env?: RunnerAuthorityOptions["env"];
   readonly observeOpenCodeIdentity?: OpenCodeIdentityObserver;
@@ -956,12 +963,12 @@ export async function collectDoctorExactBindingReports(input: {
     import("./transports/opencode-client").OpenCodeSdkLike
   >;
 }): Promise<readonly ExactBindingCapabilityReport[]> {
-  const plan = buildDoctorRoutePlan(
-    input.models,
-    input.claudeRequired === undefined
+  const plan = buildDoctorRoutePlan(input.models, {
+    ...(input.claudeRequired === undefined
       ? {}
-      : { claudeRequired: input.claudeRequired },
-  );
+      : { claudeRequired: input.claudeRequired }),
+    ...(input.profile === undefined ? {} : { profile: input.profile }),
+  });
   // U3: the doctor binds OpenCode routes the way a review's admission does, so
   // it reads the setup step's CRYSK_* manifest too.
   const openCodeSecretNames = planRoutes(plan).some(

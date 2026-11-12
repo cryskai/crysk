@@ -1,6 +1,7 @@
 import os from "node:os";
 import { loadEffectiveConfig, resolveOptionalRepoRoot } from "#config/config";
-import { type ModelsConfig, modelsNeedOpenCode } from "#model/model-name";
+import { type ModelsConfig, routingNeedsOpenCode } from "#model/model-name";
+import { resolveProfile } from "#model/profiles";
 import { type CliOptions, resolveMaterialityGate } from "#review/preflight";
 import { styleEnabled, terminalWidth } from "#ui/primitives";
 import {
@@ -40,6 +41,7 @@ export async function runDoctorCommand(input: {
   readSdkVersion?: () => Promise<string | undefined>;
 }): Promise<{ report: DoctorReport; lines: string[] }> {
   let models: ModelsConfig | undefined;
+  let profileId: string | undefined;
   // Required unless the configuration loads and proves otherwise: a config
   // that fails to load must not quietly excuse a missing Claude CLI.
   let claudeRequired = true;
@@ -51,8 +53,10 @@ export async function runDoctorCommand(input: {
       configFlag: input.configFlag,
     });
     models = loaded.effective.models;
+    profileId = loaded.effective.profile;
     claudeRequired = reviewNeedsClaude({
       models,
+      ...(profileId === undefined ? {} : { profile: profileId }),
       materialityGate: resolveMaterialityGate(loaded.effective),
     });
     // A config that loads with warnings works today and will not after the
@@ -83,6 +87,7 @@ export async function runDoctorCommand(input: {
         workspaceRoot: input.workspaceRoot,
         models,
         claudeRequired,
+        profile: resolveProfile(profileId),
       }),
   });
   // Same home the command was given. The no-arg reader uses os.homedir().
@@ -92,9 +97,11 @@ export async function runDoctorCommand(input: {
       readInstalledOpenCodeSdkVersion({
         nodeModulesDir: prheroLayout(input.home).nodeModulesDir,
       }));
-  const sdkCheck = modelsNeedOpenCode(models)
+  const profile = resolveProfile(profileId);
+  const sdkCheck = routingNeedsOpenCode(models, profile)
     ? openCodeRoutingSdkCheck({
         models,
+        profile,
         sdkVersion: await readSdkVersion(),
       })
     : undefined;

@@ -21,6 +21,14 @@
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+// The profile registry: data modules with no runtime imports of their own
+// (test/architecture/profile-registry.test.ts), so the builtins-only rule still
+// holds, and the step reads the same profiles the review runs.
+import {
+  FALLBACK_PROFILE_ID,
+  MODEL_PROFILES,
+  profileModels,
+} from "../model/profiles";
 // A sibling with no imports of its own, so the builtins-only rule still holds.
 import {
   PLATFORM_ESTIMATE_CAPABILITY,
@@ -30,6 +38,18 @@ import {
 } from "./platform-estimate";
 
 export const PLATFORM_API_URL = "https://api.crysk.dev";
+
+// The engine accepts the person config's `profile` key (openai-profile S7). An
+// engine without it refuses the key as unknown, so the platform sends a
+// profile only to a run that names this capability.
+export const PLATFORM_PROFILE_CAPABILITY = "profile";
+
+// What this engine reads from the `/runs/token` response, as the platform's
+// comma-separated `X-Crysk-Capabilities` list.
+export const PLATFORM_CAPABILITIES = [
+  PLATFORM_ESTIMATE_CAPABILITY,
+  PLATFORM_PROFILE_CAPABILITY,
+].join(",");
 
 // The audience the platform verifies. An OIDC token minted for any other
 // audience is refused with a 401.
@@ -246,10 +266,11 @@ export async function exchangePlatformToken(
         Authorization: `Bearer ${oidc}`,
         "X-Crysk-Dispatch-Id": dispatchId,
         // Only the first connect step asks: its estimate is the one the budget
-        // gate reads, and the platform records each estimate it sends.
+        // gate reads, the platform records each estimate it sends, and only
+        // that step reads the config a profile arrives in.
         ...(deps.ignoreConfig === true
           ? {}
-          : { "X-Crysk-Capabilities": PLATFORM_ESTIMATE_CAPABILITY }),
+          : { "X-Crysk-Capabilities": PLATFORM_CAPABILITIES }),
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -449,10 +470,9 @@ export async function runPlatformConnect(
       // platform `routing` is refused by the setup step's person parser.
       const person = result.config?.person ?? {};
       if (Object.keys(person).length > 0) {
-        const models = person.models;
-        const opencode =
-          models !== undefined && JSON.stringify(models).includes('"opencode:');
-        deps.appendOutput(`routing-opencode=${opencode}\n`);
+        deps.appendOutput(
+          `routing-opencode=${personMayNeedOpenCode(person)}\n`,
+        );
         // Whether any step may run on the Claude CLI (model-profiles S6). The
         // Install Claude Code CLI step skips only on exactly `false`, so an
         // absent output (a standalone run, an empty person layer, an older
@@ -481,19 +501,56 @@ export async function runPlatformConnect(
 // Claude run without its CLI. src/doctor.ts reviewNeedsClaude answers the same
 // question from the real route plan; test/ci/platform.test.ts holds both to
 // one table.
-export function personModelsMayNeedClaude(models: unknown): boolean {
-  if (!isPlainObject(models)) return true;
-  if (!Array.isArray(models.default)) return true;
-  for (const list of Object.values(models)) {
-    if (!Array.isArray(list) || list.length === 0) return true;
-    for (const entry of list) {
-      const name = isPlainObject(entry) ? entry.model : entry;
-      if (typeof name !== "string" || !name.startsWith("opencode:")) {
-        return true;
+//
+// A role `models` does not set runs the person's `profile` (openai-profile S6),
+// so with no `models.default` the answer is the profile's: `false` only for a
+// registered profile whose every route is OpenCode. No profile is the fallback
+// profile, `claude`; an unknown one is `true`, and the engine refuses it.
+export function personModelsMayNeedClaude(
+  models: unknown,
+  profile?: unknown,
+): boolean {
+  if (models !== undefined) {
+    if (!isPlainObject(models)) return true;
+    for (const list of Object.values(models)) {
+      if (!Array.isArray(list) || list.length === 0) return true;
+      for (const entry of list) {
+        const name = isPlainObject(entry) ? entry.model : entry;
+        if (typeof name !== "string" || !name.startsWith("opencode:")) {
+          return true;
+        }
       }
     }
+    if (Array.isArray(models.default)) return false;
   }
-  return false;
+  const routes = profileRouteModels(profile);
+  return routes === undefined || routes.some((m) => !m.startsWith("opencode:"));
+}
+
+// Whether the models in effect run any step on OpenCode: an `opencode:` model
+// in `models`, or, for a role `models` does not set, in the profile's routes.
+export function personMayNeedOpenCode(
+  person: Record<string, unknown>,
+): boolean {
+  const models = person.models;
+  if (models !== undefined && JSON.stringify(models).includes('"opencode:')) {
+    return true;
+  }
+  if (isPlainObject(models) && Array.isArray(models.default)) return false;
+  return (profileRouteModels(person.profile) ?? []).some((m) =>
+    m.startsWith("opencode:"),
+  );
+}
+
+// The registered profile's route models, or undefined for one this step does
+// not know (the engine's parser refuses it).
+function profileRouteModels(profile: unknown): string[] | undefined {
+  const id = profile ?? FALLBACK_PROFILE_ID;
+  if (typeof id !== "string" || !Object.hasOwn(MODEL_PROFILES, id)) {
+    return undefined;
+  }
+  const registered = MODEL_PROFILES[id];
+  return registered === undefined ? undefined : profileModels(registered);
 }
 
 // The person layer's answer: its `models`, plus the one other way a person
@@ -502,7 +559,7 @@ export function personModelsMayNeedClaude(models: unknown): boolean {
 // (preflight.ts parseSummaryConfig), so any `summary.model` keeps the CLI.
 export function personMayNeedClaude(person: Record<string, unknown>): boolean {
   if (isPlainObject(person.summary) && "model" in person.summary) return true;
-  return personModelsMayNeedClaude(person.models);
+  return personModelsMayNeedClaude(person.models, person.profile);
 }
 
 // Appends to the file the runner named in GITHUB_OUTPUT. Unset or empty is an
