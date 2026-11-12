@@ -93,7 +93,8 @@ A **profile** is a ready-made set of models for every role. Pick one in your per
   `opencode:openai/gpt-6.1-terra`, a choice made without a measurement; `models.judge` may also pick one of the
   two measured Claude models, which then needs Claude. Either way the judge runs only with `materiality_gate` on.
 - On `openai` the runner needs `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and no Claude
-  CLI unless a `models` entry names a Claude model.
+  CLI unless a `models` entry, or a prompt in a custom `agents_dir` (whose `model:` outranks the profile),
+  names a Claude model.
 - If a profile is set and its route plan cannot be built, the review fails. It never falls back to another
   profile's models.
 

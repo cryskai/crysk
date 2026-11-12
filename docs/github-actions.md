@@ -493,8 +493,9 @@ OpenCode-only `CRYSK_MODELS` included.
   credential stops before it spends.
 - **`profile: openai`** (the `profile` input from `vars.CRYSK_PROFILE`, or the platform, which sends it only
   to an engine that lists `profile` in `X-Crysk-Capabilities`) runs every step on OpenAI through OpenCode. It needs
-  `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, installs the OpenCode CLI and skips the
-  Claude CLI unless a `models` entry names a Claude model. See
+  `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH` and installs the OpenCode CLI. On a
+  repository connected to the platform it also skips the Claude CLI, unless a `models` entry names a Claude
+  model or a custom `agents_dir` may apply; a standalone workflow still installs the Claude CLI, unused. See
   [Profiles](configuration.md#profiles).
 - **Mismatch fails closed:** an OpenCode model with no secret for its provider gets a notice at setup, and
   then the review **fails** for that provider's missing record ([`CRYSK-CRED-UNUSABLE`](#crysk-cred-unusable)),
