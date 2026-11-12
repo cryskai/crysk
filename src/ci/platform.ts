@@ -19,8 +19,16 @@
 // WHY ONLY BUILTINS: like the trigger, this runs before `bun install`. Keep
 // every import `node:` or `bun`, and `fetch` is the runtime's own.
 
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
+// Import-free, like the registry below.
+import { readBrandEnv } from "../brand";
 // The profile registry: data modules with no runtime imports of their own
 // (test/architecture/profile-registry.test.ts), so the builtins-only rule still
 // holds, and the step reads the same profiles the review runs.
@@ -470,6 +478,11 @@ export async function runPlatformConnect(
       // platform `routing` is refused by the setup step's person parser.
       const person = result.config?.person ?? {};
       if (Object.keys(person).length > 0) {
+        const customAgents = customAgentsMayApply(
+          person,
+          result.config?.repo ?? {},
+          deps.env,
+        );
         deps.appendOutput(
           `routing-opencode=${personMayNeedOpenCode(person)}\n`,
         );
@@ -477,7 +490,9 @@ export async function runPlatformConnect(
         // Install Claude Code CLI step skips only on exactly `false`, so an
         // absent output (a standalone run, an empty person layer, an older
         // engine) installs it, as every run always did.
-        deps.appendOutput(`routing-claude=${personMayNeedClaude(person)}\n`);
+        deps.appendOutput(
+          `routing-claude=${personMayNeedClaude(person, { customAgents })}\n`,
+        );
       }
     }
   } catch (error) {
@@ -557,9 +572,45 @@ function profileRouteModels(profile: unknown): string[] | undefined {
 // layer names a model. A legacy `summary.model` (only "haiku" parses) becomes
 // `models.summary: claude:haiku-latest` when `models.summary` is absent
 // (preflight.ts parseSummaryConfig), so any `summary.model` keeps the CLI.
-export function personMayNeedClaude(person: Record<string, unknown>): boolean {
+//
+// `customAgents` (PR #521 R003): a custom agents_dir's frontmatter outranks
+// the profile's seat (routing.ts resolveStepChoices), and this step cannot
+// read those prompts, so with no `models.default` the CLI stays required.
+export function personMayNeedClaude(
+  person: Record<string, unknown>,
+  context: { customAgents?: boolean } = {},
+): boolean {
   if (isPlainObject(person.summary) && "model" in person.summary) return true;
+  const coversEveryRole =
+    isPlainObject(person.models) && Array.isArray(person.models.default);
+  if (context.customAgents === true && !coversEveryRole) return true;
   return personModelsMayNeedClaude(person.models, person.profile);
+}
+
+// Whether a custom agents_dir may apply to this run: named in the platform's
+// person or repo layer, in the checkout's own repo config (read raw, since this
+// step runs before `bun install`), or in the AGENTS_DIR env. A repo config this
+// step cannot read counts as one: the answer must never be a wrong `false`.
+export function customAgentsMayApply(
+  person: Record<string, unknown>,
+  repo: Record<string, unknown>,
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  if ("agents_dir" in person || "agents_dir" in repo) return true;
+  if ((readBrandEnv(env, "AGENTS_DIR")?.value ?? "") !== "") return true;
+  const workspace = env.GITHUB_WORKSPACE ?? "";
+  if (workspace === "") return false;
+  for (const dir of [".crysk", ".prhero"]) {
+    const file = path.join(workspace, dir, "config.json");
+    if (!existsSync(file)) continue;
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+      return !isPlainObject(parsed) || "agents_dir" in parsed;
+    } catch {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Appends to the file the runner named in GITHUB_OUTPUT. Unset or empty is an

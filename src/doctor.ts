@@ -38,6 +38,7 @@ import {
   resolveEngineAssets,
   selfInvocation,
 } from "./assets";
+import { readBrandEnv } from "./brand";
 import { REPO_DIR_NAME, resolveHomeDir, resolveRepoDir } from "./brand-paths";
 import {
   gitIsTracked,
@@ -118,10 +119,17 @@ export function reviewNeedsClaude(input: {
   models: ModelsConfig | undefined;
   // The config's `profile` (openai-profile S6). Absent: the fallback profile.
   profile?: string;
+  // Whether a custom agents_dir applies (PR #521 R003). Its frontmatter
+  // outranks the profile's seat and is not read here, so with no
+  // `models.default` the answer stays "Claude required".
+  customAgents?: boolean;
   materialityGate?: boolean;
   env?: Record<string, string | undefined>;
 }): boolean {
   if (input.models === undefined && input.profile === undefined) return true;
+  if (input.customAgents === true && input.models?.default === undefined) {
+    return true;
+  }
   try {
     const plan = buildResolvedRoutePlan({
       agents: localReviewSpec(input.env ?? process.env).agents,
@@ -176,6 +184,9 @@ export async function loadDoctorRouting(input: {
       claudeRequired: reviewNeedsClaude({
         models,
         ...(profile === undefined ? {} : { profile }),
+        customAgents:
+          loaded.effective.agents_dir !== undefined ||
+          (readBrandEnv(process.env, "AGENTS_DIR")?.value ?? "") !== "",
         materialityGate: resolveMaterialityGate(loaded.effective),
       }),
       ...(models === undefined ? {} : { models }),

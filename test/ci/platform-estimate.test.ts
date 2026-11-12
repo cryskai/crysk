@@ -171,7 +171,7 @@ describe("platform.ts runs before `bun install`", () => {
     expect(specifiers.length).toBeGreaterThan(0);
     for (const specifier of specifiers) {
       expect(specifier).toMatch(
-        /^(node:|bun$|bun:|\.\/platform-estimate$|\.\.\/model\/profiles$)/,
+        /^(node:|bun$|bun:|\.\/platform-estimate$|\.\.\/model\/profiles$|\.\.\/brand$)/,
       );
     }
     expect(

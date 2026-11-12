@@ -51,6 +51,16 @@ describe("loadDoctorRouting", () => {
     });
   });
 
+  // PR #521 R003: a custom agents_dir's frontmatter outranks the profile.
+  test("openai with a custom agents_dir keeps Claude required", async () => {
+    await withHome(
+      JSON.stringify({ profile: "openai", agents_dir: "/tmp/agents" }),
+      async (home) => {
+        expect((await loadDoctorRouting({ home })).claudeRequired).toBe(true);
+      },
+    );
+  });
+
   test("openai with a Claude summary still needs Claude", async () => {
     await withHome(
       JSON.stringify({

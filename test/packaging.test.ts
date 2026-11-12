@@ -726,6 +726,10 @@ describe("Packaging & distribution configuration", () => {
               (platformRouting === "" && input("models").includes("opencode:")),
           );
         }
+        // The platform's answer as is, for the trigger's standalone profile.
+        if (expr === "steps.platform.outputs.routing-opencode") {
+          return ctx.platform?.["routing-opencode"] ?? "";
+        }
         const materialized = /^steps\.materialize\.outputs\.([\w-]+)$/.exec(
           expr,
         )?.[1];

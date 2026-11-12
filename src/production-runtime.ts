@@ -904,17 +904,22 @@ export function buildDoctorRoutePlan(
   } = {},
 ): ResolvedRoutePlan {
   const profile = options.profile ?? FALLBACK_PROFILE;
-  const profileAlias = (role: string) =>
-    profileModelAlias(profileRoute(profile, role).model);
+  // A Claude route keeps the alias it always probed. Any other route takes the
+  // profile's seat (bundled), so its effort becomes the same OpenCode variant a
+  // review's route carries and the probe checks the binding the review opens.
+  const agent = (key: string, role: "hunter" | "refuter", seat: string) => {
+    const model = profileRoute(profile, seat).model;
+    return model.startsWith("claude:")
+      ? { key, role, model: profileModelAlias(model) }
+      : { key, role };
+  };
   const base = buildResolvedRoutePlan({
     agents: [
-      {
-        key: "reliability",
-        role: "hunter",
-        model: profileAlias("hunter.reliability"),
-      },
-      { key: "refuter", role: "refuter", model: profileAlias("refuter") },
+      agent("reliability", "hunter", "hunter.reliability"),
+      agent("refuter", "refuter", "refuter"),
     ],
+    bundledAgents: true,
+    profile,
   });
   if (models === undefined) return base;
   // A profile step stays when it is not on Claude (openai-profile S6): under

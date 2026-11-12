@@ -64,14 +64,27 @@ describe("the doctor's route plan (S6)", () => {
       profile: OPENAI,
       claudeRequired: false,
     });
+    // PR #521 R002: with the variant a review's routes carry, so the probe
+    // checks the bindings a review opens.
     const routes = planRoutes(plan).map((s) => [
       s.route.backend,
       s.route.provider,
       s.route.modelSnapshot,
+      s.route.modelVariant,
     ]);
     expect(routes).toEqual([
-      ["opencode", "openai", "gpt-6.1-terra"],
-      ["opencode", "openai", "gpt-6.1-sol"],
+      ["opencode", "openai", "gpt-6.1-terra", "xhigh"],
+      ["opencode", "openai", "gpt-6.1-sol", "high"],
+    ]);
+  });
+
+  test("the claude profile's doctor plan is unchanged: no variant", () => {
+    const plan = buildDoctorRoutePlan(undefined, { profile: CLAUDE });
+    expect(
+      plan.steps.map((s) => [s.logicalIdentity, s.route.modelVariant]),
+    ).toEqual([
+      ["claude:sonnet-latest", undefined],
+      ["claude:opus-latest", undefined],
     ]);
   });
 

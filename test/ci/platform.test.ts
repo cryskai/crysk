@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   statSync,
@@ -414,6 +415,7 @@ describe("platform review configuration", () => {
   function connect(
     body: unknown,
     options: { configDir?: string } = {},
+    env: Record<string, string> = {},
   ): { events: string[]; run: () => Promise<number> } {
     const events: string[] = [];
     const { fn } = fakeFetch(() => json(200, { ...SUCCESS, config: body }));
@@ -422,7 +424,7 @@ describe("platform review configuration", () => {
       run: () =>
         runPlatformConnect({
           fetch: fn,
-          env: ENV,
+          env: { ...ENV, ...env },
           baseUrl: BASE,
           stdout: (text) => events.push(`stdout:${text}`),
           appendOutput: (text) => events.push(`output:${text}`),
@@ -660,6 +662,65 @@ describe("platform review configuration", () => {
         reviewNeedsClaude({ models: models as never, profile, env: {} }),
       ).toBe(expected);
     }
+  });
+
+  // PR #521 R003: a custom agents_dir's frontmatter outranks the profile's
+  // seat, so with no models default the CLI stays required wherever one may
+  // be configured: the person or repo layer, the checkout's repo config, the
+  // AGENTS_DIR env.
+  test("a custom agents_dir keeps routing-claude=true under an OpenCode-only profile", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "platform-agents-"));
+    const claudeOutput = async (
+      body: unknown,
+      env: Record<string, string> = {},
+    ) => {
+      const h = connect(
+        body,
+        { configDir: path.join(root, `cfg-${Math.random()}`) },
+        env,
+      );
+      expect(await h.run()).toBe(0);
+      return h.events.filter((e) => e.startsWith("output:routing-claude="));
+    };
+    const TRUE = ["output:routing-claude=true\n"];
+    expect(
+      await claudeOutput({ person: { profile: "openai", agents_dir: "a" } }),
+    ).toEqual(TRUE);
+    expect(
+      await claudeOutput({
+        person: { profile: "openai" },
+        repo: { agents_dir: "a" },
+      }),
+    ).toEqual(TRUE);
+    expect(
+      await claudeOutput(
+        { person: { profile: "openai" } },
+        { CRYSK_AGENTS_DIR: "a" },
+      ),
+    ).toEqual(TRUE);
+    const workspace = path.join(root, "ws");
+    mkdirSync(path.join(workspace, ".crysk"), { recursive: true });
+    writeFileSync(
+      path.join(workspace, ".crysk", "config.json"),
+      JSON.stringify({ agents_dir: "prompts" }),
+    );
+    expect(
+      await claudeOutput(
+        { person: { profile: "openai" } },
+        { GITHUB_WORKSPACE: workspace },
+      ),
+    ).toEqual(TRUE);
+    // A models default covers every role, so the prompts' frontmatter and the
+    // profile never decide: the answer stays the models'.
+    expect(
+      await claudeOutput({
+        person: {
+          profile: "openai",
+          agents_dir: "a",
+          models: { default: ["opencode:openai/gpt-6.1-terra"] },
+        },
+      }),
+    ).toEqual(["output:routing-claude=false\n"]);
   });
 
   test("routing-opencode and routing-claude read the profile", async () => {

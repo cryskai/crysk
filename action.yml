@@ -229,6 +229,13 @@ runs:
         # layer, models or not, and empty otherwise (then the input decides). The routing input no longer counts: a value there
         # stops the run (HAS_ROUTING above).
         HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.models, 'opencode:')) }}
+        # The platform's answer as is (empty in a standalone run), the profile
+        # input and whether the models input has a default (presence only): with
+        # no platform answer, a profile whose every route is OpenCode names
+        # OpenCode when no default sends every role elsewhere.
+        PLATFORM_ROUTING_OPENCODE: ${{ steps.platform.outputs.routing-opencode }}
+        STANDALONE_PROFILE: ${{ inputs.profile }}
+        STANDALONE_MODELS_DEFAULT: ${{ contains(inputs.models, '"default"') }}
         # The attempt of this run. A re-run keeps the run id, so the record names
         # the attempt, and the publisher orders a re-run's comments by it.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}

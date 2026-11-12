@@ -162,6 +162,20 @@ export function profileModels(profile: ModelProfile): string[] {
   ];
 }
 
+// Whether a profile id names a registered profile whose every route runs on
+// OpenCode: what the CI steps that run before `bun install` read to name the
+// backend of a standalone `profile` input, with no profile named here.
+export function profileRunsOnlyOnOpenCode(id: unknown): boolean {
+  if (typeof id !== "string") return false;
+  const trimmed = id.trim();
+  if (!Object.hasOwn(MODEL_PROFILES, trimmed)) return false;
+  const profile = MODEL_PROFILES[trimmed];
+  return (
+    profile !== undefined &&
+    profileModels(profile).every((model) => model.startsWith("opencode:"))
+  );
+}
+
 // The models a profile's materiality judge may run on (S5): what was measured
 // on it, else the models its owner chose without a measurement (openai-profile
 // S9), else the fallback profile's list, so a profile with neither judges only
