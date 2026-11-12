@@ -251,7 +251,7 @@ describe("materializeCiOpenCodeData with a platform person layer", () => {
     expect(layer.models).toEqual(PLATFORM_MODELS);
     expect(layer.scout).toBe(true);
     expect(result.warnings).toEqual([
-      "The models and credentials inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.",
+      "The models, credentials and profile inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.",
     ]);
   });
 

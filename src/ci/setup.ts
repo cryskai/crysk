@@ -51,6 +51,7 @@ import {
   CREDENTIALS_INPUT_LINE,
   type ErrorClass,
   MODELS_INPUT_LINE,
+  PROFILE_INPUT_LINE,
   type SetupRecord,
 } from "#ci/outcome";
 import { appendGithubOutput } from "#ci/platform";
@@ -282,7 +283,10 @@ ${lines}
           # repository variables. Unset, every role runs the default Claude model
           # and the subscription is tried first.
           ${MODELS_INPUT_LINE}
-          ${CREDENTIALS_INPUT_LINE}`;
+          ${CREDENTIALS_INPUT_LINE}
+          # The model profile (claude or openai) from a repository variable.
+          # Unset, the claude profile. models still wins role by role.
+          ${PROFILE_INPUT_LINE}`;
 }
 
 export function generateCiWorkflowTemplate(
@@ -750,6 +754,9 @@ export interface MaterializeCiOpenCodeDataOptions {
   // unless a platform person layer exists, which wins whole.
   modelsInput?: string;
   credentialsInput?: string;
+  // The `profile` input (openai-profile S6), a profile id from
+  // vars.CRYSK_PROFILE, written beside them. The platform's layer wins whole.
+  profileInput?: string;
   home?: string;
   env?: Readonly<Record<string, string | undefined>>;
   // Platform mode: the person layer the Crysk platform returned (`{}` when it
@@ -797,8 +804,12 @@ const INPUT_CLASS: Record<"models" | "credentials", ErrorClass> = {
   models: { kind: "config-parse", source: "models-input" },
   credentials: { kind: "config-parse", source: "credentials-input" },
 };
+const PROFILE_INPUT_CLASS: ErrorClass = {
+  kind: "config-parse",
+  source: "profile-input",
+};
 const INPUTS_IGNORED_WARNING =
-  "The models and credentials inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.";
+  "The models, credentials and profile inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.";
 
 // A crysk-secrets, models or credentials input the user configured wrongly. `message` is the
 // line stderr has always printed; `cls` and `detail` are what the record carries.
@@ -978,6 +989,23 @@ function assembleOpenCodeAuth(
   return { records, manifest, notices, problems };
 }
 
+// The `profile` input: a bare id, not JSON, checked by the person parser like
+// the key in ~/.crysk/config.json. Returns undefined for an empty input.
+function readProfileInput(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const profile = raw.trim();
+  try {
+    parseGlobalConfig(JSON.stringify({ profile }), "the profile input");
+  } catch (error) {
+    throw new SetupInputError(
+      PROFILE_INPUT_CLASS,
+      "the profile input is not a known profile (the setup step's log names the known ones)",
+      messageOf(error),
+    );
+  }
+  return profile;
+}
+
 // One of the two inputs (D1), read the way the person parser reads that key in
 // ~/.crysk/config.json: the value is the key's own object, checked under that
 // key alone. Returns undefined for an empty input.
@@ -1049,9 +1077,11 @@ export async function materializeCiOpenCodeData(
     personBody = { ...platformPerson };
     // The inputs are not even read: a value the platform overrides is not this
     // run's configuration, so a malformed one must not fail it.
-    const inputGiven = [options.modelsInput, options.credentialsInput].some(
-      (raw) => raw !== undefined && raw.trim() !== "",
-    );
+    const inputGiven = [
+      options.modelsInput,
+      options.credentialsInput,
+      options.profileInput,
+    ].some((raw) => raw !== undefined && raw.trim() !== "");
     if (inputGiven) warnings.push(INPUTS_IGNORED_WARNING);
   } else {
     const models = readConfigInput(options.modelsInput, "models");
@@ -1059,9 +1089,11 @@ export async function materializeCiOpenCodeData(
       options.credentialsInput,
       "credentials",
     );
+    const profile = readProfileInput(options.profileInput);
     personBody = {
       ...(models === undefined ? {} : { models }),
       ...(credentials === undefined ? {} : { credentials }),
+      ...(profile === undefined ? {} : { profile }),
     };
   }
 
@@ -1251,6 +1283,7 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
       env: deps.env,
       modelsInput: deps.env.MODELS_INPUT ?? "",
       credentialsInput: deps.env.CREDENTIALS_INPUT ?? "",
+      profileInput: deps.env.PROFILE_INPUT ?? "",
       ...(platformMode ? { platformPerson: platform?.person ?? {} } : {}),
       ...(cryskSecrets === undefined ? {} : { cryskSecrets }),
     });

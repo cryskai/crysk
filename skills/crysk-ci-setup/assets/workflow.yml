@@ -157,4 +157,7 @@ jobs:
           # and the subscription is tried first.
           models: ${{ vars.CRYSK_MODELS }}
           credentials: ${{ vars.CRYSK_CREDENTIALS }}
+          # The model profile (claude or openai) from a repository variable.
+          # Unset, the claude profile. models still wins role by role.
+          profile: ${{ vars.CRYSK_PROFILE }}
           mode: gate

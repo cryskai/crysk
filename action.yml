@@ -31,6 +31,10 @@ inputs:
     description: 'Which Claude credential the review uses, and in what order, as JSON, e.g. {"claude": ["subscription", "api_key"]} (subscription is CRYSK_CLAUDE_OAUTH_TOKEN, api_key is CRYSK_CLAUDE_API_KEY, both in crysk-secrets). Pass it from a repository variable, credentials: followed by the vars.CRYSK_CREDENTIALS expression. Read and written like models, beside it. Empty: the subscription first.'
     required: false
     default: ''
+  profile:
+    description: 'The model profile every role falls back to: claude (the default) or openai, the profile key of the personal config. Pass it from a repository variable, profile: followed by the vars.CRYSK_PROFILE expression. models still wins role by role. Read by the setup step only and written beside models; an unknown profile fails the run (CRYSK-CONFIG-INVALID). A repository connected to the Crysk platform takes its profile from the platform, which wins whole: this input is then ignored with a warning. Empty: claude.'
+    required: false
+    default: ''
   crysk-secrets:
     description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _. A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). With operation: refresh-credential, the refresh step reads the CRYSK_OPENCODE_<P>_OAUTH record it renews. The input is read on stdin by those four steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
     required: false
@@ -322,6 +326,7 @@ runs:
         # Not secrets: repository variables, never a value from crysk-secrets.
         MODELS_INPUT: ${{ inputs.models }}
         CREDENTIALS_INPUT: ${{ inputs.credentials }}
+        PROFILE_INPUT: ${{ inputs.profile }}
         # Platform mode only: the file the connect step left (empty in a
         # standalone run, which then changes nothing). The step writes the
         # platform's `person` layer to the personal config file, and its
