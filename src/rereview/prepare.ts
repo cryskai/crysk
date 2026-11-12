@@ -981,6 +981,8 @@ export function enrichPriorsFromThreads(input: {
     created_at?: string;
   }[];
   summaryUpdatedAt: string | null;
+  // In platform mode, the login the platform's token exchange returned (CRYSK_PLATFORM_ACTOR).
+  platformActor?: string;
 }): PriorRecord[] {
   const bound = bindPriorsToPosted(input.priors, input.posted);
   return input.priors.map((prior) => {
@@ -1013,7 +1015,14 @@ export function enrichPriorsFromThreads(input: {
       // The finding itself sits among the replies (a review comment with no parent).
       const findingAuthor = input.replies.find((r) => r.id === parent.id)?.user;
       for (const reply of thread) {
-        if (!trustedAdjudicator(reply.user, findingAuthor)) continue;
+        if (
+          !trustedAdjudicator(reply.user, findingAuthor, {
+            kind: "ci",
+            platformActor: input.platformActor,
+          })
+        ) {
+          continue;
+        }
         const adjudication = parseAdjudicationMarker(reply.body);
         if (
           adjudication === null ||

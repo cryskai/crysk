@@ -39,6 +39,8 @@ import { bindPriorsToPosted } from "#rereview/prepare";
 import { parseStateBlock, type StateFinding } from "#rereview/state";
 import { parseFindingCommentBadge } from "#review/report";
 import {
+  type AdjudicatorTrust,
+  CI_ADJUDICATOR_TRUST,
   parseAdjudicationMarker,
   trustedAdjudicator,
 } from "#triage/adjudication";
@@ -162,6 +164,8 @@ export interface PrStatusInput {
   statuses: CommitStatusFact[];
   issueComments: PrStatusComment[];
   reviewComments: PrStatusReviewComment[];
+  // Whose CI ruling counts. Absent is a run's standalone read: only github-actions[bot].
+  adjudicatorTrust?: AdjudicatorTrust;
 }
 
 // The window a pending status is trusted for, named from the constant that defines it, so
@@ -453,7 +457,15 @@ function ciVerdictOf(
   )?.user;
   for (const comment of input.reviewComments) {
     if (comment.in_reply_to_id !== threadId) continue;
-    if (!trustedAdjudicator(comment.user, findingAuthor)) continue;
+    if (
+      !trustedAdjudicator(
+        comment.user,
+        findingAuthor,
+        input.adjudicatorTrust ?? CI_ADJUDICATOR_TRUST,
+      )
+    ) {
+      continue;
+    }
     const marker = parseAdjudicationMarker(comment.body);
     if (marker === null) continue;
     if (marker.reply !== newestTriageId || marker.head !== input.head) continue;

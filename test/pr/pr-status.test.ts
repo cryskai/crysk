@@ -1513,8 +1513,9 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
   // odd/tasks/platform-commands.md (platform repo) S5: in platform mode the run posts as the platform
   // App's bot, so its ruling counts when that same bot posted the finding it rules on.
   function postedBy(
-    login: string,
+    login: string | undefined,
     extra: PrStatusReviewComment[],
+    adjudicatorTrust?: PrStatusInput["adjudicatorTrust"],
   ): PrStatusInput {
     const base = dismissed(extra);
     return {
@@ -1522,31 +1523,50 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
       reviewComments: base.reviewComments.map((c) =>
         c.id === 1 ? { ...c, user: login } : c,
       ),
+      ...(adjudicatorTrust === undefined ? {} : { adjudicatorTrust }),
     };
   }
+  const platformRuling = (user: string) =>
+    ruling({ id: 3, user, reply: 2, verdict: "upheld" });
+  const CI_PLATFORM = { kind: "ci", platformActor: "crysk-ai[bot]" } as const;
 
-  test("(c2) the platform bot's ruling on a finding that bot posted counts", () => {
+  test("(c2) a run's read counts the platform bot's ruling on a finding that bot posted", () => {
     const status = buildPrStatus(
-      postedBy("crysk-ai[bot]", [
-        ruling({ id: 3, user: "crysk-ai[bot]", reply: 2, verdict: "upheld" }),
-      ]),
+      postedBy("crysk-ai[bot]", [platformRuling("crysk-ai[bot]")], CI_PLATFORM),
     );
     expect(status.findings[0]?.ci_verdict).toBe("upheld");
     expect(status.next_action).toBe("review");
   });
 
-  test("(c3) another bot's ruling does not count, nor a person's on a finding they posted", () => {
-    for (const [poster, ruler] of [
-      ["crysk-ai[bot]", "other-app[bot]"],
-      ["mallory", "mallory"],
+  test("(c3) a run's read ignores any other bot, even on a finding that bot posted, and a standalone run trusts no bot but github-actions", () => {
+    for (const [poster, ruler, trust] of [
+      ["other-app[bot]", "other-app[bot]", CI_PLATFORM],
+      ["crysk-ai[bot]", "other-app[bot]", CI_PLATFORM],
+      ["crysk-ai[bot]", "crysk-ai[bot]", undefined],
+      [undefined, "crysk-ai[bot]", CI_PLATFORM],
     ] as const) {
       const status = buildPrStatus(
-        postedBy(poster, [
-          ruling({ id: 3, user: ruler, reply: 2, verdict: "upheld" }),
-        ]),
+        postedBy(poster, [platformRuling(ruler)], trust),
       );
       expect(status.findings[0]?.ci_verdict).toBeNull();
-      expect(status.next_action).toBe("recheck");
+    }
+  });
+
+  test("(c4) crysk status on a developer's machine counts an App bot's ruling on a finding it posted, never a person's", () => {
+    const local = { kind: "local" } as const;
+    expect(
+      buildPrStatus(
+        postedBy("crysk-ai[bot]", [platformRuling("crysk-ai[bot]")], local),
+      ).findings[0]?.ci_verdict,
+    ).toBe("upheld");
+    for (const [poster, ruler] of [
+      ["mallory", "mallory"],
+      ["crysk-ai[bot]", "other-app[bot]"],
+    ] as const) {
+      expect(
+        buildPrStatus(postedBy(poster, [platformRuling(ruler)], local))
+          .findings[0]?.ci_verdict,
+      ).toBeNull();
     }
   });
 

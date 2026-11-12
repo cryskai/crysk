@@ -121,6 +121,8 @@ export function answeredBlockingFindings(input: {
   reviewComments: readonly AnswerReviewComment[];
   trustedActors: ReadonlySet<string> | undefined;
   writers: ReadonlyMap<string, boolean | null>;
+  // In platform mode, the login the platform's token exchange returned (CRYSK_PLATFORM_ACTOR).
+  platformActor?: string;
   // When the carried verdict was written (its commit status's created_at), or null when unknown.
   verdictAt: string | null;
 }): AnsweredFindings | null {
@@ -149,6 +151,7 @@ export function answeredBlockingFindings(input: {
     statuses: [],
     issueComments,
     reviewComments,
+    adjudicatorTrust: { kind: "ci", platformActor: input.platformActor },
   });
   // S5: a finding whose tier could not be read is blocking only by fail-closed default; it cannot be
   // the evidence that unlocks the gate.

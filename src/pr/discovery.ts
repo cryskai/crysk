@@ -367,6 +367,7 @@ export async function resolvePrDiscovery(params: {
       replies: reviewComments,
       summaryUpdatedAt,
       headSha,
+      platformActor: process.env.CRYSK_PLATFORM_ACTOR,
     });
     const classified = buildPhaseBQueue({
       case: prepared.case,

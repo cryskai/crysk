@@ -125,6 +125,8 @@ export async function runStatusCommand(input: {
         statuses,
         issueComments,
         reviewComments,
+        // A developer's machine never learns the platform's login (src/triage/adjudication.ts).
+        adjudicatorTrust: { kind: "local" },
       });
       consecutivePollErrors = 0;
     } catch (err) {

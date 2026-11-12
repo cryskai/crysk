@@ -267,7 +267,13 @@ export async function postAdjudicationReplies(input: {
           }).catch(() => undefined);
     // In platform mode the run posts as the platform App's bot, the login the platform's token
     // exchange returned (CRYSK_PLATFORM_ACTOR), which also posted the finding.
-    if (!trustedAdjudicator(author, process.env.CRYSK_PLATFORM_ACTOR)) {
+    const platformActor = process.env.CRYSK_PLATFORM_ACTOR;
+    if (
+      !trustedAdjudicator(author, platformActor, {
+        kind: "ci",
+        platformActor,
+      })
+    ) {
       process.stdout.write(
         `::warning::crysk: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN} or the platform's bot; the finding still counts toward the gate\n`,
       );

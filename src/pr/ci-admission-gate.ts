@@ -718,6 +718,7 @@ function answeredReader(input: {
       trustedActors: input.trustedActors,
       writers,
       verdictAt,
+      platformActor: process.env.CRYSK_PLATFORM_ACTOR,
     });
   };
 }

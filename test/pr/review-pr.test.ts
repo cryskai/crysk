@@ -562,6 +562,27 @@ describe("postAdjudicationReplies", () => {
     }
   });
 
+  test("in platform mode, an upheld reply under any other login did not land: warned", async () => {
+    const before = process.env.CRYSK_PLATFORM_ACTOR;
+    process.env.CRYSK_PLATFORM_ACTOR = "crysk-ai[bot]";
+    try {
+      const { spawnFn } = fakeAuthorGh("other-app[bot]");
+      const { out } = await captureStdout(() =>
+        postAdjudicationReplies({
+          operatorRoot: "/repo",
+          pr: 42,
+          headSha: HEAD,
+          adjudications: [ADJUDICATION],
+          spawnFn,
+        }),
+      );
+      expect(out).toContain(UNLANDED_WARNING);
+    } finally {
+      if (before === undefined) delete process.env.CRYSK_PLATFORM_ACTOR;
+      else process.env.CRYSK_PLATFORM_ACTOR = before;
+    }
+  });
+
   test("rejected and inconclusive replies are posted with no author read", async () => {
     const { spawnFn } = fakeAuthorGh("someone-else");
     const { out } = await captureStdout(() =>
