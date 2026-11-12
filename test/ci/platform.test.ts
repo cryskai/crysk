@@ -385,6 +385,18 @@ describe("runPlatformConnect", () => {
     ]);
   });
 
+  test("an Enterprise Managed User's login, with its underscore, is kept", async () => {
+    const head = "c".repeat(40);
+    const h = harness(() =>
+      json(200, {
+        ...SUCCESS,
+        command: { name: "override", actor: "mona_acme", head_sha: head },
+      }),
+    );
+    expect(await h.run()).toBe(0);
+    expect(h.events).toContain("output:command-actor=mona_acme\n");
+  });
+
   test("an override with an actor or head that could break the outputs keeps the command and drops the field", async () => {
     const h = harness(() =>
       json(200, {

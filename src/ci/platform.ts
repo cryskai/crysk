@@ -144,6 +144,9 @@ export type PlatformCommandAnswer =
   | { name: "override"; actor?: string; headSha?: string };
 
 const SAFE_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+// The override's actor is a commenter, who may be an Enterprise Managed User (`handle_shortcode`):
+// the trigger's own GITHUB_LOGIN grammar (src/ci/trigger.ts), not SAFE_LOGIN, which is the App's.
+const COMMAND_ACTOR = /^(?=.{1,91}$)[A-Za-z0-9][A-Za-z0-9_-]{0,90}(\[bot\])?$/;
 
 function parsePlatformCommand(
   value: unknown,
@@ -154,7 +157,9 @@ function parsePlatformCommand(
   if (name !== "override") return undefined;
   return {
     name,
-    ...(typeof actor === "string" && SAFE_LOGIN.test(actor) ? { actor } : {}),
+    ...(typeof actor === "string" && COMMAND_ACTOR.test(actor)
+      ? { actor }
+      : {}),
     ...(typeof headSha === "string" && SAFE_SHA.test(headSha)
       ? { headSha }
       : {}),
