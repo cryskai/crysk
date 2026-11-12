@@ -29,6 +29,7 @@ import {
   isModelAlias,
   type ModelAlias,
 } from "./catalog";
+import { type ModelProfile, profileModels } from "./profiles";
 
 export class ModelNameError extends Error {}
 
@@ -400,5 +401,18 @@ export function modelsNeedOpenCode(models: ModelsConfig | undefined): boolean {
   if (models === undefined) return false;
   return Object.values(models).some((list) =>
     list.some((entry) => modelEntry(entry).name.startsWith(OPENCODE_PREFIX)),
+  );
+}
+
+// The same question for a whole configuration (openai-profile S6): `models`,
+// or for a role `models` does not set (no `default`), the profile's routes.
+export function routingNeedsOpenCode(
+  models: ModelsConfig | undefined,
+  profile: ModelProfile,
+): boolean {
+  if (modelsNeedOpenCode(models)) return true;
+  if (models?.default !== undefined) return false;
+  return profileModels(profile).some((model) =>
+    model.startsWith(OPENCODE_PREFIX),
   );
 }

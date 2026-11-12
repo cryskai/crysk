@@ -1,12 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { profileIdProblem } from "#model/profiles";
 import {
   mergeConfig,
   parseGlobalConfig,
   parseLocalConfig,
 } from "#review/preflight";
 import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
+import { redactConfigValue } from "../security/redact";
 import { bold, box, cyan, dim, sanitizeText, yellow } from "./primitives";
 import type { KeyReader } from "./select";
 
@@ -628,6 +630,13 @@ export async function setConfigValue(input: {
       // Gone (L6 item 1): writing it would plant the very key the parser now
       // refuses. Say where the summary model lives instead.
       throw new Error(SUMMARY_MODEL_GONE);
+    } else if (input.key === "profile") {
+      const value = input.value.trim();
+      const problem = profileIdProblem(value);
+      if (problem !== undefined) {
+        throw new Error(`${problem} (got "${redactConfigValue(value)}")`);
+      }
+      currentPerson.profile = value;
     } else if (input.key === "agents_dir") {
       currentPerson.agents_dir = input.value.trim();
     } else if (input.key === "scout") {

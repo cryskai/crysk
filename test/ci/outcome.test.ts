@@ -56,6 +56,7 @@ const CREDENTIAL_EXPECTED: Record<
   malformed_payload: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
   missing_subscription_record: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
   missing_provider_record: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
+  subscription_expiring: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
   "env-absent": { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
 };
 
@@ -1169,6 +1170,29 @@ describe("renderCode and renderError: the annotation", () => {
       "gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
     );
     expect(openai.summary.join("\n")).not.toContain("OPENCODE_AUTH_JSON");
+  });
+
+  test("an expiring subscription login says who renews it, in CI and locally", () => {
+    const params = {
+      backend: "opencode",
+      provider: "openai",
+      model: "gpt-5.5",
+      step: "hunter-logic",
+    };
+    const ci = renderError(
+      { kind: "credential", failureClass: "subscription_expiring" },
+      params,
+      "action",
+    );
+    expect(ci.code).toBe("CRYSK-CRED-UNUSABLE");
+    expect(ci.summary.join("\n")).toContain("expires");
+    expect(ci.summary.join("\n")).toContain("Crysk dashboard");
+    const local = renderError(
+      { kind: "credential", failureClass: "subscription_expiring" },
+      params,
+      "local",
+    );
+    expect(local.summary.join("\n")).toContain("opencode");
   });
 
   test("the annotation Fix is the real fixing step, not the first command, for every code and variant", () => {

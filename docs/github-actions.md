@@ -117,6 +117,7 @@ jobs:
             CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[4] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[4])] }}
           models: ${{ vars.CRYSK_MODELS }}
           credentials: ${{ vars.CRYSK_CREDENTIALS }}
+          profile: ${{ vars.CRYSK_PROFILE }}
           mode: gate
 ```
 
@@ -187,11 +188,12 @@ commands that put your setup where the workflow reads it. It reads your person c
 (`~/.crysk/config.json`) first, and prints, never runs:
 
 - `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY` with `--billing api`);
-- one `gh secret set CRYSK_OPENCODE_<P>_API_KEY` per OpenCode provider your `models` name (fallbacks
-  included, the judge's list skipped), and for `openai` also the line that sets
+- one `gh secret set CRYSK_OPENCODE_<P>_API_KEY` per OpenCode provider your `models` or your `profile` name
+  (fallbacks included, the judge's list skipped), and for `openai` also the line that sets
   `CRYSK_OPENCODE_OPENAI_OAUTH` from your OpenCode login for a ChatGPT subscription;
 - `gh variable set CRYSK_MODELS --body "$(jq -c .models ~/.crysk/config.json)"` when your config has
-  `models`, the same for `CRYSK_CREDENTIALS` when it has `credentials`, and
+  `models`, the same for `CRYSK_CREDENTIALS` when it has `credentials`,
+  `gh variable set CRYSK_PROFILE --body openai` when it has `profile`, and
   `gh variable set CRYSK_OPENCODE_PROVIDERS --body '["DEEPSEEK"]'` with the `<P>` token of each OpenCode
   provider.
 
@@ -358,8 +360,10 @@ with mode `0600` (`$XDG_DATA_HOME/opencode/auth.json`, or
   writes nothing from these secrets. An OpenCode model given only in the `model` input gets no record:
   name it in `models`.
 - **`_API_KEY`** becomes OpenCode's own API record, `{"type": "api", "key": "…"}`.
-- **`_OAUTH`** is the provider's login record, decoded and written whole, refresh token included, so
-  OpenCode can renew the access token during the run.
+- **`_OAUTH`** is the provider's login record, decoded and written whole, refresh token included. A review's
+  OpenCode never reads that file: the credential broker hands it a copy of the record in a directory of its
+  own, and for a provider which rotates its refresh token that copy's refresh token is empty (see "A review
+  never renews the login" below).
 - **`_OAUTH` is read for `openai` only, for now.** That is the one subscription Crysk can project. An
   `_OAUTH` secret for another provider your models use fails the step with `CRYSK-CRED-UNUSABLE`, naming
   the secret and telling you to set that provider's `_API_KEY` instead.
@@ -377,11 +381,16 @@ with mode `0600` (`$XDG_DATA_HOME/opencode/auth.json`, or
 - **When no `CRYSK_OPENCODE_*` secret serves your models**, the step writes no auth file and leaves one
   already on the runner alone, so a self-hosted runner can keep its own OpenCode login.
 
-**A renewed token is not saved.** When the access token in an `_OAUTH` record expires during a run,
-OpenCode renews it with the refresh token, but only inside that run: nothing can write the new token
-back to the GitHub secret. Every run starts again from the record you stored. If the provider rotates
-refresh tokens on use, or the stored refresh token expires, reviews start failing to authenticate. Then
-run `opencode auth login` again on your machine and set the secret anew:
+**A review never renews the login.** OpenAI issues a new refresh token on every renewal and refuses the old
+one afterwards, and a run cannot write a renewed token back to the GitHub secret. A review that renewed the
+login would spend the stored record and lose the new one with the run's copy, so every later review would fail
+to authenticate. So the review's copy of an `_OAUTH` record carries no refresh token (for a provider that
+rotates it), a review refuses to start when the access token expires within two hours, and a step refuses a
+login that has already expired (`CRYSK-CRED-UNUSABLE`, `subscription_expiring`). On a repository connected to
+the Crysk platform, the platform renews the login ahead of time, on your runner (see
+[Subscription logins](#subscription-logins)). In a workflow you manage yourself, an OpenAI
+access token lasts about ten days: run `opencode auth login` again on your machine and set the secret anew
+before it expires:
 
 ```sh
 jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
@@ -409,8 +418,8 @@ The Action is backend-agnostic: the next provider is data (a model name and a se
    gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash"]}'
    ```
 
-   That runs every step on DeepSeek, the refuter and the summarizer included (the materiality judge stays on
-   Claude). A mixed setup, with the hunters on DeepSeek falling back to Claude and the refuter on Claude:
+   That runs every step on DeepSeek, the refuter and the summarizer included. The materiality judge runs only
+   on Claude, so with no Claude step and no `models.judge` it stands down. A mixed setup, with the hunters on DeepSeek falling back to Claude and the refuter on Claude:
 
    ```bash
    gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash", "claude:sonnet-latest"], "refuter": ["claude:opus-latest"], "summary": ["claude:haiku-latest"]}'
@@ -456,6 +465,11 @@ credential, and a self-hosted runner may have its own login). It never uses `lat
 `$HOME/.opencode/bin` to `GITHUB_PATH` so a **later** step (Run Crysk) sees the binary — the install step
 itself is not the review. Claude-only CI (no `opencode:` model) skips this install and still starts.
 
+The Claude Code CLI is installed on every run that reviews, unless the run is known to send no step to it:
+a repository connected to the Crysk platform whose models have a `default` and name only `opencode:` models,
+fallbacks and `judge` included, with no `model` input. Every other run installs it, a standalone run with
+OpenCode-only `CRYSK_MODELS` included.
+
 ### openai vs deepseek
 
 | Secret | CI outcome |
@@ -473,9 +487,16 @@ itself is not the review. Claude-only CI (no `opencode:` model) skips this insta
   job `if` never reads `secrets`. A maintainer's `/crysk review` comment reviews a fork — see
   [Fork pull requests](#fork-pull-requests).
 - **OpenCode-only** (only `CRYSK_OPENCODE_*` secrets, no Claude secret) counts as a credential and
-  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge does (it runs
-  only on Claude), so keep a Claude secret for it. A plan that sends a step to the Claude CLI with no Claude
+  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge runs on its
+  profile's judge model: on `claude` it joins the plan only when `models.judge` names it or another step runs
+  on Claude, and then needs a Claude secret; on `openai` it runs on Terra with the OpenAI secret. A plan that sends a step to the Claude CLI with no Claude
   credential stops before it spends.
+- **`profile: openai`** (the `profile` input from `vars.CRYSK_PROFILE`, or the platform, which sends it only
+  to an engine that lists `profile` in `X-Crysk-Capabilities`) runs every step on OpenAI through OpenCode. It needs
+  `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH` and installs the OpenCode CLI. On a
+  repository connected to the platform it also skips the Claude CLI, unless a `models` entry names a Claude
+  model or a custom `agents_dir` may apply; a standalone workflow still installs the Claude CLI, unused. See
+  [Profiles](configuration.md#profiles).
 - **Mismatch fails closed:** an OpenCode model with no secret for its provider gets a notice at setup, and
   then the review **fails** for that provider's missing record ([`CRYSK-CRED-UNUSABLE`](#crysk-cred-unusable)),
   rather than skipping as a clean review, unless the provider serves that model free.
@@ -732,13 +753,77 @@ failure, a 401, 400, 413, 5xx or a network error, prints a `::warning::` naming 
 message, never the token, and the step exits 0. A repeat of the same run attempt is answered as already
 recorded and is not an error.
 
+### Subscription logins
+
+A subscription login (`CRYSK_OPENCODE_<P>_OAUTH`, today `openai`) carries an access token that expires (about
+ten days for OpenAI) and a refresh token that renews it. OpenAI issues a new refresh token on every renewal and
+refuses the old one for good (`refresh_token_reused`), so a review never renews the login (see "A review never
+renews the login" above). Instead, before the access token expires, the platform dispatches the stub with
+`operation: refresh-credential` and `refresh-provider: <provider id>`, one at a time per login. The renewal runs
+on your runner: the platform never holds the login, only its ciphertext for the moment it writes the secret.
+
+With `operation: refresh-credential` only `Setup Bun`, `Connect to Crysk` (unchanged, so the job needs
+`id-token: write`, which the stub grants), `Install dependencies` and `Refresh the subscription login` run.
+Every review step is skipped. `operation` absent, `review` or empty is a review, unchanged; any other value
+fails the refresh step. The step reads the provider's `_OAUTH` line from `crysk-secrets` on stdin, masks every
+value, and then:
+
+1. `POST https://api.crysk.dev/runs/credential-refresh/targets` with `{"provider": "<id>"}`. The platform
+   answers `{"key_id": "…", "key": "…"}`, the GitHub public key of the secret's target (the organization or the
+   repository), as GitHub's `secrets/public-key` endpoint does.
+2. `POST https://api.crysk.dev/runs/credential-refresh/begin` with `{"provider": "<id>"}`. The platform records
+   that the stored refresh token is about to be spent. Then one form-encoded POST to the provider's token
+   endpoint (`grant_type=refresh_token`, the stored refresh token, the provider's `client_id`; for OpenAI,
+   `https://auth.openai.com/oauth/token` and Codex's client id, as OpenCode does). That request is never
+   retried: one that may have reached the provider may have spent the token.
+3. The new record, in OpenCode's shape (`type: "oauth"`, `access`, `refresh`, `expires` in milliseconds,
+   `accountId`), is encoded as the secret stores it (standard base64 of its JSON), sealed with libsodium's
+   `crypto_box_seal` to the target's key, and posted to `https://api.crysk.dev/runs/credential-refresh`:
+
+   ```json
+   {
+     "provider": "openai",
+     "key_id": "…",
+     "encrypted_value": "<standard base64 of the sealed box>",
+     "issued_at": "2026-11-11T12:00:00.000Z",
+     "expires_at": "2026-11-21T12:00:00.000Z",
+     "provider_account_id": "…"
+   }
+   ```
+
+   `encrypted_value` is exactly what GitHub's "create or update a secret" API takes, and the platform writes it
+   as the same `CRYSK_OPENCODE_<P>_OAUTH`. `issued_at` is the runner's clock when the provider answered,
+   `expires_at` the record's `expires`, both ISO 8601 in UTC; `provider_account_id` is null when the provider
+   has none. Once the provider has answered with new tokens the stored refresh token is spent, so this POST is
+   retried on a network error, a 5xx or a 429, with backoff from 5 seconds up to a minute, for up to 10
+   minutes; any other 4xx stops it. Every retry sends the same body, sealed once, and the platform answers a
+   repeat of a result it already recorded with 200 and `{"recorded": false}`, so a retry after a lost response
+   is not an error. `expires_at` comes from the answer's `expires_in`, else the access token's `exp`, each
+   believed only when it is after `issued_at` and at most a year later, else `issued_at` plus an hour (as
+   OpenCode does). A refresh job's `timeout-minutes` and the platform's lease must outlast
+   that.
+
+When the provider refuses the login with one of its permanent codes (for OpenAI `refresh_token_reused`,
+`refresh_token_expired`, `refresh_token_invalidated`, and the standard `invalid_grant`), the step posts
+`{"provider": "<id>", "failure": "<code>"}` to the same endpoint instead, and the dashboard asks for a new
+login. Any other error answer from the provider (a 5xx, a 429, an unknown code, or no access token) posts
+`{"failure": "provider_error"}`; the provider's own text is never sent. A provider request that fails in flight
+posts nothing. Each of these ends the job red.
+
+Every request to the platform carries `Authorization: Bearer <run token>` (from the connect step) and
+`X-Crysk-Dispatch-Id: <dispatch id>`. A failure before the provider request (the target, `begin`, a missing or
+malformed record, an unknown provider, a key that is not 32 bytes) ends the job red with nothing spent, so the
+platform may dispatch again. The step writes no file and no output, and no token reaches the log or an error
+message. The provider's endpoints, client id, permanent codes and where its account id lives are one entry in
+`src/security/oauth-providers.ts`; the contract types are in `src/ci/credential-refresh.ts`.
+
 ## Security considerations
 
 ### Fork pull requests
 In GitHub Actions, pull requests originating from forks do not receive repository secrets (the
 `CRYSK_*` secrets). This is GitHub's intentional security boundary to prevent untrusted pull requests from
 exfiltrating credentials or consuming API budget. Repository **variables** (`CRYSK_MODELS`,
-`CRYSK_CREDENTIALS`, `CRYSK_OPENCODE_PROVIDERS`) are visible; that is why they must not contain credentials,
+`CRYSK_CREDENTIALS`, `CRYSK_PROFILE`, `CRYSK_OPENCODE_PROVIDERS`) are visible; that is why they must not contain credentials,
 and why a model name or effort that looks like a credential is refused.
 
 So the generated workflow skips a fork's `pull_request` runs: they could never authenticate. To review
@@ -1388,7 +1473,10 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `anthropic-api-key`, `claude-token`, `opencode-auth`, `routing` | empty | Removed. A value in any of them stops the run with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed): pass the `CRYSK_*` secrets in `crysk-secrets`, and the models per role in `models`. |
 | `crysk-secrets` | empty | The credentials: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets](#crysk_-secrets). |
 | `models` | empty | The models per role, as JSON (the `models` object of a person config), from `vars.CRYSK_MODELS`. See [OpenCode in CI](#opencode-in-ci) and [Configuration, Models](configuration.md#models). Empty: every step runs its prompt's model. Ignored, with a warning, on a repository whose platform settings apply. |
+| `operation` | `review` | `review` reviews a pull request; `refresh-credential` renews a subscription login, and only the Crysk platform dispatches it. See [Subscription logins](#subscription-logins). Empty is a review. |
+| `refresh-provider` | empty | With `operation: refresh-credential`, the OpenCode provider id whose login is renewed (`openai`). |
 | `credentials` | empty | The Claude credential order, as JSON (`{"claude": ["subscription", "api_key"]}`), from `vars.CRYSK_CREDENTIALS`. Empty: the subscription first. Ignored like `models`. |
+| `profile` | empty | The model profile, `claude` or `openai`, from `vars.CRYSK_PROFILE`. `models` still wins role by role. An unknown profile fails the run (`CRYSK-CONFIG-INVALID`). Empty: `claude`. Ignored like `models`. |
 
 ## Error codes
 
@@ -1552,6 +1640,22 @@ Or bill per token with an OpenAI API key instead:
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
+#### `subscription_expiring`
+
+**What:** The {provider} subscription login for {step} expires before the review would finish
+
+**Why:** A review never renews a subscription login whose provider rotates its refresh token: renewing it inside the run would spend the stored login and lose the new one with the run's copy
+
+On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.
+
+On a workflow you manage yourself, run `opencode auth login` again and set the `CRYSK_OPENCODE_<PROVIDER>_OAUTH` secret from its new record: the secret is a snapshot, and nothing renews it for you.
+
+Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.
+
+A review refuses to start when the login's access token expires within two hours, and a review step refuses a
+login that has already expired. The review's copy of the login never carries the refresh token of a provider
+that rotates it (`openai`), so the review cannot renew it.
+
 #### `malformed_payload`
 
 **What:** The credential store is not usable: {detail}
@@ -1641,7 +1745,9 @@ On a workflow set up before the rename, comment `/pr-hero review` instead. Its w
 When every failed hunter reports the secret it ran on, the fix starts with the one for that secret. In the
 action, `{secret}` is the `CRYSK_*` secret the workflow passes (`CRYSK_CLAUDE_API_KEY` or
 `CRYSK_CLAUDE_OAUTH_TOKEN`); a local run names the Claude CLI's own variable (`ANTHROPIC_API_KEY` or
-`CLAUDE_CODE_OAUTH_TOKEN`), which it exports itself.
+`CLAUDE_CODE_OAUTH_TOKEN`), which it exports itself. An OpenCode route names its own secret,
+`CRYSK_OPENCODE_<PROVIDER>_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and gets the OpenCode variants below. A provider
+that answers HTTP 401 is a rejected credential whatever its words.
 
 #### `api_key`
 
@@ -1677,6 +1783,57 @@ The rejected secret is the subscription token, `CRYSK_CLAUDE_OAUTH_TOKEN` in the
 
 ```bash
 claude setup-token && gh secret set {secret}
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+#### `opencode_api_key`
+
+**Why:** the provider refused the API key in that secret: it is invalid, expired or revoked
+
+The rejected secret is an OpenCode provider's key, `CRYSK_OPENCODE_<PROVIDER>_API_KEY`.
+
+**Fix:**
+
+Create a new key with the provider and set it:
+
+```bash
+gh secret set {secret}
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+#### `opencode_oauth`
+
+**Why:** the ChatGPT login recorded in that secret is expired or revoked
+
+The rejected secret is the OpenAI subscription record, `CRYSK_OPENCODE_OPENAI_OAUTH`.
+
+**Fix:**
+
+Log in again with `opencode auth login` and choose ChatGPT, then set the provider's record, base64 on one line (on macOS, drop -w0):
+
+```bash
+opencode auth login
+jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+```
+
+Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):
+
+```bash
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
 Then ask for a new review:
@@ -1810,6 +1967,30 @@ gh variable set CRYSK_CREDENTIALS --body "$(jq -c . credentials.json)"
 ```
 
 The workflow passes it as `credentials: ${{ vars.CRYSK_CREDENTIALS }}`.
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+#### `profile-input`
+
+The workflow's `profile` input, filled from the `CRYSK_PROFILE` variable, is not a known profile. Crysk names the input and never echoes its value.
+
+**What:** The profile input is invalid: {detail}
+
+**Why:** Crysk refuses to guess which models the review should run
+
+**Fix:**
+
+Set the variable to a known profile, for example:
+
+```bash
+gh variable set CRYSK_PROFILE --body openai
+```
+
+The workflow passes it as `profile: ${{ vars.CRYSK_PROFILE }}`.
 
 Then re-run the workflow:
 
@@ -2093,6 +2274,54 @@ Or bill per token: set CRYSK_CLAUDE_API_KEY and put api_key first in `credential
 
 ```bash
 gh secret set CRYSK_CLAUDE_API_KEY
+```
+
+#### `opencode_api_key`
+
+**What:** the account behind {secret} reached a rate limit or quota
+
+**Why:** the provider refuses requests on this key until the limit resets or the account has credit again, so an immediate retry would fail the same way
+
+Every failed hunter ran on the same OpenCode provider key, `CRYSK_OPENCODE_<PROVIDER>_API_KEY`. The OpenCode transport does not report the provider's words, so the sentence names the secret instead.
+
+**Fix:**
+
+Wait for the limit to reset, or add credit or raise the quota on the provider account behind the key, then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+Or set a key from an account that has quota:
+
+```bash
+gh secret set {secret}
+```
+
+#### `opencode_oauth`
+
+**What:** the ChatGPT subscription behind {secret} reached its usage limit
+
+**Why:** the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way
+
+Every failed hunter ran on the OpenAI subscription record, `CRYSK_OPENCODE_OPENAI_OAUTH`.
+
+**Fix:**
+
+Re-run after the limit resets:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):
+
+```bash
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
 <a id="prh-provider-unavailable"></a>

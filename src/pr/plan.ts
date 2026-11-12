@@ -53,10 +53,12 @@ import {
 } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
 import { type DiffStat, estimateCost } from "#review/report";
+import { isBundledAgentsDir } from "#review/route-preflight";
 import {
   enforceCapabilityGate,
   type LoadedRunConfig,
   resolvePipelineRoute,
+  routingConfigured,
 } from "#review/run";
 import type { SizeGateVerdict } from "#review/size-gate";
 import type { ReviewSpec } from "#review/spec";
@@ -125,6 +127,7 @@ export async function resolvePrPlanAndConfirm(params: {
   config: LoadedRunConfig["config"];
   summary: LoadedRunConfig["summary"];
   loaded: LoadedRunConfig["loaded"];
+  profile: LoadedRunConfig["profile"];
   isCi: boolean;
   // The one resolution of the run's CI mode (resolveCiPosture, reviewPr). Passed
   // down, never re-resolved here.
@@ -242,12 +245,14 @@ export async function resolvePrPlanAndConfirm(params: {
     }
   }
   const productionRoute = await resolvePipelineRoute({
-    modelsConfigured: params.config.models !== undefined,
+    modelsConfigured: routingConfigured(params.config),
     workspaceRoot: params.worktreePath,
     spec: params.spec,
     options: params.options,
     agentFiles: params.agentFiles,
+    bundledAgents: isBundledAgentsDir({ source: params.agentsDirSource }),
     models: params.config.models,
+    profile: params.profile,
     summary: params.summary,
     summarizerEnabled: params.summary.enabled && !params.skipDiscovery,
     scoutEnabled: params.options.scout && !params.skipDiscovery,

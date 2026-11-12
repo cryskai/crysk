@@ -1,5 +1,6 @@
 import anthropicCatalog from "../../config/models/anthropic.json";
 import type { RunnerBackend } from "../execution/contracts";
+import { FALLBACK_PROFILE, profileRoleEffort } from "./profiles";
 
 // #175, 2026-09-02. This catalogue holds ALIAS NAMES and nothing else.
 //
@@ -182,9 +183,11 @@ export type StepRole =
   | "verifier"
   | "other";
 
-// THE per-role effort table, and the only place a default is chosen. It is the
-// fallback when a prompt's frontmatter omits `effort:`, so a custom or lab
-// prompt set still runs at an EXPLICIT level.
+// The per-role effort table: the fallback when a prompt's frontmatter omits
+// `effort:`, so a custom or lab prompt set still runs at an EXPLICIT level.
+// The levels a profile assigns are read from the `claude` profile
+// (src/model/profiles.ts), the one place they are chosen; `verifier` and
+// `other` have no profile role and stay here.
 //
 // WHY the engine owns this at all (#299, 2026-10-02): pr-hero never passed
 // `--effort`, so every step ran at the CLI's implicit default, which is `high`
@@ -208,10 +211,10 @@ export type StepRole =
 //   - everything else high: unmeasured, so it keeps what every model ran at
 //     before the 5.5 family, i.e. the behavior those roles were validated under.
 const ROLE_EFFORT: Readonly<Record<StepRole, Effort>> = Object.freeze({
-  hunter: "xhigh",
-  refuter: "high",
-  summarizer: "high",
-  scout: "high",
+  hunter: profileRoleEffort(FALLBACK_PROFILE, "hunter"),
+  refuter: profileRoleEffort(FALLBACK_PROFILE, "refuter"),
+  summarizer: profileRoleEffort(FALLBACK_PROFILE, "summary"),
+  scout: profileRoleEffort(FALLBACK_PROFILE, "scout"),
   verifier: "high",
   other: "high",
 });

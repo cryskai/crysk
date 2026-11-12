@@ -4,6 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadEffectiveConfig } from "#config/config";
+import { profileModelAlias, profileRoute } from "#model/profiles";
+import { CLAUDE_PROFILE } from "#model/profiles/claude";
 import {
   type AgentsDirConfigSeat,
   agentFilePath,
@@ -13,6 +15,7 @@ import {
   resolveAgentsDirSetting,
 } from "#review/preflight";
 import { parseAgentSource, promptSetFingerprint } from "#review/prompt-set";
+import { resolveSpecialty } from "#review/spec";
 import type { EngineAssets } from "../../src/assets";
 import { resolveEngineAssets } from "../../src/assets";
 import { preflightAgentsDir, resolveAgentsDir } from "../../src/cli";
@@ -161,11 +164,13 @@ describe("bundled prompts carry no tool-injected content", () => {
   });
 });
 
-describe("bundled prompts declare the intended model split", () => {
-  // Hunters are Sonnet at `xhigh`; the refuter is Opus at `high`. Each prompt's
-  // frontmatter `model:` and `effort:` are the ONLY place this is decided (the
-  // bundled AgentSpec carries neither), so a one-line frontmatter edit moves it
-  // and nothing else would notice.
+describe("the claude profile holds the intended model split", () => {
+  // Hunters are Sonnet at `xhigh`; the refuter is Opus at `high`. The `claude`
+  // profile (src/model/profiles.ts) is where this is decided now (model-profiles
+  // S1-S2): a bundled set marked `bundledAgents` takes its routing from it,
+  // so a one-line profile edit moves it and nothing else would notice. While the bundled prompts
+  // still carry `model:`/`effort:` lines, they must say the same thing: a user
+  // who copies the set as a starting point gets the same run.
   //
   // The effort values are the #299 (2026-10-02) evidence, not taste. pr-hero
   // never passed `--effort`, so every step ran at the CLI's implicit default:
@@ -187,47 +192,76 @@ describe("bundled prompts declare the intended model split", () => {
   const defaultDir = path.resolve(import.meta.dir, "../../prompts/default");
   const parsedOf = (file: string) =>
     parseAgentSource(readFileSync(path.join(defaultDir, file), "utf-8"));
+  const hunterFiles = () =>
+    readdirSync(defaultDir)
+      .filter((f) => f.startsWith("deep-review-") && f.endsWith(".md"))
+      .sort();
+  const specHunters = () =>
+    localReviewSpec({}).agents.filter((a) => a.role === "hunter");
 
-  test("the refuter prompt declares opus at high effort", () => {
-    const refuter = parsedOf("review-refuter.md");
-    expect(refuter.model).toBe("opus");
-    expect(refuter.effort).toBe("high");
+  test("the refuter runs opus at high effort", () => {
+    expect(profileRoute(CLAUDE_PROFILE, "refuter")).toEqual({
+      model: "claude:opus-latest",
+      effort: "high",
+    });
+  });
+
+  test("every bundled hunter runs sonnet at xhigh effort", () => {
+    // Pinned against the spec so the loop below cannot pass vacuously: a glob
+    // that matched nothing, or a hunter renamed out of the prefix, would
+    // otherwise leave it asserting over an empty or shrunken list.
+    expect(hunterFiles()).toEqual(
+      specHunters()
+        .map((a) => a.file)
+        .sort(),
+    );
+    expect(specHunters().length).toBeGreaterThan(0);
+
+    for (const hunter of specHunters()) {
+      expect(
+        profileRoute(CLAUDE_PROFILE, `hunter.${resolveSpecialty(hunter)}`),
+        `${hunter.key} route`,
+      ).toEqual({ model: "claude:sonnet-latest", effort: "xhigh" });
+    }
   });
 
   // The engine mandates a codegraph_explore call whenever the run's registry
   // grants codegraph, so a hunter that does not declare the tool would be
   // told to use something it never listed (logic did, until 2026-10).
   test("every bundled hunter prompt declares codegraph_explore", () => {
-    const hunterFiles = readdirSync(defaultDir)
-      .filter((f) => f.startsWith("deep-review-") && f.endsWith(".md"))
-      .sort();
-    expect(hunterFiles.length).toBeGreaterThan(0);
-    for (const file of hunterFiles) {
+    expect(hunterFiles().length).toBeGreaterThan(0);
+    for (const file of hunterFiles()) {
       expect(parsedOf(file).tools, `${file} tools`).toContain(
         "mcp__codegraph__codegraph_explore",
       );
     }
   });
 
-  test("every bundled hunter prompt declares sonnet at xhigh effort", () => {
-    const hunterFiles = readdirSync(defaultDir)
-      .filter((f) => f.startsWith("deep-review-") && f.endsWith(".md"))
-      .sort();
-
-    // Pinned against the spec so the loop below cannot pass vacuously: a glob
-    // that matched nothing, or a hunter renamed out of the prefix, would
-    // otherwise leave it asserting over an empty or shrunken list.
-    expect(hunterFiles).toEqual(
-      localReviewSpec({})
-        .agents.filter((a) => a.role === "hunter")
-        .map((a) => a.file)
-        .sort(),
-    );
-
-    for (const file of hunterFiles) {
-      const hunter = parsedOf(file);
-      expect(hunter.model, `${file} model`).toBe("sonnet");
-      expect(hunter.effort, `${file} effort`).toBe("xhigh");
+  // Drift guard for the lines the bundled set still carries (phase 1 keeps
+  // them; only the bundled set may drop them later). A line that disagrees
+  // with the profile would route a copied set differently from the bundled
+  // one. A dropped line is fine; a different one is not.
+  test("the bundled frontmatter, where present, equals the claude profile", () => {
+    const routes: Array<[string, string]> = [
+      ["review-refuter.md", "refuter"],
+      ...specHunters().map((a): [string, string] => [
+        a.file,
+        `hunter.${resolveSpecialty(a)}`,
+      ]),
+    ];
+    for (const [file, role] of routes) {
+      const parsed = parsedOf(file);
+      const route = profileRoute(CLAUDE_PROFILE, role);
+      if (parsed.model !== undefined) {
+        expect(parsed.model, `${file} model`).toBe(
+          profileModelAlias(route.model),
+        );
+      }
+      if (parsed.effort !== undefined) {
+        expect(parsed.effort, `${file} effort`).toBe(
+          route.effort as typeof parsed.effort,
+        );
+      }
     }
   });
 });

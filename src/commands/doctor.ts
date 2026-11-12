@@ -1,12 +1,13 @@
 import os from "node:os";
-import { loadEffectiveConfig, resolveOptionalRepoRoot } from "#config/config";
-import { type ModelsConfig, modelsNeedOpenCode } from "#model/model-name";
+import { resolveOptionalRepoRoot } from "#config/config";
+import { routingNeedsOpenCode } from "#model/model-name";
 import type { CliOptions } from "#review/preflight";
 import { styleEnabled, terminalWidth } from "#ui/primitives";
 import {
   type DoctorCheckItem,
   type DoctorReport,
   evaluateDoctorReport,
+  loadDoctorRouting,
   openCodeRoutingSdkCheck,
   renderDoctorReport,
   runDoctor,
@@ -38,41 +39,41 @@ export async function runDoctorCommand(input: {
   // the loader share. Tests pass a version without resolving a package.
   readSdkVersion?: () => Promise<string | undefined>;
 }): Promise<{ report: DoctorReport; lines: string[] }> {
-  let models: ModelsConfig | undefined;
+  // Required unless the configuration loads and proves otherwise: a config
+  // that fails to load must not quietly excuse a missing Claude CLI.
+  const routing = await loadDoctorRouting({
+    home: input.home,
+    repoRoot: input.repoRoot,
+    configFlag: input.configFlag,
+  });
+  const { models, profile, claudeRequired } = routing;
   let configCheck: DoctorCheckItem | undefined;
-  try {
-    const loaded = await loadEffectiveConfig({
-      root: input.repoRoot,
-      home: input.home,
-      configFlag: input.configFlag,
-    });
-    models = loaded.effective.models;
-    // A config that loads with warnings works today and will not after the
-    // key it uses is removed: degraded, with the warning as its message.
-    if (loaded.warnings.length > 0) {
-      configCheck = {
-        name: "config",
-        severity: "degraded",
-        message: loaded.warnings.join("\n"),
-      };
-    }
-  } catch (error) {
+  if (routing.error !== undefined) {
     configCheck = {
       name: "config",
       severity: "blocking",
-      message: `configuration failed to load: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      message: `configuration failed to load: ${routing.error}`,
+    };
+  } else if (routing.warnings.length > 0) {
+    // A config that loads with warnings works today and will not after the
+    // key it uses is removed: degraded, with the warning as its message.
+    configCheck = {
+      name: "config",
+      severity: "degraded",
+      message: routing.warnings.join("\n"),
     };
   }
   const runDoctorFn = input.runDoctorFn ?? runDoctor;
   const doctorReport = await runDoctorFn({
     repoRoot: input.repoRoot,
     cwd: input.repoRoot,
+    claudeRequired,
     probeExactBindings: () =>
       collectDoctorExactBindingReports({
         workspaceRoot: input.workspaceRoot,
         models,
+        claudeRequired,
+        profile,
       }),
   });
   // Same home the command was given. The no-arg reader uses os.homedir().
@@ -82,9 +83,10 @@ export async function runDoctorCommand(input: {
       readInstalledOpenCodeSdkVersion({
         nodeModulesDir: prheroLayout(input.home).nodeModulesDir,
       }));
-  const sdkCheck = modelsNeedOpenCode(models)
+  const sdkCheck = routingNeedsOpenCode(models, profile)
     ? openCodeRoutingSdkCheck({
         models,
+        profile,
         sdkVersion: await readSdkVersion(),
       })
     : undefined;

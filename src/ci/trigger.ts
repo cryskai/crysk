@@ -19,8 +19,9 @@
 // ignored comment costs seconds instead of a dependency install. A package
 // import has no node_modules to resolve against yet, and a `#...` alias is no
 // better: it resolves to a src module whose own imports reach packages. Keep
-// every import here `node:` or `bun`, plus the import-free ../brand and
-// ./crysk-secrets (the CRYSK_* grammar, kept import-free for this step).
+// every import here `node:` or `bun`, plus the import-free ../brand,
+// ./crysk-secrets (the CRYSK_* grammar, kept import-free for this step) and the
+// profile registry ../model/profiles.
 
 import { randomBytes } from "node:crypto";
 import {
@@ -33,6 +34,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { commandHint, isCommand, startsWithCommand } from "../brand";
+// The profile registry: data modules with no runtime imports of their own
+// (test/architecture/profile-registry.test.ts), so the builtins-only rule
+// still holds.
+import { profileRunsOnlyOnOpenCode } from "../model/profiles";
 import {
   type CryskSecretsParse,
   cryskSecretsCarryCredential,
@@ -868,9 +873,20 @@ function lookupClass(decision: {
 
 // The route the run would have used. The trigger has no models text, only
 // whether the models in effect name OpenCode: the platform's, or else the
-// `models` input's (action.yml's HAS_OPENCODE_ROUTING, D1).
+// `models` input's (action.yml's HAS_OPENCODE_ROUTING, D1). With no platform
+// answer, a `profile` input whose every route is OpenCode names OpenCode too,
+// unless a `models` default sends every role elsewhere (STANDALONE_*).
 function backendOf(deps: CiTriggerDeps): string {
-  return deps.env.HAS_OPENCODE_ROUTING === "true" ? "opencode" : "claude";
+  if (deps.env.HAS_OPENCODE_ROUTING === "true") return "opencode";
+  // The platform answered (its person layer wins whole): the input is ignored.
+  if ((deps.env.PLATFORM_ROUTING_OPENCODE ?? "") !== "") return "claude";
+  if (
+    deps.env.STANDALONE_MODELS_DEFAULT !== "true" &&
+    profileRunsOnlyOnOpenCode(deps.env.STANDALONE_PROFILE)
+  ) {
+    return "opencode";
+  }
+  return "claude";
 }
 
 // The run's PR number, or why there is none. `malformed` is kept apart from a

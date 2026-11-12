@@ -2,13 +2,12 @@
 import { readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { resolveModelRoute } from "#model/routing";
 import {
   type FindingsDocument,
   validateFindingsDocument,
 } from "#review/findings";
-import { localReviewSpec } from "#review/preflight";
-import { parseAgentSource } from "#review/prompt-set";
+import { type LocalConfig, localReviewSpec } from "#review/preflight";
+import { type ParsedAgent, parseAgentSource } from "#review/prompt-set";
 import {
   type ExecutionAttemptEvidence,
   evidenceSha256,
@@ -25,6 +24,10 @@ export interface BenchmarkIdentity {
   headSha: string;
   baseSha: string;
   routes: ResolvedModelRoute[];
+  // The route plan's fingerprint, the one pipeline.json records as
+  // `route_fingerprint` for the plan the run executed (S2). Absent on
+  // identities frozen before it; those keep qualifying on step proofs alone.
+  routeFingerprint?: string;
   runtime: Array<{
     backend: string;
     executableSha256: string;
@@ -75,17 +78,20 @@ export async function freezeBenchmarkIdentity(input: {
       source: await readFile(path.join(input.agentsDir, name), "utf8"),
     })),
   );
-  // The model each prompt runs on, from the flags or its frontmatter. The
-  // config's `models` is not read here, so a benchmark that routes a role
-  // elsewhere through `models` records the Claude identity (L47).
-  const routes = prompts.map((p) =>
-    resolveModelRoute(
-      input.model ??
-        (p.name.includes("refuter") ? input.refuterModel : input.hunterModel) ??
-        parseAgentSource(p.source).model ??
-        "sonnet",
-    ),
-  );
+  // The routes the review will execute, built by the production plan builder
+  // from the same inputs `crysk review` reads (S2, L47): the config's `models`,
+  // the profile, the prompts' frontmatter and `--model`. Routes used to come
+  // from the flags or the frontmatter with a `sonnet` fallback, so a run routed
+  // through `models` froze the Claude identity. The fingerprint hashes these
+  // routes (and the engine's files), so attempts frozen before this change no
+  // longer match on resume and run again; judging still accepts them.
+  const plan = await benchmarkRoutePlan({
+    ...input,
+    config: loaded.effective,
+    sources: prompts,
+  });
+  const { planRoutes } = await import("#model/routing");
+  const routes = planRoutes(plan).map((step) => step.route);
   const runtime: BenchmarkIdentity["runtime"] = [];
   for (const backend of new Set(routes.map((r) => r.backend))) {
     const binary = Bun.which(backend === "opencode" ? "opencode" : "claude");
@@ -166,8 +172,71 @@ export async function freezeBenchmarkIdentity(input: {
     headSha: input.headSha,
     baseSha: input.baseSha,
     routes,
+    ...(plan.routeFingerprint === undefined
+      ? {}
+      : { routeFingerprint: plan.routeFingerprint }),
     runtime,
   };
+}
+// The route plan of the review martian-cal spawns (`review --agents <dir>
+// --no-summary [--model m]`), through buildCliRoutePlan as review.ts builds it.
+// `--hunter-model` / `--refuter-model` are not CLI flags (S5): they apply as a
+// `models` layer over the config, one entry per hunter role and the refuter.
+export async function benchmarkRoutePlan(input: {
+  agentsDir: string;
+  model?: string;
+  hunterModel?: string;
+  refuterModel?: string;
+  config: LocalConfig;
+  sources: Array<{ name: string; source: string }>;
+}) {
+  const { parseArgs, resolveMaterialityGate, resolveScout, resolveSummary } =
+    await import("#review/preflight");
+  const { validateReviewSpec } = await import("#review/spec");
+  const { agentModelRole } = await import("#model/routing");
+  const { modelNameFromAlias } = await import("#model/model-name");
+  const { resolveProfile } = await import("#model/profiles");
+  const { buildCliRoutePlan, isBundledAgentsDir } = await import(
+    "#review/route-preflight"
+  );
+  const { options } = parseArgs([
+    "review",
+    "--agents",
+    input.agentsDir,
+    "--no-summary",
+    ...(input.model === undefined ? [] : ["--model", input.model]),
+  ]);
+  const spec = validateReviewSpec(localReviewSpec());
+  const agentFiles = new Map<string, ParsedAgent>();
+  for (const agent of spec.agents) {
+    const source = input.sources.find((p) => p.name === agent.file)?.source;
+    if (source !== undefined)
+      agentFiles.set(agent.key, parseAgentSource(source));
+  }
+  const overlay: Record<string, string[]> = {};
+  for (const agent of spec.agents) {
+    const role = agentModelRole(agent);
+    const model =
+      agent.role === "refuter" ? input.refuterModel : input.hunterModel;
+    if (role !== undefined && model !== undefined)
+      overlay[role] = [modelNameFromAlias(model).raw];
+  }
+  return buildCliRoutePlan({
+    spec,
+    options: { ...options, scout: resolveScout(options, input.config) },
+    agentFiles,
+    // martian-cal always passes `--agents`, so the set is a flag's, never the
+    // bundled one, exactly as the review subprocess resolves it.
+    bundledAgents: isBundledAgentsDir({ source: "flag" }),
+    models:
+      Object.keys(overlay).length === 0
+        ? input.config.models
+        : { ...input.config.models, ...overlay },
+    summary: resolveSummary(options, input.config),
+    // The profile the review subprocess resolves from the same config.
+    profile: resolveProfile(input.config.profile),
+    materialityEnabled: resolveMaterialityGate(input.config),
+  });
 }
 function hash(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -225,6 +294,7 @@ export async function loadQualifiedReview(
     )
       throw new Error("incomplete or mismatched findings");
     const pipeline = (await readEvidenceFile(root, "pipeline.json")).value as {
+      route_fingerprint?: string;
       steps?: Array<{
         name: string;
         status?: string;
@@ -248,6 +318,11 @@ export async function loadQualifiedReview(
       )
     )
       throw new Error("missing expected steps");
+    if (
+      identity.routeFingerprint !== undefined &&
+      pipeline.route_fingerprint !== identity.routeFingerprint
+    )
+      throw new Error("executed route plan differs from frozen identity");
     const names = new Set<string>();
     for (const step of pipeline.steps) {
       if (

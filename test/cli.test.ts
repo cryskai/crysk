@@ -30,6 +30,7 @@ import {
   evaluateCiReviewAdmission,
   resolveCiAdmissionAttemptCount,
 } from "#ci/review-admission";
+import { FALLBACK_PROFILE } from "#model/profiles";
 import {
   ADMISSION_CHECK_RUN_NAME,
   listAdmissionCheckRuns,
@@ -61,6 +62,8 @@ import {
 import { canonicalRemoteId } from "../src/home-preflight";
 import { readLocalIgnoreRules } from "../src/ignore-read";
 import { createSignalHandler, settleOnSignal } from "../src/signal-handler";
+
+const RUN_PROMPTS = { profile: FALLBACK_PROFILE };
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -213,7 +216,7 @@ function _summaryStdins(calls: RecordedCall[]): string[] {
 describe("CLI summarizer activation", () => {
   test("default-on activation supplies the bundled prompt and model override", () => {
     const settings: SummarySettings = { enabled: true, model: "opus" };
-    expect(pipelineSummarizerInput(settings)).toEqual({
+    expect(pipelineSummarizerInput(settings, RUN_PROMPTS)).toEqual({
       summarizer: {
         promptPath: path.join(
           import.meta.dir,
@@ -222,12 +225,16 @@ describe("CLI summarizer activation", () => {
           "summarizer.md",
         ),
         model: "opus",
+        // Engine-owned: routed by the profile (model-profiles S3-S4).
+        bundled: true,
       },
     });
   });
 
   test("--no-summary's resolved setting preserves WU2 optional absence", () => {
-    expect(pipelineSummarizerInput({ enabled: false })).toEqual({});
+    expect(pipelineSummarizerInput({ enabled: false }, RUN_PROMPTS)).toEqual(
+      {},
+    );
   });
 });
 
@@ -235,18 +242,20 @@ describe("CLI scout activation (ROADMAP-DOORDASH M5)", () => {
   const BUNDLED = path.join(import.meta.dir, "..", "prompts", "scout.md");
 
   test("off resolves to WU2's optional absence — the pipeline sees no scout key", () => {
-    expect(pipelineScoutInput({ scout: false })).toEqual({});
-    expect(pipelineScoutInput({ scout: false, scoutModel: "haiku" })).toEqual(
-      {},
-    );
+    expect(pipelineScoutInput({ scout: false }, RUN_PROMPTS)).toEqual({});
+    expect(
+      pipelineScoutInput({ scout: false, scoutModel: "haiku" }, RUN_PROMPTS),
+    ).toEqual({});
   });
 
   test("on supplies the bundled prompt, and the model only when asked for", () => {
-    expect(pipelineScoutInput({ scout: true })).toEqual({
-      scout: { promptPath: BUNDLED },
+    expect(pipelineScoutInput({ scout: true }, RUN_PROMPTS)).toEqual({
+      scout: { promptPath: BUNDLED, bundled: true },
     });
-    expect(pipelineScoutInput({ scout: true, scoutModel: "haiku" })).toEqual({
-      scout: { promptPath: BUNDLED, model: "haiku" },
+    expect(
+      pipelineScoutInput({ scout: true, scoutModel: "haiku" }, RUN_PROMPTS),
+    ).toEqual({
+      scout: { promptPath: BUNDLED, model: "haiku", bundled: true },
     });
   });
 
@@ -256,7 +265,7 @@ describe("CLI scout activation (ROADMAP-DOORDASH M5)", () => {
   // does not name as a prompt-set mismatch and refuses to start.
   test("the prompt lives in prompts/, is not agent-named, and exists on disk", async () => {
     const resolved = (
-      pipelineScoutInput({ scout: true }) as {
+      pipelineScoutInput({ scout: true }, RUN_PROMPTS) as {
         scout: { promptPath: string };
       }
     ).scout.promptPath;

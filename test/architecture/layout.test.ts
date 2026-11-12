@@ -60,6 +60,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "admission-ledger",
       "classify-error",
       "cli-record",
+      "credential-refresh",
       "crysk-secrets",
       "force-comment",
       "gates",
@@ -104,6 +105,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "exec-snapshots",
       "free-discovery",
       "model-name",
+      "profiles",
       "provider-capabilities",
       "routing",
     ],
@@ -195,6 +197,16 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   {
     domain: "git",
     files: ["git", "identity", "refs"],
+  },
+  {
+    domain: "harness",
+    files: [
+      "materiality-judge",
+      "pipeline-plan",
+      "replay-rows",
+      "route-runner",
+      "single-step",
+    ],
   },
 ];
 

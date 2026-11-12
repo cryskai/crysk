@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadQualifiedReview } from "../benchmarks/martian/martian-evidence";
-import { computeQualifiedBenchmarkMetrics } from "../benchmarks/martian/martian-judge";
+import {
+  computeQualifiedBenchmarkMetrics,
+  martianJudgeRoute,
+} from "../benchmarks/martian/martian-judge";
+import { routeIdentityFields } from "../src/harness/single-step";
 import { OpenCodeEvidenceCollector } from "../src/transports/opencode-evidence";
 
 test("legacy proofless complete findings never qualifies", async () => {
@@ -190,6 +194,7 @@ async function realAttemptFixture(
     headSha: "head",
     baseSha: "base",
     routes: [route],
+    routeFingerprint: "c".repeat(64),
     runtime: [
       {
         backend,
@@ -214,6 +219,7 @@ async function realAttemptFixture(
       },
     ],
     usage_v2: { completeness: "complete", cashCostUsd: 0 },
+    route_fingerprint: "c".repeat(64),
   };
   await writeFile(path.join(root, "pipeline.json"), JSON.stringify(pipeline));
   await writeFile(
@@ -254,6 +260,39 @@ test("actual harness proof qualifies schema-valid empty review; changed frozen i
   ).toBe(false);
   await writeFile(x.step.outPath, '{"findings":["changed"]}');
   expect((await loadQualifiedReview(x.root, x.identity)).qualified).toBe(false);
+});
+// S2: the run must have executed the route plan its identity froze. A run
+// whose pipeline.json records another plan fingerprint does not qualify, even
+// when every step proof is otherwise intact.
+test("a run that executed a different route plan than the frozen identity does not qualify", async () => {
+  const x = await realAttemptFixture();
+  await writeFile(
+    path.join(x.root, "pipeline.json"),
+    JSON.stringify({ ...x.pipeline, route_fingerprint: "d".repeat(64) }),
+  );
+  const result = await loadQualifiedReview(x.root, x.identity);
+  expect(result.qualified).toBe(false);
+  expect(result.reason).toBe(
+    "executed route plan differs from frozen identity",
+  );
+  const { route_fingerprint: _, ...noPlan } = x.pipeline;
+  await writeFile(path.join(x.root, "pipeline.json"), JSON.stringify(noPlan));
+  expect((await loadQualifiedReview(x.root, x.identity)).reason).toBe(
+    "executed route plan differs from frozen identity",
+  );
+});
+// Identities frozen before S2 carry no plan fingerprint; already-scored
+// attempts keep qualifying at judge time on their step proofs alone.
+test("a legacy frozen identity without a route plan fingerprint still qualifies", async () => {
+  const x = await realAttemptFixture();
+  const { routeFingerprint: _, ...legacy } = x.identity;
+  await writeFile(
+    path.join(x.root, "run-identity.json"),
+    JSON.stringify(legacy),
+  );
+  const result = await loadQualifiedReview(x.root, legacy as BenchmarkIdentity);
+  expect(result.reason).toBeUndefined();
+  expect(result.qualified).toBe(true);
 });
 test("untrusted evidence traversal, symlink escapes and oversized records fail closed", async () => {
   const x = await realAttemptFixture();
@@ -341,6 +380,27 @@ test("actual judge CLI honors frozen selected denominator and includes valid emp
   expect(report.aggregate.missing).toBe(1);
   expect(report.aggregate.high_critical.precision).toBeUndefined();
   expect(report.aggregate.surfaces.surface_b).toContain("not run");
+  // The judge's route identity is recorded even when no PR needed a judge
+  // call, and no runner was prepared for a run that judged nothing.
+  expect(report.judge_model).toBe("sonnet");
+  expect(report.judge_route).toEqual(
+    JSON.parse(
+      JSON.stringify(routeIdentityFields(martianJudgeRoute().identity)),
+    ),
+  );
+});
+
+// S6: the judge keeps measuring the model it always measured, the Claude Code
+// CLI's sonnet, now as an explicit choice on the route seam.
+test("the Martian judge runs claude:sonnet-latest on its own step", () => {
+  const route = martianJudgeRoute();
+  expect(route.stepKey).toBe("martian-judge");
+  expect(route.identity.route).toEqual({
+    backend: "claude-code",
+    provider: "anthropic",
+    modelFamily: "sonnet",
+    modelSnapshot: "sonnet",
+  });
 });
 
 test("actual run CLI resumes only full matching proof, and preserves prior attempt when model identity changes", async () => {
@@ -480,6 +540,74 @@ test("positive OpenCode frozen identity supplies the actual installed SDK reader
   ]);
 });
 
+// L47 / S2: a benchmark that routes through the config's `models` must freeze
+// the routes the review will execute, built by the production plan builder,
+// never the prompts' `sonnet` frontmatter.
+test("frozen identity routes come from the config's models, not the frontmatter", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "prhero-freeze-routed-"));
+  const agents = path.join(root, "agents");
+  await mkdir(agents);
+  const { localReviewSpec } = await import("#review/preflight");
+  for (const a of localReviewSpec().agents)
+    await writeFile(
+      path.join(agents, a.file),
+      `---\nname: ${a.key}\nmodel: sonnet\n---\nbody`,
+    );
+  await writeFile(path.join(root, "gotchas.md"), "gotchas");
+  await writeFile(path.join(root, "binary"), "fixture");
+  const modulePath = path.join(
+    import.meta.dir,
+    "../benchmarks/martian/martian-evidence.ts",
+  );
+  const configPath = path.join(import.meta.dir, "../src/config/config.ts");
+  const admissionPath = path.join(
+    import.meta.dir,
+    "../src/transports/opencode-admission.ts",
+  );
+  const input = {
+    engineRoot: root,
+    repo: root,
+    agentsDir: agents,
+    gotchasPath: path.join(root, "gotchas.md"),
+    pr: 1,
+    headSha: "head",
+    baseSha: "base",
+  };
+  const script = path.join(root, "test.ts");
+  await writeFile(
+    script,
+    `import {mock} from 'bun:test';import * as config from ${JSON.stringify(configPath)};import * as admission from ${JSON.stringify(admissionPath)};mock.module(${JSON.stringify(configPath)},()=>({...config,loadEffectiveConfig:async()=>({effective:{models:{default:['opencode:openai/gpt-x']}}})}));mock.module(${JSON.stringify(admissionPath)},()=>({...admission,observeOpenCodeExecutable:async(executable)=>({sdkVersion:'1.18.25',serverVersion:'1.18.30',executableSha256:executable.sha256})}));Bun.which=()=>${JSON.stringify(path.join(root, "binary"))};Bun.spawnSync=(argv)=>({exitCode:0,stdout:Buffer.from(argv.includes('ls-files')?'':'fixture-head'),stderr:Buffer.from('')});Bun.spawn=()=>{throw Error('No inference')};globalThis.fetch=()=>{throw Error('No network')};const {freezeBenchmarkIdentity}=await import(${JSON.stringify(modulePath)});const routed=await freezeBenchmarkIdentity(${JSON.stringify(input)});const split=await freezeBenchmarkIdentity(${JSON.stringify({ ...input, refuterModel: "opus" })});console.log(JSON.stringify({routed,split}));`,
+  );
+  const proc = Bun.spawn([process.execPath, script], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  expect({ code: await proc.exited, stderr }).toMatchObject({ code: 0 });
+  const { routed, split } = JSON.parse(stdout) as {
+    routed: BenchmarkIdentity;
+    split: BenchmarkIdentity;
+  };
+  expect(routed.routes.length).toBeGreaterThan(0);
+  for (const route of routed.routes)
+    expect(route).toMatchObject({
+      backend: "opencode",
+      provider: "openai",
+      modelSnapshot: "gpt-x",
+    });
+  expect(routed.runtime.map((r) => r.backend)).toEqual(["opencode"]);
+  expect(routed.routeFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  // The per-role flag is a `models` layer over the config: the refuter moves
+  // to opus while the hunters keep the configured route.
+  expect(split.routeFingerprint).not.toBe(routed.routeFingerprint);
+  expect(split.routes).toContainEqual(
+    expect.objectContaining({ backend: "claude-code", provider: "anthropic" }),
+  );
+  expect(split.routes).toContainEqual(
+    expect.objectContaining({ backend: "opencode", modelSnapshot: "gpt-x" }),
+  );
+});
 test("OpenCode actual harness evidence requires complete attributable wire/readback capture, not only runtime labels", async () => {
   const x = await realAttemptFixture("opencode");
   const good = await loadQualifiedReview(x.root, x.identity);
@@ -662,4 +790,86 @@ test("actual judge keeps partial known spend from qualified completion", async (
   expect(report.aggregate.known_spend_usd).toBe(0.7);
   expect(report.aggregate.total_cost_usd).toBeNull();
   expect(report.aggregate.unknown_cost_count).toBe(1);
+});
+
+// S2: the gate above is only sound if the plan the freeze builds is the plan
+// the review subprocess builds. Build both offline, the review side through
+// the production derivations review.ts uses on martian-cal's argv, and compare
+// their fingerprints for no config, a routed `models` and `--model`.
+test("frozen route plan fingerprint equals the one the review command builds", async () => {
+  const { benchmarkRoutePlan } = await import(
+    "../benchmarks/martian/martian-evidence"
+  );
+  const { loadRunConfig, resolvePromptSet } = await import("#review/run");
+  const { parseArgs, resolveAgentsDirSetting, resolveMaterialityGate } =
+    await import("#review/preflight");
+  const { buildCliRoutePlan, isBundledAgentsDir } = await import(
+    "#review/route-preflight"
+  );
+  const { resolveHomeDir } = await import("../src/brand-paths");
+  const { readFile } = await import("node:fs/promises");
+  const agentsDir = resolveAgentsDirSetting({ cwd: process.cwd() }).dir;
+  const { localReviewSpec } = await import("#review/preflight");
+  const sources = await Promise.all(
+    localReviewSpec().agents.map(async (a) => ({
+      name: a.file,
+      source: await readFile(path.join(agentsDir, a.file), "utf8"),
+    })),
+  );
+  const cases: Array<{ models?: Record<string, string[]>; model?: string }> = [
+    {},
+    { models: { default: ["opencode:openai/gpt-x"] } },
+    { models: { default: ["opencode:openai/gpt-x"] }, model: "opus" },
+  ];
+  for (const c of cases) {
+    const root = await mkdtemp(path.join(tmpdir(), "prhero-freeze-parity-"));
+    const home = await mkdtemp(path.join(tmpdir(), "prhero-freeze-home-"));
+    if (c.models) {
+      // `models` is a per-person key: it lives in the home config.
+      await mkdir(resolveHomeDir(home), { recursive: true });
+      await writeFile(
+        path.join(resolveHomeDir(home), "config.json"),
+        JSON.stringify({ models: c.models }),
+      );
+    }
+    const argv = [
+      "review",
+      "--agents",
+      agentsDir,
+      "--no-summary",
+      ...(c.model === undefined ? [] : ["--model", c.model]),
+    ];
+    let { options } = parseArgs(argv);
+    const { loaded, config, summary, scout, profile } = await loadRunConfig({
+      root,
+      home,
+      configFlag: undefined,
+      options,
+      warn: () => {},
+    });
+    expect(config.models).toEqual(c.models);
+    options = { ...options, scout };
+    const { agents, spec, agentFiles } = await resolvePromptSet(
+      options,
+      loaded,
+      { profile },
+    );
+    const review = await buildCliRoutePlan({
+      spec,
+      options,
+      agentFiles,
+      bundledAgents: isBundledAgentsDir(agents),
+      models: config.models,
+      profile,
+      summary,
+      materialityEnabled: resolveMaterialityGate(config),
+    });
+    const frozen = await benchmarkRoutePlan({
+      agentsDir,
+      model: c.model,
+      config,
+      sources,
+    });
+    expect(frozen.routeFingerprint).toBe(review.routeFingerprint);
+  }
 });

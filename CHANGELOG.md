@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-12
+
+### Added
+
+- **Model profiles: `profile` picks a ready-made set of models for every role** (#518, #521). A new
+  person-only key, `"profile": "claude"` (the default) or `"openai"`, refused in a repo file and for an
+  unknown id. `models` still wins role by role; the profile fills every role it leaves out. Each profile is a
+  data module behind one registry (`src/model/profiles/`), and `claude` is only the fallback. The `openai`
+  profile runs every step on OpenAI through OpenCode: `gpt-6.1-terra` at `xhigh` for the hunters,
+  `gpt-6.1-sol` at `high` for the refuter, `gpt-6.1-terra` at `high` for consolidation, `gpt-6.1-terra` for the
+  scout and the materiality judge, `gpt-6-luna` for the summary. A profile's effort becomes the OpenCode
+  variant. The `openai` judge runs on Terra by choice, not by a measurement; `models.judge` can still pick the
+  measured Claude models. `crysk config` shows and edits the key; see "Profiles" in docs/configuration.md.
+- **A `profile` action input** (#521), from `vars.CRYSK_PROFILE`, for a workflow not connected to the platform.
+  The setup step validates it (`CRYSK-CONFIG-INVALID` with the new `profile-input` source) and writes it
+  beside `models`; `crysk ci init` prints the variable and the profile's provider secrets. The connect step
+  sends `X-Crysk-Capabilities: estimate,profile`, so the platform knows this engine accepts the key.
+
+- **`operation: refresh-credential` renews a subscription login on the runner** (cryskai/platform
+  odd/tasks/openai-oauth.md). The Crysk platform dispatches it before the access token expires, with
+  `refresh-provider` naming the OpenCode provider (`openai`). Only the connect step, the install and the new
+  `Refresh the subscription login` step run: it renews the login once at the provider's token endpoint, seals
+  the new `CRYSK_OPENCODE_<P>_OAUTH` record with the target's GitHub public key, and posts only the ciphertext
+  to `/runs/credential-refresh`, retrying for up to 10 minutes once the old refresh token is spent. A provider
+  refusal (`refresh_token_reused`, `refresh_token_expired`, `refresh_token_invalidated`, `invalid_grant`) is
+  reported as a failure so the dashboard asks for a new login. Reviews are unchanged: `operation` defaults to
+  `review`, and every review step is skipped for a refresh. The endpoints are documented under "Subscription
+  logins" in docs/github-actions.md. New dependency: `libsodium-wrappers` 0.8.4, loaded only by the refresh
+  step.
+
+### Changed
+
+- **The Claude CLI is required only when a step routes to it** (#518, #521). With every step on OpenCode
+  (all `models` on OpenCode, or `profile: openai`), a platform run skips the Claude CLI install, a PR review
+  skips the Claude authority check, and `crysk doctor`, `crysk update`, the menu and the wizard stop requiring
+  the CLI. A custom `agents_dir` keeps it required unless `models.default` covers every role, since its prompts'
+  `model:` outranks the profile. A standalone workflow still installs it.
+- **Credential failures name the OpenCode secret** (#518). A missing or rejected OpenCode credential points at
+  `CRYSK_OPENCODE_<PROVIDER>_*`, and an OpenCode 401 is `auth_invalid` (not retried).
+- **Probes, replays and benchmarks run on the production route plan** (#519): every harness step resolves its
+  model through the same route path a review uses and records the route it ran. `martian-cal` refuses
+  `--hunter-model`/`--refuter-model` (set `models` in the person config instead).
+
+- **A review never renews a subscription login whose provider rotates its refresh token** (cryskai/platform
+  odd/tasks/openai-oauth.md). OpenAI refuses a refresh token once it has been used, and a run cannot write the
+  renewed token back to `CRYSK_OPENCODE_OPENAI_OAUTH`, so a review that renewed the login spent the stored
+  record and the next review failed to authenticate. The review's copy of the record now carries an empty
+  refresh token; a review refuses to start when the access token expires within two hours, and a step refuses
+  one that has expired, both as `CRYSK-CRED-UNUSABLE` with the new `subscription_expiring` class. The Crysk
+  platform renews the login ahead of time; a workflow managed by hand re-sets the secret before it expires
+  (about ten days for OpenAI). Which providers rotate is one table, `src/security/oauth-providers.ts`.
+
 ## [0.5.1] - 2026-11-11
 
 ### Changed
@@ -925,7 +977,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/cryskai/crysk/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/cryskai/crysk/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cryskai/crysk/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cryskai/crysk/compare/v0.3.3...v0.4.0

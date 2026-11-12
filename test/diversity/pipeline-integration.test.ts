@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
+import {
+  buildResolvedRoutePlan,
+  createResolvedRoutePlan,
+  resolveStepRoute,
+} from "#model/routing";
 import type { DraftFinding, HunterDraft, RefuterResult } from "#review/drafts";
 import { type PipelineInput, runPipeline } from "#review/pipeline";
 import { defaultReviewSpec, validateReviewSpec } from "#review/spec";
@@ -548,5 +552,120 @@ describe("pipeline diversity integration", () => {
         }),
       }),
     ).toThrow(DiversityCapabilityError);
+  });
+});
+
+// S2: a leg's recorded identity is the route it executes. Its provenance never
+// names Anthropic for a leg that does not run on Claude, and its fingerprint is
+// the one the run's route plan gives the same step.
+describe("diversity leg identity follows the executed route", () => {
+  const legSpec = (models: string[]) =>
+    validateReviewSpec({
+      multiModelDiversity: {
+        enabled: true,
+        armId: "arm",
+        maxLegs: 2,
+        cashCapUsd: 10,
+      },
+      agents: [
+        {
+          key: "reliability",
+          file: "deep-review-reliability.md",
+          role: "hunter",
+          models,
+        },
+        { key: "refuter", file: "review-refuter.md", role: "refuter" },
+      ],
+    });
+  const finding: DraftFinding = {
+    id: "REL-1",
+    category: 1,
+    path: "src/app.ts",
+    line: 1,
+    severity: "BLOCKER",
+    evidence_class: "deterministic",
+    causal_disposition: "introduced",
+    claim: "bad",
+    proof_refs: ["src/app.ts:1"],
+    hunter: "reliability",
+    hops_used: 0,
+    hop_trail: [],
+    dedupe_key: "k1",
+  };
+  const okResult: StepResult = {
+    name: "hunter-reliability",
+    status: "ok",
+    output: { findings: [finding] },
+    usage: usage(),
+    attempts: 1,
+    stderrTail: "",
+    resultText: "",
+  };
+
+  test("an OpenCode leg without an executed route is never labelled anthropic", () => {
+    const spec = legSpec(["opencode:openai/gpt-x"]);
+    const plan = buildDiversityPlan({ spec, c2SchemaVersion: "1.1.0" });
+    const [leg] = plan.legs;
+    const [agent] = spec.agents;
+    if (!leg || !agent) throw new Error("missing diversity fixtures");
+    expect(() =>
+      recordDiversityHunterResult(
+        emptyDiversityLedger(),
+        plan,
+        agent,
+        okResult,
+        leg,
+      ),
+    ).toThrow(DiversityAdmissionError);
+  });
+
+  test("a Claude leg without an executed route records its resolved Claude route", () => {
+    const spec = legSpec(["sonnet"]);
+    const plan = buildDiversityPlan({ spec, c2SchemaVersion: "1.1.0" });
+    const [leg] = plan.legs;
+    const [agent] = spec.agents;
+    if (!leg || !agent) throw new Error("missing diversity fixtures");
+    const ledger = recordDiversityHunterResult(
+      emptyDiversityLedger(),
+      plan,
+      agent,
+      okResult,
+      leg,
+    );
+    expect(ledger.observations[0]?.observation).toMatchObject({
+      backend: "claude-code",
+      provider: "anthropic",
+      modelFamily: "sonnet",
+      modelSnapshot: "sonnet",
+      routeFingerprint: leg.routeFingerprint,
+    });
+  });
+
+  test("leg fingerprints equal the run plan's steps under models and --model", () => {
+    const spec = legSpec(["sonnet", "opencode:openai/gpt-x"]);
+    const models = {
+      default: ["opencode:openai/gpt-default"],
+      "hunter.reliability": ["opencode:anthropic/claude-x"],
+    };
+    for (const cliModel of [undefined, "opus"]) {
+      const ctx = prepareDiversityExecution({
+        reviewSpec: spec,
+        cliModel,
+        frontmatterModel: () => "haiku",
+      });
+      const legPlan = ctx.plan;
+      if (!legPlan) throw new Error("diversity plan missing");
+      const routePlan = buildResolvedRoutePlan({
+        agents: ctx.routeAgents,
+        cliModel,
+        models,
+        frontmatterModel: () => "haiku",
+      });
+      expect(() => assertDiversityLegRoutes(legPlan, routePlan)).not.toThrow();
+      for (const leg of legPlan.legs) {
+        const step = routePlan.steps.find((s) => s.stepKey === leg.stepKey);
+        expect(step?.routeFingerprint).toBe(leg.routeFingerprint);
+      }
+    }
   });
 });

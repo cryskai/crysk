@@ -1,0 +1,322 @@
+{
+  "case": "opencode",
+  "steps": [
+    {
+      "name": "consolidate",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "sonnet",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": "high",
+      "effort": "high",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": [],
+      "systemPromptSha256": "9fc226dace19631d5587ecb5ccbea27278f30e4d511da2bce647cec006b0d2f7",
+      "promptSha256": "0231a5d9fc6810a4c8b69eebd5d53404e6432825c28db77cafd107dce2902c0d",
+      "cliModel": null,
+      "argv": null
+    },
+    {
+      "name": "hunter-logic",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "sonnet",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": "high",
+      "effort": "xhigh",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "dd873351248817c4d8d156d608891580e3a5b0ff054d6e4753122bac8ab63332",
+      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
+      "cliModel": null,
+      "argv": null
+    },
+    {
+      "name": "hunter-parity",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "sonnet",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": "high",
+      "effort": "xhigh",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "c60f46c96bb6e5e1443adcc8657a9cf91fef804951cd3e1130b5e30d5348ee25",
+      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
+      "cliModel": null,
+      "argv": null
+    },
+    {
+      "name": "hunter-reliability",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "sonnet",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": "high",
+      "effort": "xhigh",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "3329a15eac454d06c44b141a24d908b7c8b5b744447da5d460cea435178c29e7",
+      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
+      "cliModel": null,
+      "argv": null
+    },
+    {
+      "name": "hunter-resilience",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "sonnet",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": "high",
+      "effort": "xhigh",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "f3a2375e7aff777897b60980fc2bf44b77d286adaacb10d41bb7d695fc52b9a5",
+      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
+      "cliModel": null,
+      "argv": null
+    },
+    {
+      "name": "refuter-F001",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "opus",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": null,
+      "effort": "high",
+      "fallbackEfforts": null,
+      "effortApplied": false,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "17694a98710c672032d6edda4f5a98722993b1b5a01e1f4a6664c86fb626b229",
+      "promptSha256": "82a74d242804c5b876f6441d3c560d8fa368b459357bb60f735c3ca550ddb8cf",
+      "cliModel": null,
+      "argv": null
+    },
+    {
+      "name": "scout",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "sonnet",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": "high",
+      "effort": "high",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": [],
+      "systemPromptSha256": "edb1abfb7d72950040871e8d7968175a73dfd9cc6788bef97fe9e8f15df8e6a2",
+      "promptSha256": "6974b38cf091f0f7311d65af77fa11189dd8ce140332cd9f8a916de8c9aaa5f7",
+      "cliModel": null,
+      "argv": null
+    },
+    {
+      "name": "summarizer",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "haiku",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": "high",
+      "effort": "high",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob"],
+      "systemPromptSha256": "44a53222728303c24eb1a19d2c84ad59952ac1d41eecb20ddc88bb8e427e2232",
+      "promptSha256": "80af5f767217ce5cea5c13b89c2be418c6378b9ee7da490a401f8d3d95a2fbee",
+      "cliModel": null,
+      "argv": null
+    }
+  ],
+  "plan": {
+    "routeFingerprint": "29afc5fd08070afe4eea36aae00c1f735da1a3d0d318ef73e9b813b679a4ea79",
+    "steps": [
+      {
+        "stepKey": "hunter-reliability",
+        "role": "hunter",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
+        "effort": "high",
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x",
+          "modelVariant": "high"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "hunter-resilience",
+        "role": "hunter",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
+        "effort": "high",
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x",
+          "modelVariant": "high"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "hunter-logic",
+        "role": "hunter",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
+        "effort": "high",
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x",
+          "modelVariant": "high"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "hunter-parity",
+        "role": "hunter",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
+        "effort": "high",
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x",
+          "modelVariant": "high"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "refuter",
+        "role": "refuter",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "ee1c967ea49d43e8fa1cbe66e8cf8abc4e4c6ae8614c5b4bc3abb2bee5fcd85f",
+        "effort": null,
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "summarizer",
+        "role": "summarizer",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
+        "effort": "high",
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x",
+          "modelVariant": "high"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "scout",
+        "role": "scout",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
+        "effort": "high",
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x",
+          "modelVariant": "high"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "consolidate",
+        "role": "other",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
+        "effort": "high",
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x",
+          "modelVariant": "high"
+        },
+        "fallbacks": null
+      }
+    ]
+  },
+  "pipelineSteps": [
+    {
+      "name": "consolidate",
+      "model": "gpt-x",
+      "effort": "high",
+      "effort_applied": true,
+      "variant": "high",
+      "tools": []
+    },
+    {
+      "name": "hunter-logic",
+      "model": "gpt-x",
+      "effort": "xhigh",
+      "effort_applied": true,
+      "variant": "high",
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "hunter-parity",
+      "model": "gpt-x",
+      "effort": "xhigh",
+      "effort_applied": true,
+      "variant": "high",
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "hunter-reliability",
+      "model": "gpt-x",
+      "effort": "xhigh",
+      "effort_applied": true,
+      "variant": "high",
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "hunter-resilience",
+      "model": "gpt-x",
+      "effort": "xhigh",
+      "effort_applied": true,
+      "variant": "high",
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "refuter-F001",
+      "model": "gpt-x",
+      "effort": "high",
+      "effort_applied": false,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "scout",
+      "model": "gpt-x",
+      "effort": "high",
+      "effort_applied": true,
+      "variant": "high",
+      "tools": []
+    },
+    {
+      "name": "summarizer",
+      "model": "gpt-x",
+      "effort": "high",
+      "effort_applied": true,
+      "variant": "high",
+      "tools": ["Read", "Grep", "Glob"]
+    }
+  ]
+}

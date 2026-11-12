@@ -1442,6 +1442,7 @@ describe("CONFIG_DIRECTION", () => {
       summary: { enabled: false },
       models: { default: ["claude:sonnet-latest"] },
       credentials: { claude: ["subscription"] },
+      profile: "claude",
       max_verification_steps: 3,
       max_concurrent_steps: 4,
       max_changed_lines: 1500,
@@ -1484,6 +1485,7 @@ describe("CONFIG_DIRECTION", () => {
       summary: "capped",
       models: "person",
       credentials: "person",
+      profile: "person",
       max_verification_steps: "capped",
       max_concurrent_steps: "capped",
       max_changed_lines: "capped",
@@ -1596,7 +1598,7 @@ describe("parseLocalConfig admits the same keys it does today", () => {
   test("the admitted key set is unchanged, the three person-only keys aside", () => {
     expect(
       Object.keys(CONFIG_DIRECTION)
-        .filter((k) => !["models", "credentials"].includes(k))
+        .filter((k) => !["models", "credentials", "profile"].includes(k))
         .sort(),
     ).toEqual(PRE_C5_LOCAL_KEYS);
     const full = {
@@ -1893,6 +1895,7 @@ describe("mergeConfig", () => {
       summary: { enabled: "default" },
       models: "default",
       credentials: "default",
+      profile: "default",
       max_verification_steps: "default",
       max_concurrent_steps: "default",
       max_changed_lines: "default",

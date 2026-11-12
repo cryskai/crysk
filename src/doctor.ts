@@ -1,17 +1,25 @@
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type ModelsConfig, modelsNeedOpenCode } from "#model/model-name";
+import { loadEffectiveConfig } from "#config/config";
+import { type ModelsConfig, routingNeedsOpenCode } from "#model/model-name";
+import {
+  FALLBACK_PROFILE,
+  type ModelProfile,
+  resolveProfile,
+} from "#model/profiles";
 import {
   exactBindingCapabilityIssues,
   type ProviderCapabilityReport,
 } from "#model/provider-capabilities";
+import { buildResolvedRoutePlan, planRoutes } from "#model/routing";
 import {
   agentFilePath,
   GOTCHAS_PLACEHOLDER_MARKER,
   gotchasUnusableReason,
   localReviewSpec,
   resolveAgentsDirSetting,
+  resolveMaterialityGate,
 } from "#review/preflight";
 import {
   REVIEW_MD_FILE_NAME,
@@ -30,6 +38,7 @@ import {
   resolveEngineAssets,
   selfInvocation,
 } from "./assets";
+import { readBrandEnv } from "./brand";
 import { REPO_DIR_NAME, resolveHomeDir, resolveRepoDir } from "./brand-paths";
 import {
   gitIsTracked,
@@ -93,6 +102,108 @@ export interface RunDoctorOptions {
   // Legacy injectable ProviderCapabilityReport. Ignored when
   // probeExactBindings is provided.
   produceCapabilityReport?: () => Promise<ProviderCapabilityReport>;
+  // Whether any step the configuration resolves runs on the Claude CLI
+  // (reviewNeedsClaude). Absent: required, as every caller that does not
+  // resolve the configuration (the updater, the menu) has always had it.
+  claudeRequired?: boolean;
+}
+
+// Whether a review under this configuration sends any step to the Claude CLI
+// (model-profiles S6): the route plan a review would build, every hunter of
+// the bundled spec, the refuter, consolidate, scout, summarizer and, with the
+// gate on, the materiality judge, resolved through `models` and the active
+// profile. True whenever the answer is not proven: neither `models` nor a
+// `profile`, a plan that fails to build, or a bad CRYSK_EXTRA_HUNTERS. So zero-config and
+// every configuration naming a Claude model keep the CLI required.
+export function reviewNeedsClaude(input: {
+  models: ModelsConfig | undefined;
+  // The config's `profile` (openai-profile S6). Absent: the fallback profile.
+  profile?: string;
+  // Whether a custom agents_dir applies (PR #521 R003). Its frontmatter
+  // outranks the profile's seat and is not read here, so with no
+  // `models.default` the answer stays "Claude required".
+  customAgents?: boolean;
+  materialityGate?: boolean;
+  env?: Record<string, string | undefined>;
+}): boolean {
+  if (input.models === undefined && input.profile === undefined) return true;
+  if (input.customAgents === true && input.models?.default === undefined) {
+    return true;
+  }
+  try {
+    const plan = buildResolvedRoutePlan({
+      agents: localReviewSpec(input.env ?? process.env).agents,
+      models: input.models,
+      profile: resolveProfile(input.profile),
+      bundledAgents: true,
+      summarizer: { bundled: true },
+      scout: { bundled: true },
+      consolidate: { bundled: true },
+      // Unknown counts as on: the judge then joins only when it shares a
+      // backend with another step or `models.judge` names it.
+      ...(input.materialityGate === false
+        ? {}
+        : { materiality: true as const }),
+    });
+    // Fallbacks included: a step that falls back to Claude can start the CLI.
+    return planRoutes(plan).some(
+      (step) => step.route.backend === "claude-code",
+    );
+  } catch {
+    return true;
+  }
+}
+
+// What a doctor run reads from the configuration: whether any step needs the
+// Claude CLI, and the models and profile its binding probe resolves
+// (openai-profile S6). One reading for `crysk doctor`, `crysk update`, the
+// menu and the wizard, so none of them asks a person who chose a profile with
+// no Claude step for the Claude CLI. A config that fails to load keeps Claude
+// required on the fallback profile, and `error` says why.
+export interface DoctorRouting {
+  readonly claudeRequired: boolean;
+  readonly models?: ModelsConfig;
+  readonly profile: ModelProfile;
+  readonly warnings: readonly string[];
+  readonly error?: string;
+}
+
+export async function loadDoctorRouting(input: {
+  home: string;
+  repoRoot?: string | undefined;
+  configFlag?: string | undefined;
+  // The environment the AGENTS_DIR override is read from. Absent: the process's.
+  env?: Record<string, string | undefined>;
+}): Promise<DoctorRouting> {
+  try {
+    const loaded = await loadEffectiveConfig({
+      root: input.repoRoot,
+      home: input.home,
+      configFlag: input.configFlag,
+    });
+    const { models, profile } = loaded.effective;
+    return {
+      claudeRequired: reviewNeedsClaude({
+        models,
+        ...(profile === undefined ? {} : { profile }),
+        customAgents:
+          loaded.effective.agents_dir !== undefined ||
+          (readBrandEnv(input.env ?? process.env, "AGENTS_DIR")?.value ??
+            "") !== "",
+        materialityGate: resolveMaterialityGate(loaded.effective),
+      }),
+      ...(models === undefined ? {} : { models }),
+      profile: resolveProfile(profile),
+      warnings: loaded.warnings,
+    };
+  } catch (error) {
+    return {
+      claudeRequired: true,
+      profile: FALLBACK_PROFILE,
+      warnings: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 // Remediation hints for the report's known non-blocking codes; blocking
@@ -162,9 +273,13 @@ function pushProviderIssues(
 
 export function openCodeRoutingSdkCheck(input: {
   models: ModelsConfig | undefined;
+  // The configuration's profile (openai-profile S6). Absent: the fallback.
+  profile?: ModelProfile;
   sdkVersion: string | undefined;
 }): DoctorCheckItem | undefined {
-  if (!modelsNeedOpenCode(input.models)) return undefined;
+  if (!routingNeedsOpenCode(input.models, input.profile ?? FALLBACK_PROFILE)) {
+    return undefined;
+  }
   const version =
     typeof input.sdkVersion === "string" ? input.sdkVersion.trim() : "";
   if (version === SUPPORTED_OPENCODE_SDK_VERSION) return undefined;
@@ -254,8 +369,22 @@ export async function runDoctor(
     });
   }
 
-  // Claude (required + auth)
-  if (!tools.claude.installed) {
+  // Claude (required + auth). Required unless the caller resolved the
+  // configuration and found no step on the Claude CLI (model-profiles S6,
+  // reviewNeedsClaude): then a missing or signed-out CLI is reported, but it
+  // blocks nothing, because no review would start it.
+  const claudeRequired = options.claudeRequired !== false;
+  if (!claudeRequired && !(tools.claude.installed && tools.claude.authOk)) {
+    checks.push({
+      name: "claude",
+      severity: "healthy",
+      message: `${
+        tools.claude.installed
+          ? `Claude Code CLI is installed (${tools.claude.version ?? "unknown"}) but not authenticated`
+          : "Claude Code CLI is not installed"
+      }; not needed, since no configured step runs on it`,
+    });
+  } else if (!tools.claude.installed) {
     checks.push({
       name: "claude",
       severity: "blocking",

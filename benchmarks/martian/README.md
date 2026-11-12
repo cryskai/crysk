@@ -227,7 +227,7 @@ What is on disk for the TypeScript slice. Not the 50.
 1. **Worklist** — `docs/martian-cal-goldens.json` + `docs/martian-cal-cases.json` (SHAs via `gh`, captured 2026-08-19).
 2. **Driver** — `benchmarks/martian/martian-cal.ts` (`plan|check|run|score`). Local `pr-hero review --repo --base --head --two-dot --yes --no-summary`. Refuses `--pr` / `--post`. `--out` outside the clone.
 3. **Adapter** — `src/martian-adapter.ts`: `findings.json` → `martian-review.json` (`candidates[]` + `review_comments`). One candidate per finding.
-4. **Judge (Surface A)** — `benchmarks/martian/martian-judge.ts`. Martian’s `JUDGE_PROMPT` (“same underlying issue?”), one Claude Code spawn per PR (`tools: []`, model `sonnet`). **Not** their Python gateway / `MARTIAN_API_KEY`. Sibling findings at the same `path:line` are not extra FPs (mechanical analogue of their step 2.5). Artifact: `~/Desktop/martian-cal/runs/martian-judge.json`.
+4. **Judge (Surface A)** — `benchmarks/martian/martian-judge.ts`. Martian’s `JUDGE_PROMPT` (“same underlying issue?”), one Claude Code spawn per PR (`tools: []`, model `sonnet`), run through the production route seam on its own `martian-judge` step; the artifact records the route and its fingerprints under `judge_route`. **Not** their Python gateway / `MARTIAN_API_KEY`. Sibling findings at the same `path:line` are not extra FPs (mechanical analogue of their step 2.5). Artifact: `~/Desktop/martian-cal/runs/martian-judge.json`.
 5. **Inject** — not done. A copy of `benchmark_data.json` with `tool: "pr-hero"` is still the path to sit in *their* Opus 4.5 / Sonnet 4.5 / GPT-5.2 tables.
 6. **Surface B** — not done. Stored Greptile/CodeRabbit comments are still on their repo, not bucketed against us for the ten.
 
@@ -560,7 +560,7 @@ are not silently upgraded by the new loader.
 | Gate | Required evidence |
 |---|---|
 | Schedule | `schedule-<arm>.json` freezes selected PRs, head/base, replicate and output directory before execution. `--reps` creates separate attempt directories. Selection changes require a new arm. |
-| Identity | `run-identity.json` freezes engine commit and file digests, prompt/config content, effective routes and observed executable/SDK/server identity. Missing identity refuses qualified reuse. |
+| Identity | `run-identity.json` freezes engine commit and file digests, prompt/config content, the route plan and observed executable/SDK/server identity. Missing identity refuses qualified reuse. The routes come from the production plan builder (`buildCliRoutePlan`) with the config's `models` and the profile, the same plan the review executes; a run whose `pipeline.json` `route_fingerprint` differs from the frozen `routeFingerprint` does not qualify. Identities frozen before that change name the prompts' frontmatter routes instead. The fingerprint hashes the routes as well as the engine's files, so, like any engine change, those attempts no longer match on resume and run again, while judging still accepts them on their step proofs. |
 | Completion | Findings schema validator, all required hunters and executed steps, actual delivered outcome, verified integrity, attributable terminal proof, matching request-plan/output/capture hashes. Mere file existence or a finish string is insufficient. |
 | Isolation | Artifact reads are bounded, confined to the run directory, and reject traversal, nonregular files and symlink escapes. |
 | Retry | A failed or mismatched previous directory is moved intact under `incomplete-attempts/`; it is never overwritten by the replacement attempt. |

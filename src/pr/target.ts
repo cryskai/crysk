@@ -47,7 +47,7 @@ import {
 } from "#review/preflight";
 import type { ParsedAgent, PromptSetIdentity } from "#review/prompt-set";
 import type { estimateCost } from "#review/report";
-import { buildCliRoutePlan } from "#review/route-preflight";
+import { buildCliRoutePlan, isBundledAgentsDir } from "#review/route-preflight";
 import {
   type LoadedRunConfig,
   loadRunConfig,
@@ -79,6 +79,7 @@ export interface ResolvedPrRunOptions {
   loaded: LoadedRunConfig["loaded"];
   config: LoadedRunConfig["config"];
   summary: LoadedRunConfig["summary"];
+  profile: LoadedRunConfig["profile"];
 }
 
 // Step 1's first half: the operator root, the PR number, `home`, and the
@@ -112,12 +113,14 @@ export async function resolvePrRunOptions(
   // yet at this point, and a `.crysk/config.json` committed by the PR author
   // must stay unread (O-8). Same loader as local mode, so the two modes
   // cannot drift on precedence.
-  const { loaded, config, summary, scout, post } = await loadRunConfig({
-    root: operatorRoot,
-    home,
-    configFlag: options.config,
-    options,
-  });
+  const { loaded, config, summary, scout, post, profile } = await loadRunConfig(
+    {
+      root: operatorRoot,
+      home,
+      configFlag: options.config,
+      options,
+    },
+  );
   // ROADMAP Pillar 3 (GitHub Actions CI). isCi folds in HERE, alongside
   // scout/post, so `options.yes` carries the headless bypass (spec 2.1:
   // "MUST run headlessly ... equivalent to --yes") through every downstream
@@ -138,6 +141,7 @@ export async function resolvePrRunOptions(
     loaded,
     config,
     summary,
+    profile,
   };
 }
 
@@ -189,6 +193,8 @@ export async function resolvePrPromptSetAndBudget(params: {
   operatorRoot: string;
   // The summarizer's settings, for its route (openCodeRouteProviders).
   summary: LoadedRunConfig["summary"];
+  // The run's profile (openai-profile S3), for the same routes.
+  profile: LoadedRunConfig["profile"];
   // S5: the run's Claude credential, chosen once at run start (reviewPr). Its env
   // holds only the chosen credential, so the ceiling follows the choice: the
   // subscription has no metered ceiling, the API key keeps it. Absent (tests that
@@ -201,6 +207,7 @@ export async function resolvePrPromptSetAndBudget(params: {
   const { agents, spec, agentFiles, promptSet } = await resolvePromptSet(
     params.options,
     params.loaded,
+    { profile: params.profile },
   );
   // The OpenCode half from the routes the run can take, not from the auth file
   // existing (cryskai/platform#12): a file built for a ChatGPT subscription, one
@@ -216,8 +223,10 @@ export async function resolvePrPromptSetAndBudget(params: {
           spec,
           options: params.options,
           agentFiles,
+          bundledAgents: isBundledAgentsDir(agents),
           models: params.config.models,
           summary: params.summary,
+          profile: params.profile,
         }),
         authFilePresent: existsSync(resolveOpenCodeAuthPath()),
         openCodeSecretNames: readOpenCodeSecretNames(),

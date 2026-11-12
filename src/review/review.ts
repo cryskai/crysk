@@ -39,6 +39,7 @@ import {
 } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
+  isBundledAgentsDir,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
   pipelineScoutInput,
@@ -56,6 +57,7 @@ import {
   resolvePipelineRoute,
   resolvePromptSet,
   resolveReviewInstructions,
+  routingConfigured,
   selectActiveHunters,
   shadowedGotchasNotice,
   validateGotchas,
@@ -100,12 +102,14 @@ export async function review(options: CliOptions): Promise<number> {
   // Two layers since C5, folded by loadEffectiveConfig into the one
   // LocalConfig everything below already expected. The --config missing-file
   // error and the boundary rules live there.
-  const { loaded, config, summary, scout, post } = await loadRunConfig({
-    root: repoRoot,
-    home: os.homedir(),
-    configFlag: options.config,
-    options,
-  });
+  const { loaded, config, summary, scout, post, profile } = await loadRunConfig(
+    {
+      root: repoRoot,
+      home: os.homedir(),
+      configFlag: options.config,
+      options,
+    },
+  );
   options = { ...options, scout, post };
   // S5: the Claude credential this run uses, chosen once, here, from
   // `credentials.claude` and what is set. Every runner, binding and child below
@@ -158,6 +162,7 @@ export async function review(options: CliOptions): Promise<number> {
   const { agents, spec, agentFiles, promptSet } = await resolvePromptSet(
     options,
     loaded,
+    { profile },
   );
   const { dir: agentsDir, source: agentsDirSource } = agents;
 
@@ -250,12 +255,14 @@ export async function review(options: CliOptions): Promise<number> {
     true,
   );
   const productionRoute = await resolvePipelineRoute({
-    modelsConfigured: config.models !== undefined,
+    modelsConfigured: routingConfigured(config),
     workspaceRoot: repoRoot,
     spec,
     options,
     agentFiles,
+    bundledAgents: isBundledAgentsDir(agents),
     models: config.models,
+    profile,
     summary,
     materialityEnabled: resolveMaterialityGate(config),
     claudeRun: options.dryRun ? undefined : claudeRun,
@@ -425,6 +432,8 @@ export async function review(options: CliOptions): Promise<number> {
         gotchasPath,
         agentsDir,
         ...(agents.files ? { agentFiles: agents.files } : {}),
+        // The same answer the plan was built with (resolvePipelineRoute).
+        ...(isBundledAgentsDir(agents) ? { bundledAgents: true } : {}),
         runDir,
         outPath: path.join(runDir, "findings.json"),
         mcpConfigPath,
@@ -432,10 +441,11 @@ export async function review(options: CliOptions): Promise<number> {
         ...(options.model ? { model: options.model } : {}),
         parityTriggerPaths: config.parity_trigger_paths,
         suspicionPriors: config.suspicion_priors,
-        ...pipelineSummarizerInput(summary),
-        ...pipelineScoutInput(options),
-        ...pipelineConsolidateInput(),
-        ...pipelineMaterialityInput(config),
+        modelProfile: profile,
+        ...pipelineSummarizerInput(summary, { profile }),
+        ...pipelineScoutInput(options, { profile }),
+        ...pipelineConsolidateInput({ profile }),
+        ...pipelineMaterialityInput(config, { profile }),
         ...(prTitle === undefined ? {} : { prTitle }),
         ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
         ...pipelineConfigInput(loaded),

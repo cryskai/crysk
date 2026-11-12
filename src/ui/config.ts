@@ -168,6 +168,7 @@ export function configRows(
     ),
     models: modelsCell(effective.models, sources.models),
     credentials: credentialsCell(effective.credentials, sources.credentials),
+    profile: cell(effective.profile, sources.profile),
     max_verification_steps: cell(
       effective.max_verification_steps?.toString(),
       sources.max_verification_steps,

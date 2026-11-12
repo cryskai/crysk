@@ -95,6 +95,8 @@ import {
 } from "#review/preflight";
 import { code, estimateCost } from "#review/report";
 import {
+  claudeAuthorityRequired,
+  isBundledAgentsDir,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
   pipelineScoutInput,
@@ -281,7 +283,16 @@ export async function reviewPr(
   // module.
   const step1 = await resolvePrRunOptions(options, prArg);
   options = step1.options;
-  const { operatorRoot, prNumber, home, isCi, loaded, config, summary } = step1;
+  const {
+    operatorRoot,
+    prNumber,
+    home,
+    isCi,
+    loaded,
+    config,
+    summary,
+    profile,
+  } = step1;
   // S5: the Claude credential this run uses, chosen once, here, from
   // `credentials.claude` and what is set. The CI ceiling, the admission, every
   // runner and binding, and the child read its env, which holds that one
@@ -310,6 +321,7 @@ export async function reviewPr(
       loaded,
       config,
       summary,
+      profile,
       isCi,
       operatorRoot,
       claudeRun,
@@ -718,6 +730,7 @@ export async function reviewPr(
       config,
       summary,
       loaded,
+      profile,
       isCi,
       ciMode,
       statusContext,
@@ -782,7 +795,11 @@ export async function reviewPr(
       await withCiWorkflowGroup(isCi, "crysk review", log, async () => {
         log(reviewingLine(hunterCount, summary, options));
         // runnerAuthority resolved before confirm with the exact-binding gate.
-        if (runnerAuthority.error !== undefined) {
+        // A plan with no claude-code route never starts the Claude CLI.
+        if (
+          runnerAuthority.error !== undefined &&
+          claudeAuthorityRequired(routePlan)
+        ) {
           throw new CliError(
             `execution authority unavailable: ${runnerAuthority.error}`,
           );
@@ -847,6 +864,8 @@ export async function reviewPr(
               gotchasPath,
               agentsDir,
               ...(agents.files ? { agentFiles: agents.files } : {}),
+              // The same answer the plan was built with (pr/plan.ts).
+              ...(isBundledAgentsDir(agents) ? { bundledAgents: true } : {}),
               runDir,
               outPath: path.join(runDir, "findings.json"),
               mcpConfigPath,
@@ -854,12 +873,19 @@ export async function reviewPr(
               ...(options.model ? { model: options.model } : {}),
               parityTriggerPaths: config.parity_trigger_paths,
               suspicionPriors: config.suspicion_priors,
-              ...(skipDiscovery ? {} : pipelineSummarizerInput(summary)),
-              ...(skipDiscovery ? {} : pipelineScoutInput(options)),
-              ...(skipDiscovery ? {} : pipelineConsolidateInput()),
+              modelProfile: profile,
+              ...(skipDiscovery
+                ? {}
+                : pipelineSummarizerInput(summary, { profile })),
+              ...(skipDiscovery
+                ? {}
+                : pipelineScoutInput(options, { profile })),
+              ...(skipDiscovery ? {} : pipelineConsolidateInput({ profile })),
               // Gated on skipDiscovery like consolidation: an empty-delta
               // re-review posts no new findings, so there is nothing to judge.
-              ...(skipDiscovery ? {} : pipelineMaterialityInput(config)),
+              ...(skipDiscovery
+                ? {}
+                : pipelineMaterialityInput(config, { profile })),
               prTitle: target.title,
               ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
               // NOT gated on skipDiscovery: an empty-delta re-review still

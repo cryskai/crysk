@@ -35,7 +35,7 @@ import {
   type PostedFindingRow,
   renderNoiseReport,
 } from "#compare/noise";
-import { JUDGE_MODEL, judgeClaim } from "./materiality-spawn";
+import { JUDGE_MODEL, judgeClaim, judgeRouteFields } from "./materiality-spawn";
 
 const STORE = path.join(homedir(), ".crysk", "prhero.db");
 const REPOS = [
@@ -60,6 +60,10 @@ interface Judgment {
 
 interface ResultsFile {
   judge_model: string;
+  // The judge's route and the plan's fingerprint. Optional: files written
+  // before the route seam carry judge_model alone.
+  judge_route?: ReturnType<typeof judgeRouteFields>["judge_route"];
+  judge_route_fingerprint?: string;
   judge_system_sha256: string;
   started_at: string;
   finished_at: string | null;
@@ -178,6 +182,7 @@ async function run(args: string[]): Promise<void> {
 
   const results: ResultsFile = {
     judge_model: JUDGE_MODEL,
+    ...judgeRouteFields(),
     judge_system_sha256: judgeSystemSha256(),
     started_at: new Date().toISOString(),
     finished_at: null,

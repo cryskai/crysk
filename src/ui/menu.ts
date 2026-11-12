@@ -6,7 +6,7 @@ import { DEFAULT_SIZE_GATE } from "#review/size-gate";
 import { listActiveRuns } from "#store/activity";
 import { DEFAULT_DAILY_CAP } from "#watch/preflight";
 import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
-import { runDoctor } from "../doctor";
+import { loadDoctorRouting, runDoctor } from "../doctor";
 import {
   getMenuOptions,
   type MenuItem,
@@ -157,7 +157,14 @@ export async function gatherMenuStatus(
 
   let doctorStatus: MenuStatusInfo["doctorStatus"];
   try {
-    const report = await runDoctor({ home, cwd });
+    // The person's profile decides whether the Claude CLI is required
+    // (openai-profile S6), as `crysk doctor` reads it.
+    const routing = await loadDoctorRouting({ home, repoRoot: cwd });
+    const report = await runDoctor({
+      home,
+      cwd,
+      claudeRequired: routing.claudeRequired,
+    });
     doctorStatus = report.overall;
   } catch {
     // Ignore

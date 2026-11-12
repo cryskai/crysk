@@ -2011,6 +2011,32 @@ describe("production runtime PR1", () => {
       ]);
     });
 
+    // model-profiles S6: an all-OpenCode configuration probes no Claude route,
+    // so a machine with no Claude CLI on PATH still gets every report it needs.
+    test("collectDoctorExactBindingReports probes no Claude route when the configuration needs none", async () => {
+      await writeOpenCodeFixture(tmpDir);
+      // No Claude CLI on this PATH at all.
+      await rm(claudeFixture.canonicalPath);
+      const models = { default: ["opencode:openai/gpt-4o"] };
+      const reports = await collectDoctorExactBindingReports({
+        workspaceRoot: tmpDir,
+        models,
+        claudeRequired: false,
+        env: { PATH: tmpDir },
+      });
+      expect([...reports].map((report) => report.backend)).toEqual([
+        "opencode",
+      ]);
+      // Without the answer the profile's Claude steps stay, and fail here.
+      await expect(
+        collectDoctorExactBindingReports({
+          workspaceRoot: tmpDir,
+          models,
+          env: { PATH: tmpDir },
+        }),
+      ).rejects.toThrow();
+    });
+
     // U3: the doctor binds an OpenCode model the way a review would, so it
     // reads the setup step's CRYSK_* manifest too: openai on an API key is the
     // metered kind there, not the subscription the provider literal assumes.

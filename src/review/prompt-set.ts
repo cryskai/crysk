@@ -6,6 +6,8 @@
 // spawn time moves into the driver (renderAgentBody).
 
 import { EFFORT_LEVELS, type Effort, isEffort } from "#model/catalog";
+import type { ModelProfile } from "#model/profiles";
+import { PROFILE_PROMPT_FILES } from "../asset-manifest";
 import { wrapBlock } from "./boundary";
 
 // Fixed order — the lab's promptSetFingerprint hashes the concatenated files
@@ -18,6 +20,72 @@ export const AGENT_NAMES = [
   "deep-review-parity",
   "review-refuter",
 ] as const;
+
+// The engine-owned prompts at `prompts/` root: not part of the fingerprinted
+// agent set (a user `agents_dir` never holds them), but looked up through the
+// active profile's prompt set like every other step's prompt
+// (model-profiles S4).
+export const ENGINE_PROMPT_FILES = [
+  "consolidate.md",
+  "scout.md",
+  "summarizer.md",
+  "materiality.md",
+] as const;
+export type EnginePromptFile = (typeof ENGINE_PROMPT_FILES)[number];
+
+// Profile prompt sets by name: logical filename -> readable path, holding ONLY
+// the files that differ from the default set (`prompts/profiles/<set>/`,
+// embedded through asset-manifest.ts like every other prompt).
+export type ProfilePromptSets = Readonly<
+  Record<string, Readonly<Record<string, string>>>
+>;
+
+export interface ProfilePromptOverrides {
+  // Agent files (`deep-review-*.md`, `review-refuter.md`) the set overrides.
+  agents: Record<string, string>;
+  // Engine-owned root prompts the set overrides.
+  engine: Partial<Record<EnginePromptFile, string>>;
+}
+
+// The ONE lookup of a profile's prompt set, split into the two places a
+// prompt is read from: the agents (merged over the default set by
+// resolveAgentsDirSetting) and the engine-owned root prompts
+// (enginePromptPath). Any file the set does not hold falls back to the default
+// set's. A profile with no `promptSet` (`claude`) overrides nothing.
+//
+// A set name this build lacks, or a file that overrides nothing in the default
+// set, throws: either is a build defect, and a silent fallback would run the
+// default prompt while the profile reads as tuned.
+export function profilePromptSet(
+  profile: Pick<ModelProfile, "id" | "promptSet">,
+  defaultAgentFiles: readonly string[],
+  sets: ProfilePromptSets = PROFILE_PROMPT_FILES,
+): ProfilePromptOverrides {
+  const overrides: ProfilePromptOverrides = { agents: {}, engine: {} };
+  if (profile.promptSet === undefined) return overrides;
+  const set = sets[profile.promptSet];
+  if (set === undefined) {
+    throw new Error(
+      `model profile "${profile.id}" names prompt set "${profile.promptSet}", which this build does not have`,
+    );
+  }
+  for (const [file, filePath] of Object.entries(set)) {
+    if (defaultAgentFiles.includes(file)) {
+      overrides.agents[file] = filePath;
+    } else if (isEnginePromptFile(file)) {
+      overrides.engine[file] = filePath;
+    } else {
+      throw new Error(
+        `prompt set "${profile.promptSet}" holds "${file}", which overrides no file of the default set`,
+      );
+    }
+  }
+  return overrides;
+}
+
+function isEnginePromptFile(file: string): file is EnginePromptFile {
+  return (ENGINE_PROMPT_FILES as readonly string[]).includes(file);
+}
 
 export interface ParsedAgent {
   name: string;

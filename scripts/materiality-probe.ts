@@ -49,7 +49,7 @@ import {
   scoreExam,
   stabilitySubset,
 } from "#compare/materiality";
-import { JUDGE_MODEL, judgeClaim } from "./materiality-spawn";
+import { JUDGE_MODEL, judgeClaim, judgeRouteFields } from "./materiality-spawn";
 
 const ROOT = path.join(import.meta.dir, "..");
 const BENCH = path.join(ROOT, "docs", "benchmarks");
@@ -65,6 +65,10 @@ interface Job {
 
 interface ResultsFile {
   judge_model: string;
+  // The judge's route and the plan's fingerprint. Optional: files written
+  // before the route seam carry judge_model alone.
+  judge_route?: ReturnType<typeof judgeRouteFields>["judge_route"];
+  judge_route_fingerprint?: string;
   judge_system_sha256: string;
   pass_bar: typeof PASS_BAR;
   started_at: string;
@@ -223,6 +227,7 @@ async function run(args: string[]): Promise<void> {
   const score = scoreExam(anchors, runs);
   const results: ResultsFile = {
     judge_model: JUDGE_MODEL,
+    ...judgeRouteFields(),
     judge_system_sha256: judgeSystemSha256(),
     pass_bar: PASS_BAR,
     started_at: startedAt,

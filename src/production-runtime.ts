@@ -8,6 +8,12 @@ import {
   type ModelVariantsProbe,
 } from "#model/free-discovery";
 import type { ModelsConfig } from "#model/model-name";
+import {
+  FALLBACK_PROFILE,
+  type ModelProfile,
+  profileModelAlias,
+  profileRoute,
+} from "#model/profiles";
 import type { ProviderCapabilityReport } from "#model/provider-capabilities";
 import {
   type CapabilityGateDecision,
@@ -80,6 +86,10 @@ import {
   resolveOpenCodeAuthPath,
 } from "./security/credential-broker";
 import { authorizeWorkspaceCwd } from "./security/execution-authority";
+import {
+  REVIEW_EXPIRY_MARGIN_MS,
+  recordExpiresAt,
+} from "./security/oauth-providers";
 import { readOpenCodeSecretNames } from "./security/opencode-secret-manifest";
 import {
   type AdmitRoutePlanOptions,
@@ -874,29 +884,68 @@ export async function probeBindingsReadiness(
   };
 }
 
-// The plan `crysk doctor` probes: the two default models a zero-config review
-// runs (a sonnet hunter, an opus refuter), plus one step per distinct route
-// `models` names, fallbacks included, so every binding a configured review
-// could open is checked before a review needs it. Distinct by route, not by
-// entry: an OpenCode effort is the route's variant and so a binding of its own,
-// while a Claude effort is not part of the route and is probed once.
-export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
+// The plan `crysk doctor` probes: the active profile's hunter and refuter (on
+// `claude`, the sonnet hunter and opus refuter a zero-config review runs),
+// plus one step per distinct route `models` names, fallbacks included, so
+// every binding a configured review could open is checked before a review
+// needs it. Distinct by route, not by entry: an OpenCode effort is the route's
+// variant and so a binding of its own, while a Claude effort is not part of
+// the route and is probed once.
+//
+// `claudeRequired: false` (model-profiles S6, doctor.ts reviewNeedsClaude)
+// means `models` sends every step elsewhere, so the profile's two steps, which
+// no review would run, are left out: probing them would demand a Claude binding
+// the configuration never opens. Absent or true keeps them, as before.
+export function buildDoctorRoutePlan(
+  models?: ModelsConfig,
+  options: {
+    readonly claudeRequired?: boolean;
+    readonly profile?: ModelProfile;
+  } = {},
+): ResolvedRoutePlan {
+  const profile = options.profile ?? FALLBACK_PROFILE;
+  // A Claude route keeps the alias it always probed. Any other route takes the
+  // profile's seat (bundled), so its effort becomes the same OpenCode variant a
+  // review's route carries and the probe checks the binding the review opens.
+  const agent = (key: string, role: "hunter" | "refuter", seat: string) => {
+    const model = profileRoute(profile, seat).model;
+    return model.startsWith("claude:")
+      ? { key, role, model: profileModelAlias(model) }
+      : { key, role };
+  };
   const base = buildResolvedRoutePlan({
     agents: [
-      { key: "reliability", role: "hunter", model: "sonnet" },
-      { key: "refuter", role: "refuter", model: "opus" },
+      agent("reliability", "hunter", "hunter.reliability"),
+      agent("refuter", "refuter", "refuter"),
     ],
+    bundledAgents: true,
+    profile,
   });
   if (models === undefined) return base;
+  // A profile step stays when it is not on Claude (openai-profile S6): under
+  // `openai` the profile's own steps are the routes a review runs.
+  const baseSteps =
+    options.claudeRequired === false
+      ? base.steps.filter((step) => step.route.backend !== "claude-code")
+      : base.steps;
   const distinct = new Map<string, ResolvedStepRoute>();
   for (const entry of Object.values(models).flat()) {
     const step = resolveModelEntryRoute("doctor-model", "other", entry);
+    // claudeRequired=false means no step the review runs is on Claude (a
+    // Claude judge with the gate off, say), so probing it would contradict
+    // the "not needed" answer and fail on a machine without the CLI.
+    if (
+      options.claudeRequired === false &&
+      step.route.backend === "claude-code"
+    ) {
+      continue;
+    }
     if (!distinct.has(step.routeFingerprint)) {
       distinct.set(step.routeFingerprint, step);
     }
   }
   return createResolvedRoutePlan([
-    ...base.steps,
+    ...baseSteps,
     ...[...distinct.values()].map((step, i) => ({
       ...step,
       stepKey: `doctor-model-${i + 1}`,
@@ -907,6 +956,11 @@ export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
 export async function collectDoctorExactBindingReports(input: {
   readonly workspaceRoot: string;
   readonly models?: ModelsConfig;
+  // Whether any step the configuration resolves runs on the Claude CLI
+  // (doctor.ts reviewNeedsClaude). Absent: required, as before.
+  readonly claudeRequired?: boolean;
+  // The configuration's profile (openai-profile S6). Absent: the fallback.
+  readonly profile?: ModelProfile;
   readonly authorityDeps?: ResolveRunnerAuthorityDeps;
   readonly env?: RunnerAuthorityOptions["env"];
   readonly observeOpenCodeIdentity?: OpenCodeIdentityObserver;
@@ -914,7 +968,12 @@ export async function collectDoctorExactBindingReports(input: {
     import("./transports/opencode-client").OpenCodeSdkLike
   >;
 }): Promise<readonly ExactBindingCapabilityReport[]> {
-  const plan = buildDoctorRoutePlan(input.models);
+  const plan = buildDoctorRoutePlan(input.models, {
+    ...(input.claudeRequired === undefined
+      ? {}
+      : { claudeRequired: input.claudeRequired }),
+    ...(input.profile === undefined ? {} : { profile: input.profile }),
+  });
   // U3: the doctor binds OpenCode routes the way a review's admission does, so
   // it reads the setup step's CRYSK_* manifest too.
   const openCodeSecretNames = planRoutes(plan).some(
@@ -1198,7 +1257,8 @@ export interface OpenCodeCredentialRefusal {
   readonly message: string;
   readonly failureClass:
     | "missing_provider_record"
-    | "missing_subscription_record";
+    | "missing_subscription_record"
+    | "subscription_expiring";
   readonly params: {
     readonly backend: "opencode";
     readonly provider: string;
@@ -1285,6 +1345,7 @@ export async function openCodeCredentialRefusal(
   openCodeSecretNames: readonly string[] | undefined,
   freeVerdicts: ReadonlyMap<string, boolean>,
   env: Readonly<Record<string, string | undefined>>,
+  now: number = Date.now(),
 ): Promise<OpenCodeCredentialRefusal | undefined> {
   const needs = new Map<
     string,
@@ -1321,7 +1382,33 @@ export async function openCodeCredentialRefusal(
       kind === "opencode_chatgpt_oauth"
         ? await lookupOpenCodeOAuthRecord(reader)
         : await lookupOpenCodeApiRecord(reader, provider);
-    if (lookup.ok) continue;
+    if (lookup.ok) {
+      // A subscription login that would expire during the review: the review never
+      // renews it (the broker empties a rotating provider's refresh token), so its
+      // later steps would fail on a dead token. Refused before anything is spent.
+      const expiresAt =
+        kind === "opencode_chatgpt_oauth"
+          ? recordExpiresAt(lookup.record)
+          : undefined;
+      if (
+        expiresAt !== undefined &&
+        expiresAt - now <= REVIEW_EXPIRY_MARGIN_MS
+      ) {
+        refused.push({
+          sentence: `models name OpenCode provider ${provider} (${stepKeys.join(", ")}), but its subscription login ${expiresAt <= now ? "has expired" : `expires at ${new Date(expiresAt).toISOString()}, before the review would finish`}: the Crysk platform renews it ahead of time, or reconnect it in the Crysk dashboard (locally, run any \`opencode\` request to renew it)`,
+          refusal: {
+            failureClass: "subscription_expiring",
+            params: {
+              backend: "opencode",
+              provider,
+              model: step.route.modelSnapshot,
+              step: stepKeys[0] ?? step.stepKey,
+            },
+          },
+        });
+      }
+      continue;
+    }
     if (
       lookup.failureClass !== "missing_provider_record" &&
       lookup.failureClass !== "missing_subscription_record"

@@ -7,6 +7,11 @@ import { loadBenchmarkSchedule, loadQualifiedReview } from "./martian-evidence";
 // their Martian gateway (we have no MARTIAN_API_KEY). The prompt is theirs;
 // the model is the engine's `sonnet` alias. Report both.
 //
+// The judge runs through the production route seam (src/harness/single-step.ts)
+// on its own harness-only step, `martian-judge`, with JUDGE_MODEL as an
+// explicit choice: `claude:sonnet-latest`, the route it always ran. The report
+// records that route and its fingerprints under `judge_route`.
+//
 //   bun run benchmarks/martian/martian-judge.ts
 //   bun run benchmarks/martian/martian-judge.ts --runs ~/Desktop/martian-cal/runs
 //
@@ -20,9 +25,15 @@ import path from "node:path";
 import { lookupGolden, type MartianGoldenPr } from "#compare/martian-adapter";
 import { defaultEffortForRole } from "#model/catalog";
 import type { Finding } from "#review/findings";
-import { ClaudeCodeRunner } from "#review/step-runner";
 import { readEvidenceFile } from "../../src/execution/attempt-evidence";
-import { resolveRunnerAuthority } from "../../src/runner-authority";
+import {
+  prepareSingleStepRunner,
+  routeIdentityFields,
+  type SingleStepRoute,
+  type SingleStepRunner,
+  singleStepRoute,
+} from "../../src/harness/single-step";
+import { resolveRunClaudeCredential } from "../../src/security/claude-credential";
 
 export type ResumeClassification = "complete" | "incomplete" | "inconclusive";
 
@@ -320,6 +331,12 @@ const GOLDENS_PATH = path.join(
 const DEFAULT_RUNS = path.join(homedir(), "Desktop", "martian-cal", "runs");
 const JUDGE_MODEL = "sonnet";
 
+// The judge's one-step route: a harness-only step, since no review step judges
+// against Martian goldens, routed only by the judge's own model.
+export function martianJudgeRoute(model = JUDGE_MODEL): SingleStepRoute {
+  return singleStepRoute({ key: "martian-judge" }, model);
+}
+
 const JUDGE_SYSTEM = `You are evaluating AI code review tools.
 Determine if the candidate issue matches the golden (expected) comment.
 
@@ -460,6 +477,27 @@ if (import.meta.main) {
     fail(`--arm must match [a-zA-Z0-9_-]+, got: ${arm}`);
   }
   const goldens = (await Bun.file(GOLDENS_PATH).json()) as MartianGoldenPr[];
+  const judgeRoute = martianJudgeRoute();
+  // Prepared on the first PR that needs a judge call, never for a run that
+  // judges nothing: production admission probes executables and credentials.
+  // Every PR's scratch dir lives under one workspace root.
+  let judge: { root: string; runner: SingleStepRunner } | undefined;
+  const judgeRunner = async () => {
+    if (judge === undefined) {
+      const root = mkdtempSync(path.join(tmpdir(), "martian-judge-"));
+      const runner = await prepareSingleStepRunner({
+        workspaceRoot: root,
+        route: judgeRoute,
+        claudeRun: resolveRunClaudeCredential({}),
+      }).catch((error) => fail(`execution authority unavailable: ${error}`));
+      judge = { root, runner };
+    }
+    return judge;
+  };
+  const disposeJudge = async () => {
+    await judge?.runner.dispose();
+    judge = undefined;
+  };
 
   const schedule = await loadBenchmarkSchedule(runsRoot, arm).catch((error) =>
     fail(`frozen schedule required: ${error.message}`),
@@ -551,23 +589,14 @@ if (import.meta.main) {
       .join("\n\n");
     const prompt = `Golden Comment(s):\n${numberedGold}\n\nCandidate Issue(s):\n${numberedCand}\n\nScore every (golden, candidate) pair.`;
 
-    const tmp = mkdtempSync(path.join(tmpdir(), "martian-judge-"));
+    const { root, runner } = await judgeRunner();
+    const tmp = mkdtempSync(path.join(root, `pr-${pr}-`));
     const systemPromptPath = path.join(tmp, "system.md");
     const mcpConfigPath = path.join(tmp, "mcp.json");
     writeFileSync(systemPromptPath, JUDGE_SYSTEM);
     writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
     chmodSync(systemPromptPath, 0o600);
-    // Re-resolved per PR: workspaceRoot must name the tmp dir this judge
-    // actually runs in, and that dir is recreated every iteration.
-    const runnerAuthority = await resolveRunnerAuthority({
-      workspaceRoot: tmp,
-    });
-    if (runnerAuthority.error !== undefined) {
-      fail(`execution authority unavailable: ${runnerAuthority.error}`);
-    }
-    const result = await new ClaudeCodeRunner(
-      runnerAuthority.runnerOptions,
-    ).run({
+    const result = await runner.run({
       name: `judge-${pr}`,
       systemPromptPath,
       prompt,
@@ -585,6 +614,7 @@ if (import.meta.main) {
         parsePairs(finalText, golden.comments.length, candidates.length),
     });
     if (result.status !== "ok" || result.output === undefined) {
+      await disposeJudge();
       fail(`judge spawn failed for PR ${pr}: ${result.stderrTail.slice(-400)}`);
     }
     judgeCost += result.usage.cost_usd_est;
@@ -672,6 +702,8 @@ if (import.meta.main) {
     );
   }
 
+  await disposeJudge();
+
   // Retained attempts remain spend evidence, never extra scheduled completions.
   const archived = await readdir(path.join(runsRoot, "incomplete-attempts"), {
     withFileTypes: true,
@@ -756,6 +788,7 @@ if (import.meta.main) {
         judge_prompt:
           "withmartian/code-review-benchmark step3_judge_comments.py JUDGE_PROMPT",
         judge_model: JUDGE_MODEL,
+        judge_route: routeIdentityFields(judgeRoute.identity),
         gateway: "claude-code CLI (tools:[]), not MARTIAN_API_KEY",
         sibling_rule:
           "same path:line are not extra FPs (mechanical analogue of step 2.5)",
