@@ -58,6 +58,11 @@
 //   SCOUT_PROBE_DRY=1 bun scripts/scout-probe.ts
 //   bun scripts/scout-probe.ts [--only coverage|restraint] [--pr <n>]...
 //     [--replicates 3] [--model sonnet] [--prompt prompts/scout.md] [--out <dir>]
+//
+// --model runs through the production route seam (src/harness/single-step.ts):
+// `sonnet` (the default) is the Claude route the probe always ran,
+// `claude:sonnet-latest`, and `opencode:<provider>/<model>` measures an
+// OpenCode model. The report and every run record carry the route identity.
 
 import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -76,8 +81,13 @@ import {
   scoutPrompt,
   validateScoutLeads,
 } from "#review/scout";
-import { ClaudeCodeRunner, type StepSpec } from "#review/step-runner";
-import { resolveRunnerAuthority } from "../src/runner-authority";
+import type { StepSpec } from "#review/step-runner";
+import {
+  prepareSingleStepRunner,
+  routeIdentityFields,
+  singleStepRoute,
+} from "../src/harness/single-step";
+import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 
 // The frozen M0 control set (§1.1). These run dirs MUST survive until M6; the
 // probe only ever READS `diff.patch` out of them.
@@ -364,12 +374,22 @@ const promptSha256 = new Bun.CryptoHasher("sha256")
   .update(promptSource)
   .digest("hex");
 
+// Built in the preflight, so an invalid --model fails a $0 dry run too.
+const route = (() => {
+  try {
+    return singleStepRoute("scout", model);
+  } catch (error) {
+    return fail(`--model ${model}: ${(error as Error).message}`);
+  }
+})();
+const ranOn = routeIdentityFields(route.identity);
+
 const plannedSpawns = prsInScope.length * replicates;
 console.error(
   [
     "scout-probe preflight OK",
     `  prompt      ${promptPath} (sha256 ${promptSha256.slice(0, 12)})`,
-    `  model       ${model}`,
+    `  model       ${model} (route ${ranOn.route.backend}:${ranOn.route.provider}/${ranOn.route.modelSnapshot}, fingerprint ${ranOn.step_route_fingerprint.slice(0, 12)})`,
     `  replicates  ${replicates}`,
     `  timeout     ${timeoutMinutes} min per step`,
     `  scope       ${scope} (--only ${only}${
@@ -422,15 +442,15 @@ const scratchDir = path.join(runDir, SCRATCH_DIR_NAME);
 // EMPTY, so leaving a `.keep` in it would undercut the only thing it asserts.
 await mkdir(scratchDir, { recursive: true });
 
-const runnerAuthority = await resolveRunnerAuthority({
+// Prepared as a review prepares it: the run's Claude credential, production
+// admission, the route seam.
+const runner = await prepareSingleStepRunner({
   workspaceRoot: scratchDir,
+  route,
+  claudeRun: resolveRunClaudeCredential({}),
 });
-if (runnerAuthority.error !== undefined) {
-  throw new Error(`execution authority unavailable: ${runnerAuthority.error}`);
-}
-const runner = new ClaudeCodeRunner(runnerAuthority.runnerOptions);
 
-interface RunRecord {
+type RunRecord = typeof ranOn & {
   pr: number;
   replicate: number;
   status: "ok" | "failed";
@@ -450,7 +470,7 @@ interface RunRecord {
   // keys them by step NAME, which is "scout" for every one), so the witness is
   // preserved here or it is lost.
   failure_tail?: string;
-}
+};
 
 const emptyCoverage = (patch: string): HunkCoverage => hunkCoverage(patch, []);
 
@@ -502,6 +522,7 @@ async function runOnce(input: PrInput, replicate: number): Promise<RunRecord> {
     // column and never retried here (retrying would spend the maxAttempts: 1
     // decision the design made on purpose).
     return {
+      ...ranOn,
       pr: input.pr,
       replicate,
       status: "failed",
@@ -524,6 +545,7 @@ async function runOnce(input: PrInput, replicate: number): Promise<RunRecord> {
   const raw = result.output as ScoutLead[];
   const capped = capScoutLeads(raw);
   return {
+    ...ranOn,
     pr: input.pr,
     replicate,
     status: "ok",
@@ -547,22 +569,26 @@ const records: RunRecord[] = [];
 // live cost legible. Replicate-outer rather than PR-outer for refuter-probe's
 // reason — any drift in service behaviour over the probe's wall clock then
 // hits every PR evenly instead of loading one of them.
-for (let r = 1; r <= replicates; r++) {
-  for (const pr of prsInScope) {
-    const input = inputs.get(pr);
-    if (input === undefined) fail(`no diff loaded for PR ${pr}`);
-    const record = await runOnce(input, r);
-    records.push(record);
-    console.error(
-      `[PR ${record.pr} #${r}] ${record.status} raw=${record.raw_lead_count} ` +
-        `capped=${record.capped_lead_count} dropped=${record.dropped} ` +
-        `whyTrunc=${record.why_truncated} ` +
-        `cov=${record.hunk_coverage_capped.coverage.toFixed(2)} ` +
-        `unmatched=${record.hunk_coverage_capped.unmatchedLeads} ` +
-        `${(record.duration_ms / 1000).toFixed(0)}s ` +
-        `$${record.cost_usd.toFixed(4)}`,
-    );
+try {
+  for (let r = 1; r <= replicates; r++) {
+    for (const pr of prsInScope) {
+      const input = inputs.get(pr);
+      if (input === undefined) throw new Error(`no diff loaded for PR ${pr}`);
+      const record = await runOnce(input, r);
+      records.push(record);
+      console.error(
+        `[PR ${record.pr} #${r}] ${record.status} raw=${record.raw_lead_count} ` +
+          `capped=${record.capped_lead_count} dropped=${record.dropped} ` +
+          `whyTrunc=${record.why_truncated} ` +
+          `cov=${record.hunk_coverage_capped.coverage.toFixed(2)} ` +
+          `unmatched=${record.hunk_coverage_capped.unmatchedLeads} ` +
+          `${(record.duration_ms / 1000).toFixed(0)}s ` +
+          `$${record.cost_usd.toFixed(4)}`,
+      );
+    }
   }
+} finally {
+  await runner.dispose();
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +697,7 @@ const report = {
   prompt_path: promptPath,
   prompt_sha256: promptSha256,
   model,
+  ...ranOn,
   replicates,
   // The ceiling this result ran under. A coverage number is only comparable to
   // another one taken at the same watchdog: a killed run scores as a miss, so

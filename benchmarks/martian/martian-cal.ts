@@ -81,7 +81,7 @@ function argValue(flag: string): string | undefined {
 const mode = Bun.argv[2];
 if (mode !== "plan" && mode !== "check" && mode !== "run" && mode !== "score") {
   fail(
-    "usage: bun run benchmarks/martian/martian-cal.ts plan|check|run|score [--corpus cal|sentry|grafana|keycloak|discourse] [--all] [--only 14943,8330] [--arm <id>] [--model <logical>] [--hunter-model <l>] [--refuter-model <l>] [--repo …] [--runs …]",
+    "usage: bun run benchmarks/martian/martian-cal.ts plan|check|run|score [--corpus cal|sentry|grafana|keycloak|discourse] [--all] [--only 14943,8330] [--arm <id>] [--model <logical>] [--repo …] [--runs …]",
   );
 }
 
@@ -118,11 +118,18 @@ if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(arm)) {
 // global opus mapping (opencode/glm-5.3-flash#high) while frontmatter says
 // sonnet. Empty = frontmatter (the `hunters` baseline shape).
 const model = argValue("--model");
-// Per-role models (--hunter-model / --refuter-model set AgentSpec.model per
-// role). Lets one arm split hunters and refuter across two routes with the
-// prompt set byte-identical.
-const hunterModel = argValue("--hunter-model");
-const refuterModel = argValue("--refuter-model");
+// Per-role models are not CLI flags (`crysk review` has no --hunter-model or
+// --refuter-model), so an arm that passed them could never run. Refuse them
+// before anything is spent; a per-role split goes in the operator's person
+// config `models` (hunter.<specialty>, refuter), which the review and the
+// frozen identity both read.
+for (const flag of ["--hunter-model", "--refuter-model"]) {
+  if (Bun.argv.includes(flag)) {
+    fail(
+      `${flag} is not supported: crysk review has no per-role model flag. Set models.hunter.<specialty> / models.refuter in your person config (~/.crysk) instead.`,
+    );
+  }
+}
 
 function parseOnly(raw: string): number[] {
   return raw.split(",").map((s) => {
@@ -222,8 +229,6 @@ async function review(
     "--agents",
     LAB_AGENTS_DIR,
     ...(model === undefined ? [] : ["--model", model]),
-    ...(hunterModel === undefined ? [] : ["--hunter-model", hunterModel]),
-    ...(refuterModel === undefined ? [] : ["--refuter-model", refuterModel]),
     // The shipped size gate, not the operator config: a benchmark scores what
     // dev ships, and a laptop that lowered max_changed_lines would silently
     // drop PRs every vendor reviewed (Sentry #5, 3195 effective lines).
@@ -297,9 +302,6 @@ if (mode === "plan") {
   console.log(
     `model: ${model ?? "(frontmatter)"}  (CLI --model precedence over frontmatter)`,
   );
-  console.log(
-    `role models: hunters ${hunterModel ?? "(frontmatter)"} / refuter ${refuterModel ?? "(frontmatter)"}`,
-  );
   console.log(`band sum: $${low.toFixed(2)}–$${high.toFixed(2)}`);
   console.log(
     "Gate column is GitHub aggregate counters (no exclusions, no whitespace). Conservative.",
@@ -342,7 +344,7 @@ if (mode === "check") {
 
 if (mode === "run") {
   console.error(
-    `martian-cal run: ${rows.length} PR(s), pipeline hunters, arm ${arm}, model ${model ?? "(frontmatter)"}, hunters ${hunterModel ?? "(frontmatter)"}, refuter ${refuterModel ?? "(frontmatter)"}, into ${runsRoot}`,
+    `martian-cal run: ${rows.length} PR(s), pipeline hunters, arm ${arm}, model ${model ?? "(frontmatter)"}, into ${runsRoot}`,
   );
   const reps = Number(argValue("--reps") ?? "1");
   if (!Number.isInteger(reps) || reps < 1 || reps > 100)
@@ -393,8 +395,6 @@ if (mode === "run") {
       headSha: row.headSha,
       baseSha: row.baseSha,
       model,
-      hunterModel,
-      refuterModel,
     });
     const previous = await loadQualifiedReview(dir, identity);
     if (previous.qualified) {

@@ -54,7 +54,21 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { DraftFinding, RefuterOutcome } from "#review/drafts";
+import type { ResolvedRoutePlan } from "#model/routing";
+import type { DraftFinding, HunterDraft, RefuterOutcome } from "#review/drafts";
+import {
+  type PipelineDeps,
+  type PipelineInput,
+  type PipelineResult,
+  runPipeline,
+} from "#review/pipeline";
+import type { ReviewSpec } from "#review/spec";
+import type { StepResult, StepRunner, StepSpec } from "#review/step-runner";
+import {
+  type PipelineRouteIdentity,
+  readPipelineRouteIdentity,
+} from "../src/harness/pipeline-plan";
+import { zeroUsage } from "../src/usage";
 
 // The arm list is a tuple, not a bare union, so the script can iterate the
 // matrix without restating it — a fifth arm added here reaches the runner and
@@ -661,5 +675,186 @@ export async function buildRefuterProbeFixture(
     draft,
     expectedVerdict: EXPECTED_VERDICT[arm],
     contradictingLine,
+  };
+}
+
+// --- The probe's run, on a route plan (route-plan-harness S4, S6) -----------
+
+// What the probe measures, as explicit choices (S6). The refuter is the
+// production refuter model: it must equal the `model:` in
+// prompts/default/review-refuter.md (test/review/preflight-bundled-prompts.test.ts
+// asserts that value). A haiku refuter would answer a different question —
+// this probe is about the v2 PROMPT's deference, not about what a cheap model
+// can verify. Set on the AgentSpec on purpose, so the probe is pinned even if
+// the agent file's frontmatter is later retuned; that also means retuning the
+// frontmatter does NOT move this constant, and a probe run on a model
+// production no longer uses proves nothing about production. The hunter is
+// never spawned (PlantedDraftRunner); its model is only the route its step is
+// planned on. Effort is deliberately NOT pinned beside them: the fixture
+// carries the refuter prompt verbatim, so the step runs at the `effort:` the
+// frontmatter declares, the production level.
+export const REFUTER_PROBE_MODELS = { refuter: "opus", hunter: "haiku" };
+
+export interface RefuterProbeOptions {
+  replicates: number;
+  // A spec model: an alias (`opus`) or a model name (`opencode:openai/gpt-5`).
+  refuterModel: string;
+  hunterModel: string;
+}
+
+function flagValue(argv: readonly string[], flag: string): string | undefined {
+  const at = argv.indexOf(flag);
+  if (at === -1) return undefined;
+  const value = argv[at + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`refuter probe: ${flag} needs a model`);
+  }
+  return value;
+}
+
+// `bun run scripts/refuter-probe.ts [replicates] [--refuter-model <m>]
+// [--hunter-model <m>]`. The env (REFUTER_PROBE_REFUTER_MODEL,
+// REFUTER_PROBE_HUNTER_MODEL) is read when the flag is absent.
+export function parseRefuterProbeArgs(
+  argv: readonly string[],
+  env: Readonly<Record<string, string | undefined>> = {},
+): RefuterProbeOptions {
+  const flags = new Set(["--refuter-model", "--hunter-model"]);
+  const positional = argv.filter(
+    (arg, i) => !flags.has(arg) && !flags.has(argv[i - 1] ?? ""),
+  );
+  const replicates = Number(positional[0] ?? 3);
+  if (!Number.isInteger(replicates) || replicates < 1) {
+    throw new Error(`refuter probe: replicates must be a positive integer`);
+  }
+  return {
+    replicates,
+    refuterModel:
+      flagValue(argv, "--refuter-model") ??
+      env.REFUTER_PROBE_REFUTER_MODEL ??
+      REFUTER_PROBE_MODELS.refuter,
+    hunterModel:
+      flagValue(argv, "--hunter-model") ??
+      env.REFUTER_PROBE_HUNTER_MODEL ??
+      REFUTER_PROBE_MODELS.hunter,
+  };
+}
+
+// One hunter (never spawned) and one refuter, the minimum the pipeline
+// accepts. The hunter is non-parity, so the conditional parity leg cannot
+// fire. Both models sit on the AgentSpec, which outranks `models` and the
+// frontmatter, so the plan and the steps take them from the same place.
+function refuterProbeSpec(
+  models: Pick<RefuterProbeOptions, "refuterModel" | "hunterModel">,
+): ReviewSpec {
+  return {
+    agents: [
+      {
+        key: HUNTER_KEY,
+        file: HUNTER_AGENT_FILE,
+        role: "hunter",
+        model: models.hunterModel,
+      },
+      {
+        key: "refuter",
+        file: REFUTER_AGENT_FILE,
+        role: "refuter",
+        model: models.refuterModel,
+      },
+    ],
+  };
+}
+
+// The probe's runPipeline input. The route plan is built from this same object
+// (buildPipelineHarnessPlan), so the plan and the steps cannot disagree.
+export function refuterProbePipelineInput(
+  fixture: RefuterProbeFixture,
+  options: {
+    mcpConfigPath: string;
+    refuterModel?: string;
+    hunterModel?: string;
+  },
+): PipelineInput {
+  return {
+    pr: 0,
+    baseSha: fixture.baseSha,
+    headSha: fixture.headSha,
+    worktree: fixture.repoDir,
+    diffPath: fixture.diffPath,
+    gotchasPath: fixture.gotchasPath,
+    // A lab-style set: the fixture's own files, frontmatter included.
+    agentsDir: fixture.agentsDir,
+    runDir: fixture.runDir,
+    outPath: path.join(fixture.runDir, "findings.json"),
+    mcpConfigPath: options.mcpConfigPath,
+    hopBudget: 4,
+    parityTriggerPaths: [],
+    // Priors template into HUNTER bodies only, and this run's hunter is a
+    // fake that is never spawned. The refuter body anchors {{GOTCHAS}} (the
+    // repository facts, rendered from fixture.gotchasPath) but no
+    // {{PRIORS}}, so empty priors keep the probe honest.
+    suspicionPriors: [],
+    stepTimeoutMs: 10 * 60 * 1000,
+    spec: refuterProbeSpec({
+      refuterModel: options.refuterModel ?? REFUTER_PROBE_MODELS.refuter,
+      hunterModel: options.hunterModel ?? REFUTER_PROBE_MODELS.hunter,
+    }),
+  };
+}
+
+// THE ENGINE SEAM. Hunter steps are answered with a canned draft carrying the
+// arm's planted finding — free, deterministic, and not what is under test.
+// Refuter steps go to the live runner the route seam prepared, so the genuine
+// refuterPrompt, refuter.system.md write, isolation argv, retry ordering,
+// watchdog, validateRefuterResult and verdict→tier mapping all stay in the
+// path. A reimplementation of that leg would measure the reimplementation.
+class PlantedDraftRunner implements StepRunner {
+  constructor(
+    private readonly draft: DraftFinding,
+    private readonly live: StepRunner,
+  ) {}
+
+  async run(spec: StepSpec): Promise<StepResult> {
+    if (spec.name.startsWith("refuter-")) return this.live.run(spec);
+    if (!spec.name.startsWith("hunter-")) {
+      // An unrecognised step name means the spec drifted; failing loudly beats
+      // quietly answering it with the planted draft.
+      throw new Error(`refuter probe: unexpected step ${spec.name}`);
+    }
+    const output: HunterDraft = { findings: [this.draft] };
+    return {
+      name: spec.name,
+      status: "ok",
+      output,
+      // Zero on purpose: a fabricated bill for the fake leg would pollute the
+      // only cost figure this probe reports honestly, the refuter's own.
+      usage: zeroUsage(),
+      attempts: 1,
+      stderrTail: "",
+      resultText: "",
+    };
+  }
+}
+
+// One probe run on its route plan: the plan and the prepared deps come from
+// prepareHarnessRunner (src/harness/route-runner.ts), and only the runner is
+// wrapped, so the ceiling controller and the transport registry are the ones
+// the seam prepared. The identity is the route the run recorded for the
+// refuter in its pipeline.json.
+export async function runRefuterProbePipeline(
+  input: PipelineInput,
+  harness: { plan: ResolvedRoutePlan; deps: PipelineDeps },
+  draft: DraftFinding,
+): Promise<{ result: PipelineResult; identity: PipelineRouteIdentity }> {
+  const result = await runPipeline(
+    { ...input, routePlan: harness.plan },
+    {
+      ...harness.deps,
+      runner: new PlantedDraftRunner(draft, harness.deps.runner),
+    },
+  );
+  return {
+    result,
+    identity: await readPipelineRouteIdentity(input.runDir, "refuter"),
   };
 }

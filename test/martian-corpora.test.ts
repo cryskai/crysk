@@ -80,3 +80,28 @@ test("the five corpora hold Martian's 50 PRs and 173 goldens", async () => {
   expect(prs).toBe(50);
   expect(comments).toBe(173);
 });
+
+// route-plan-harness S5: crysk review has no per-role model flag, so
+// martian-cal refuses one before it spends anything instead of starting an arm
+// whose every review fails on an unknown option.
+for (const flag of ["--hunter-model", "--refuter-model"]) {
+  test(`martian-cal refuses ${flag}`, async () => {
+    const proc = Bun.spawn(
+      [
+        process.execPath,
+        path.join(import.meta.dir, "../benchmarks/martian/martian-cal.ts"),
+        "plan",
+        flag,
+        "opus",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [exitCode, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stderr).text(),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain(`${flag} is not supported`);
+    expect(stderr).toContain("person config");
+  });
+}

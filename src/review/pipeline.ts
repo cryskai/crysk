@@ -4500,7 +4500,7 @@ function resolveModel(
 //
 // `roleDefault` is a level, not a StepRole, because the consolidation pass has
 // its own default (the profile's consolidate effort) outside the role table.
-function stepEffortFields(
+export function stepEffortFields(
   routePlan: ResolvedRoutePlan | undefined,
   stepKey: string,
   frontmatterEffort: Effort | undefined,
@@ -4598,7 +4598,7 @@ export function routeSharesPrefix(
   );
 }
 
-function routeForStepKey(
+export function routeForStepKey(
   routePlan: ResolvedRoutePlan | undefined,
   stepKey: string,
 ): ResolvedModelRoute | undefined {
@@ -4608,7 +4608,7 @@ function routeForStepKey(
 // A step's route AND its fallbacks (S4), from the plan, as StepSpec fields.
 // One spread at every site that routes a step, so no site can hand a runner
 // the first model without the rest of the list.
-function stepRouteFields(
+export function stepRouteFields(
   routePlan: ResolvedRoutePlan | undefined,
   stepKey: string,
 ): Pick<StepSpec, "route" | "fallbackRoutes"> {

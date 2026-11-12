@@ -197,6 +197,16 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
     domain: "git",
     files: ["git", "identity", "refs"],
   },
+  {
+    domain: "harness",
+    files: [
+      "materiality-judge",
+      "pipeline-plan",
+      "replay-rows",
+      "route-runner",
+      "single-step",
+    ],
+  },
 ];
 
 function srcRootFiles(): string[] {

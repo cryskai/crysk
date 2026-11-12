@@ -15,6 +15,12 @@
 // martian-inject's shape, rendered with the same renderInlineComment, under
 // the given tool name, ready to splice into a COPY of benchmark_data.json.
 // Goldens are used only to key the entry by PR URL; the model never sees them.
+//
+// --model runs through the production route seam (src/harness/single-step.ts):
+// `sonnet` (the default) is the Claude route it always ran,
+// `claude:sonnet-latest`, and `opencode:<provider>/<model>` measures an
+// OpenCode model. Every audit row of a step that ran records the model and the
+// route identity.
 
 import { appendFile, chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,21 +31,28 @@ import {
   consolidationInput,
   enforcePlanInvariants,
   type MergedDraft,
-  type PlanEntry,
   validatePlan,
 } from "#review/consolidate";
 import { extractJsonObject } from "#review/drafts";
 import type { Finding } from "#review/findings";
 import { parseAgentSource } from "#review/prompt-set";
 import { renderInlineComment } from "#review/report";
-import { ClaudeCodeRunner } from "#review/step-runner";
-import { resolveRunnerAuthority } from "../src/runner-authority";
 import {
   BENCH_HOME,
   type CasesFile,
   CORPORA,
   corpusFile,
 } from "../benchmarks/martian/martian-corpora";
+import {
+  type ConsolidateStepRow,
+  consolidateConfigMatches,
+  consolidateStepRow,
+} from "../src/harness/replay-rows";
+import {
+  prepareSingleStepRunner,
+  singleStepRoute,
+} from "../src/harness/single-step";
+import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 
 function argValue(flag: string): string | undefined {
   const i = Bun.argv.indexOf(flag);
@@ -67,6 +80,14 @@ const only = argValue("--only")?.split(",");
 const variant = argValue("--variant") ?? "base";
 if (variant !== "base" && variant !== "strict")
   fail(`unknown --variant ${variant}`);
+// Built before anything is read or spent, so an invalid --model fails here.
+const route = (() => {
+  try {
+    return singleStepRoute("consolidate", model);
+  } catch (error) {
+    fail(`--model ${model}: ${(error as Error).message}`);
+  }
+})();
 
 // The body of prompts/consolidate.md is the measured prompt, byte for byte.
 const SYSTEM = parseAgentSource(
@@ -128,12 +149,13 @@ for (const [name, corpus] of Object.entries(CORPORA)) {
 await mkdir(outDir, { recursive: true });
 // The audit is keyed by PR label only, so reusing --out with another arm,
 // variant or model would read the wrong experiment's plans. Pin the config.
+// The pin keeps its pre-seam shape, so an existing --out keeps resuming.
 const configPath = path.join(outDir, "config.json");
 const config = { arm, tool, model, variant };
 const prior = Bun.file(configPath);
 if (await prior.exists()) {
   const seen = await prior.json();
-  if (JSON.stringify(seen) !== JSON.stringify(config))
+  if (!consolidateConfigMatches(seen, config, route))
     fail(
       `${configPath} records ${JSON.stringify(seen)}; this run is ${JSON.stringify(config)}. Use a fresh --out.`,
     );
@@ -142,15 +164,17 @@ if (await prior.exists()) {
 }
 
 const auditPath = path.join(outDir, "consolidation.jsonl");
-interface AuditRow {
-  label: string;
-  status: "ok" | "fallback" | "passthrough";
-  reason?: string;
-  plan?: PlanEntry[];
-  in: number;
-  out: number;
-  notional_usd: number | null;
-}
+// A passthrough ran no step, so it records no route. Rows written before the
+// seam carry no model or route either.
+type AuditRow =
+  | ConsolidateStepRow
+  | {
+      label: string;
+      status: "passthrough";
+      in: number;
+      out: number;
+      notional_usd: number | null;
+    };
 const audit = new Map<string, AuditRow>();
 const auditFile = Bun.file(auditPath);
 if (await auditFile.exists()) {
@@ -171,11 +195,16 @@ await Bun.write(
 );
 await chmod(systemPromptPath, 0o600);
 await Bun.write(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
-const authority = await resolveRunnerAuthority({ workspaceRoot: scratch });
-if (authority.error !== undefined) {
-  fail(`execution authority unavailable: ${authority.error}`);
-}
-const runner = new ClaudeCodeRunner(authority.runnerOptions);
+// Prepared as a review prepares it: the run's Claude credential, production
+// admission, the route seam.
+const runner = await prepareSingleStepRunner({
+  workspaceRoot: scratch,
+  route,
+  claudeRun: resolveRunClaudeCredential({}),
+}).catch(async (error) => {
+  await rm(scratch, { recursive: true, force: true });
+  fail(`execution authority unavailable: ${error}`);
+});
 
 async function consolidate(job: PrJob): Promise<AuditRow> {
   const ids = job.findings.map((f) => f.id);
@@ -210,7 +239,8 @@ async function consolidate(job: PrJob): Promise<AuditRow> {
         : `Findings:\n${JSON.stringify(input, null, 2)}`,
     tools: [],
     mcpConfigPath,
-    model,
+    // The route decides what the backend is sent.
+    model: route.model,
     effort: "high",
     cwd: scratch,
     outPath: path.join(scratch, `${job.label}.json`),
@@ -226,26 +256,7 @@ async function consolidate(job: PrJob): Promise<AuditRow> {
       );
     },
   });
-  const cost = result.usageV2?.notionalCostUsd ?? null;
-  if (result.status !== "ok") {
-    return {
-      label: job.label,
-      status: "fallback",
-      reason: result.stderrTail.slice(-300),
-      in: ids.length,
-      out: ids.length,
-      notional_usd: cost,
-    };
-  }
-  const plan = result.output as PlanEntry[];
-  return {
-    label: job.label,
-    status: "ok",
-    plan,
-    in: ids.length,
-    out: plan.length,
-    notional_usd: cost,
-  };
+  return consolidateStepRow({ label: job.label, ids, route, result });
 }
 
 const pending = jobs.filter(
@@ -267,6 +278,9 @@ async function worker() {
 try {
   await Promise.all(Array.from({ length: concurrency }, worker));
 } finally {
+  await runner.dispose().catch((error) => {
+    console.error(`cleanup: runner dispose failed: ${error}`);
+  });
   await rm(scratch, { recursive: true, force: true });
 }
 
