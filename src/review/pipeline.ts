@@ -3735,7 +3735,9 @@ async function runMaterialityJudge(
     protected: 0,
     failed: 0,
     skipped_unsafe: 0,
-    model: MATERIALITY_JUDGE_MODEL,
+    // The active profile's judge, so a run on another profile never records
+    // a Claude model it did not run (under `claude`, MATERIALITY_JUDGE_MODEL).
+    model: profileModelAlias(profileRoute(activeProfile(input), "judge").model),
     duration_ms: 0,
   };
   state.materiality = record;

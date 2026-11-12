@@ -1,6 +1,8 @@
 // odd/tasks/openai-profile.md S2, S4, S5, S9: the `openai` profile, Juanma's
 // approved table ("Asi si"), as one more lego piece next to `claude`.
 import { describe, expect, test } from "bun:test";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { MODEL_PROFILES, profileRoute, resolveProfile } from "#model/profiles";
 import {
   MATERIALITY_STEP_KEY,
@@ -12,6 +14,7 @@ import {
   buildCliRoutePlan,
   claudeAuthorityRequired,
   pipelineConsolidateInput,
+  pipelineMaterialityInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
 } from "#review/route-preflight";
@@ -19,6 +22,10 @@ import { defaultReviewSpec } from "#review/spec";
 import { captureBaseline } from "../review/model-profiles-harness";
 
 const OPENAI = resolveProfile("openai");
+const OPENAI_PLAN_FIXTURE = path.join(
+  import.meta.dir,
+  "../fixtures/model-profiles/openai-plan.json",
+);
 
 async function openaiPlan(
   overrides: Partial<Parameters<typeof buildCliRoutePlan>[0]> = {},
@@ -158,5 +165,45 @@ describe("a pipeline run on the openai profile (S5)", () => {
     for (const step of baseline.plan?.steps ?? []) {
       expect(step.route.backend).toBe("opencode");
     }
+  });
+
+  test("with the gate on, the judge stands down and records the profile's judge", async () => {
+    const prompts = { profile: OPENAI };
+    let materiality: Record<string, unknown> | undefined;
+    await captureBaseline(
+      { name: "openai", opencode: true },
+      {
+        bundledAgents: true,
+        modelProfile: OPENAI,
+        ...pipelineSummarizerInput({ enabled: true }, prompts),
+        ...pipelineMaterialityInput({ materiality_gate: true }, prompts),
+      },
+      (json) => {
+        materiality = json.materiality as Record<string, unknown> | undefined;
+      },
+    );
+    expect(materiality?.model).toBe("opencode:openai/gpt-6.1-terra");
+  });
+
+  test("the openai plan is pinned byte for byte", async () => {
+    const plan = await openaiPlan();
+    const pinned = plan.steps.map((s) => ({
+      stepKey: s.stepKey,
+      role: s.role,
+      logicalIdentity: s.logicalIdentity,
+      route: s.route,
+      effort: s.effort ?? null,
+      routeFingerprint: s.routeFingerprint,
+    }));
+    const actual = { routeFingerprint: plan.routeFingerprint, steps: pinned };
+    if (process.env.CRYSK_WRITE_PROFILES_BASELINE === "1") {
+      await writeFile(
+        OPENAI_PLAN_FIXTURE,
+        `${JSON.stringify(actual, null, 2)}\n`,
+      );
+    }
+    expect(actual).toEqual(
+      JSON.parse(await readFile(OPENAI_PLAN_FIXTURE, "utf8")),
+    );
   });
 });
