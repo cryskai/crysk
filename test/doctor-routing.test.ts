@@ -27,7 +27,7 @@ async function withHome(
 describe("loadDoctorRouting", () => {
   test("profile openai alone needs no Claude and carries the profile", async () => {
     await withHome(JSON.stringify({ profile: "openai" }), async (home) => {
-      const routing = await loadDoctorRouting({ home });
+      const routing = await loadDoctorRouting({ home, env: {} });
       expect(routing.claudeRequired).toBe(false);
       expect(routing.profile).toBe(resolveProfile("openai"));
       expect(routing.models).toBeUndefined();
@@ -36,7 +36,7 @@ describe("loadDoctorRouting", () => {
 
   test("no config keeps Claude required on the fallback profile", async () => {
     await withHome(undefined, async (home) => {
-      const routing = await loadDoctorRouting({ home });
+      const routing = await loadDoctorRouting({ home, env: {} });
       expect(routing.claudeRequired).toBe(true);
       expect(routing.profile).toBe(resolveProfile(undefined));
     });
@@ -44,7 +44,7 @@ describe("loadDoctorRouting", () => {
 
   test("a config that fails to load keeps Claude required and reports why", async () => {
     await withHome("{not json", async (home) => {
-      const routing = await loadDoctorRouting({ home });
+      const routing = await loadDoctorRouting({ home, env: {} });
       expect(routing.claudeRequired).toBe(true);
       expect(routing.profile).toBe(resolveProfile(undefined));
       expect(routing.error).toContain("is not valid JSON");
@@ -56,9 +56,28 @@ describe("loadDoctorRouting", () => {
     await withHome(
       JSON.stringify({ profile: "openai", agents_dir: "/tmp/agents" }),
       async (home) => {
-        expect((await loadDoctorRouting({ home })).claudeRequired).toBe(true);
+        expect(
+          (await loadDoctorRouting({ home, env: {} })).claudeRequired,
+        ).toBe(true);
       },
     );
+  });
+
+  test("an AGENTS_DIR override keeps Claude required under openai", async () => {
+    await withHome(JSON.stringify({ profile: "openai" }), async (home) => {
+      for (const name of ["CRYSK_AGENTS_DIR", "PRHERO_AGENTS_DIR"]) {
+        const routing = await loadDoctorRouting({
+          home,
+          env: { [name]: "/tmp/agents" },
+        });
+        expect(routing.claudeRequired).toBe(true);
+      }
+      const empty = await loadDoctorRouting({
+        home,
+        env: { CRYSK_AGENTS_DIR: "" },
+      });
+      expect(empty.claudeRequired).toBe(false);
+    });
   });
 
   test("openai with a Claude summary still needs Claude", async () => {
@@ -68,7 +87,9 @@ describe("loadDoctorRouting", () => {
         models: { summary: ["claude:haiku-latest"] },
       }),
       async (home) => {
-        expect((await loadDoctorRouting({ home })).claudeRequired).toBe(true);
+        expect(
+          (await loadDoctorRouting({ home, env: {} })).claudeRequired,
+        ).toBe(true);
       },
     );
   });

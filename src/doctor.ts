@@ -172,6 +172,8 @@ export async function loadDoctorRouting(input: {
   home: string;
   repoRoot?: string | undefined;
   configFlag?: string | undefined;
+  // The environment the AGENTS_DIR override is read from. Absent: the process's.
+  env?: Record<string, string | undefined>;
 }): Promise<DoctorRouting> {
   try {
     const loaded = await loadEffectiveConfig({
@@ -186,7 +188,8 @@ export async function loadDoctorRouting(input: {
         ...(profile === undefined ? {} : { profile }),
         customAgents:
           loaded.effective.agents_dir !== undefined ||
-          (readBrandEnv(process.env, "AGENTS_DIR")?.value ?? "") !== "",
+          (readBrandEnv(input.env ?? process.env, "AGENTS_DIR")?.value ??
+            "") !== "",
         materialityGate: resolveMaterialityGate(loaded.effective),
       }),
       ...(models === undefined ? {} : { models }),
