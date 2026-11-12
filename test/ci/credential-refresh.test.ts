@@ -52,7 +52,7 @@ const REVIEW_STEPS_BEFORE: ReadonlyArray<readonly [string, string | null]> = [
   ],
   [
     "Report to Crysk",
-    `\${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}`,
+    `\${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') && steps.platform.outputs.command != 'override' }}`,
   ],
   [
     "Refresh the Crysk token (cancelled run)",
@@ -64,7 +64,7 @@ const REVIEW_STEPS_BEFORE: ReadonlyArray<readonly [string, string | null]> = [
   ],
   [
     "Upload the Crysk trace",
-    `\${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}`,
+    `\${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') && steps.platform.outputs.command != 'override' }}`,
   ],
   [
     "Upload Crysk run directory",

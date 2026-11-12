@@ -212,6 +212,13 @@ runs:
         PR_NUMBER_INPUT: ${{ inputs.pr-number }}
         FORCE_INPUT: ${{ inputs.force }}
         FULL_INPUT: ${{ inputs.full }}
+        # The PR comment command a Crysk platform dispatched this run for (recheck or
+        # override), with the override's actor and head: read ONLY from the Connect
+        # step's outputs, which the platform's authenticated token exchange wrote,
+        # never from a dispatch input anyone with write access can set by hand.
+        PLATFORM_COMMAND: ${{ steps.platform.outputs.command }}
+        PLATFORM_COMMAND_ACTOR: ${{ steps.platform.outputs.command-actor }}
+        PLATFORM_COMMAND_HEAD: ${{ steps.platform.outputs.command-head }}
         # The inputs the clean break removed (U5): any with a value stops the run
         # (CRYSK-INPUT-REMOVED). Presence only, never a value.
         HAS_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key != '' }}
@@ -590,9 +597,12 @@ runs:
     # HTTP status and the API's message and exits 0, for the report and for the
     # findings upload alike. The review's own result stands. Builtins only, like
     # publish: it runs even when nothing installed.
+    # WHY not on a platform override: an override runs no review, so there is no
+    # round to report or trace; the platform recorded the command when it
+    # dispatched it, and the gate's status is the publish step's.
     - name: Report to Crysk
       id: report
-      if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') && (inputs.operation == 'review' || inputs.operation == '') }}
+      if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') && steps.platform.outputs.command != 'override' && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).
@@ -683,7 +693,7 @@ runs:
     - name: Upload the Crysk trace
       id: trace
       continue-on-error: true
-      if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') && (inputs.operation == 'review' || inputs.operation == '') }}
+      if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-settle.outputs.run-token != '' || steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') && steps.platform.outputs.command != 'override' && (inputs.operation == 'review' || inputs.operation == '') }}
       shell: bash
       env:
         # E-f F5: the Claude variables, emptied (see Connect to Crysk).

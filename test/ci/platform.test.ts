@@ -357,6 +357,65 @@ describe("runPlatformConnect", () => {
     }
   });
 
+  // odd/tasks/platform-commands.md (platform repo) S4: the command the platform dispatched, with
+  // its actor and head, reaches the trigger only through these outputs.
+  test("a recheck the platform names is written as command, after the token", async () => {
+    const h = harness(() =>
+      json(200, { ...SUCCESS, command: { name: "recheck" } }),
+    );
+    expect(await h.run()).toBe(0);
+    const outputs = h.events.filter((e) => e.startsWith("output:"));
+    expect(outputs.slice(-1)).toEqual(["output:command=recheck\n"]);
+  });
+
+  test("an override is written with its actor and head", async () => {
+    const head = "c".repeat(40);
+    const h = harness(() =>
+      json(200, {
+        ...SUCCESS,
+        command: { name: "override", actor: "octocat", head_sha: head },
+      }),
+    );
+    expect(await h.run()).toBe(0);
+    const outputs = h.events.filter((e) => e.startsWith("output:command"));
+    expect(outputs).toEqual([
+      "output:command=override\n",
+      "output:command-actor=octocat\n",
+      `output:command-head=${head}\n`,
+    ]);
+  });
+
+  test("an override with an actor or head that could break the outputs keeps the command and drops the field", async () => {
+    const h = harness(() =>
+      json(200, {
+        ...SUCCESS,
+        command: {
+          name: "override",
+          actor: "a\nevil=1",
+          head_sha: "main\nrun=true",
+        },
+      }),
+    );
+    expect(await h.run()).toBe(0);
+    const outputs = h.events.filter((e) => e.startsWith("output:command"));
+    expect(outputs).toEqual(["output:command=override\n"]);
+    expect(h.events.join("")).not.toContain("evil");
+  });
+
+  test("no command, or one this engine does not know, writes no command", async () => {
+    for (const command of [
+      undefined,
+      null,
+      "recheck",
+      { name: "stop" },
+      { name: 7 },
+    ]) {
+      const h = harness(() => json(200, { ...SUCCESS, command }));
+      expect(await h.run()).toBe(0);
+      expect(h.events.join("")).not.toContain("output:command");
+    }
+  });
+
   test("masks both tokens before writing the output, then exits 0", async () => {
     const h = harness(() => json(200, SUCCESS));
     expect(await h.run()).toBe(0);
@@ -871,6 +930,29 @@ describe("action.yml platform wiring", () => {
       expression("github.event.inputs['dispatch-id']"),
     );
     expect(JSON.stringify(step.env)).not.toMatch(/api\.crysk|https?:/);
+  });
+
+  // odd/tasks/platform-commands.md (platform repo) S4: the trigger learns a platform command only
+  // from the Connect step's outputs, and an override reports no round and uploads no trace.
+  test("the trigger reads the platform command from the Connect step only", () => {
+    const env = find("trigger").env ?? {};
+    expect(env.PLATFORM_COMMAND).toBe(
+      expression("steps.platform.outputs.command"),
+    );
+    expect(env.PLATFORM_COMMAND_ACTOR).toBe(
+      expression("steps.platform.outputs.command-actor"),
+    );
+    expect(env.PLATFORM_COMMAND_HEAD).toBe(
+      expression("steps.platform.outputs.command-head"),
+    );
+  });
+
+  test("an override neither reports a round nor uploads a trace", () => {
+    for (const id of ["report", "trace"]) {
+      expect(String(find(id).if)).toContain(
+        "steps.platform.outputs.command != 'override'",
+      );
+    }
   });
 
   test("the early token-consuming steps fall back to inputs.github-token", () => {
