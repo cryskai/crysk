@@ -8,6 +8,7 @@
 import { EFFORT_LEVELS, type Effort, isEffort } from "#model/catalog";
 import type { ModelProfile } from "#model/profiles";
 import { PROFILE_PROMPT_FILES } from "../asset-manifest";
+import { resolveBundledFilePath } from "../assets";
 import { wrapBlock } from "./boundary";
 
 // Fixed order — the lab's promptSetFingerprint hashes the concatenated files
@@ -69,7 +70,11 @@ export function profilePromptSet(
       `model profile "${profile.id}" names prompt set "${profile.promptSet}", which this build does not have`,
     );
   }
-  for (const [file, filePath] of Object.entries(set)) {
+  for (const [file, bundledPath] of Object.entries(set)) {
+    // Set paths come from bundled `with { type: "file" }` imports, which an npm
+    // build emits as cwd-relative strings; resolve them against the module like
+    // every other bundled asset (src/assets.ts).
+    const filePath = resolveBundledFilePath(bundledPath);
     if (defaultAgentFiles.includes(file)) {
       overrides.agents[file] = filePath;
     } else if (isEnginePromptFile(file)) {
