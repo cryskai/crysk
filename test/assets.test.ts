@@ -9,9 +9,22 @@ import {
   deriveEngineIdentity,
   isNpxCacheInvocation,
   NPX_REGISTRATION_REFUSED,
+  resolveBundledFilePath,
   resolveEngineAssets,
   selfInvocation,
 } from "../src/assets";
+
+describe("resolveBundledFilePath", () => {
+  test("normalizes Bun hashed file imports against the bundle, never process.cwd()", () => {
+    const bundleDir = path.resolve("bundle-output", "dist");
+    const emitted = "./summarizer-zca44nxa.md";
+    expect(resolveBundledFilePath(emitted, bundleDir)).toBe(
+      path.join(bundleDir, "summarizer-zca44nxa.md"),
+    );
+    const absolute = path.join(bundleDir, "consolidate-ac0mnfyj.md");
+    expect(resolveBundledFilePath(absolute, "/unrelated")).toBe(absolute);
+  });
+});
 
 describe("resolveEngineAssets", () => {
   test("returns populated assets in dev mode with existing paths", () => {
@@ -19,6 +32,16 @@ describe("resolveEngineAssets", () => {
     expect(assets.mode).toBe("dev");
     expect(assets.version).toBeDefined();
     expect(assets.version.length).toBeGreaterThan(0);
+
+    for (const packagedPath of [
+      assets.consolidatePromptPath,
+      assets.materialityPromptPath,
+      assets.scoutPromptPath,
+      assets.summarizerPromptPath,
+      ...Object.values(assets.bundledAgentFiles),
+    ]) {
+      expect(path.isAbsolute(packagedPath)).toBe(true);
+    }
 
     // Consolidate, materiality, scout and summarizer paths exist
     expect(existsSync(assets.consolidatePromptPath)).toBe(true);

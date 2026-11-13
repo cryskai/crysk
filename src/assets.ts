@@ -77,11 +77,34 @@ function resolveVersion(): string {
   return "0.6.0";
 }
 
+// Bun file imports can emit "./name-hash.ext" in bundled npm builds.
+// Resolve those filenames against the emitting module, never the consumer CWD.
+export function resolveBundledFilePath(
+  filePath: string,
+  moduleDir: string = import.meta.dir,
+): string {
+  return path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(moduleDir, filePath);
+}
+
+function resolveBundledFileMap(
+  files: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(files).map(([name, file]) => [
+      name,
+      resolveBundledFilePath(file),
+    ]),
+  );
+}
+
 export function resolveEngineAssets(): EngineAssets {
   const mode = detectAssetMode();
   const version = resolveVersion();
 
-  let defaultAgentsDir = path.dirname(BUNDLED_AGENT_FILES["review-refuter.md"]);
+  const bundledAgentFiles = resolveBundledFileMap(BUNDLED_AGENT_FILES);
+  let defaultAgentsDir = path.dirname(bundledAgentFiles["review-refuter.md"]);
   if (mode !== "compiled") {
     const fsDefaultDir = path.resolve(import.meta.dir, "../prompts/default");
     if (existsSync(fsDefaultDir)) {
@@ -91,16 +114,16 @@ export function resolveEngineAssets(): EngineAssets {
 
   return {
     mode,
-    bundledAgentFiles: BUNDLED_AGENT_FILES,
+    bundledAgentFiles,
     defaultAgentsDir,
-    consolidatePromptPath: CONSOLIDATE_PROMPT_PATH,
-    materialityPromptPath: MATERIALITY_PROMPT_PATH,
-    scoutPromptPath: SCOUT_PROMPT_PATH,
-    summarizerPromptPath: SUMMARIZER_PROMPT_PATH,
-    triageSkillFiles: TRIAGE_SKILL_FILES,
-    ciSetupSkillFiles: CI_SETUP_SKILL_FILES,
-    prSkillFiles: PR_SKILL_FILES,
-    generalSkillFiles: GENERAL_SKILL_FILES,
+    consolidatePromptPath: resolveBundledFilePath(CONSOLIDATE_PROMPT_PATH),
+    materialityPromptPath: resolveBundledFilePath(MATERIALITY_PROMPT_PATH),
+    scoutPromptPath: resolveBundledFilePath(SCOUT_PROMPT_PATH),
+    summarizerPromptPath: resolveBundledFilePath(SUMMARIZER_PROMPT_PATH),
+    triageSkillFiles: resolveBundledFileMap(TRIAGE_SKILL_FILES),
+    ciSetupSkillFiles: resolveBundledFileMap(CI_SETUP_SKILL_FILES),
+    prSkillFiles: resolveBundledFileMap(PR_SKILL_FILES),
+    generalSkillFiles: resolveBundledFileMap(GENERAL_SKILL_FILES),
     version,
   };
 }
