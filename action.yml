@@ -478,9 +478,10 @@ runs:
         # --ci is unconditional: --budget-usd, --step-summary and --ci-mode
         # all require it at parse time, and it is what puts the CLI into
         # headless CI mode. The job's exit code still does not carry the
-        # findings (ciExitCode): the pr-hero commit status does. In gate mode
-        # (the default) that status is the required check; in advisory it
-        # stays green. --yes skips the interactive confirmation prompt, which
+        # findings (src/review/exit-code.ts): the crysk commit status does. In
+        # gate mode (the default) that status is the required check; in
+        # advisory it stays green. An incomplete review (a step failed) exits 3,
+        # so this job goes red with it. --yes skips the interactive confirmation prompt, which
         # has no TTY to run against here.
         set -- review --pr "$TRIGGER_PR" --ci --yes
         if [ "$POST_INPUT" = "true" ] && [ "$POST_FROM_PLATFORM" != "true" ]; then set -- "$@" --post; fi

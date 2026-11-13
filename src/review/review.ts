@@ -26,6 +26,7 @@ import { engineIdentity } from "#git/identity";
 import { countFreeRouteSteps } from "#model/free-discovery";
 import { planRoutes } from "#model/routing";
 import { reviewPr } from "#pr/review-pr";
+import { reviewExitCode } from "#review/exit-code";
 import type { Telemetry } from "#review/findings";
 import { type PipelineResult, runPipeline } from "#review/pipeline";
 import {
@@ -537,6 +538,14 @@ export async function review(options: CliOptions): Promise<number> {
   })) {
     log(line);
   }
-  if (result.sessionFailed) return 1;
-  return 0;
+  // The same table as PR and CI mode (src/review/exit-code.ts). Local mode
+  // posts nothing, so nothing can be dropped.
+  return reviewExitCode({
+    sessionFailed: result.sessionFailed,
+    ...(result.noReviewerRan === undefined
+      ? {}
+      : { noReviewerRan: result.noReviewerRan }),
+    runStatus: doc.run_status,
+    droppedFindingIds: 0,
+  });
 }

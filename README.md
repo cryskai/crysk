@@ -520,6 +520,19 @@ Run artifacts land **outside** the repo, in `~/.crysk/repos/<origin>/runs/<run>/
 | `diff.raw.patch` | The unfiltered diff of the same range. Written **only** when exclusions actually dropped a file, since otherwise it would duplicate `diff.patch`. |
 | `anchor.patch` | The full PR diff (merge-base..head, after exclusions) that inline comments anchor against. On a first review it equals `diff.patch`; on an incremental re-review `diff.patch` is only the push delta, and this file still covers the whole PR, so a finding on an untouched line of the PR gets a review thread. |
 
+### Exit codes
+
+The exit code says whether the review ran, never what it found: blocking findings still exit `0`. The verdict is the `crysk` commit status and the posted comments. The same table holds in local, `--pr` and CI mode, gate or advisory.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The review is complete, with or without findings. |
+| `1` | No usable review: every hunter failed, no reviewer ran, or findings that should have been posted were dropped. |
+| `2` | Usage error. |
+| `3` | The review is incomplete: it ran, but a step failed (a hunter, the refuter, verify, adjudicate, or the time ceiling). `findings.json` reads `run_status: "partial"`. Run it again. |
+
+A script that merges on success should treat only `0` as a finished review.
+
 ## Cost and expectations
 
 - **$2–5 per review** of a typical PR-sized diff — the floor is real, because hunters read the tree,

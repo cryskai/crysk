@@ -661,9 +661,9 @@ export function deriveTier(
   // gets this power — `inconclusive` still blocks, mirroring the rule that
   // `refuted` requires positive disproof. Silence is not a demotion.
   if (finding.refuter_verdict === "downgraded-latent") return "advisory";
-  // The blocking tier does not change the job's exit code: ciExitCode stays 0
-  // on findings, and "blocking findings exit 0 in CI — reviewer, not a merge
-  // gate" (test/ci/review.test.ts) pins that. What it does change is the pr-hero commit status, and only in
+  // The blocking tier does not change the job's exit code: reviewExitCode
+  // never reads findings (src/review/exit-code.ts, spec 2.1), and
+  // test/review/exit-code.test.ts pins that. What it does change is the pr-hero commit status, and only in
   // gate mode (the CI default, S4): there that status, which is the required
   // check, goes red on blocking findings. In advisory mode the tier buys only
   // the report's loudest register: the red badge, the "Blocking" section, and

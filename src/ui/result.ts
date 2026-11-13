@@ -540,7 +540,7 @@ export function renderResult(input: ResultInput): string[] {
     );
   }
   // The line that outranks every count above it. The exit code is the SHELL's
-  // (return 1 in local mode, postingExitCode in PR mode) — this only says so.
+  // (reviewExitCode, src/review/exit-code.ts: 1 here) — this only says so.
   if (input.sessionFailed) {
     lines.push(
       "",

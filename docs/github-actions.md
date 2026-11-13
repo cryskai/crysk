@@ -1129,7 +1129,10 @@ newest row across both, so a head reviewed earlier keeps its verdict, and an ove
 only on `pr-hero` still wins. Descriptions are written `crysk: …`
 and read in both spellings. The job's exit code does not
 carry the review's findings: a finished review exits `0` even when it finds blocking-tier issues. Findings
-are published as comments and a summary, and the commit status decides the gate.
+are published as comments and a summary, and the commit status decides the gate. The exit code does carry
+whether the review finished: an incomplete one (a hunter, the refuter, verify, adjudicate or the time ceiling
+failed) exits `3` and the job goes red, in gate and advisory mode alike; `/crysk review` runs it again. The
+full table is in the README's "Exit codes" section.
 
 The action's `mode` input picks what the status says. It defaults to `gate`:
 
@@ -1346,7 +1349,8 @@ rather than silently absorbed into the enum (see
 of its own is an open follow-up.
 
 The two are told apart by the exit code: green with an empty `status` is the concurrent run, red with an
-empty `status` is the dead one. If your workflow branches on `steps.<id>.outputs.status`, treat an
+empty `status` is the dead one. A red job whose `status` is `reviewed` is an incomplete review (exit `3`):
+its findings and status were published, and a retry finishes it. If your workflow branches on `steps.<id>.outputs.status`, treat an
 **empty** value on a green job as "no review outcome yet — a concurrent run owns this head", not as a
 failure.
 
