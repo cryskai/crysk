@@ -20,17 +20,27 @@ import type { CredentialKind, RunnerBackend } from "./execution/contracts";
 // the ADMISSION WIRING block on `envBillsMetered` itself for the full history.
 import { envBillsMetered } from "./execution/usage-normalized";
 import {
+  AgyCredentialBroker,
   type CredentialBroker,
   KeychainCredentialBroker,
   OPENCODE_OAUTH_PROVIDER,
   OpenCodeApiTokenBroker,
   OpenCodeAuthBroker,
   OpenCodeFreeBroker,
+  resolveAntigravityCredentialSource,
 } from "./security/credential-broker";
 
 export interface RunnerAuthorityOptions {
   readonly binaryPath?: string;
   readonly openCodeBinaryPath?: string;
+  // odd/tasks/antigravity-oauth.md T3: the `agy` executable. Never derived from
+  // `binaryPath`, which overrides the Claude CLI.
+  readonly antigravityBinaryPath?: string;
+  // T3: whether a transport is registered for a backend (the runtime's
+  // registry). An antigravity route binds only when it is, so a build with the
+  // broker and no transport (T3 before T4) refuses an agy plan before anything
+  // spends. Absent: not registered.
+  readonly isTransportRegistered?: (backend: RunnerBackend) => boolean;
   readonly workspaceRoot: string;
   // Widened from `{ PATH?: string }` (#161): this is now also the env
   // `credentialKindForRoute` reads to decide a claude-code route's credential
@@ -109,8 +119,39 @@ export type BindingAuthorityResolution =
   | { readonly error: string; readonly binding?: undefined };
 
 const OPENCODE_BINARY_NAME = "opencode";
+const AGY_BINARY_NAME = "agy";
 
 async function resolveOpenCodeCanonicalBinary(
+  lookup: {
+    readonly binaryPath?: string;
+    readonly env?: { PATH?: string };
+  },
+  deps: ClaudeBinaryResolutionDeps = {},
+): Promise<
+  | { readonly canonicalPath: string; readonly sha256: string }
+  | { readonly error: string }
+> {
+  return resolveCanonicalBinaryOnPath(OPENCODE_BINARY_NAME, lookup, deps);
+}
+
+// T3: the `agy` executable, resolved exactly as opencode's is.
+async function resolveAgyCanonicalBinary(
+  lookup: {
+    readonly binaryPath?: string;
+    readonly env?: { PATH?: string };
+  },
+  deps: ClaudeBinaryResolutionDeps = {},
+): Promise<
+  | { readonly canonicalPath: string; readonly sha256: string }
+  | { readonly error: string }
+> {
+  return resolveCanonicalBinaryOnPath(AGY_BINARY_NAME, lookup, deps);
+}
+
+// An absolute override, or the first `name` on PATH; then its realpath and the
+// sha256 of its bytes. One copy for every non-Claude backend.
+async function resolveCanonicalBinaryOnPath(
+  name: string,
   lookup: {
     readonly binaryPath?: string;
     readonly env?: { PATH?: string };
@@ -139,14 +180,14 @@ async function resolveOpenCodeCanonicalBinary(
       .filter((dir) => dir.length > 0);
     candidate = "";
     for (const dir of searchDirs) {
-      const probe = path.join(dir, OPENCODE_BINARY_NAME);
+      const probe = path.join(dir, name);
       if (exists(probe)) {
         candidate = probe;
         break;
       }
     }
     if (candidate === "") {
-      return { error: "opencode binary not found on PATH" };
+      return { error: `${name} binary not found on PATH` };
     }
   }
 
@@ -158,7 +199,7 @@ async function resolveOpenCodeCanonicalBinary(
     return { canonicalPath: canonical, sha256: hasher.digest("hex") };
   } catch (error) {
     return {
-      error: `failed to resolve opencode binary ${candidate}: ${(error as Error).message}`,
+      error: `failed to resolve ${name} binary ${candidate}: ${(error as Error).message}`,
     };
   }
 }
@@ -244,6 +285,35 @@ export async function withOpenCodeDiscoveryAllowlist(
   };
 }
 
+// T3: the `agy` executable's allowlist, discovered like opencode's when the
+// plan names an agy model and none was configured.
+export async function withAgyDiscoveryAllowlist(
+  options: RunnerAuthorityOptions,
+  deps: ResolveRunnerAuthorityDeps = {},
+): Promise<RunnerAuthorityOptions | { readonly error: string }> {
+  const configured = options.executableAllowlists?.antigravity;
+  if (configured !== undefined && configured.length > 0) {
+    return options;
+  }
+  const resolved = await resolveAgyCanonicalBinary(
+    { binaryPath: options.antigravityBinaryPath, env: options.env },
+    deps,
+  );
+  if ("error" in resolved) {
+    return { error: resolved.error };
+  }
+  return {
+    ...options,
+    antigravityBinaryPath: resolved.canonicalPath,
+    executableAllowlists: {
+      ...options.executableAllowlists,
+      antigravity: [
+        { absolutePath: resolved.canonicalPath, sha256: resolved.sha256 },
+      ],
+    },
+  };
+}
+
 function planUsesBackend(
   plan: ResolvedRoutePlan,
   backend: RunnerBackend,
@@ -278,6 +348,14 @@ export async function prepareProductionRunnerAuthority(
       return withClaude;
     }
     options = withClaude;
+  }
+
+  if (planUsesBackend(plan, "antigravity")) {
+    const withAgy = await withAgyDiscoveryAllowlist(options, deps);
+    if ("error" in withAgy) {
+      return withAgy;
+    }
+    options = withAgy;
   }
 
   if (!planUsesBackend(plan, "opencode")) {
@@ -678,14 +756,54 @@ export async function resolveBindingAuthority(
     };
   }
 
-  // odd/tasks/antigravity-oauth.md T2: `agy:` names parse and route, but the
-  // transport, credential broker and executable authority come in T3-T4.
-  // Refused by name here, the one place every plan route binds before
-  // anything spends, so an agy plan stops instead of running elsewhere.
+  // odd/tasks/antigravity-oauth.md T2-T3: an agy route binds only when its
+  // transport is registered (T4). Until then it is refused by name here, the
+  // one place every plan route binds before anything spends, so an agy plan
+  // stops instead of running elsewhere.
   if (backend === "antigravity") {
+    if (options.isTransportRegistered?.("antigravity") !== true) {
+      return {
+        error:
+          "the antigravity backend (agy: models) is not available yet: Crysk cannot run an agy: model in this version, so choose a claude: or opencode: model",
+      };
+    }
+    const resolved = await resolveAgyCanonicalBinary(
+      { binaryPath: options.antigravityBinaryPath, env: options.env },
+      deps,
+    );
+    if ("error" in resolved) {
+      return { error: resolved.error };
+    }
+    const verified = await verifyConfiguredExecutable(
+      backend,
+      resolved.canonicalPath,
+      options,
+      deps,
+    );
+    if ("error" in verified) {
+      return { error: verified.error };
+    }
     return {
-      error:
-        "the antigravity backend (agy: models) is not available yet: Crysk cannot run an agy: model in this version, so choose a claude: or opencode: model",
+      binding: {
+        backend,
+        binaryPath: resolved.canonicalPath,
+        workspaceRoot: options.workspaceRoot,
+        canonicalCwd: options.workspaceRoot,
+        executableAllowlist: verified.allowlist,
+        credentialKind: credentialKindForRoute(backend, provider),
+        credentialRef: "antigravity-oauth",
+        // S5: always a broker. The record is read when the step projects, so
+        // a missing login refuses that step (and admission refuses it first,
+        // antigravityCredentialRefusal); nothing runs on the operator's env.
+        credentialBroker:
+          options.credentialBrokers?.antigravity ??
+          new AgyCredentialBroker({
+            sourcePath: resolveAntigravityCredentialSource(
+              options.env ?? process.env,
+            ),
+          }),
+        bucketId: "antigravity",
+      },
     };
   }
 

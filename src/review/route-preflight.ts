@@ -18,6 +18,7 @@ import { type EngineAssets, resolveEngineAssets } from "../assets";
 import { CliError } from "../errors";
 import type { RunnerBackend } from "../execution/contracts";
 import {
+  type AntigravityCredentialRefusal,
   type OpenCodeCredentialRefusal,
   type ProductionAdmissionContext,
   prepareProductionAdmissionContext,
@@ -299,6 +300,20 @@ export class OpenCodeCredentialRefusalError extends CredentialRefusalError {
   }
 }
 
+// odd/tasks/antigravity-oauth.md T3 (S5): an agy route the plan runs has no
+// usable Google login (antigravityCredentialRefusal, production-runtime.ts). The
+// failure its first step would hit (CRYSK-CRED-UNUSABLE), raised before spend.
+export class AntigravityCredentialRefusalError extends CredentialRefusalError {
+  constructor(refusal: AntigravityCredentialRefusal) {
+    super(
+      refusal.message,
+      { kind: "credential", failureClass: refusal.failureClass },
+      refusal.params,
+      "no usable Antigravity login for agy routes; refused before any provider spend",
+    );
+  }
+}
+
 export interface ProductionRoutePlanResult {
   readonly routePlan: ResolvedRoutePlan;
   readonly productionAdmission: ProductionAdmissionContext;
@@ -355,9 +370,15 @@ export async function resolveProductionRoutePlanAtConfirm(input: {
       : { claudeCredential: input.claudeRun.kind }),
   });
   if ("error" in productionAdmission) {
-    if (productionAdmission.credentialRefusal !== undefined) {
+    const credentialRefusal = productionAdmission.credentialRefusal;
+    if (credentialRefusal !== undefined) {
+      if (credentialRefusal.params.backend === "antigravity") {
+        throw new AntigravityCredentialRefusalError(
+          credentialRefusal as AntigravityCredentialRefusal,
+        );
+      }
       throw new OpenCodeCredentialRefusalError(
-        productionAdmission.credentialRefusal,
+        credentialRefusal as OpenCodeCredentialRefusal,
       );
     }
     throw new CliError(

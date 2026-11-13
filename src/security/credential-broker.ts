@@ -799,3 +799,333 @@ export class OpenCodeFreeBroker implements CredentialBroker {
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// odd/tasks/antigravity-oauth.md T3 (S5): the Antigravity (`agy`) route, on a
+// Google subscription login. Ported from the OpenCode brokers above (fresh
+// 0700 tree per step, one layout list for create and lstat, a sha256 per
+// file), with the differences agy forces (L3, L5, L6):
+//
+//  1. agy reads `$HOME/.gemini/antigravity-cli/antigravity-oauth-token` in its
+//     own nested `StoredToken` shape, so the canonical record is translated.
+//  2. The access token lasts one hour and agy refreshes an expired one at
+//     startup, rewriting the file. So an expired access token is NOT refused
+//     (OpenCodeAuthBroker's expiry check would refuse every Google login), and
+//     the refresh token travels whole: Google does not rotate it (L6), so a
+//     renewal inside the step spends nothing the platform still needs.
+//  3. agy writes its own state into HOME (`.config/antigravity`, many
+//     `.gemini/antigravity-cli` dirs), so the whole home is the step's own,
+//     writable, and destroyed after it.
+//  4. MCP servers come only from `$HOME/.gemini/config/mcp_config.json`; the
+//     step gets an empty one (T4b adds Crysk's read-only search server).
+//
+// The step agent file (`.gemini/config/agents/crysk-step.md`) is the
+// transport's (T4), as the Claude transport owns its own prompt files: a
+// projection carries the credential and the home, never a step's prompt. The
+// `agents` directory is created here so the file lands in a guarded tree.
+//
+// Its failures use `source_read_failed` and `malformed_payload` only, never
+// `missing_subscription_record`, the one class the harness degrades to the
+// operator's environment; the harness also refuses that degradation for this
+// kind outright (harness.ts), so a projection failure always refuses the step.
+//
+// macOS: agy tries the Keychain (/usr/bin/security) before the token file, so
+// a local run uses the developer's own agy login. Accepted (L3, L6).
+// ---------------------------------------------------------------------------
+
+export const AGY_TOKEN_RELATIVE_PATH = path.join(
+  ".gemini",
+  "antigravity-cli",
+  "antigravity-oauth-token",
+);
+
+// Where CI materializes the canonical record from CRYSK_ANTIGRAVITY_OAUTH
+// (T5 writes it, 0600). Under XDG_DATA_HOME like OpenCode's auth file.
+export function resolveAntigravityRecordPath(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  homeDir: string = homedir(),
+): string {
+  const dataHome = env.XDG_DATA_HOME;
+  const base =
+    dataHome !== undefined && dataHome.length > 0
+      ? dataHome
+      : path.join(homeDir, ".local", "share");
+  return path.join(base, "crysk", "antigravity-auth.json");
+}
+
+export function resolveAgyTokenPath(homeDir: string = homedir()): string {
+  return path.join(homeDir, AGY_TOKEN_RELATIVE_PATH);
+}
+
+// CI reads only the record its setup step materialized: a self-hosted runner's
+// own agy login must never stand in for the repository's secret. A local run
+// reads the developer's agy login.
+export function resolveAntigravityCredentialSource(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  homeDir: string = homedir(),
+): string {
+  return env.GITHUB_ACTIONS === "true"
+    ? resolveAntigravityRecordPath(env, homeDir)
+    : resolveAgyTokenPath(homeDir);
+}
+
+// agy's StoredToken, the shape of its token file.
+export interface AgyStoredToken {
+  readonly token: {
+    readonly access_token: string;
+    readonly token_type: "Bearer";
+    readonly refresh_token: string;
+    readonly expiry: string;
+  };
+  readonly auth_method: string;
+}
+
+export type AntigravityRecordLookup =
+  | { readonly ok: true; readonly token: AgyStoredToken }
+  | {
+      readonly ok: false;
+      readonly failureClass: "source_read_failed" | "malformed_payload";
+    };
+
+function isoExpiry(value: unknown): string | undefined {
+  const ms =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Date.parse(value)
+        : Number.NaN;
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
+// The canonical `{ type: "oauth", access, refresh, expires }` record, or agy's
+// own StoredToken, as agy's StoredToken. Undefined for anything else, and for a
+// record with no refresh token: without one agy cannot renew the hour-long
+// access token, so the step would fail on its first request.
+function agyStoredTokenOf(parsed: unknown): AgyStoredToken | undefined {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const record = parsed as Record<string, unknown>;
+  let access: unknown;
+  let refresh: unknown;
+  let expiry: string | undefined;
+  let authMethod = "consumer";
+  if (record.type === "oauth") {
+    access = record.access;
+    refresh = record.refresh;
+    expiry =
+      typeof record.expires === "number"
+        ? isoExpiry(record.expires)
+        : undefined;
+  } else if (typeof record.token === "object" && record.token !== null) {
+    const token = record.token as Record<string, unknown>;
+    access = token.access_token;
+    refresh = token.refresh_token;
+    expiry = isoExpiry(token.expiry);
+    if (typeof record.auth_method === "string" && record.auth_method !== "") {
+      authMethod = record.auth_method;
+    }
+  } else {
+    return undefined;
+  }
+  if (typeof access !== "string" || typeof refresh !== "string") {
+    return undefined;
+  }
+  if (refresh.length === 0 || expiry === undefined) return undefined;
+  return {
+    token: {
+      access_token: access,
+      token_type: "Bearer",
+      refresh_token: refresh,
+      expiry,
+    },
+    auth_method: authMethod,
+  };
+}
+
+// The read+parse+validate sequence, shared by the broker and admission's check
+// (antigravityCredentialRefusal, production-runtime.ts), so admission refuses
+// exactly what the step would. The access token's expiry is never a refusal.
+export async function lookupAntigravityRecord(
+  readerFn: () => Promise<string>,
+): Promise<AntigravityRecordLookup> {
+  let raw: string;
+  try {
+    raw = await readerFn();
+  } catch {
+    return { ok: false, failureClass: "source_read_failed" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, failureClass: "malformed_payload" };
+  }
+  const token = agyStoredTokenOf(parsed);
+  return token === undefined
+    ? { ok: false, failureClass: "malformed_payload" }
+    : { ok: true, token };
+}
+
+// ONE list for creating and guarding the tree (pr-hero F001 on PR #80).
+export interface AgyProjectionLayout {
+  readonly syntheticHome: string;
+  readonly syntheticConfigHome: string;
+  readonly syntheticTmp: string;
+  readonly xdgDataHome: string;
+  readonly xdgConfigHome: string;
+  readonly tokenFile: string;
+  readonly mcpConfigFile: string;
+  readonly directories: readonly string[];
+  readonly guarded: readonly string[];
+}
+
+export function agyProjectionLayout(
+  projectionRoot: string,
+  parentDir: string = tmpdir(),
+): AgyProjectionLayout {
+  const geminiDir = path.join(projectionRoot, ".gemini");
+  const agyCliDir = path.join(geminiDir, "antigravity-cli");
+  const geminiConfigDir = path.join(geminiDir, "config");
+  const agentsDir = path.join(geminiConfigDir, "agents");
+  const xdgConfigHome = path.join(projectionRoot, ".config");
+  const antigravityConfigDir = path.join(xdgConfigHome, "antigravity");
+  const localDir = path.join(projectionRoot, ".local");
+  const xdgDataHome = path.join(localDir, "share");
+  const syntheticTmp = path.join(projectionRoot, "tmp");
+  const tokenFile = path.join(agyCliDir, "antigravity-oauth-token");
+  const mcpConfigFile = path.join(geminiConfigDir, "mcp_config.json");
+  const directories = [
+    projectionRoot,
+    geminiDir,
+    agyCliDir,
+    geminiConfigDir,
+    agentsDir,
+    xdgConfigHome,
+    antigravityConfigDir,
+    localDir,
+    xdgDataHome,
+    syntheticTmp,
+  ];
+  return {
+    syntheticHome: projectionRoot,
+    syntheticConfigHome: geminiConfigDir,
+    syntheticTmp,
+    xdgDataHome,
+    xdgConfigHome,
+    tokenFile,
+    mcpConfigFile,
+    directories,
+    guarded: [parentDir, ...directories, tokenFile, mcpConfigFile],
+  };
+}
+
+export interface AgyCredentialBrokerOptions {
+  // Injectable for offline tests; returns the raw record.
+  readonly readerFn?: () => Promise<string>;
+  // Overrides the source lookup (resolveAntigravityCredentialSource).
+  readonly sourcePath?: string;
+}
+
+export class AgyCredentialBroker implements CredentialBroker {
+  private readonly readerFn: () => Promise<string>;
+
+  constructor(options: AgyCredentialBrokerOptions = {}) {
+    if (options.readerFn !== undefined) {
+      this.readerFn = options.readerFn;
+    } else {
+      const sourcePath =
+        options.sourcePath ?? resolveAntigravityCredentialSource();
+      this.readerFn = () => Bun.file(sourcePath).text();
+    }
+  }
+
+  async project(input: {
+    readonly sessionId: string;
+    readonly credentialRef: string;
+    readonly kind: CredentialKind;
+    readonly verifiedBinaryPath: string;
+  }): Promise<CredentialProjection> {
+    void input.sessionId;
+    void input.credentialRef;
+    void input.verifiedBinaryPath;
+    if (input.kind !== "antigravity_subscription_oauth") {
+      throw new Error(
+        `Unsupported credential kind: ${input.kind} (AgyCredentialBroker projects only antigravity_subscription_oauth)`,
+      );
+    }
+    const lookup = await lookupAntigravityRecord(this.readerFn);
+    if (!lookup.ok) {
+      throw new CredentialProjectionError(lookup.failureClass);
+    }
+    return buildAgyProjection(input.kind, lookup.token);
+  }
+}
+
+function sha256Of(payload: string): string {
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(new TextEncoder().encode(payload));
+  return hasher.digest("hex");
+}
+
+function buildAgyProjection(
+  kind: CredentialKind,
+  token: AgyStoredToken,
+): CredentialProjection {
+  const parentDir = path.join(tmpdir(), "prhero-cred-projections");
+  const layout = agyProjectionLayout(
+    path.join(parentDir, randomUUID()),
+    parentDir,
+  );
+  // Every level explicitly at 0700 — `recursive` alone lets an intermediate
+  // directory inherit the umask.
+  for (const dir of layout.directories) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const tokenPayload = `${JSON.stringify(token, null, 2)}\n`;
+  const mcpPayload = `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`;
+  try {
+    writeFileSync(layout.tokenFile, tokenPayload, { mode: 0o600 });
+    writeFileSync(layout.mcpConfigFile, mcpPayload, { mode: 0o600 });
+  } catch (error) {
+    rmSync(layout.syntheticHome, { recursive: true, force: true });
+    throw error;
+  }
+  // §6.1: lstat every guarded path — a pre-planted symlink anywhere in the
+  // chain means the credential, or a directory agy writes into, landed
+  // outside our control.
+  for (const component of layout.guarded) {
+    if (lstatSync(component).isSymbolicLink()) {
+      rmSync(layout.syntheticHome, { recursive: true, force: true });
+      throw new CredentialProjectionError("projection_layout_invalid");
+    }
+  }
+  return {
+    projectionId: `cred-${randomUUID()}`,
+    kind,
+    syntheticHome: layout.syntheticHome,
+    syntheticConfigHome: layout.syntheticConfigHome,
+    syntheticTmp: layout.syntheticTmp,
+    env: {
+      HOME: layout.syntheticHome,
+      TMPDIR: layout.syntheticTmp,
+      // Pinned so nothing inherited points agy back at the operator's state.
+      XDG_DATA_HOME: layout.xdgDataHome,
+      XDG_CONFIG_HOME: layout.xdgConfigHome,
+      // L3: agy honours `true`, not `1`. A step never updates the binary the
+      // executable allowlist verified.
+      AGY_CLI_DISABLE_AUTO_UPDATE: "true",
+    },
+    files: [
+      { path: layout.tokenFile, mode: 0o600, sha256: sha256Of(tokenPayload) },
+      {
+        path: layout.mcpConfigFile,
+        mode: 0o600,
+        sha256: sha256Of(mcpPayload),
+      },
+    ],
+    destroy: async () => {
+      rmSync(layout.syntheticHome, { recursive: true, force: true });
+    },
+  };
+}

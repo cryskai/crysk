@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agy:` entry that sets an `effort` is refused with the reason. Reviews do not run on agy yet: a plan that
   names an `agy:` model, fallbacks included, stops before anything spends with `the antigravity backend (agy:
   models) is not available yet`.
+- **The Antigravity credential projection and admission check.** Each agy step will run in its own 0700 home
+  holding only agy's token file, built from the CI record of `CRYSK_ANTIGRAVITY_OAUTH` or, locally, the
+  developer's own agy login, plus an empty MCP config; it is deleted after the step. An agy plan with no
+  usable login (missing, malformed, or with no refresh token) is refused before anything spends and names
+  `CRYSK_ANTIGRAVITY_OAUTH`; an expired access token is not refused, since agy renews it. A failed
+  Antigravity projection always fails the step and never falls back to the operator's environment. Reviews
+  still do not run on agy until its transport ships: before the `not available yet` refusal, an agy plan now
+  also stops when `agy` is not on PATH or no usable login exists.
 
 ### Changed
 

@@ -252,9 +252,13 @@ export type ClaudeFailureCredential =
 export type OpenCodeFailureCredential =
   | `CRYSK_OPENCODE_${string}_API_KEY`
   | `CRYSK_OPENCODE_${string}_OAUTH`;
+// An Antigravity (`agy`) route names its one secret (odd/tasks/antigravity-oauth.md
+// S2): the Google subscription login, oauthSecretName("antigravity").
+export type AntigravityFailureCredential = "CRYSK_ANTIGRAVITY_OAUTH";
 export type FailureCredential =
   | ClaudeFailureCredential
-  | OpenCodeFailureCredential;
+  | OpenCodeFailureCredential
+  | AntigravityFailureCredential;
 
 export type TransportFailureCause =
   | "auth_invalid"

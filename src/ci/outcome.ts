@@ -23,6 +23,7 @@
 
 import { commandHint, MARKER_OPEN, matchMarkerPrefix } from "../brand";
 import type {
+  AntigravityFailureCredential,
   ClaudeFailureCredential,
   FailureCredential,
   OpenCodeFailureCredential,
@@ -408,6 +409,18 @@ function isOpenCodeCredential(
   return OPENCODE_FAILURE_CREDENTIAL_RE.test(value);
 }
 
+// The Antigravity secret (odd/tasks/antigravity-oauth.md S2). A COPY of
+// oauthSecretName("antigravity") in security/oauth-providers.ts, which this module
+// cannot import at runtime (the builtins-only guard);
+// test/ci/outcome-antigravity.test.ts pins the two to the same name.
+const ANTIGRAVITY_OAUTH_SECRET = "CRYSK_ANTIGRAVITY_OAUTH";
+
+function isAntigravityCredential(
+  value: string,
+): value is AntigravityFailureCredential {
+  return value === ANTIGRAVITY_OAUTH_SECRET;
+}
+
 export function knownFailureCredential(
   value: unknown,
 ): FailureCredential | undefined {
@@ -415,6 +428,7 @@ export function knownFailureCredential(
   if (Object.hasOwn(FAILURE_CREDENTIAL_LOOKUP, value)) {
     return value as ClaudeFailureCredential;
   }
+  if (isAntigravityCredential(value)) return value;
   return isOpenCodeCredential(value) ? value : undefined;
 }
 
@@ -1223,11 +1237,24 @@ const OPENCODE_SUBSCRIPTION_FIXES = [
   "Or bill per token with an OpenAI API key instead:",
   "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
 ];
-// Only the OpenCode route stores a ChatGPT login; any other backend, or none, is
-// the Claude route.
+// Only the OpenCode route stores a ChatGPT login; the antigravity route has its own
+// Google login; any other backend, or none, is the Claude route.
 function isOpencodeRoute(params: ErrorParams): boolean {
   return params.backend?.trim() === "opencode";
 }
+function isAntigravityRoute(params: ErrorParams): boolean {
+  return params.backend?.trim() === "antigravity";
+}
+// An agy route's login (odd/tasks/antigravity-oauth.md S1, S2): connected from the
+// Crysk dashboard, which stores it as CRYSK_ANTIGRAVITY_OAUTH and renews it.
+const ANTIGRAVITY_LOGIN_FIXES = [
+  `Connect Antigravity again in the Crysk dashboard, which stores the Google login as \`${ANTIGRAVITY_OAUTH_SECRET}\`. On a workflow you manage yourself, set it from the record of a Google sign-in:`,
+  `$ gh secret set ${ANTIGRAVITY_OAUTH_SECRET}`,
+  `Then pass it in the crysk-secrets input, for example \`${cryskSecretsLine(ANTIGRAVITY_OAUTH_SECRET)}\`, and ask for a new review:`,
+  REVIEW_AGAIN,
+  LEGACY_REVIEW_NOTE,
+];
+const ANTIGRAVITY_LOGIN_ANNOTATION = `connect Antigravity again in the Crysk dashboard, or set \`${ANTIGRAVITY_OAUTH_SECRET}\` (\`gh secret set ${ANTIGRAVITY_OAUTH_SECRET}\`) and pass it in the crysk-secrets input`;
 // A refused `crysk-secrets` input (src/ci/crysk-secrets.ts, U1) records
 // malformed_payload with a detail that names a CRYSK_* secret or a line of the
 // input, never a value. Its fix is that secret, not the OpenCode auth store.
@@ -1428,13 +1455,17 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "Crysk cannot authenticate, so it cannot review this PR",
       (params) =>
-        isOpencodeRoute(params)
-          ? OPENCODE_CREDENTIAL_FIXES
-          : CLAUDE_CREDENTIAL_FIXES,
+        isAntigravityRoute(params)
+          ? ANTIGRAVITY_LOGIN_FIXES
+          : isOpencodeRoute(params)
+            ? OPENCODE_CREDENTIAL_FIXES
+            : CLAUDE_CREDENTIAL_FIXES,
       (params) =>
-        params.backend?.trim() === "opencode"
-          ? "set the provider's CRYSK_OPENCODE_<PROVIDER>_API_KEY secret (`gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY`) and pass it in the crysk-secrets input"
-          : "set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input",
+        isAntigravityRoute(params)
+          ? ANTIGRAVITY_LOGIN_ANNOTATION
+          : params.backend?.trim() === "opencode"
+            ? "set the provider's CRYSK_OPENCODE_<PROVIDER>_API_KEY secret (`gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY`) and pass it in the crysk-secrets input"
+            : "set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input",
     ),
   },
   "CRYSK-INPUT-REMOVED": {
@@ -1472,13 +1503,17 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       missing_subscription_record: {
         why: CRED_STORE_WHY,
         fixes: (params) =>
-          isOpencodeRoute(params)
-            ? OPENCODE_SUBSCRIPTION_FIXES
-            : CLAUDE_SUBSCRIPTION_FIXES,
+          isAntigravityRoute(params)
+            ? ANTIGRAVITY_LOGIN_FIXES
+            : isOpencodeRoute(params)
+              ? OPENCODE_SUBSCRIPTION_FIXES
+              : CLAUDE_SUBSCRIPTION_FIXES,
         annotationFix: (params) =>
-          isOpencodeRoute(params)
-            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then set CRYSK_OPENCODE_OPENAI_OAUTH from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY to bill per token"
-            : "log in again with `claude setup-token` and set `CRYSK_CLAUDE_OAUTH_TOKEN` (`gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`)",
+          isAntigravityRoute(params)
+            ? ANTIGRAVITY_LOGIN_ANNOTATION
+            : isOpencodeRoute(params)
+              ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then set CRYSK_OPENCODE_OPENAI_OAUTH from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY to bill per token"
+              : "log in again with `claude setup-token` and set `CRYSK_CLAUDE_OAUTH_TOKEN` (`gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`)",
       },
       // The review would outlive the login's access token, and a review never renews
       // a rotating provider's login itself (src/security/oauth-providers.ts).
@@ -2121,7 +2156,13 @@ function secretNameOf(
   credential: FailureCredential,
   ctx: OutcomeContext,
 ): string {
-  if (ctx !== "action" || isOpenCodeCredential(credential)) return credential;
+  if (
+    ctx !== "action" ||
+    isOpenCodeCredential(credential) ||
+    isAntigravityCredential(credential)
+  ) {
+    return credential;
+  }
   return CRYSK_SECRET_OF_CREDENTIAL[credential] ?? credential;
 }
 
