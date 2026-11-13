@@ -1147,7 +1147,7 @@ The table shows the status and the job exit for each case:
 
 | Cause | `gate` status | `advisory` status | Exit |
 |---|---|---|---|
-| Finished review with unresolved blocking findings (see below) | `failure`: `crysk: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
+| Finished review with unresolved blocking findings (see below) | `failure`: `crysk: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0`, or `3` when a step also failed (the blocking count wins the status, not the exit) |
 | Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/crysk override`) | `failure`: `crysk: review partial (N of M hunters failed, set abc123) — /pr-hero review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `3` |
 | Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `crysk: review partial again (N of M hunters failed, set abc123) — fix the failing route or /pr-hero override` | `success` | `3` |
 | Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `1` |
