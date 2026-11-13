@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-13
+
+### Added
+
+- **The platform runs `/crysk recheck` and `/crysk override` on managed repositories** (#525). A
+  platform-managed repository's workflow listens only to `workflow_dispatch`, so those comments never ran
+  there. The platform now dispatches them and names the command in its `/runs/token` answer, which is the
+  only place the engine reads it. In platform mode the adjudicator posts as the platform App's bot, and a
+  run now trusts that exact login on the findings it posted; a standalone workflow still trusts only
+  `github-actions[bot]`. `/crysk stop` already worked there and is unchanged.
+
+### Changed
+
+- **An incomplete review exits `3`** (#527). A review in which a step failed (a hunter, the refuter, verify,
+  adjudicate or the time ceiling; `run_status: "partial"`) used to exit `0`, so the CI job stayed green
+  while the gate's own `crysk` status read "review partial", and a pipeline outside GitHub could not tell.
+  One table now holds in local, `--pr` and CI mode, gate or advisory: `0` complete, `1` no usable
+  review, `2` usage error, `3` incomplete (run it again). Findings still never change the code. A run in
+  which no reviewer ran now exits `1` instead of `0`, matching its `error` status. **What to check:** a
+  workflow or script that treated any finished run as success now sees a red job or a non-zero exit on an
+  incomplete review; treat only `0` as a finished review. See "Exit codes" in the README.
+- **`crysk watch` reports an incomplete review as incomplete** (#527): `status=incomplete exit=3` with the
+  finding counts, and a "review incomplete, run it again" notification, instead of "review failed".
+
+### Fixed
+
+- **The npm package finds its bundled prompts from any directory** (#526, contributed by Juan Ma Perals).
+  The npm build emits each bundled prompt and skill as a path relative to the working directory, so
+  `crysk` installed from npm and run inside a repository could not read the consolidate, materiality,
+  scout and summarizer prompts or its skill files. Those paths now resolve against the CLI module, as do
+  the paths of model-profile prompt sets.
+
 ## [0.6.0] - 2026-11-12
 
 ### Added
@@ -977,7 +1009,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/cryskai/crysk/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/cryskai/crysk/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/cryskai/crysk/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cryskai/crysk/compare/v0.4.0...v0.5.0

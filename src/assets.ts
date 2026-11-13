@@ -74,7 +74,7 @@ function resolveVersion(): string {
     // Ignore read errors
   }
 
-  return "0.6.0";
+  return "0.6.1";
 }
 
 // Bun file imports can emit "./name-hash.ext" in bundled npm builds.
