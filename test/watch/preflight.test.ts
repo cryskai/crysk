@@ -41,6 +41,7 @@ import {
   removeWatchRepo,
   renderWatchPlist,
   renderWatchStatus,
+  reviewOutcomeResult,
   skipLine,
   summaryMarkerFields,
   type TickInput,
@@ -1397,7 +1398,7 @@ describe("watch log", () => {
       launchedLine("2026-08-11T10:00:01+02:00", 6, "musive", HEAD_B),
       outcomeLine("2026-08-11T10:20:00+02:00", "musive", {
         pr: 6,
-        ok: true,
+        result: "ok",
         exitCode: 0,
         counts: { blocking: 1, advisory: 0 },
       }),
@@ -1428,7 +1429,7 @@ describe("watch log", () => {
     expect(
       outcomeLine("T", "musive", {
         pr: 7,
-        ok: true,
+        result: "ok",
         exitCode: 0,
         counts: { blocking: 2, advisory: 1 },
       }),
@@ -1436,11 +1437,39 @@ describe("watch log", () => {
     expect(
       outcomeLine("T", "musive", {
         pr: 7,
-        ok: false,
+        result: "failed",
+        exitCode: 1,
+        counts: null,
+      }),
+    ).toBe("T outcome pr=7 repo=musive status=failed exit=1");
+    // exit 3 (src/review/exit-code.ts): the review ran but a step failed. It
+    // is not a failure, and its delivered findings still count.
+    expect(
+      outcomeLine("T", "musive", {
+        pr: 7,
+        result: "incomplete",
+        exitCode: 3,
+        counts: { blocking: 0, advisory: 2 },
+      }),
+    ).toBe(
+      "T outcome pr=7 repo=musive status=incomplete exit=3 blocking=0 advisory=2",
+    );
+    expect(
+      outcomeLine("T", "musive", {
+        pr: 7,
+        result: "incomplete",
         exitCode: 3,
         counts: null,
       }),
-    ).toBe("T outcome pr=7 repo=musive status=failed exit=3");
+    ).toBe("T outcome pr=7 repo=musive status=incomplete exit=3");
+  });
+
+  test("the review exit code maps to the watch result", () => {
+    expect(reviewOutcomeResult(0)).toBe("ok");
+    expect(reviewOutcomeResult(3)).toBe("incomplete");
+    expect(reviewOutcomeResult(1)).toBe("failed");
+    expect(reviewOutcomeResult(2)).toBe("failed");
+    expect(reviewOutcomeResult(137)).toBe("failed");
   });
 });
 
@@ -1544,17 +1573,43 @@ describe("notification", () => {
     expect(
       outcomeNotificationText({
         pr: 5,
-        ok: true,
+        result: "ok",
         exitCode: 0,
         counts: { blocking: 1, advisory: 2 },
       }),
     ).toBe("PR #5: 1 blocking, 2 advisory");
     expect(
-      outcomeNotificationText({ pr: 5, ok: true, exitCode: 0, counts: null }),
+      outcomeNotificationText({
+        pr: 5,
+        result: "ok",
+        exitCode: 0,
+        counts: null,
+      }),
     ).toBe("PR #5 reviewed (counts unavailable)");
     expect(
-      outcomeNotificationText({ pr: 5, ok: false, exitCode: 3, counts: null }),
-    ).toBe("PR #5 review failed (exit 3)");
+      outcomeNotificationText({
+        pr: 5,
+        result: "failed",
+        exitCode: 1,
+        counts: null,
+      }),
+    ).toBe("PR #5 review failed (exit 1)");
+    expect(
+      outcomeNotificationText({
+        pr: 5,
+        result: "incomplete",
+        exitCode: 3,
+        counts: { blocking: 1, advisory: 2 },
+      }),
+    ).toBe("PR #5 review incomplete, run it again: 1 blocking, 2 advisory");
+    expect(
+      outcomeNotificationText({
+        pr: 5,
+        result: "incomplete",
+        exitCode: 3,
+        counts: null,
+      }),
+    ).toBe("PR #5 review incomplete, run it again (counts unavailable)");
   });
 });
 
@@ -1938,7 +1993,7 @@ describe("watch status pure pieces", () => {
       launchedLine("2026-08-10T09:00:00+02:00", 4, "musive", HEAD_A),
       outcomeLine("2026-08-10T09:20:00+02:00", "musive", {
         pr: 4,
-        ok: false,
+        result: "failed",
         exitCode: 1,
         counts: null,
       }),
@@ -1946,7 +2001,7 @@ describe("watch status pure pieces", () => {
       launchedLine("2026-08-11T09:00:01+02:00", 5, "musive", HEAD_B),
       outcomeLine("2026-08-11T09:25:00+02:00", "musive", {
         pr: 5,
-        ok: true,
+        result: "ok",
         exitCode: 0,
         counts: { blocking: 1, advisory: 2 },
       }),
@@ -1955,7 +2010,7 @@ describe("watch status pure pieces", () => {
       launched: launchedLine("2026-08-11T09:00:01+02:00", 5, "musive", HEAD_B),
       outcome: outcomeLine("2026-08-11T09:25:00+02:00", "musive", {
         pr: 5,
-        ok: true,
+        result: "ok",
         exitCode: 0,
         counts: { blocking: 1, advisory: 2 },
       }),

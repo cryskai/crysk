@@ -39,8 +39,10 @@ import { bindPriorsToPosted } from "#rereview/prepare";
 import { parseStateBlock, type StateFinding } from "#rereview/state";
 import { parseFindingCommentBadge } from "#review/report";
 import {
-  CI_ADJUDICATOR_LOGIN,
+  type AdjudicatorTrust,
+  CI_ADJUDICATOR_TRUST,
   parseAdjudicationMarker,
+  trustedAdjudicator,
 } from "#triage/adjudication";
 import {
   type ParsedTriageMarker,
@@ -149,7 +151,7 @@ const TRIGGER_COMMANDS = [REVIEW_COMMAND, REVIEW_FULL_COMMAND, RECHECK_COMMAND];
 // shape has them (rereview/prepare.ts PostedForPrior): without them the marker's anchor stands.
 export interface PrStatusReviewComment extends PrStatusComment {
   in_reply_to_id: number | null;
-  // The GitHub login that posted it. The CI adjudicator's ruling is trusted only from CI_ADJUDICATOR_LOGIN.
+  // The GitHub login that posted it. The CI adjudicator's ruling is trusted only from trustedAdjudicator.
   user?: string;
   path?: string;
   line?: number | null;
@@ -162,6 +164,8 @@ export interface PrStatusInput {
   statuses: CommitStatusFact[];
   issueComments: PrStatusComment[];
   reviewComments: PrStatusReviewComment[];
+  // Whose CI ruling counts. Absent is a run's standalone read: only github-actions[bot].
+  adjudicatorTrust?: AdjudicatorTrust;
 }
 
 // The window a pending status is trusted for, named from the constant that defines it, so
@@ -448,9 +452,20 @@ function ciVerdictOf(
     id: number;
     verdict: "upheld" | "rejected" | "inconclusive";
   } | null = null;
+  const findingAuthor = input.reviewComments.find(
+    (c) => c.id === threadId,
+  )?.user;
   for (const comment of input.reviewComments) {
     if (comment.in_reply_to_id !== threadId) continue;
-    if (comment.user !== CI_ADJUDICATOR_LOGIN) continue;
+    if (
+      !trustedAdjudicator(
+        comment.user,
+        findingAuthor,
+        input.adjudicatorTrust ?? CI_ADJUDICATOR_TRUST,
+      )
+    ) {
+      continue;
+    }
     const marker = parseAdjudicationMarker(comment.body);
     if (marker === null) continue;
     if (marker.reply !== newestTriageId || marker.head !== input.head) continue;

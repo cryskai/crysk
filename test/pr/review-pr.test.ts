@@ -422,7 +422,12 @@ describe("postAdjudicationReplies", () => {
 
   // The author read (GET pulls/comments/<id>, the only argv with --jq) answers
   // `login`; a POST answers the new comment's id, or fails with exit 1.
-  function fakeAuthorGh(login: string, postFails = false) {
+  // `findingLogin`: who GitHub says posted the finding (thread 100); `login` otherwise.
+  function fakeAuthorGh(
+    login: string,
+    postFails = false,
+    findingLogin = login,
+  ) {
     const calls: { argv: string[]; stdin: string | undefined }[] = [];
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
@@ -443,7 +448,11 @@ describe("postAdjudicationReplies", () => {
         });
       return {
         stdout: stream(
-          failed ? "" : isRead ? `${login}\n` : JSON.stringify({ id: 300 }),
+          failed
+            ? ""
+            : isRead
+              ? `${argv.some((a) => a.endsWith("/pulls/comments/100")) ? findingLogin : login}\n`
+              : JSON.stringify({ id: 300 }),
         ),
         stderr: stream(failed ? "boom" : ""),
         exited: Promise.resolve(failed ? 1 : 0),
@@ -471,7 +480,7 @@ describe("postAdjudicationReplies", () => {
   }
 
   const UNLANDED_WARNING =
-    "::warning::crysk: the CI adjudication for R001 was not recorded under github-actions[bot]; the finding still counts toward the gate";
+    "::warning::crysk: the CI adjudication for R001 was not recorded under github-actions[bot] or the platform's bot; the finding still counts toward the gate";
 
   test("a failed adjudication posts nothing and prints the pending notice", async () => {
     const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
@@ -538,6 +547,74 @@ describe("postAdjudicationReplies", () => {
       }),
     );
     expect(out).not.toContain("was not recorded under");
+  });
+
+  // odd/tasks/platform-commands.md (platform repo) S5.
+  test("an upheld reply recorded under the platform's bot landed in platform mode: no warning", async () => {
+    const before = process.env.CRYSK_PLATFORM_ACTOR;
+    process.env.CRYSK_PLATFORM_ACTOR = "crysk-ai[bot]";
+    try {
+      const { spawnFn } = fakeAuthorGh("crysk-ai[bot]");
+      const { out } = await captureStdout(() =>
+        postAdjudicationReplies({
+          operatorRoot: "/repo",
+          pr: 42,
+          headSha: HEAD,
+          adjudications: [ADJUDICATION],
+          spawnFn,
+        }),
+      );
+      expect(out).not.toContain("was not recorded under");
+    } finally {
+      if (before === undefined) delete process.env.CRYSK_PLATFORM_ACTOR;
+      else process.env.CRYSK_PLATFORM_ACTOR = before;
+    }
+  });
+
+  test("in platform mode, a ruling under the platform bot on a finding someone else posted did not land: warned", async () => {
+    const before = process.env.CRYSK_PLATFORM_ACTOR;
+    process.env.CRYSK_PLATFORM_ACTOR = "crysk-ai[bot]";
+    try {
+      const { spawnFn } = fakeAuthorGh(
+        "crysk-ai[bot]",
+        false,
+        "github-actions[bot]",
+      );
+      const { out } = await captureStdout(() =>
+        postAdjudicationReplies({
+          operatorRoot: "/repo",
+          pr: 42,
+          headSha: HEAD,
+          adjudications: [ADJUDICATION],
+          spawnFn,
+        }),
+      );
+      expect(out).toContain(UNLANDED_WARNING);
+    } finally {
+      if (before === undefined) delete process.env.CRYSK_PLATFORM_ACTOR;
+      else process.env.CRYSK_PLATFORM_ACTOR = before;
+    }
+  });
+
+  test("in platform mode, an upheld reply under any other login did not land: warned", async () => {
+    const before = process.env.CRYSK_PLATFORM_ACTOR;
+    process.env.CRYSK_PLATFORM_ACTOR = "crysk-ai[bot]";
+    try {
+      const { spawnFn } = fakeAuthorGh("other-app[bot]");
+      const { out } = await captureStdout(() =>
+        postAdjudicationReplies({
+          operatorRoot: "/repo",
+          pr: 42,
+          headSha: HEAD,
+          adjudications: [ADJUDICATION],
+          spawnFn,
+        }),
+      );
+      expect(out).toContain(UNLANDED_WARNING);
+    } finally {
+      if (before === undefined) delete process.env.CRYSK_PLATFORM_ACTOR;
+      else process.env.CRYSK_PLATFORM_ACTOR = before;
+    }
   });
 
   test("rejected and inconclusive replies are posted with no author read", async () => {

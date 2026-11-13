@@ -114,6 +114,7 @@ import {
   type AdjudicationOutcome,
   adjudicationMarker,
   CI_ADJUDICATOR_LOGIN,
+  trustedAdjudicator,
 } from "#triage/adjudication";
 import { dryRunHunterCount, reviewingLine } from "#ui/plan";
 import { log, styleEnabled, terminalWidth } from "#ui/primitives";
@@ -264,9 +265,23 @@ export async function postAdjudicationReplies(input: {
             commentId,
             spawnFn: input.spawnFn,
           }).catch(() => undefined);
-    if (author !== CI_ADJUDICATOR_LOGIN) {
+    // In platform mode the run posts as the platform App's bot, the login the platform's token
+    // exchange returned (CRYSK_PLATFORM_ACTOR). Its ruling counts only on a finding that bot
+    // posted, so the finding's own author is read too, as the gate's read does.
+    const platformActor = process.env.CRYSK_PLATFORM_ACTOR;
+    const findingAuthor =
+      author === undefined || author === CI_ADJUDICATOR_LOGIN
+        ? undefined
+        : await readCommentAuthor({
+            operatorRoot: input.operatorRoot,
+            commentId: entry.threadId,
+            spawnFn: input.spawnFn,
+          }).catch(() => undefined);
+    if (
+      !trustedAdjudicator(author, findingAuthor, { kind: "ci", platformActor })
+    ) {
       process.stdout.write(
-        `::warning::crysk: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN}; the finding still counts toward the gate\n`,
+        `::warning::crysk: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN} or the platform's bot; the finding still counts toward the gate\n`,
       );
     }
   }

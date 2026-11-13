@@ -133,6 +133,39 @@ export function parsePlatformConfig(
 // says. `full` is the only value that lets the report step send finding text.
 export type PlatformDataMode = "full" | "metadata_only";
 
+// The PR comment command the platform dispatched this run for (odd/tasks/platform-commands.md
+// in the platform repo, S2-S4). A platform-managed repository has no issue_comment trigger, so the
+// platform checks the comment and its author, and names the command here; the trigger reads it
+// from this step's outputs. Absent for an ordinary review, and for a name this engine does not know.
+// An override keeps its name when the actor or head is unusable, so the trigger refuses it instead
+// of running a review nobody asked for.
+export type PlatformCommandAnswer =
+  | { name: "recheck" }
+  | { name: "override"; actor?: string; headSha?: string };
+
+const SAFE_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+// The override's actor is a commenter, who may be an Enterprise Managed User (`handle_shortcode`):
+// the trigger's own GITHUB_LOGIN grammar (src/ci/trigger.ts), not SAFE_LOGIN, which is the App's.
+const COMMAND_ACTOR = /^(?=.{1,91}$)[A-Za-z0-9][A-Za-z0-9_-]{0,90}(\[bot\])?$/;
+
+function parsePlatformCommand(
+  value: unknown,
+): PlatformCommandAnswer | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { name, actor, head_sha: headSha } = value as Record<string, unknown>;
+  if (name === "recheck") return { name };
+  if (name !== "override") return undefined;
+  return {
+    name,
+    ...(typeof actor === "string" && COMMAND_ACTOR.test(actor)
+      ? { actor }
+      : {}),
+    ...(typeof headSha === "string" && SAFE_SHA.test(headSha)
+      ? { headSha }
+      : {}),
+  };
+}
+
 export type PlatformTokenResult =
   // `githubActor` is the login the platform says posts as the App's bot. It is
   // absent when the platform sent none or one that is not a plausible login.
@@ -152,6 +185,7 @@ export type PlatformTokenResult =
       traceContent?: true;
       config?: PlatformConfig;
       estimate?: PlatformEstimate;
+      command?: PlatformCommandAnswer;
     }
   // `message` names the HTTP status and the API's own `message` when there was
   // one. It never carries a token.
@@ -297,6 +331,7 @@ export async function exchangePlatformToken(
       trace_content?: unknown;
       config?: unknown;
       estimate?: unknown;
+      command?: unknown;
     };
     const {
       github_token: githubToken,
@@ -332,6 +367,7 @@ export async function exchangePlatformToken(
     }
     // An estimate is advice: one that does not parse is dropped and the
     // engine's own band decides, never a failed exchange.
+    const command = parsePlatformCommand(body.command);
     const estimate =
       deps.ignoreConfig === true
         ? undefined
@@ -352,6 +388,7 @@ export async function exchangePlatformToken(
       ...(body.trace_content === true ? { traceContent: true as const } : {}),
       ...(config.config === undefined ? {} : { config: config.config }),
       ...(estimate === undefined ? {} : { estimate }),
+      ...(command === undefined ? {} : { command }),
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -453,6 +490,19 @@ export async function runPlatformConnect(
     // set never learns one from anywhere else (see CRYSK_PLATFORM_ACTOR).
     if (result.githubActor !== undefined) {
       deps.appendOutput(`github-actor=${result.githubActor}\n`);
+    }
+    // Not a secret: a known command name, a validated login and a validated sha. The trigger
+    // reads them as PLATFORM_COMMAND* (action.yml), from the first connect step only.
+    if (result.command !== undefined) {
+      deps.appendOutput(`command=${result.command.name}\n`);
+      if (result.command.name === "override") {
+        if (result.command.actor !== undefined) {
+          deps.appendOutput(`command-actor=${result.command.actor}\n`);
+        }
+        if (result.command.headSha !== undefined) {
+          deps.appendOutput(`command-head=${result.command.headSha}\n`);
+        }
+      }
     }
     // Not a secret: two validated numbers and a basis. The run step's budget
     // gate reads it as CRYSK_PLATFORM_ESTIMATE in place of the engine's band.

@@ -3117,3 +3117,123 @@ describe("the trigger warns about a CRYSK_OPENCODE_* variable in its environment
     expect(run.stdout).not.toContain("is set in this step's environment");
   });
 });
+
+// odd/tasks/platform-commands.md S2-S4 (platform repo): a platform-managed repository has no
+// issue_comment trigger, so the platform turns `/crysk recheck` and `/crysk override` into a
+// dispatch and says which command it was in its token exchange. The Connect step writes that
+// answer to its outputs, and action.yml hands them to the trigger as PLATFORM_COMMAND*.
+function platformDispatchEnv(overrides: Record<string, string> = {}) {
+  return baseEnv({
+    EVENT_NAME: "workflow_dispatch",
+    EVENT_PR_NUMBER: "",
+    EVENT_PR_HEAD_REPO: "",
+    EVENT_PR_HEAD_SHA: "",
+    PR_NUMBER_INPUT: "21",
+    FORCE_INPUT: "true",
+    ...overrides,
+  });
+}
+
+describe("runCiTrigger — a command the platform dispatched", () => {
+  test("a recheck reviews with force and adjudication, and looks up no commenter permission", () => {
+    const run = runShell(
+      platformDispatchEnv({ PLATFORM_COMMAND: "recheck" }),
+      (args) =>
+        args[0] === "api" ? ok("write") : overrideHead(HEAD_SHA, false),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({
+      run: "true",
+      force: "true",
+      adjudicate: "true",
+      pr: "21",
+    });
+    expect(run.ghCalls.filter((args) => args[0] === "api")).toEqual([]);
+  });
+
+  test("an override names the platform's actor and the head the comment was made on", () => {
+    const run = outcomeRun(
+      platformDispatchEnv({
+        PLATFORM_COMMAND: "override",
+        PLATFORM_COMMAND_ACTOR: "octocat",
+        PLATFORM_COMMAND_HEAD: HEAD_SHA,
+      }),
+      () => overrideHead(HEAD_SHA, false),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({
+      run: "false",
+      publish: "true",
+      pr: "21",
+      head_sha: HEAD_SHA,
+    });
+    expect(run.record).toMatchObject({
+      decision: "override",
+      actor: "octocat",
+      head_sha: HEAD_SHA,
+    });
+    expect(run.ghCalls.filter((args) => args[0] === "api")).toEqual([]);
+  });
+
+  test("an override whose pull request moved past the commented head is refused, with no status", () => {
+    const run = outcomeRun(
+      platformDispatchEnv({
+        PLATFORM_COMMAND: "override",
+        PLATFORM_COMMAND_ACTOR: "octocat",
+        PLATFORM_COMMAND_HEAD: OTHER_SHA,
+      }),
+      () => overrideHead(HEAD_SHA, false),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
+    expect(run.record).toMatchObject({ decision: "denied" });
+    expect(run.record).not.toHaveProperty("actor");
+    expect(run.stdout).toContain(
+      "the pull request has new commits since the override was asked",
+    );
+  });
+
+  test.each([
+    ["no actor", { PLATFORM_COMMAND_HEAD: HEAD_SHA }],
+    [
+      "an actor that is not a login",
+      { PLATFORM_COMMAND_ACTOR: "a b", PLATFORM_COMMAND_HEAD: HEAD_SHA },
+    ],
+    ["no head", { PLATFORM_COMMAND_ACTOR: "octocat" }],
+    [
+      "a head that is not a sha",
+      { PLATFORM_COMMAND_ACTOR: "octocat", PLATFORM_COMMAND_HEAD: "main" },
+    ],
+  ])(
+    "an override with %s is refused and records no actor",
+    (_label, fields) => {
+      const run = outcomeRun(
+        platformDispatchEnv({ PLATFORM_COMMAND: "override", ...fields }),
+        () => overrideHead(HEAD_SHA, false),
+      );
+      expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
+      expect(run.record).toMatchObject({ decision: "denied" });
+      expect(run.record).not.toHaveProperty("actor");
+    },
+  );
+
+  test("a dispatch without a platform command reviews exactly as before", () => {
+    const run = runShell(platformDispatchEnv(), () => ok(HEAD_SHA));
+    expect(run.outputs).toMatchObject({
+      run: "true",
+      force: "true",
+      adjudicate: "false",
+    });
+  });
+
+  test("a platform command never applies to an event other than a dispatch", () => {
+    const run = runShell(
+      baseEnv({
+        PLATFORM_COMMAND: "override",
+        PLATFORM_COMMAND_ACTOR: "octocat",
+        PLATFORM_COMMAND_HEAD: HEAD_SHA,
+      }),
+    );
+    expect(run.outputs).toMatchObject({ run: "true", adjudicate: "false" });
+  });
+});

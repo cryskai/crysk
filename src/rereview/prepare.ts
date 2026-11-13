@@ -9,9 +9,9 @@ import type { Severity } from "#review/findings";
 import { parseFindingCommentBadge } from "#review/report";
 import {
   type AdjudicationSubject,
-  CI_ADJUDICATOR_LOGIN,
   MAX_ADJUDICATIONS_PER_RUN,
   parseAdjudicationMarker,
+  trustedAdjudicator,
 } from "#triage/adjudication";
 import { parseTriageMarker } from "#triage/triage";
 import {
@@ -981,6 +981,8 @@ export function enrichPriorsFromThreads(input: {
     created_at?: string;
   }[];
   summaryUpdatedAt: string | null;
+  // In platform mode, the login the platform's token exchange returned (CRYSK_PLATFORM_ACTOR).
+  platformActor?: string;
 }): PriorRecord[] {
   const bound = bindPriorsToPosted(input.priors, input.posted);
   return input.priors.map((prior) => {
@@ -1010,8 +1012,17 @@ export function enrichPriorsFromThreads(input: {
     // so a verdict on an earlier head is stale and a later head needs a new
     // recheck. With no headSha, no bot verdict can be shown current.
     if (triage?.replyId !== undefined && input.headSha !== undefined) {
+      // The finding itself sits among the replies (a review comment with no parent).
+      const findingAuthor = input.replies.find((r) => r.id === parent.id)?.user;
       for (const reply of thread) {
-        if (reply.user !== CI_ADJUDICATOR_LOGIN) continue;
+        if (
+          !trustedAdjudicator(reply.user, findingAuthor, {
+            kind: "ci",
+            platformActor: input.platformActor,
+          })
+        ) {
+          continue;
+        }
         const adjudication = parseAdjudicationMarker(reply.body);
         if (
           adjudication === null ||

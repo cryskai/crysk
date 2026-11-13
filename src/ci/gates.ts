@@ -8,10 +8,8 @@
 // comment + marker + step-summary markdown + $GITHUB_OUTPUT, all from the
 // same numbers, so the shell has no decision left to make beyond "post it /
 // write it". `budgetDisabledWarningMessage` covers spec 3.1's disabled-
-// ceiling `::warning::` requirement. `ciExitCode` pins the assistant-posture
-// exit-code contract (spec 2.1): findings, even blocking ones, never fail
-// the job — only a fatal session failure or a genuine posting drop (design
-// D6) does.
+// ceiling `::warning::` requirement. The exit-code contract (spec 2.1) lives
+// in src/review/exit-code.ts, shared by every mode.
 //
 // This module does NOT reimplement the size gate — that gate (deterministic
 // line/file counting, exclusion globs, the whole cost-predictability
@@ -870,26 +868,6 @@ export function planCiReviewManualRequired(input: {
     summaryMarkdown: renderStepSummary(summary, input.ciMode),
     outputs: ciGateSkipOutputs("manual-required", 0),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Assistant posture — spec 2.1: "The CLI MUST NOT exit with a non-zero code
-// merely because findings (even `blocking` ones) were discovered ... exit
-// non-zero ONLY on fatal execution failures." `blockingCount` is accepted
-// and deliberately NEVER read: its only job is to let a test construct a
-// high-blocking-count input and assert the result is still 0, so a future
-// change that wires it into this function's logic (the exact regression
-// this rule guards against) fails that test rather than shipping silently.
-// ---------------------------------------------------------------------------
-
-export function ciExitCode(input: {
-  sessionFailed: boolean;
-  droppedFindingIds: number;
-  blockingCount: number;
-}): 0 | 1 {
-  if (input.sessionFailed) return 1;
-  if (input.droppedFindingIds > 0) return 1;
-  return 0;
 }
 
 // ---------------------------------------------------------------------------

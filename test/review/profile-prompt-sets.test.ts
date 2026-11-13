@@ -36,7 +36,7 @@ import {
   type RunPromptOptions,
 } from "#review/route-preflight";
 import { resolvePromptSet } from "#review/run";
-import { resolveEngineAssets } from "../../src/assets";
+import { resolveBundledFilePath, resolveEngineAssets } from "../../src/assets";
 import {
   BASELINE_CASES,
   baselinePath,
@@ -87,6 +87,32 @@ describe("profilePromptSet: one lookup, split into agent and engine files", () =
         "review-refuter.md": FIXTURE_SETS.fixture?.["review-refuter.md"],
       },
       engine: { "consolidate.md": FIXTURE_SETS.fixture?.["consolidate.md"] },
+    });
+  });
+
+  // A bundled npm build emits a `with { type: "file" }` import as a relative
+  // "./name-hash.md" string, which Bun.file() would resolve against the
+  // consumer's cwd (PR #526). Profile sets come from those imports too, so
+  // their paths are resolved against the emitting module, like every other
+  // bundled asset; an absolute path passes through unchanged (above).
+  test("a bundled relative path resolves against the module, not the cwd", () => {
+    const relative: ProfilePromptSets = {
+      fixture: {
+        "review-refuter.md": "./review-refuter-abc123.md",
+        "consolidate.md": "./consolidate-def456.md",
+      },
+    };
+    const moduleDir = path.dirname(
+      resolveBundledFilePath("./review-refuter-abc123.md"),
+    );
+    expect(moduleDir).not.toBe(process.cwd());
+    expect(profilePromptSet(FIXTURE_PROFILE, AGENT_FILES, relative)).toEqual({
+      agents: {
+        "review-refuter.md": path.join(moduleDir, "review-refuter-abc123.md"),
+      },
+      engine: {
+        "consolidate.md": path.join(moduleDir, "consolidate-def456.md"),
+      },
     });
   });
 
