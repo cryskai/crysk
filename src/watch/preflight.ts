@@ -11,6 +11,10 @@
 import path from "node:path";
 import { isFullCommitId } from "#git/refs";
 import { PR_COMMENT_MARKER_PREFIX } from "#pr/preflight";
+import {
+  EXIT_REVIEW_COMPLETE,
+  EXIT_REVIEW_INCOMPLETE,
+} from "#review/exit-code";
 import type { NumstatFile } from "#review/preflight";
 import {
   DEFAULT_SIZE_GATE,
@@ -1096,9 +1100,21 @@ export function launchedLine(
   return `${ts} launched pr=${pr} repo=${repoBase} head=${headSha.slice(0, 8)}`;
 }
 
+// What the watcher makes of a review child's exit code, by the review's own
+// table (src/review/exit-code.ts). "incomplete" is exit 3: the review ran and
+// may have posted findings, but a step failed, so it is neither a clean "ok"
+// nor a "failed" whose counts mean nothing.
+export type ReviewResult = "ok" | "incomplete" | "failed";
+
+export function reviewOutcomeResult(exitCode: number): ReviewResult {
+  if (exitCode === EXIT_REVIEW_COMPLETE) return "ok";
+  if (exitCode === EXIT_REVIEW_INCOMPLETE) return "incomplete";
+  return "failed";
+}
+
 export interface ReviewOutcome {
   pr: number;
-  ok: boolean;
+  result: ReviewResult;
   exitCode: number;
   counts: { blocking: number; advisory: number } | null;
 }
@@ -1108,13 +1124,17 @@ export function outcomeLine(
   repoBase: string,
   outcome: ReviewOutcome,
 ): string {
-  const status = outcome.ok ? "status=ok" : "status=failed";
-  const detail = outcome.ok
-    ? outcome.counts === null
+  const counts =
+    outcome.counts === null
       ? ""
-      : ` blocking=${outcome.counts.blocking} advisory=${outcome.counts.advisory}`
-    : ` exit=${outcome.exitCode}`;
-  return `${ts} outcome pr=${outcome.pr} repo=${repoBase} ${status}${detail}`;
+      : ` blocking=${outcome.counts.blocking} advisory=${outcome.counts.advisory}`;
+  const detail =
+    outcome.result === "ok"
+      ? counts
+      : outcome.result === "incomplete"
+        ? ` exit=${outcome.exitCode}${counts}`
+        : ` exit=${outcome.exitCode}`;
+  return `${ts} outcome pr=${outcome.pr} repo=${repoBase} status=${outcome.result}${detail}`;
 }
 
 // Counts today's launches back out of the raw log text. dayPrefix is the
@@ -1267,8 +1287,14 @@ export function osascriptNotifyArgs(title: string, text: string): string[] {
 }
 
 export function outcomeNotificationText(outcome: ReviewOutcome): string {
-  if (!outcome.ok) {
+  if (outcome.result === "failed") {
     return `PR #${outcome.pr} review failed (exit ${outcome.exitCode})`;
+  }
+  if (outcome.result === "incomplete") {
+    const prefix = `PR #${outcome.pr} review incomplete, run it again`;
+    return outcome.counts === null
+      ? `${prefix} (counts unavailable)`
+      : `${prefix}: ${outcome.counts.blocking} blocking, ${outcome.counts.advisory} advisory`;
   }
   if (outcome.counts === null) {
     return `PR #${outcome.pr} reviewed (counts unavailable)`;
