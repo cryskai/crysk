@@ -36,7 +36,7 @@ inputs:
     required: false
     default: ''
   crysk-secrets:
-    description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _. A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). With operation: refresh-credential, the refresh step reads the CRYSK_OPENCODE_<P>_OAUTH record it renews. The input is read on stdin by those four steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
+    description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _, and CRYSK_ANTIGRAVITY_OAUTH (base64 -w0 of the Antigravity Google subscription record). A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). With operation: refresh-credential, the refresh step reads the subscription record it renews (CRYSK_OPENCODE_OPENAI_OAUTH or CRYSK_ANTIGRAVITY_OAUTH). The input is read on stdin by those four steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
     required: false
     default: ''
   pr-number:
@@ -84,7 +84,7 @@ inputs:
     required: false
     default: 'review'
   refresh-provider:
-    description: 'With operation: refresh-credential, the OpenCode provider id whose subscription login is renewed (openai), read from its CRYSK_OPENCODE_<P>_OAUTH line in crysk-secrets. Ignored by a review.'
+    description: 'With operation: refresh-credential, the subscription provider whose login is renewed: openai, read from its CRYSK_OPENCODE_OPENAI_OAUTH line in crysk-secrets, or antigravity, read from its CRYSK_ANTIGRAVITY_OAUTH line. Ignored by a review.'
     required: false
     default: ''
 

@@ -8,8 +8,13 @@
 // connect step) may read it, and they are limited to runtime builtins.
 
 export interface OAuthProviderDescriptor {
-  // The OpenCode provider id, the key of its record in auth.json.
+  // The provider id: the key of its record in the subscription store and the
+  // `refresh-provider` input's value.
   readonly id: string;
+  // The GitHub Actions secret that holds the provider's login record (base64 of
+  // its JSON). The workflow forwards it in the crysk-secrets input, and the
+  // refresher writes the renewed record back under the same name.
+  readonly secretName: string;
   // Whether the provider issues a new refresh token on every refresh and refuses
   // the old one afterwards (OpenAI answers `refresh_token_reused`). A review never
   // holds such a provider's refresh token: renewing it inside a run would spend
@@ -46,6 +51,7 @@ export interface OAuthProviderDescriptor {
 export const OAUTH_PROVIDERS: readonly OAuthProviderDescriptor[] = [
   {
     id: "openai",
+    secretName: "CRYSK_OPENCODE_OPENAI_OAUTH",
     rotatesRefreshToken: true,
     refresh: {
       tokenUrl: "https://auth.openai.com/oauth/token",
@@ -67,10 +73,48 @@ export const OAUTH_PROVIDERS: readonly OAuthProviderDescriptor[] = [
       ],
     },
   },
+  // Antigravity (agy) on a Google subscription. The client is agy's own Google
+  // installed-app client (odd/tasks/antigravity-oauth.md, L6): a refresh answers
+  // without a new refresh token, so the stored one is kept. The error codes are
+  // RFC 6749's token endpoint refusals plus Google's `invalid_rapt` (a
+  // reauthentication the person must complete in a browser).
+  {
+    id: "antigravity",
+    secretName: "CRYSK_ANTIGRAVITY_OAUTH",
+    rotatesRefreshToken: false,
+    refresh: {
+      tokenUrl: "https://oauth2.googleapis.com/token",
+      clientId:
+        "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+      // Not a secret: Google documents an installed app's client secret as
+      // non-confidential, and agy ships this one in its binary.
+      extraParams: { client_secret: "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" },
+    },
+    permanentErrors: [
+      "invalid_request",
+      "invalid_client",
+      "invalid_grant",
+      "unauthorized_client",
+      "unsupported_grant_type",
+      "invalid_scope",
+      "invalid_rapt",
+    ],
+    accountId: {
+      recordField: "accountId",
+      tokens: ["id_token"],
+      claims: [["email"], ["sub"]],
+    },
+  },
 ];
 
 export function oauthProvider(id: string): OAuthProviderDescriptor | undefined {
   return OAUTH_PROVIDERS.find((provider) => provider.id === id);
+}
+
+// The secret that holds a provider's login, or undefined for a provider that is
+// not in the table.
+export function oauthSecretName(id: string): string | undefined {
+  return oauthProvider(id)?.secretName;
 }
 
 // A review refuses to start on a login whose access token expires within this

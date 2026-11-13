@@ -682,3 +682,200 @@ describe("credential-refresh.ts — renewing a subscription login", () => {
     expect(ok).not.toContain("::add-mask::Bearer");
   });
 });
+
+// Antigravity (odd/tasks/antigravity-oauth.md, S2/S3): the refresher reads the
+// descriptor's own secret, CRYSK_ANTIGRAVITY_OAUTH, renews it at Google with
+// agy's client, and keeps the stored refresh token, which Google does not rotate.
+describe("credential-refresh.ts — an Antigravity (Google) login", () => {
+  const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+  const GOOGLE_ACCESS = "ya29.new-google-access-SENTINEL-6666";
+  const googleLine = (record: Record<string, unknown>) =>
+    `CRYSK_ANTIGRAVITY_OAUTH=${Buffer.from(JSON.stringify(record)).toString("base64")}`;
+  const GOOGLE_RECORD = {
+    type: "oauth",
+    access: STORED_ACCESS,
+    refresh: STORED_REFRESH,
+    expires: NOW - 60_000,
+    accountId: "stored@example.test",
+  };
+  const antigravity = (options: {
+    answers: Record<string, Answer[]>;
+    secrets?: string;
+  }) =>
+    runRefresh({
+      env: { CRYSK_REFRESH_PROVIDER: "antigravity" },
+      secrets: `${googleLine(GOOGLE_RECORD)}\n`,
+      ...options,
+    });
+  const opened = (
+    run: Awaited<ReturnType<typeof runRefresh>>,
+    result: Record<string, unknown> | undefined,
+  ) =>
+    run.keys.sodium.to_string(
+      run.keys.sodium.crypto_box_seal_open(
+        run.keys.sodium.from_base64(
+          String(result?.encrypted_value),
+          run.keys.sodium.base64_variants.ORIGINAL,
+        ),
+        run.keys.pair.publicKey,
+        run.keys.pair.privateKey,
+      ),
+    );
+
+  test("renews at Google with agy's client and secret, keeps the refresh token, and seals CRYSK_ANTIGRAVITY_OAUTH's value", async () => {
+    const { oauthProvider } = await import(
+      "../../src/security/oauth-providers"
+    );
+    const descriptor = oauthProvider("antigravity");
+    const run = await antigravity({
+      answers: {
+        [GOOGLE_TOKEN_URL]: [
+          json({
+            access_token: GOOGLE_ACCESS,
+            expires_in: 3599,
+            id_token: jwt(
+              { email: "person@example.test", sub: "1234" },
+              "idsig-SENTINEL",
+            ),
+            token_type: "Bearer",
+          }),
+        ],
+      },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.paths).toEqual([
+      "/runs/credential-refresh/targets",
+      "/runs/credential-refresh/begin",
+      GOOGLE_TOKEN_URL,
+      "/runs/credential-refresh",
+    ]);
+    expect(JSON.parse(run.calls[0]?.body ?? "")).toEqual({
+      provider: "antigravity",
+    });
+    expect(
+      Object.fromEntries(new URLSearchParams(run.calls[2]?.body ?? "")),
+    ).toEqual({
+      client_secret: descriptor?.refresh.extraParams?.client_secret ?? "",
+      grant_type: "refresh_token",
+      refresh_token: STORED_REFRESH,
+      client_id: descriptor?.refresh.clientId ?? "",
+    });
+
+    const [result] = resultBodies(run.calls);
+    expect(result?.provider).toBe("antigravity");
+    expect(result?.expires_at).toBe(new Date(NOW + 3599 * 1000).toISOString());
+    expect(result?.provider_account_id).toBe("person@example.test");
+
+    const { parseCryskSecrets } = await import("../../src/ci/crysk-secrets");
+    const parsed = parseCryskSecrets(
+      `CRYSK_ANTIGRAVITY_OAUTH=${opened(run, result)}`,
+    );
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.secrets.oauth.get("antigravity")).toEqual({
+      type: "oauth",
+      refresh: STORED_REFRESH,
+      access: GOOGLE_ACCESS,
+      expires: NOW + 3599 * 1000,
+      accountId: "person@example.test",
+    });
+    expect(run.out).toContain(
+      "Renewed the antigravity subscription login; it expires at",
+    );
+    for (const sentinel of [...SENTINELS, GOOGLE_ACCESS]) {
+      expect(unmaskedLog(run.out)).not.toContain(sentinel);
+    }
+  });
+
+  test("falls back to the id_token's sub, then the stored account id", async () => {
+    const bySub = await antigravity({
+      answers: {
+        [GOOGLE_TOKEN_URL]: [
+          json({
+            access_token: GOOGLE_ACCESS,
+            expires_in: 3599,
+            id_token: jwt({ sub: "1234" }),
+          }),
+        ],
+      },
+    });
+    expect(resultBodies(bySub.calls)[0]?.provider_account_id).toBe("1234");
+    const kept = await antigravity({
+      answers: {
+        [GOOGLE_TOKEN_URL]: [
+          json({ access_token: GOOGLE_ACCESS, expires_in: 3599 }),
+        ],
+      },
+    });
+    expect(resultBodies(kept.calls)[0]?.provider_account_id).toBe(
+      "stored@example.test",
+    );
+  });
+
+  test("Google's invalid_grant and invalid_rapt are permanent; another error is provider_error", async () => {
+    for (const code of ["invalid_grant", "invalid_rapt"]) {
+      const run = await antigravity({
+        answers: {
+          [GOOGLE_TOKEN_URL]: [
+            json({ error: code, error_description: "SENTINEL-DESC" }, 400),
+          ],
+        },
+      });
+      expect(run.exitCode).toBe(1);
+      expect(resultBodies(run.calls)).toEqual([
+        { provider: "antigravity", failure: code },
+      ]);
+    }
+    const other = await antigravity({
+      answers: { [GOOGLE_TOKEN_URL]: [json({ error: "server_error" }, 500)] },
+    });
+    expect(resultBodies(other.calls)).toEqual([
+      { provider: "antigravity", failure: "provider_error" },
+    ]);
+  });
+
+  test("a missing, refused or OpenCode-named record ends red before any request, naming CRYSK_ANTIGRAVITY_OAUTH", async () => {
+    const cases: Array<[string, string]> = [
+      [
+        "CRYSK_ANTIGRAVITY_OAUTH=\n",
+        "CRYSK_ANTIGRAVITY_OAUTH is not set in the crysk-secrets input; connect the subscription again from the Crysk dashboard.",
+      ],
+      [
+        `CRYSK_OPENCODE_ANTIGRAVITY_OAUTH=${Buffer.from(JSON.stringify(GOOGLE_RECORD)).toString("base64")}\n`,
+        "CRYSK_ANTIGRAVITY_OAUTH is not set in the crysk-secrets input",
+      ],
+      [
+        "CRYSK_ANTIGRAVITY_OAUTH=not base64!\n",
+        "CRYSK_ANTIGRAVITY_OAUTH is not base64",
+      ],
+      [
+        googleLine({ ...GOOGLE_RECORD, refresh: "" }),
+        "CRYSK_ANTIGRAVITY_OAUTH holds no refresh token",
+      ],
+    ];
+    for (const [secrets, message] of cases) {
+      const run = await antigravity({ answers: {}, secrets });
+      expect(run.exitCode, secrets).toBe(1);
+      expect(run.calls, secrets).toEqual([]);
+      expect(run.out, secrets).toContain(message);
+    }
+  });
+});
+
+describe("credential-refresh.ts — OpenAI keeps its secret", () => {
+  test("reads and names CRYSK_OPENCODE_OPENAI_OAUTH, never the Antigravity secret", async () => {
+    const run = await runRefresh({
+      answers: {},
+      secrets: `CRYSK_ANTIGRAVITY_OAUTH=${Buffer.from(JSON.stringify(STORED_RECORD)).toString("base64")}\n`,
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.calls).toEqual([]);
+    expect(run.out).toBe(
+      "::add-mask::run-token-SENTINEL-1111\n" +
+        `::add-mask::${Buffer.from(JSON.stringify(STORED_RECORD)).toString("base64")}\n` +
+        "::add-mask::stored-access-SENTINEL-2222\n" +
+        "::add-mask::stored-refresh-SENTINEL-3333\n" +
+        "::add-mask::acct-stored\n" +
+        "::error title=crysk::Crysk credential refresh failed: CRYSK_OPENCODE_OPENAI_OAUTH is not set in the crysk-secrets input; connect the subscription again from the Crysk dashboard.\n",
+    );
+  });
+});

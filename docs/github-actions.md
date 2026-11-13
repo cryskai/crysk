@@ -303,6 +303,7 @@ Each credential gets one secret, with one name per kind:
 | `CRYSK_CLAUDE_API_KEY` | Claude Code on an Anthropic API key (replaces `ANTHROPIC_API_KEY`) |
 | `CRYSK_OPENCODE_<P>_API_KEY` | An OpenCode provider's API key |
 | `CRYSK_OPENCODE_<P>_OAUTH` | That provider's `opencode auth login` record, base64 on one line (`base64 -w0`) |
+| `CRYSK_ANTIGRAVITY_OAUTH` | The Antigravity (Google) subscription record, `{"type": "oauth", "access", "refresh", "expires", "accountId"}`, base64 on one line. The Crysk platform writes and renews it; the engine checks and masks it like an `_OAUTH` record. Reviews do not run on it yet |
 
 `<P>` is the [Models.dev](https://models.dev) provider id in upper case, with `-` and `.` written as `_`:
 `deepseek` becomes `DEEPSEEK`, `github-copilot` becomes `GITHUB_COPILOT`, and `wafer.ai` becomes `WAFER_AI`.
@@ -775,8 +776,9 @@ recorded and is not an error.
 
 ### Subscription logins
 
-A subscription login (`CRYSK_OPENCODE_<P>_OAUTH`, today `openai`) carries an access token that expires (about
-ten days for OpenAI) and a refresh token that renews it. OpenAI issues a new refresh token on every renewal and
+A subscription login (`CRYSK_OPENCODE_OPENAI_OAUTH` for `openai`, `CRYSK_ANTIGRAVITY_OAUTH` for `antigravity`)
+carries an access token that expires (about ten days for OpenAI, one hour for Google) and a refresh token that
+renews it. Google does not issue a new refresh token on renewal, so an Antigravity renewal keeps the stored one. OpenAI issues a new refresh token on every renewal and
 refuses the old one for good (`refresh_token_reused`), so a review never renews the login (see "A review never
 renews the login" above). Instead, before the access token expires, the platform dispatches the stub with
 `operation: refresh-credential` and `refresh-provider: <provider id>`, one at a time per login. The renewal runs
@@ -794,7 +796,9 @@ value, and then:
 2. `POST https://api.crysk.dev/runs/credential-refresh/begin` with `{"provider": "<id>"}`. The platform records
    that the stored refresh token is about to be spent. Then one form-encoded POST to the provider's token
    endpoint (`grant_type=refresh_token`, the stored refresh token, the provider's `client_id`; for OpenAI,
-   `https://auth.openai.com/oauth/token` and Codex's client id, as OpenCode does). That request is never
+   `https://auth.openai.com/oauth/token` and Codex's client id, as OpenCode does; for Antigravity,
+   `https://oauth2.googleapis.com/token` with agy's own client id and its non-confidential installed-app
+   `client_secret`). That request is never
    retried: one that may have reached the provider may have spent the token.
 3. The new record, in OpenCode's shape (`type: "oauth"`, `access`, `refresh`, `expires` in milliseconds,
    `accountId`), is encoded as the secret stores it (standard base64 of its JSON), sealed with libsodium's
@@ -812,7 +816,7 @@ value, and then:
    ```
 
    `encrypted_value` is exactly what GitHub's "create or update a secret" API takes, and the platform writes it
-   as the same `CRYSK_OPENCODE_<P>_OAUTH`. `issued_at` is the runner's clock when the provider answered,
+   as the same secret (`CRYSK_OPENCODE_OPENAI_OAUTH` or `CRYSK_ANTIGRAVITY_OAUTH`). `issued_at` is the runner's clock when the provider answered,
    `expires_at` the record's `expires`, both ISO 8601 in UTC; `provider_account_id` is null when the provider
    has none. Once the provider has answered with new tokens the stored refresh token is spent, so this POST is
    retried on a network error, a 5xx or a 429, with backoff from 5 seconds up to a minute, for up to 10
@@ -1501,7 +1505,7 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `crysk-secrets` | empty | The credentials: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets](#crysk_-secrets). |
 | `models` | empty | The models per role, as JSON (the `models` object of a person config), from `vars.CRYSK_MODELS`. See [OpenCode in CI](#opencode-in-ci) and [Configuration, Models](configuration.md#models). Empty: every step runs its prompt's model. Ignored, with a warning, on a repository whose platform settings apply. |
 | `operation` | `review` | `review` reviews a pull request; `refresh-credential` renews a subscription login, and only the Crysk platform dispatches it. See [Subscription logins](#subscription-logins). Empty is a review. |
-| `refresh-provider` | empty | With `operation: refresh-credential`, the OpenCode provider id whose login is renewed (`openai`). |
+| `refresh-provider` | empty | With `operation: refresh-credential`, the subscription provider whose login is renewed: `openai` (read from `CRYSK_OPENCODE_OPENAI_OAUTH`) or `antigravity` (read from `CRYSK_ANTIGRAVITY_OAUTH`). Ignored by a review. |
 | `credentials` | empty | The Claude credential order, as JSON (`{"claude": ["subscription", "api_key"]}`), from `vars.CRYSK_CREDENTIALS`. Empty: the subscription first. Ignored like `models`. |
 | `profile` | empty | The model profile, `claude` or `openai`, from `vars.CRYSK_PROFILE`. `models` still wins role by role. An unknown profile fails the run (`CRYSK-CONFIG-INVALID`). Empty: `claude`. Ignored like `models`. |
 

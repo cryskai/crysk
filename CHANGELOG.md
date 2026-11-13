@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`CRYSK_ANTIGRAVITY_OAUTH`, the Antigravity (Google) subscription secret.** Each subscription provider now
+  names its own secret (`CRYSK_OPENCODE_OPENAI_OAUTH` is unchanged). The `crysk-secrets` input accepts the new
+  name, checks and masks its record like an `_OAUTH` record, and counts it as a credential; with
+  `operation: refresh-credential` and `refresh-provider: antigravity`, the refresh step renews it at Google's
+  token endpoint and keeps the stored refresh token, which Google does not rotate. Reviews do not run on it yet.
+
 ## [0.6.1] - 2026-11-13
 
 ### Added

@@ -22,6 +22,7 @@
 //   CRYSK_CLAUDE_API_KEY              Claude Code on an Anthropic API key
 //   CRYSK_OPENCODE_<P>_API_KEY        an OpenCode provider's API key
 //   CRYSK_OPENCODE_<P>_OAUTH          base64 of that provider's `opencode auth login` record
+//   CRYSK_ANTIGRAVITY_OAUTH           base64 of the Antigravity (Google) subscription record
 // <P> is the Models.dev provider id uppercased with `-` and `.` as `_`
 // (opencodeSecretToken). CRYSK_CLAUDE_(OAUTH_TOKEN|API_KEY)_<NAME> is reserved
 // for several Claude accounts (S6, out of scope) and ignored with a notice.
@@ -48,6 +49,9 @@ export interface CryskSecrets {
   // opencodeSecretsFor, which normalizes the provider: a secret name is never
   // reversed into a provider id (`WAFER_AI` could be `wafer.ai` or `wafer-ai`).
   readonly opencode: ReadonlyMap<string, OpenCodeProviderSecrets>;
+  // The subscription records whose secret is not an OpenCode name
+  // (PROVIDER_OAUTH_SECRETS), keyed by the provider id the name maps to.
+  readonly oauth: ReadonlyMap<string, OpenCodeOAuthRecord>;
 }
 
 // The names the engine read before S8. Recorded by presence only, for the clean
@@ -96,6 +100,14 @@ const CLAUDE_RESERVED_RE = /^CRYSK_CLAUDE_(?:OAUTH_TOKEN|API_KEY)_[A-Z0-9_]+$/;
 // Exported for outcome.ts's copy (knownFailureCredential), which a test pins to it.
 export const OPENCODE_SECRET_NAME_RE =
   /^CRYSK_OPENCODE_([A-Z0-9]+(?:_[A-Z0-9]+)*)_(API_KEY|OAUTH)$/;
+// The subscription secrets whose name is not CRYSK_OPENCODE_<P>_OAUTH, each to its
+// provider id. A COPY of the non-OpenCode `secretName`s in
+// src/security/oauth-providers.ts, not imported so this module keeps no imports;
+// test/ci/crysk-secrets.test.ts pins the two equal. The record is checked and
+// masked like an OpenCode _OAUTH record.
+export const PROVIDER_OAUTH_SECRETS: Readonly<Record<string, string>> = {
+  CRYSK_ANTIGRAVITY_OAUTH: "antigravity",
+};
 // A line is NAME=value when it starts with an identifier and an `=`; the value
 // runs from the FIRST `=`, so base64 padding survives.
 const LINE_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
@@ -180,6 +192,23 @@ export function opencodeSecretsFor(
   return token === undefined ? undefined : secrets.opencode.get(token);
 }
 
+// The subscription record a secret NAME holds, whichever grammar the name uses:
+// an OpenCode _OAUTH name reads its provider's entry, a PROVIDER_OAUTH_SECRETS
+// name its provider's record. Undefined for any other name or an absent record.
+// The refresher looks a descriptor's `secretName` up here, so it never branches
+// on a provider.
+export function oauthRecordForSecret(
+  secrets: CryskSecrets,
+  name: string,
+): OpenCodeOAuthRecord | undefined {
+  if (Object.hasOwn(PROVIDER_OAUTH_SECRETS, name)) {
+    return secrets.oauth.get(PROVIDER_OAUTH_SECRETS[name] as string);
+  }
+  const match = OPENCODE_SECRET_NAME_RE.exec(name);
+  if (match === null || match[2] !== "OAUTH") return undefined;
+  return secrets.opencode.get(match[1] as string)?.oauth;
+}
+
 // U3 (L12 decision 5): an `_OAUTH` secret is read for this provider only, the
 // one whose subscription record the engine projects (OPENCODE_OAUTH_PROVIDER in
 // security/credential-broker.ts, not imported so this module stays builtins-only;
@@ -236,6 +265,7 @@ export function cryskSecretsCarryCredential(parse: CryskSecretsParse): boolean {
   return (
     presence.claude.length > 0 ||
     presence.opencodeProviders.length > 0 ||
+    presence.oauthProviders.length > 0 ||
     parse.problems.length > 0
   );
 }
@@ -245,6 +275,8 @@ export function cryskSecretsPresence(parse: CryskSecretsParse): {
   names: string[];
   claude: ClaudeCredentialKind[];
   opencodeProviders: string[];
+  // The provider ids of the PROVIDER_OAUTH_SECRETS records present.
+  oauthProviders: string[];
 } {
   const claude = (["subscription", "api_key"] as const).filter(
     (kind) => parse.secrets.claude[kind] !== undefined,
@@ -253,6 +285,7 @@ export function cryskSecretsPresence(parse: CryskSecretsParse): {
     names: [...parse.names],
     claude,
     opencodeProviders: [...parse.secrets.opencode.keys()].sort(),
+    oauthProviders: [...parse.secrets.oauth.keys()].sort(),
   };
 }
 
@@ -280,13 +313,20 @@ function stringLeaves(value: unknown, out: string[], skipType: boolean): void {
   }
 }
 
-function decodeOAuth(name: string, value: string): OAuthDecode {
+// `opencode` names the record an OpenCode _OAUTH secret holds; any other
+// subscription secret's messages say only "OAuth record".
+function decodeOAuth(
+  name: string,
+  value: string,
+  opencode: boolean,
+): OAuthDecode {
+  const record = opencode ? "OpenCode auth record" : "OAuth record";
   // Buffer.from(x, "base64") skips characters outside the alphabet without a
   // word, so the alphabet and the padded length are checked first.
   if (!BASE64_RE.test(value) || value.length % 4 !== 0) {
     return {
       ok: false,
-      problem: `${name} is not base64 (encode the OpenCode auth record with base64 -w0)`,
+      problem: `${name} is not base64 (encode the ${record} with base64 -w0)`,
     };
   }
   let parsed: unknown;
@@ -301,7 +341,7 @@ function decodeOAuth(name: string, value: string): OAuthDecode {
   if (parsed.type !== "oauth") {
     return {
       ok: false,
-      problem: `${name} is not an OpenCode OAuth record (its type is not "oauth")`,
+      problem: `${name} is not ${opencode ? "an OpenCode OAuth" : "an OAuth"} record (its type is not "oauth")`,
     };
   }
   const leaves: string[] = [];
@@ -312,6 +352,7 @@ function decodeOAuth(name: string, value: string): OAuthDecode {
 export function parseCryskSecrets(raw: string): CryskSecretsParse {
   const claude: { subscription?: string; api_key?: string } = {};
   const opencode = new Map<string, OpenCodeProviderSecrets>();
+  const oauth = new Map<string, OpenCodeOAuthRecord>();
   const names = new Set<string>();
   const legacy = new Set<LegacySecretName>();
   const masks: string[] = [];
@@ -379,7 +420,14 @@ export function parseCryskSecrets(raw: string): CryskSecretsParse {
 
     const claudeKind = CLAUDE_NAMES[name];
     const opencodeMatch = OPENCODE_SECRET_NAME_RE.exec(name);
-    if (claudeKind === undefined && opencodeMatch === null) {
+    const oauthProvider = Object.hasOwn(PROVIDER_OAUTH_SECRETS, name)
+      ? PROVIDER_OAUTH_SECRETS[name]
+      : undefined;
+    if (
+      claudeKind === undefined &&
+      opencodeMatch === null &&
+      oauthProvider === undefined
+    ) {
       notices.push(`${name} is not a Crysk credential name; it is ignored.`);
       continue;
     }
@@ -394,13 +442,24 @@ export function parseCryskSecrets(raw: string): CryskSecretsParse {
       names.add(name);
       continue;
     }
+    if (oauthProvider !== undefined) {
+      const decoded = decodeOAuth(name, value, false);
+      if (!decoded.ok) {
+        problems.push(decoded.problem);
+        continue;
+      }
+      for (const leaf of decoded.leaves) mask(leaf);
+      oauth.set(oauthProvider, decoded.record);
+      names.add(name);
+      continue;
+    }
     const token = (opencodeMatch as RegExpExecArray)[1] as string;
     const kind = (opencodeMatch as RegExpExecArray)[2];
     const entry: OpenCodeProviderSecrets = opencode.get(token) ?? {};
     if (kind === "API_KEY") {
       entry.apiKey = value;
     } else {
-      const decoded = decodeOAuth(name, value);
+      const decoded = decodeOAuth(name, value, true);
       if (!decoded.ok) {
         problems.push(decoded.problem);
         continue;
@@ -413,7 +472,7 @@ export function parseCryskSecrets(raw: string): CryskSecretsParse {
   }
 
   return {
-    secrets: { claude, opencode },
+    secrets: { claude, opencode, oauth },
     names: [...names].sort(),
     legacy: LEGACY_SECRET_NAMES.filter((name) => legacy.has(name)),
     masks,
