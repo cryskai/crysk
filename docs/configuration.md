@@ -143,6 +143,7 @@ A model name says which backend runs it:
 | `claude:sonnet-latest`, `claude:opus-latest`, `claude:haiku-latest`, `claude:fable-latest` | the Claude Code CLI, on the newest version of that model (the CLI's `sonnet`, `opus`, `haiku`, `fable` aliases, which move to each new release) |
 | `claude:claude-sonnet-5-5`, or any full `claude-*` model id | the Claude Code CLI, pinned to that version |
 | `opencode:<provider>/<model>` | OpenCode, on that provider's model id, as `opencode models <provider>` lists it. The model may hold more slashes (`opencode:openrouter/anthropic/claude-sonnet-4.5`): the provider runs to the first one |
+| `agy:<model-id>` | Google Antigravity (the `agy` CLI) on your Google subscription, on the model id as `agy models` lists it (`agy:gemini-4-argon-high`, `agy:claude-sonnet-5-5-high`). The id is lowercase letters, digits, `.`, `_` and `-`, and carries the effort itself. **Not runnable yet**: the name is accepted, but a review whose plan names an `agy:` model, fallbacks included, stops before anything spends with `the antigravity backend (agy: models) is not available yet` |
 
 A bare `claude:sonnet` is refused rather than guessed, so nobody reads it as a pin:
 
@@ -150,9 +151,9 @@ A bare `claude:sonnet` is refused rather than guessed, so nobody reads it as a p
 ~/.crysk/config.json models.default[0]: "claude:sonnet" is not a model name: write "claude:sonnet-latest" for the newest sonnet, or a full name such as "claude-sonnet-5-5" to pin a version
 ```
 
-There is no catalog of OpenCode models: the bundled one (`config/models/anthropic.json`) holds only the
-Claude aliases, so an OpenCode model must be spelled exactly as its provider names it, and a wrong id fails
-at the provider, not at Crysk. A name that looks like a credential is refused unseen.
+There is no catalog of OpenCode or Antigravity models: the bundled one (`config/models/anthropic.json`) holds
+only the Claude aliases, so an OpenCode or `agy:` model must be spelled exactly as its provider names it, and
+a wrong id fails at the provider, not at Crysk. A name that looks like a credential is refused unseen.
 
 ### Lists
 
@@ -350,6 +351,15 @@ its own entry's effort, not the first model's:
   does not list, an effort on a model with no variants, or a listing that cannot be read stops the review
   before anything spends, naming the model and the variants it does have. An OpenCode model with no entry
   effort is sent no variant and runs at its default level.
+- **On Antigravity** the effort is part of the model id (`agy:gemini-4-argon-high`): `agy` refuses a
+  `--model` with a conflicting `--effort`, so Crysk never sends one, and an `agy:` entry that sets an
+  `effort` is refused rather than ignored:
+
+  ```
+  ~/.crysk/config.json models.default[0] sets an effort on an Antigravity model: the effort is part of the agy model id (for example "agy:gemini-4-argon-high"), so write the id with the level you want and no effort
+  ```
+
+  Its `effort_applied` is always `false`.
 - **`--model`, the CI `model` input and the materiality judge take no effort.**
 
 Before that variants check, every OpenCode model the plan may run, fallbacks included, must have a record

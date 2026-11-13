@@ -436,10 +436,14 @@ export function credentialKindForRoute(
       ? "opencode_chatgpt_oauth"
       : "provider_api_token";
   }
-  // Exhaustive on purpose: a backend with no credential authority must not
-  // fall into the metered default by accident. It has no binding at all —
-  // resolveBindingAuthority refuses it a few lines below — and inventing a
-  // kind for it here would make that refusal look like a pricing problem.
+  // Antigravity has one credential: the Google subscription OAuth record
+  // (S4). Its binding is still refused below until its transport and broker
+  // exist, so this kind decides nothing that can spend yet.
+  if (backend === "antigravity") return "antigravity_subscription_oauth";
+  // Exhaustive on purpose: a backend with no credential authority (codex)
+  // must not fall into the metered default by accident. It has no binding at
+  // all — resolveBindingAuthority refuses it a few lines below — and inventing
+  // a kind for it here would make that refusal look like a pricing problem.
   throw new Error(`No credential authority is bound for backend "${backend}"`);
 }
 
@@ -671,6 +675,17 @@ export async function resolveBindingAuthority(
         ),
         bucketId: "opencode",
       },
+    };
+  }
+
+  // odd/tasks/antigravity-oauth.md T2: `agy:` names parse and route, but the
+  // transport, credential broker and executable authority come in T3-T4.
+  // Refused by name here, the one place every plan route binds before
+  // anything spends, so an agy plan stops instead of running elsewhere.
+  if (backend === "antigravity") {
+    return {
+      error:
+        "the antigravity backend (agy: models) is not available yet: Crysk cannot run an agy: model in this version, so choose a claude: or opencode: model",
     };
   }
 

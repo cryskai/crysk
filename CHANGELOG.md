@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name, checks and masks its record like an `_OAUTH` record, and counts it as a credential; with
   `operation: refresh-credential` and `refresh-provider: antigravity`, the refresh step renews it at Google's
   token endpoint and keeps the stored refresh token, which Google does not rotate. Reviews do not run on it yet.
+- **`agy:<model-id>` model names for Google Antigravity.** `models`, `--model` and the CI `model` input accept
+  `agy:` and the id as `agy models` lists it (`agy:gemini-4-argon-high`). The effort is part of the id, so an
+  `agy:` entry that sets an `effort` is refused with the reason. Reviews do not run on agy yet: a plan that
+  names an `agy:` model, fallbacks included, stops before anything spends with `the antigravity backend (agy:
+  models) is not available yet`.
+
+### Changed
+
+- The message for a model name with no known prefix now lists `agy:<model-id>` beside `claude:<name>` and
+  `opencode:<provider>/<model>`.
 
 ## [0.6.1] - 2026-11-13
 
