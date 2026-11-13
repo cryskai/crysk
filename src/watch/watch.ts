@@ -102,6 +102,7 @@ import {
   removeWatchRepo,
   renderWatchPlist,
   renderWatchStatus,
+  reviewOutcomeResult,
   skipLine,
   type TickDecision,
   type TickLaunch,
@@ -860,14 +861,17 @@ async function runTick(
   );
   const exitCode = await proc.exited;
 
+  // An incomplete review (exit 3) still ran and may have posted findings, so
+  // its counts are read like a complete one's; only a failed run has none.
+  const result = reviewOutcomeResult(exitCode);
   const outcome: ReviewOutcome = {
     pr: launch.pr,
-    ok: exitCode === 0,
+    result,
     exitCode,
     counts:
-      exitCode === 0
-        ? await readTierCounts(launched?.runsRoot, launch.pr, launch.head)
-        : null,
+      result === "failed"
+        ? null
+        : await readTierCounts(launched?.runsRoot, launch.pr, launch.head),
   };
   await appendLog(
     paths.logPath,

@@ -1129,7 +1129,10 @@ newest row across both, so a head reviewed earlier keeps its verdict, and an ove
 only on `pr-hero` still wins. Descriptions are written `crysk: …`
 and read in both spellings. The job's exit code does not
 carry the review's findings: a finished review exits `0` even when it finds blocking-tier issues. Findings
-are published as comments and a summary, and the commit status decides the gate.
+are published as comments and a summary, and the commit status decides the gate. The exit code does carry
+whether the review finished: an incomplete one (a hunter, the refuter, verify, adjudicate or the time ceiling
+failed) exits `3` and the job goes red, in gate and advisory mode alike; `/crysk review` runs it again. The
+full table is in the README's "Exit codes" section.
 
 The action's `mode` input picks what the status says. It defaults to `gate`:
 
@@ -1144,10 +1147,10 @@ The table shows the status and the job exit for each case:
 
 | Cause | `gate` status | `advisory` status | Exit |
 |---|---|---|---|
-| Finished review with unresolved blocking findings (see below) | `failure`: `crysk: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
-| Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/crysk override`) | `failure`: `crysk: review partial (N of M hunters failed, set abc123) — /pr-hero review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `0` |
-| Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `crysk: review partial again (N of M hunters failed, set abc123) — fix the failing route or /pr-hero override` | `success` | `0` |
-| Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `0` |
+| Finished review with unresolved blocking findings (see below) | `failure`: `crysk: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0`, or `3` when a step also failed (the blocking count wins the status, not the exit) |
+| Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/crysk override`) | `failure`: `crysk: review partial (N of M hunters failed, set abc123) — /pr-hero review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `3` |
+| Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `crysk: review partial again (N of M hunters failed, set abc123) — fix the failing route or /pr-hero override` | `success` | `3` |
+| Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `1` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/crysk review` reviews it anyway) | `failure`: `crysk skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
 | Admission skip by any review rule: a low-risk or below-threshold delta, once per PR, a `/crysk stop`, the attempt budget used up (`ci_max_attempts`), or `manual_only` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; a carried blocking failure whose blocking findings are all answered becomes `success` `crysk: N answered finding(s), fixes unverified (<reason>); carried from <sha>` (see below); with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it`. Under the attempt budget used up or `manual_only`, either green is held instead: `pending` `crysk: waiting for a manual review (<reason>); carried from <sha> — /pr-hero review or /pr-hero override` (see below) | none | `0` |
@@ -1346,7 +1349,9 @@ rather than silently absorbed into the enum (see
 of its own is an open follow-up.
 
 The two are told apart by the exit code: green with an empty `status` is the concurrent run, red with an
-empty `status` is the dead one. If your workflow branches on `steps.<id>.outputs.status`, treat an
+empty `status` is the dead one. A red job whose `status` is `reviewed` has two causes, told apart by the exit
+code: `3` is an incomplete review whose findings and status were published, and a retry finishes it; `1`
+means the review finished but some comments could not be posted, or no reviewer ran. If your workflow branches on `steps.<id>.outputs.status`, treat an
 **empty** value on a green job as "no review outcome yet — a concurrent run owns this head", not as a
 failure.
 
@@ -2541,8 +2546,9 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 - **No comment appears on the PR** — check `permissions: pull-requests: write` is present, and that at
   least one `CRYSK_*` secret is set and passed in `crysk-secrets`. Fork pushes never receive those
   secrets; a maintainer's `/crysk review` comment reviews them.
-- **The review job is red** — never because of findings. Read `status` to tell the three causes apart:
-  `error` is a fatal failure and the `::error::` annotation in the log names it; an **empty** `status`
-  means every hunter died (the log shows their failures); `reviewed` means the review itself succeeded
-  but some comments could not be posted. See "Gate mode" above. An OpenCode model whose provider has no
+- **The review job is red** — never because of findings. Read `status` and the exit code to tell the causes
+  apart: `error` is a fatal failure and the `::error::` annotation in the log names it; an **empty** `status`
+  means every hunter died (the log shows their failures); `reviewed` with exit `3` means the review is
+  incomplete (a hunter, the refuter, verify, adjudicate or the time ceiling failed) and `/crysk review`
+  retries it; `reviewed` with exit `1` means some comments could not be posted, or no reviewer ran. See "Gate mode" above. An OpenCode model whose provider has no
   `CRYSK_OPENCODE_*` secret fails closed rather than skipping.

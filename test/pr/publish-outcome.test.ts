@@ -129,6 +129,7 @@ function findingFixture(id: string, tier: "blocking" | "advisory"): Finding {
 function baseResult(
   over: {
     sessionFailed?: boolean;
+    noReviewerRan?: boolean;
     skillOutput?: SkillOutput;
     gatePriors?: readonly GateRow[];
     perAgent?: PipelineResult["perAgent"];
@@ -139,6 +140,9 @@ function baseResult(
     perAgent: over.perAgent ?? {},
     usage: { ...zeroUsage(), cost_usd_est: 0.42 },
     sessionFailed: over.sessionFailed ?? false,
+    ...(over.noReviewerRan === undefined
+      ? {}
+      : { noReviewerRan: over.noReviewerRan }),
     unresolved: [],
     ...(over.gatePriors === undefined ? {} : { gatePriors: over.gatePriors }),
   } as unknown as PipelineResult;
@@ -345,8 +349,8 @@ describe("publishRunOutcome", () => {
   // Task item 2 (second half): a failed session still runs the whole tail
   // (artifacts are written, posting is attempted-but-null via
   // postInlineIfEligible's own sessionFailed guard) and then short-circuits
-  // to exit 1 BEFORE reaching ciExitCode/postingExitCode, exactly as
-  // reviewPr() did inline.
+  // to exit 1 BEFORE reaching reviewExitCode, exactly as reviewPr() did
+  // inline.
   test("session failed: onPosted(null), returns 1 before the exit-code ternary", async () => {
     const { onPosted, value } = captureOnPosted();
     const exitCode = await publishRunOutcome(
@@ -359,6 +363,65 @@ describe("publishRunOutcome", () => {
     );
     expect(value()).toBeNull();
     expect(exitCode).toBe(1);
+  });
+
+  // The exit-code table (src/review/exit-code.ts). An incomplete review used to
+  // exit 0, so the job check went green while the gate's own status read
+  // "review partial", and a script outside GitHub could not tell.
+  describe("exit code of an incomplete review", () => {
+    const partial = () =>
+      baseResult({
+        skillOutput: { ...baseSkillOutput(), run_status: "partial" },
+      });
+
+    test("a partial review exits 3 outside CI", async () => {
+      expect(
+        await publishRunOutcome(
+          baseInput({ result: partial(), postEnabled: false, isCi: false }),
+        ),
+      ).toBe(3);
+    });
+
+    test("a partial review exits 3 in CI gate mode", async () => {
+      expect(
+        await publishRunOutcome(
+          baseInput({
+            result: partial(),
+            postEnabled: false,
+            isCi: true,
+            ciMode: "gate",
+          }),
+        ),
+      ).toBe(3);
+    });
+
+    test("a partial review exits 3 in CI advisory mode: the code is about execution, not the verdict", async () => {
+      expect(
+        await publishRunOutcome(
+          baseInput({
+            result: partial(),
+            postEnabled: false,
+            isCi: true,
+            ciMode: "advisory",
+          }),
+        ),
+      ).toBe(3);
+    });
+
+    test("a run in which no reviewer ran exits 1, not 0", async () => {
+      expect(
+        await publishRunOutcome(
+          baseInput({
+            result: baseResult({
+              noReviewerRan: true,
+              skillOutput: { ...baseSkillOutput(), run_status: "partial" },
+            }),
+            postEnabled: false,
+            isCi: false,
+          }),
+        ),
+      ).toBe(1);
+    });
   });
 
   // Task item 3: the happy path's artifacts and return value are exactly

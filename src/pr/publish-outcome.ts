@@ -27,7 +27,6 @@
 import path from "node:path";
 import { classifyCliError } from "#ci/classify-error";
 import { recordReviewDelivered, writeCliRecord } from "#ci/cli-record";
-import { ciExitCode } from "#ci/gates";
 import {
   ingestReviewMetrics,
   notionalCostInput,
@@ -42,11 +41,12 @@ import {
 } from "#pr/admission";
 import { publishCiReviewIfEligible } from "#pr/ci-publish";
 import type { PrDiscoveryResult } from "#pr/discovery";
-import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
+import type { InlinePostOutcome } from "#pr/inline";
 import type { PostMinSeverity } from "#pr/post-floor";
 import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
 import type { CiMode } from "#pr/preflight";
 import { unresolvedBlockingCount } from "#rereview/state";
+import { reviewExitCode } from "#review/exit-code";
 import type { Telemetry } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
@@ -359,15 +359,16 @@ export async function publishRunOutcome(
     "completed",
     "review complete",
   );
-  // Assistant posture (spec 2.1): in CI mode, exit 0 even with blocking
-  // findings — ciExitCode only fails on a fatal session failure (already
-  // returned above) or a genuine posting drop (design D6). Outside CI,
-  // postingExitCode keeps its existing behavior unchanged.
-  return input.isCi
-    ? ciExitCode({
-        sessionFailed: result.sessionFailed,
-        droppedFindingIds: posted?.droppedFindingIds.length ?? 0,
-        blockingCount,
-      })
-    : postingExitCode(posted);
+  // One table for every mode (src/review/exit-code.ts): findings never change
+  // the code (spec 2.1), an incomplete review exits 3, a review that did not
+  // happen or a dropped posting exits 1.
+  return reviewExitCode({
+    sessionFailed: result.sessionFailed,
+    ...(result.noReviewerRan === undefined
+      ? {}
+      : { noReviewerRan: result.noReviewerRan }),
+    runStatus: doc.run_status,
+    droppedFindingIds: posted?.droppedFindingIds.length ?? 0,
+    blockingCount,
+  });
 }

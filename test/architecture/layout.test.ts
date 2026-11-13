@@ -148,6 +148,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "consolidate",
       "dedupe",
       "drafts",
+      "exit-code",
       "findings",
       "findings-conformance",
       "materiality-gate",

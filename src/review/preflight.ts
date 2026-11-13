@@ -613,7 +613,15 @@ questions; use it first.
 The size gate is a COST gate, not a quality gate: past its limits a diff bills
 several times more with a much wider spread, so Crysk skips it unattended
 rather than guess at the bill. An interactive run asks first. It says nothing
-about how well a large diff reviews.`;
+about how well a large diff reviews.
+
+Exit codes of a review (findings never change them):
+  0  the review is complete, with or without findings
+  1  no usable review: every hunter failed, no reviewer ran, or findings
+     that should have been posted were dropped
+  2  usage error
+  3  the review is incomplete: a step failed (a hunter, the refuter,
+     verify, adjudicate, or the time ceiling). Run it again.`;
 
 const VALUE_FLAGS = new Set([
   "--repo",

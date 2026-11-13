@@ -1,10 +1,10 @@
 // Phase 3 (Pillar 3, GitHub Actions CI): Review CLI Integration & CI
 // Headless Shell. Ties Phase 1's reporter (ci/reporter.ts) and Phase 2's
 // gates (ci/gates.ts) into the CLI surface: `--ci`/`--budget-usd`/
-// `--step-summary` parsing, environment auto-detection, the assistant-
-// posture exit-code contract, and the pure "what to publish" compositions
-// reviewPr's shell calls mechanically (see cli.ts's reviewPr — the size-gate
-// and budget-gate CI branches, and the final `ciExitCode` return).
+// `--step-summary` parsing, environment auto-detection, and the pure "what
+// to publish" compositions reviewPr's shell calls mechanically (see cli.ts's
+// reviewPr — the size-gate and budget-gate CI branches). The exit-code
+// contract is pinned in test/review/exit-code.test.ts.
 //
 // Style mirrors ci/gates.test.ts / ci/reporter.test.ts: no mocks, no I/O,
 // plain literals for the upstream types.
@@ -20,7 +20,6 @@ import {
   budgetUnlimitedNoticeMessage,
   CI_DEFAULT_METERED_BUDGET_USD,
   type CiGateSkipPlan,
-  ciExitCode,
   ciGateSkipOutputs,
   deriveCiBillingMode,
   planCiBudgetSkip,
@@ -283,53 +282,6 @@ describe("parseArgs — --step-summary / --no-step-summary", () => {
     expect(() => parseArgs(["review", "--pr", "5", "--step-summary"])).toThrow(
       /--ci/,
     );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Assistant posture — spec 2.1: findings (even blocking ones) never fail
-// the job. Only sessionFailed / a genuine posting drop do.
-// ---------------------------------------------------------------------------
-
-describe("ciExitCode — assistant posture (reviewer, not a merge gate)", () => {
-  test("blocking findings exit 0 in CI — reviewer, not a merge gate", () => {
-    expect(
-      ciExitCode({
-        sessionFailed: false,
-        droppedFindingIds: 0,
-        blockingCount: 7,
-      }),
-    ).toBe(0);
-  });
-
-  test("zero findings also exit 0", () => {
-    expect(
-      ciExitCode({
-        sessionFailed: false,
-        droppedFindingIds: 0,
-        blockingCount: 0,
-      }),
-    ).toBe(0);
-  });
-
-  test("a fatal session failure exits 1 regardless of findings", () => {
-    expect(
-      ciExitCode({
-        sessionFailed: true,
-        droppedFindingIds: 0,
-        blockingCount: 3,
-      }),
-    ).toBe(1);
-  });
-
-  test("a genuine posting drop (design D6) exits 1 regardless of findings", () => {
-    expect(
-      ciExitCode({
-        sessionFailed: false,
-        droppedFindingIds: 2,
-        blockingCount: 0,
-      }),
-    ).toBe(1);
   });
 });
 
