@@ -43,8 +43,22 @@ import {
 // The exam keeps everything it writes under one folder. The tests point that
 // folder at a temp dir, so running them never touches the real one.
 const HOME = await mkdtemp(path.join(tmpdir(), "casebank-test-"));
+// Both variables are how a developer points the exam at their own folder and
+// bank: the suite must not read theirs, and must hand them back afterwards.
+const AMBIENT = {
+  home: process.env.CRYSK_CASEBANK_HOME,
+  cases: process.env.CRYSK_CASEBANK_CASES,
+};
 process.env.CRYSK_CASEBANK_HOME = HOME;
+delete process.env.CRYSK_CASEBANK_CASES;
 afterAll(async () => {
+  for (const [name, saved] of [
+    ["CRYSK_CASEBANK_HOME", AMBIENT.home],
+    ["CRYSK_CASEBANK_CASES", AMBIENT.cases],
+  ] as const) {
+    if (saved === undefined) delete process.env[name];
+    else process.env[name] = saved;
+  }
   await rm(HOME, { recursive: true, force: true });
 });
 
@@ -452,6 +466,47 @@ describe("exam.ts refuses instead of guessing", () => {
     const { stderr, code } = await exam(args);
     expect(code).toBe(64);
     expect(stderr).toMatch(message);
+  });
+
+  test.each([
+    [["list", "--bank"], /--bank needs a directory/],
+    [["list", "--bank", "--quick"], /--bank needs a directory/],
+    [["where", "--home"], /--home needs a directory/],
+  ])("a directory option without a directory: %j", async (args, message) => {
+    const { stderr, code } = await exam(args);
+    expect(code).toBe(64);
+    expect(stderr).toMatch(message);
+  });
+
+  test("build refuses a target that already exists", async () => {
+    const { stderr, code } = await exam([
+      "build",
+      "--case",
+      pilot.id,
+      "--to",
+      HOME,
+    ]);
+    expect(code).toBe(64);
+    expect(stderr).toMatch(/--to must not exist yet/);
+  });
+
+  // Nothing failed last time is a success, not a selection that matches nothing.
+  test("--failed-from a report in which everything passed exits 0", async () => {
+    const report = path.join(HOME, "all-passed.json");
+    await writeFile(
+      report,
+      JSON.stringify({
+        hunters: [{ cases: [{ id: pilot.id, verdict: "pass" }] }],
+      }),
+    );
+    const { code } = await exam([
+      "score",
+      "--hunter",
+      "logic",
+      "--failed-from",
+      report,
+    ]);
+    expect(code).toBe(0);
   });
 
   // An empty selection used to exit 0 with pass: true.

@@ -48,9 +48,14 @@ const argv = Bun.argv.slice(2);
 // case goes to the bank linked in the exam's folder, or into this repository
 // when there is none.
 if (argv.includes("--bank")) {
-  process.env.CRYSK_CASEBANK_CASES = path.resolve(
-    argv[argv.indexOf("--bank") + 1] ?? "",
-  );
+  const bank = argv[argv.indexOf("--bank") + 1];
+  // No operand would resolve to the current directory, and a case's patches
+  // would be written wherever the command happened to run.
+  if (bank === undefined || bank.startsWith("--")) {
+    console.error("--bank needs a directory");
+    process.exit(64);
+  }
+  process.env.CRYSK_CASEBANK_CASES = path.resolve(bank);
 }
 function value(name: string): string {
   const index = argv.indexOf(name);
@@ -337,12 +342,15 @@ try {
       2,
     )}\n`,
   );
-  // A case written again without --drop has no base.patch: the old one goes,
-  // or the case would build from a mix of two generations of files.
+  // A base.patch this run did not produce is left alone and named: it may
+  // be one the author wrote by hand, which this tool itself asks for when a
+  // file cannot be reverted, and it cannot be regenerated.
   if (basePatch !== undefined) {
     await writeFile(path.join(out, "base.patch"), basePatch);
-  } else {
-    await rm(path.join(out, "base.patch"), { force: true });
+  } else if (await Bun.file(path.join(out, "base.patch")).exists()) {
+    console.log(
+      "  kept the existing base.patch (this run wrote none): check it still belongs to this case",
+    );
   }
   if (message !== undefined) {
     await writeFile(path.join(out, "message.txt"), message);

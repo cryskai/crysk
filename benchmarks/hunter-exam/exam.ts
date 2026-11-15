@@ -66,6 +66,7 @@
 // Exit code: 0 every selected case passed, 1 a case failed, 2 no failure but
 // a case is undecided (missing runs or infrastructure errors).
 
+import { existsSync } from "node:fs";
 import {
   mkdir,
   readdir,
@@ -132,14 +133,25 @@ function usage(message: string): never {
   process.exit(64);
 }
 
-// Before anything resolves a case: both are read through the environment.
-if (value("--home") !== undefined) {
-  process.env.CRYSK_CASEBANK_HOME = path.resolve(value("--home") as string);
+// A directory option that is present must name a directory. A missing
+// operand used to be ignored, so a run meant for a bank examined the sample
+// alone and could exit 0.
+function directoryOption(name: string): string | undefined {
+  if (!argv.includes(name)) return undefined;
+  const operand = value(name);
+  if (operand === undefined || operand.startsWith("--")) {
+    usage(`${name} needs a directory`);
+  }
+  return path.resolve(operand);
 }
-if (value("--bank") !== undefined) {
+// Before anything resolves a case: both are read through the environment.
+const homeOption = directoryOption("--home");
+if (homeOption !== undefined) process.env.CRYSK_CASEBANK_HOME = homeOption;
+const bankOption = directoryOption("--bank");
+if (bankOption !== undefined) {
   process.env.CRYSK_CASEBANK_CASES = [
     process.env.CRYSK_CASEBANK_CASES,
-    path.resolve(value("--bank") as string),
+    bankOption,
   ]
     .filter((root) => root !== undefined && root !== "")
     .join(":");
@@ -215,6 +227,9 @@ if (command === "build") {
   const to = value("--to");
   if (id === undefined || to === undefined)
     usage("build needs --case and --to");
+  // The checkout is moved to --to; onto an existing directory that means
+  // "replace" on one filesystem and "copy inside" across two.
+  if (existsSync(path.resolve(to))) usage("--to must not exist yet");
   const built = await materializeCase(caseDir(id));
   try {
     await rename(built.repoDir, path.resolve(to)).catch(async (error) => {
@@ -327,6 +342,12 @@ if (failedFrom !== undefined) {
       h.cases.filter((c) => c.verdict !== "pass").map((c) => c.id),
     ),
   );
+  // Nothing failed last time is not a wrong selection: there is nothing to
+  // run, and that is a success.
+  if (failed.size === 0) {
+    console.log(`nothing failed in ${failedFrom}: nothing to run`);
+    process.exit(0);
+  }
   ids = (ids ?? [...failed]).filter((id) => failed.has(id));
 }
 const cases = selectCases(bank.cases, {
