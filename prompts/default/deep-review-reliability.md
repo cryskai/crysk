@@ -77,8 +77,8 @@ the consequence is the most common way a finding turns out to be wrong.
 
 `SUGGESTION` is for a finding with no wrong behaviour.
 
-How sure you are, how large the change is and how many other findings you have do not move severity. Certainty
-belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
+How sure you are, how large the change is and how many other findings you have do not move severity. Being
+unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
 block a merge; a `WARNING` is posted as an advisory comment that nothing verifies, so a severe consequence
 reported as `WARNING` is never checked.
 
@@ -105,8 +105,8 @@ Two worked calibrations for this pass:
 
 - A value that renders wrong every single time it is displayed is `CRITICAL`, **even if you are unsure the
   input that produces it ever reaches production**. Users-see-it-break
-  decides the severity; whether the input reaches production is the trigger link, and how much of that you
-  read decides the evidence class.
+  decides the severity. Being unsure whether the input reaches production is not a condition that lowers it:
+  say what you read in the trigger link and let the evidence class carry the doubt.
 - A size read as bytes when its source produced kilobytes is `CRITICAL` if that value feeds anything a human or
   a test actually looks at. Hedging words in your own claim — "would", "plausibly", "could" — are a signal you
   are reasoning about a link you did not read: say so in that link, set `evidence_class` to match, and leave

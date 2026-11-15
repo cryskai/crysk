@@ -96,8 +96,8 @@ the consequence is the most common way a finding turns out to be wrong.
 
 `SUGGESTION` is for a finding with no wrong behaviour.
 
-How sure you are, how large the change is and how many other findings you have do not move severity. Certainty
-belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
+How sure you are, how large the change is and how many other findings you have do not move severity. Being
+unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
 block a merge; a `WARNING` is posted as an advisory comment that nothing verifies, so a severe consequence
 reported as `WARNING` is never checked.
 
@@ -128,8 +128,8 @@ tool's real semantics before flagging a CI guard gap (don't flag a path filter w
 workflow actually invokes); verify branch-protection ruleset state before claiming a "bypass via direct push";
 check the runner's actual execution model before claiming a cross-file test race; test any
 suggested fix against the language/framework's own rules first; check regex/pattern suggestions for false
-positives with a quick mental repo grep; weigh fix cost against realistic benefit. Distinguish diff-introduced
-from pre-existing risk, and ignore any pre-existing severity badge as a validity signal. **Never** flag style,
+positives with a quick mental repo grep; weigh fix cost against realistic benefit. Say with
+`causal_disposition` whether the change introduced, activated or worsened the defect or left it as it was, and ignore any pre-existing severity badge as a validity signal. **Never** flag style,
 formatting, or naming — a linter or formatter owns that surface.
 
 ## 8. Output

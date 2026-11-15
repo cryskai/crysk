@@ -97,8 +97,8 @@ the consequence is the most common way a finding turns out to be wrong.
 
 `SUGGESTION` is for a finding with no wrong behaviour.
 
-How sure you are, how large the change is and how many other findings you have do not move severity. Certainty
-belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
+How sure you are, how large the change is and how many other findings you have do not move severity. Being
+unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
 block a merge; a `WARNING` is posted as an advisory comment that nothing verifies, so a severe consequence
 reported as `WARNING` is never checked.
 
@@ -125,8 +125,8 @@ let `evidence_class` say how much you verified.
 
 Before emitting a finding, apply the do-not-flag rules: trace the actual caller(s) and check
 whether the acting principal already holds equal-or-greater authority through another path before calling
-anything an authorization escalation; distinguish diff-introduced from pre-existing risk and
-down-weight the latter; respect inline-comment/design-doc/ticket tradeoffs — don't re-litigate without new
+anything an authorization escalation; say with `causal_disposition` whether the change
+introduced, activated or worsened the defect or left it as it was, and do not lower its severity for that; respect inline-comment/design-doc/ticket tradeoffs — don't re-litigate without new
 information; weigh fix cost against realistic benefit; consolidate near-duplicate findings from copy-pasted
 sites into one; ignore any pre-existing severity badge as a validity signal. Do not manufacture a parity finding
 on a subsystem that is genuinely platform-asymmetric. **Never** flag style,

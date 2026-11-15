@@ -71,6 +71,9 @@ describe("the bundled hunters' finding contract", () => {
         "in one neutral sentence",
         "put that in `evidence_class`",
         "use `pre-existing` when the defect is",
+        "down-weight the latter",
+        "diff-introduced",
+        "is the trigger link, and how much",
       ]) {
         expect(text).not.toContain(gone);
       }

@@ -142,8 +142,8 @@ the consequence is the most common way a finding turns out to be wrong.
 
 `SUGGESTION` is for a finding with no wrong behaviour.
 
-How sure you are, how large the change is and how many other findings you have do not move severity. Certainty
-belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
+How sure you are, how large the change is and how many other findings you have do not move severity. Being
+unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
 block a merge; a `WARNING` is posted as an advisory comment that nothing verifies, so a severe consequence
 reported as `WARNING` is never checked.
 
