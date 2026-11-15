@@ -26,8 +26,8 @@ the producer and every consumer, and hop with `codegraph_explore` when either li
 
 | Column | What to establish |
 |---|---|
-| **Origin** | Where does it come from — a DTO field, a store, an `<audio>` element, a fixture/seed row, a literal, a computation? Name the file and line. |
-| **Units / representation** | Seconds or milliseconds? Fraction (0–1) or percentage (0–100)? Raw peaks or normalized? Pixels or CSS units? If the name says one thing and the producer says another, record the producer. |
+| **Origin** | Where does it come from — a DTO field, a store, a DOM element, a fixture/seed row, a literal, a computation? Name the file and line. |
+| **Units / representation** | Seconds or milliseconds? Fraction (0–1) or percentage (0–100)? Raw or normalized? Pixels or CSS units? If the name says one thing and the producer says another, record the producer. |
 | **Domain** | What values can it ACTUALLY take? Specifically: can it be `0`? `undefined` or `null`? negative? `NaN`/non-finite? an empty array? Is it optional in its type (`?`) or nullable? Was it already transformed upstream? |
 | **Transformations** | Every operation applied along each path from origin to use: `*100`, `/1000`, `Math.round`, clamp, parse, normalize. List them **per path** — the same value may take two routes. |
 | **Consumer assumptions** | For each place it is read: what does that code assume? What does its guard actually exclude (read the guard's exact operator)? What would it do with the boundary values from the Domain column? |
