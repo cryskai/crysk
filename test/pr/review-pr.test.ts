@@ -110,6 +110,26 @@ describe("reviewPr's call site for the pipeline record", () => {
   });
 });
 
+// The re-review verifier's own body reaches the pipeline only through this
+// call. An overlap candidate can queue a verify step with an empty verify
+// queue, so the input must not be gated on the queue. Pinned by source, as the
+// call-site test above is: reviewPr is not driveable offline.
+describe("reviewPr hands the pipeline the verifier's own prompt", () => {
+  test("pipelineVerifierInput is spread into the runPipeline call, unconditionally", () => {
+    const source = readFileSync(
+      path.join(import.meta.dir, "../../src/pr/review-pr.ts"),
+      "utf8",
+    );
+    const pipelineAt = source.indexOf("result = await runPipeline(");
+    const call = source.slice(
+      pipelineAt,
+      source.indexOf("\n          );", pipelineAt),
+    );
+    expect(pipelineAt).toBeGreaterThan(-1);
+    expect(call).toMatch(/^\s*\.\.\.pipelineVerifierInput\(\{ profile \}\),$/m);
+  });
+});
+
 // Fix C: the inner try records that its body threw, and the commit-status settle
 // reads that flag, so a failed status write cannot replace the body's own error.
 // reviewPr itself is not driveable offline (gh and git at its head), so this pins

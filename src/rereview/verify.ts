@@ -43,12 +43,20 @@ export interface VerifySubject extends VerifyQueueEntry {
   vId: string;
 }
 
+// Three verdicts, each named once in the request. The parse still accepts
+// `downgraded-latent` because it shares the refuter's validator, and
+// mapVerifyVerdict keeps such a finding open; the request does not offer it,
+// because "a real defect nothing can execute yet" is an answer to the
+// refuter's question, not to "is it still present".
 export const VERIFY_OUTPUT_CONTRACT = [
   "Your final message must be exactly one JSON object — no prose, no code",
-  'fences — of the shape {"results":[{"finding_id":"...","outcome":',
-  '"corroborated|refuted|downgraded-latent|inconclusive","proof_refs":',
-  '["..."]}]} with exactly one verdict per submitted V### id — never',
-  "implied, never extra.",
+  'fences — of the shape {"results":[{"finding_id":"...","outcome":"...",',
+  '"proof_refs":["..."]}]} with exactly one verdict per submitted V### id —',
+  "never implied, never extra. `outcome` is one of:",
+  "- `refuted`: the defect is no longer present in the checkout, and",
+  "  `proof_refs` cites the lines that show it.",
+  "- `corroborated`: the defect is still present.",
+  "- `inconclusive`: you could not tell.",
 ].join("\n");
 
 export function verifySubjectId(index: number): string {
@@ -222,17 +230,15 @@ export function composeVerifyPrompt(
   ];
   if (blocks.some((block) => blockForgesNonce(block, nonce))) return null;
   return [
-    "Is this specific defect still present at these locations, at H?",
+    "Is the defect this earlier finding describes still present in the code",
+    "checked out in your working directory? That checkout is the pull request",
+    "at its current head.",
     "",
     wrapBlock("previous_finding", nonce, previousFinding),
     wrapBlock("patch", nonce, subject.deltaHunks),
     wrapBlock("author_reply", nonce, subject.authorReply),
     wrapBlock("comment_body", nonce, subject.commentBody),
     wrapBlock("triage_tag", nonce, subject.triageTag),
-    "",
-    "`refuted` means the code at H positively contradicts the claim — cite",
-    "the contradicting lines. Absence of a hunter re-finding it is not",
-    "disproof. `inconclusive` means you could not tell.",
     "",
     VERIFY_OUTPUT_CONTRACT,
   ]

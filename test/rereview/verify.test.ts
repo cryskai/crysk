@@ -7,6 +7,7 @@ import {
   dedupeVerifyQueue,
   judgeProposedMatch,
   mapVerifyVerdict,
+  VERIFY_OUTPUT_CONTRACT,
   type VerifyQueueEntry,
   verifyArtifactDir,
   verifyBatchPath,
@@ -182,5 +183,38 @@ describe("C4 — forged nonce is inconclusive without wrapBlock throwing", () =>
     expect(wrapBlock("comment_body", "d0d0cafe", "a thread")).toContain(
       "<comment_body d0d0cafe>",
     );
+  });
+});
+
+describe("the verify request states its own question and verdicts", () => {
+  const prompt =
+    composeVerifyPrompt(
+      { ...entry({ priorId: "R001", sev: "CRITICAL" }), vId: "V001" },
+      "d0d0cafe",
+    ) ?? "";
+
+  // "H" was the design document's name for the current head. Nothing the
+  // model receives defined it.
+  test("it names the checkout, not an undefined H", () => {
+    expect(prompt).not.toMatch(/\bat H\b/);
+    expect(prompt).toContain("checked out in your working directory");
+    expect(prompt).toContain("current head");
+  });
+
+  // `downgraded-latent` belongs to the refuter's question (is a new defect
+  // reachable). Here it maps to the same status as `corroborated`, so the
+  // request must not offer a fourth verdict that means nothing.
+  test("it offers three verdicts, each said once", () => {
+    expect(VERIFY_OUTPUT_CONTRACT).toContain("refuted");
+    expect(VERIFY_OUTPUT_CONTRACT).toContain("corroborated");
+    expect(VERIFY_OUTPUT_CONTRACT).toContain("inconclusive");
+    expect(VERIFY_OUTPUT_CONTRACT).not.toContain("downgraded-latent");
+    expect(prompt).not.toContain("downgraded-latent");
+    expect(prompt.split("inconclusive").length - 1).toBe(1);
+  });
+
+  // The request must not name a stage the verifier cannot see.
+  test("it does not mention hunters", () => {
+    expect(prompt.toLowerCase()).not.toContain("hunter");
   });
 });
