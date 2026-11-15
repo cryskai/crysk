@@ -5,6 +5,11 @@
 // applied, rendered prompts and Claude argv for every step, and the same route
 // plan fingerprints.
 //
+// Re-captured on 2026-11-15 after the bundled hunter bodies changed (see
+// prompts/default/PROVENANCE.md): only the system prompt hashes of the edited
+// hunters moved. Backend, model, effort, argv and route fingerprints are still
+// those of 4898e1b4.
+//
 // To re-capture (only on purpose, and only on a commit whose behavior is the
 // intended baseline): CRYSK_WRITE_PROFILES_BASELINE=1 bun test <this file>,
 // then `./node_modules/.bin/biome format --write` over the fixture directory.

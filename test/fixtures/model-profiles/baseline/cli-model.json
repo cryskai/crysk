@@ -49,7 +49,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "dd873351248817c4d8d156d608891580e3a5b0ff054d6e4753122bac8ab63332",
+      "systemPromptSha256": "5160ce8b456ce7ee9dcb820115e302ac5154ccd5846957386dc9a8f7284ca91b",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": "haiku",
       "argv": [
@@ -86,7 +86,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "c60f46c96bb6e5e1443adcc8657a9cf91fef804951cd3e1130b5e30d5348ee25",
+      "systemPromptSha256": "9a1122fc28ccf49299a6194cf156f77c32ac68f0b2ebec5df09338e6579057f8",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": "haiku",
       "argv": [
@@ -123,7 +123,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "3329a15eac454d06c44b141a24d908b7c8b5b744447da5d460cea435178c29e7",
+      "systemPromptSha256": "f843cf58cdd91ea9d5c457ef0f04138f737dad39b8470871035c88ef78693f7e",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": "haiku",
       "argv": [
@@ -160,7 +160,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "f3a2375e7aff777897b60980fc2bf44b77d286adaacb10d41bb7d695fc52b9a5",
+      "systemPromptSha256": "0c3dd36e34d583f9d084dc2c3cc189dc5abb318707fb5413fd8c2395314f97d2",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": "haiku",
       "argv": [

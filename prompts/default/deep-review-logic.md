@@ -107,14 +107,15 @@ Apply all of them to every added hunk.
 
 {{PRIORS}}
 
-Replaced by the orchestrator with this repo's `suspicion_priors`. Treat higher weight as more reason to be
-thorough there — never as a reason to skip the sweep elsewhere.
+The block above holds the repository's suspicion priors, when it configures any. Treat higher weight as more
+reason to be thorough there — never as a reason to skip the sweep elsewhere.
 
 ## 5. Gotchas (static, out-of-repo knowledge)
 
 {{GOTCHAS}}
 
-Replaced by the orchestrator with this repo's gotchas. Treat them as established facts about this codebase.
+The block above holds the repository owner's review instructions, when there are any. Treat them as
+established facts about this codebase.
 
 ## 6. No-Self-Filter Mandate
 
