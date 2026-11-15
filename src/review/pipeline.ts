@@ -315,6 +315,12 @@ export interface PipelineInput {
   // (`enabled: false`, `status: "skipped"`), the scout's rule, so the two
   // arms are told apart from the artifact alone.
   consolidate?: { promptPath: string; model?: string; bundled?: boolean };
+  // The re-review verifier's own body (prompts/verifier.md), engine-owned.
+  // The product's PR path passes it. ABSENT means the verify steps render the
+  // refuter agent's body, as they did before the verifier had one; that keeps
+  // a direct `runPipeline` caller unchanged. Only the body comes from here:
+  // tools, model, effort and route are always the refuter agent's.
+  verifier?: { promptPath: string };
   // Optional engine-owned materiality gate (odd/tasks/materiality-gate.md):
   // an isolated judge reads every finding that would post as blocking and
   // demotes the immaterial ones to advisory. ABSENT means no judge step and
@@ -2944,10 +2950,17 @@ async function runVerify(
     agentPromptPath(input, options.agent.file),
   );
   const systemPromptPath = path.join(options.stepsDir, "verifier.system.md");
-  // Same body as the refuter, so the same render (see runRefuter).
+  // The verifier's own body when the caller gave one, the refuter's otherwise
+  // (PipelineInput.verifier). Rendered like the refuter's either way (see
+  // runRefuter): no priors, the repository's review instructions in the
+  // gotchas block.
+  const body =
+    input.verifier === undefined
+      ? agent.body
+      : (await parseAgentFile(input.verifier.promptPath)).body;
   await writeSystemPrompt(
     systemPromptPath,
-    renderAgentBody(agent.body, {
+    renderAgentBody(body, {
       priors: [],
       gotchas: state.reviewInstructions ?? NO_REVIEW_INSTRUCTIONS,
       nonce: options.nonce,
@@ -2960,7 +2973,7 @@ async function runVerify(
     prompt.model,
     options.agent.file,
   );
-  // The verifier re-reads the REFUTER's prompt file, so a frontmatter `effort:`
+  // The verifier runs as the REFUTER's agent, so a frontmatter `effort:`
   // there applies to it as well (on the bundled set, the profile's refuter
   // effort); `verifier` is only the fallback for a prompt that omits the key.
   const effortFields = stepEffortFields(

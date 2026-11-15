@@ -1173,6 +1173,88 @@ describe("engine-owned effort", () => {
     expect(effortOf(runner, "verify-V001")).toBe("high");
   });
 
+  // The verifier answers "is this earlier finding's defect still present at
+  // the current head", which is not the refuter's question. Given its own
+  // body it must run under that body, and still on the refuter agent's tools.
+  describe("the rereview verifier's system prompt", () => {
+    const VERIFY_ENTRY = {
+      priorId: "R001",
+      sev: "CRITICAL" as const,
+      trigger: "touched" as const,
+      claim: "a live defect",
+      locs: ["src/app.ts:10"],
+      authorReply: "",
+      commentBody: "",
+      triageTag: "",
+      deltaHunks: "",
+    };
+    const verifierRunner = () =>
+      new FakeStepRunner({
+        verifier: (spec) =>
+          ok(spec, {
+            results: [
+              {
+                finding_id: "V001",
+                outcome: "corroborated",
+                proof_refs: ["src/app.ts:10"],
+              },
+            ],
+          }),
+      });
+
+    test("is the verifier's own body when one is given", async () => {
+      const promptDir = await mkdtemp(path.join(tmpdir(), "pr-hero-verifier-"));
+      const promptPath = path.join(promptDir, "verifier.md");
+      await Bun.write(
+        promptPath,
+        [
+          "---",
+          "name: verifier",
+          "description: re-review verifier",
+          "---",
+          "",
+          "Decide whether the earlier finding still holds.",
+          "",
+          "{{GOTCHAS}}",
+          "",
+        ].join("\n"),
+      );
+      const runner = verifierRunner();
+      const input = await makeInput({
+        skipDiscovery: true,
+        verifyQueue: [VERIFY_ENTRY],
+        verifier: { promptPath },
+      });
+
+      await runPipeline(input, { runner });
+
+      const spec = runner.specs.find((s) => s.name === "verify-V001");
+      const system = await Bun.file(spec?.systemPromptPath ?? "").text();
+      expect(system).toContain(
+        "Decide whether the earlier finding still holds.",
+      );
+      expect(system).not.toContain("Refute or corroborate.");
+      expect(system).toContain(GOTCHAS);
+      expect(system).not.toContain("{{GOTCHAS}}");
+      expect(system.startsWith(RUNTIME_PREAMBLE)).toBe(true);
+      expect(spec?.tools).toEqual(["Read", "Grep", "Glob"]);
+    });
+
+    test("is the refuter's body when none is given", async () => {
+      const runner = verifierRunner();
+      const input = await makeInput({
+        skipDiscovery: true,
+        verifyQueue: [VERIFY_ENTRY],
+      });
+
+      await runPipeline(input, { runner });
+
+      const spec = runner.specs.find((s) => s.name === "verify-V001");
+      const system = await Bun.file(spec?.systemPromptPath ?? "").text();
+      expect(system).toContain("Refute or corroborate.");
+    });
+  });
+
   // The verifier runs as the refuter's agent, so it must run on the refuter's
   // admitted route, and `models.refuter` covers it (S1). Without it a routed
   // run (then: any non-default `routing`) left

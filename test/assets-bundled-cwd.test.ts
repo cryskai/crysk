@@ -25,6 +25,7 @@ describe("bundled engine assets", () => {
           "  assets.summarizerPromptPath,",
           "  assets.materialityPromptPath,",
           "  assets.scoutPromptPath,",
+          "  assets.verifierPromptPath,",
           "  ...Object.values(assets.bundledAgentFiles),",
           "];",
           "console.log(JSON.stringify(files.map(file => ({ absolute: path.isAbsolute(file), exists: existsSync(file) }))));",

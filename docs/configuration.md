@@ -125,7 +125,7 @@ it runs on, in the order to try them:
 | Role | Steps | When the role is not listed |
 | --- | --- | --- |
 | `hunter.<key>` | one hunter: `hunter.logic`, `hunter.parity`, `hunter.reliability`, `hunter.resilience`, `hunter.security`, or the key of a hunter in your own prompt set | `default` |
-| `refuter` | the refuter, and the re-review verifier and the CI adjudicator, which run its prompt family | `default` |
+| `refuter` | the refuter, and the re-review verifier and the CI adjudicator, which run as its agent | `default` |
 | `consolidate` | the consolidation pass after the refuter | `default` |
 | `scout` | the experimental diff-only scout | `default` |
 | `summary` | the summarizer | `default` |
@@ -312,7 +312,10 @@ prompt set still runs at an explicit level:
 | Summarizer, scout, rereview verifier | `high` | Unmeasured, so they keep what every model ran at before the 5.5 family. |
 
 The bundled prompts declare `effort: xhigh` on the hunters and `effort: high` on the refuter. The rereview
-verifier reuses the refuter's prompt, so it follows the refuter's frontmatter. There is no CLI flag or
+verifier runs as the refuter's agent, so it follows the refuter's frontmatter for model, effort and tools.
+What it is told is the engine's own text, not the refuter's: it answers whether an earlier finding's defect is
+still present at the current head, which is not the refuter's question. A custom `review-refuter.md` therefore
+no longer changes the verifier's instructions, only its model, effort and tools. There is no CLI flag or
 environment variable that overrides effort, and the child process never inherits `CLAUDE_CODE_EFFORT_LEVEL`
 from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, and the cost band does
 not price effort yet, so expect the real bill to exceed the quote.
