@@ -50,7 +50,7 @@ describe("resolveEngineAssets", () => {
     expect(existsSync(assets.summarizerPromptPath)).toBe(true);
 
     // Bundled agent files all exist on disk
-    expect(Object.keys(assets.bundledAgentFiles).length).toBe(5);
+    expect(Object.keys(assets.bundledAgentFiles).length).toBe(6);
     for (const [logicalName, filePath] of Object.entries(
       assets.bundledAgentFiles,
     )) {

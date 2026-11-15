@@ -1,4 +1,4 @@
-// The four bundled hunters carry one finding contract: what a finding
+// The five bundled hunters carry one finding contract: what a finding
 // consists of, and what `severity`, `evidence_class` and `causal_disposition`
 // mean. It decides which findings are verified and which can block, so it
 // must say the same thing in every hunter. Until 2026-11-15 each prompt had
@@ -15,6 +15,7 @@ const HUNTERS = [
   "deep-review-reliability.md",
   "deep-review-resilience.md",
   "deep-review-parity.md",
+  "deep-review-security.md",
 ];
 
 // The section's body: from its heading to the first line that is not part of
@@ -31,7 +32,7 @@ async function contractOf(file: string): Promise<string> {
 }
 
 describe("the bundled hunters' finding contract", () => {
-  test("is the same text in all four hunters", async () => {
+  test("is the same text in all five hunters", async () => {
     const [first, ...rest] = await Promise.all(HUNTERS.map(contractOf));
     for (const other of rest) expect(other).toBe(first as string);
   });

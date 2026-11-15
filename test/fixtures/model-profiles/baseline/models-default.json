@@ -187,6 +187,43 @@
       ]
     },
     {
+      "name": "hunter-security",
+      "backend": "claude-code",
+      "provider": "anthropic",
+      "model": "sonnet",
+      "modelSnapshot": "opus",
+      "modelVariant": null,
+      "effort": "xhigh",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "5eaf8812360217a8d09a7f8f61df12be7e4d506350206454b6ad31d0a3788581",
+      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
+      "cliModel": "opus",
+      "argv": [
+        "claude",
+        "-p",
+        "--append-system-prompt-file",
+        "<RUN>/steps/hunter-security.system.md",
+        "--output-format",
+        "json",
+        "--mcp-config",
+        "<RUN>/mcp.json",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "",
+        "--tools",
+        "Read,Grep,Glob,mcp__codegraph__codegraph_explore",
+        "--permission-mode",
+        "bypassPermissions",
+        "--model",
+        "sonnet",
+        "--effort",
+        "xhigh",
+        "--exclude-dynamic-system-prompt-sections"
+      ]
+    },
+    {
       "name": "materiality-F001",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -336,7 +373,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "de7bd99c55b4d2390d83273c0748551470f2cf37b10ff25b9693be3731f7520a",
+    "routeFingerprint": "3087bf95bf7fd09c1f11be77bc0f3efaf7e19df72348e3de0f366a696c7e761e",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -368,6 +405,20 @@
       },
       {
         "stepKey": "hunter-logic",
+        "role": "hunter",
+        "logicalIdentity": "claude:opus-latest",
+        "routeFingerprint": "0e4a03866558e58a15f46141062da8eed9751443f745918bc3f90bf30f6c28f8",
+        "effort": null,
+        "route": {
+          "backend": "claude-code",
+          "provider": "anthropic",
+          "modelFamily": "opus",
+          "modelSnapshot": "opus"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "hunter-security",
         "role": "hunter",
         "logicalIdentity": "claude:opus-latest",
         "routeFingerprint": "0e4a03866558e58a15f46141062da8eed9751443f745918bc3f90bf30f6c28f8",
@@ -497,6 +548,13 @@
     },
     {
       "name": "hunter-resilience",
+      "model": "opus",
+      "effort": "xhigh",
+      "effort_applied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "hunter-security",
       "model": "opus",
       "effort": "xhigh",
       "effort_applied": true,

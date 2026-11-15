@@ -110,7 +110,7 @@ import {
   sweepWork,
 } from "./run-case";
 
-const ALWAYS_ON = ["reliability", "resilience", "logic"];
+const ALWAYS_ON = ["reliability", "resilience", "logic", "security"];
 // A run that delivered nothing is retried in place, this many times per case.
 const INFRA_RETRIES = 2;
 

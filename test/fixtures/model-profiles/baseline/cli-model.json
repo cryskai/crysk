@@ -187,6 +187,43 @@
       ]
     },
     {
+      "name": "hunter-security",
+      "backend": "claude-code",
+      "provider": "anthropic",
+      "model": "haiku",
+      "modelSnapshot": "haiku",
+      "modelVariant": null,
+      "effort": "xhigh",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "5eaf8812360217a8d09a7f8f61df12be7e4d506350206454b6ad31d0a3788581",
+      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
+      "cliModel": "haiku",
+      "argv": [
+        "claude",
+        "-p",
+        "--append-system-prompt-file",
+        "<RUN>/steps/hunter-security.system.md",
+        "--output-format",
+        "json",
+        "--mcp-config",
+        "<RUN>/mcp.json",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "",
+        "--tools",
+        "Read,Grep,Glob,mcp__codegraph__codegraph_explore",
+        "--permission-mode",
+        "bypassPermissions",
+        "--model",
+        "haiku",
+        "--effort",
+        "xhigh",
+        "--exclude-dynamic-system-prompt-sections"
+      ]
+    },
+    {
       "name": "materiality-F001",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -336,7 +373,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "8a248c06591ad68e1facfb41258ed52ea924cc0a8ee65fd1b608595c2c2b9f7a",
+    "routeFingerprint": "c5d22490496c1985ffcc1af28c6d77ecbf07a94ac62c14bd7c25fbdd2e1cf0c4",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -368,6 +405,20 @@
       },
       {
         "stepKey": "hunter-logic",
+        "role": "hunter",
+        "logicalIdentity": "claude:haiku-latest",
+        "routeFingerprint": "2cfba1ffffbaac16153dcfce6e898a1e88263d6e703911fbf3423a3d20d9687c",
+        "effort": null,
+        "route": {
+          "backend": "claude-code",
+          "provider": "anthropic",
+          "modelFamily": "haiku",
+          "modelSnapshot": "haiku"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "hunter-security",
         "role": "hunter",
         "logicalIdentity": "claude:haiku-latest",
         "routeFingerprint": "2cfba1ffffbaac16153dcfce6e898a1e88263d6e703911fbf3423a3d20d9687c",
@@ -497,6 +548,13 @@
     },
     {
       "name": "hunter-resilience",
+      "model": "haiku",
+      "effort": "xhigh",
+      "effort_applied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "hunter-security",
       "model": "haiku",
       "effort": "xhigh",
       "effort_applied": true,

@@ -78,11 +78,11 @@ describe("budgetInput", () => {
   test("an API key with a 0 ceiling writes 0", () => {
     expect(budgetInput(choices({ billing: "api", budgetUsd: 0 }))).toBe("0");
   });
-  test("api writes the chosen ceiling, or the $10 default", () => {
+  test("api writes the chosen ceiling, or the metered default", () => {
     expect(budgetInput(choices({ billing: "api", budgetUsd: 7.5 }))).toBe(
       "7.5",
     );
-    expect(budgetInput(choices({ billing: "api" }))).toBe("10");
+    expect(budgetInput(choices({ billing: "api" }))).toBe("12");
   });
   test("no billing writes nothing", () => {
     expect(budgetInput(choices())).toBeUndefined();
