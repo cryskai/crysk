@@ -712,7 +712,7 @@ describe("budgetUnlimitedNoticeMessage", () => {
     if (message === null) throw new Error("unreachable");
     expect(message).toBe(
       "no budget-usd ceiling was applied: this route has no per-token invoice " +
-        "credential (a Claude subscription or a free route), so a run draws on " +
+        "credential (a Claude, ChatGPT or Antigravity subscription, or a free route), so a run draws on " +
         "quota rather than a per-token invoice and the estimated cost is not a " +
         "dollar figure to gate on. The size gate resolves from the route separately. " +
         "Set `budget-usd: <n>` to impose a ceiling anyway.",
@@ -931,5 +931,28 @@ describe("planCiExcludedSkip", () => {
     });
     expect(plan.summaryMarkdown).toContain("`weird'name.lock`");
     expect(plan.summaryMarkdown).not.toContain("weird`name");
+  });
+});
+
+describe("the unlimited notices name every subscription, not Claude's alone", () => {
+  test("the size-gate notice says subscription route without naming one vendor", () => {
+    const message = sizeGateUnlimitedNoticeMessage({
+      maxChangedLines: 0,
+      maxChangedFiles: 0,
+      defaultedOff: ["lines", "files"],
+    });
+    expect(message).toContain(
+      "no changed-lines or changed-files limit on a subscription or free route",
+    );
+    expect(message).not.toContain("Claude subscription route");
+  });
+
+  test("the budget notice names the Claude, ChatGPT and Antigravity subscriptions", () => {
+    const message = budgetUnlimitedNoticeMessage({
+      source: "unlimited-subscription",
+    } as Parameters<typeof budgetUnlimitedNoticeMessage>[0]);
+    expect(message).toContain(
+      "(a Claude, ChatGPT or Antigravity subscription, or a free route)",
+    );
   });
 });
