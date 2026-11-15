@@ -52,31 +52,66 @@ Now compare rows. A finding exists **only** where two established facts disagree
 For each contradiction, your `proof_refs` must cite **both sides**: the producer fact and the consumer fact,
 each as `path:line`. A finding that cites only one side is not a contradiction, it is a hunch — do not emit it.
 
-### Severity — answer the hypothetical, then stop
+## Finding contract
 
-Severity asks one question and only one: **assume the contradiction is real and the bad value does occur. What
-does the user or the data experience then?** Data loss, corruption, or a broken core flow is `BLOCKER`. Something
-the user watches malfunction — wrong values on screen, a control that silently does nothing, an operation applied to a different target
-than the one chosen — is `CRITICAL`. Degraded-but-working, or latent until some other
-condition also holds, is `WARNING`. Pure hygiene is `SUGGESTION`.
+A finding reports one defect. Write `claim` as three links, in this order:
 
-**Never discount severity by how likely you think the bad value is.** That likelihood is `evidence_class`'s
-entire job (`deterministic` when both sides of the contradiction are proven by code you read; `inferential` when
-one side depends on a path you reasoned about). Discounting twice — once by softening the severity and again by
-marking the evidence weak — is how a real defect becomes an advisory nobody reads. Two worked calibrations:
+1. **Fact** — what the code does, with the lines you read.
+2. **Trigger** — who or what reaches that code, and with what input or state.
+3. **Consequence** — what goes wrong, and who or what observes it.
+
+Say which links you read with a tool and which you are assuming. A claim that proves the fact and only asserts
+the consequence is the most common way a finding turns out to be wrong.
+
+**`severity` starts from the consequence.** Decide it in two steps:
+
+1. If the consequence is irreversible or crosses a security boundary (data lost or corrupted, a change that
+   cannot be rolled back, access to something the caller is not entitled to), it is `BLOCKER` whatever the
+   trigger is, as long as the trigger can happen in the running system: something a user or a caller does, or
+   a failure the system has to expect, such as a dependency erroring or a process dying part-way. A race or a
+   failed write that corrupts data is `BLOCKER`, not `WARNING`.
+2. Otherwise the wrong behaviour can be recovered from, and the trigger separates two levels:
+   - `CRITICAL` — ordinary operation reaches it: a wrong result returned, a crash on normal input, a command
+     or control that does nothing, a documented contract broken.
+   - `WARNING` — it needs a condition the claim names: two requests interleaving, a dependency failing, data
+     in an unusual state.
+
+`SUGGESTION` is for a finding with no wrong behaviour.
+
+How sure you are, how large the change is and how many other findings you have do not move severity. Being
+unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER`
+and `CRITICAL` findings are checked by a second reviewer and can block a merge; a `WARNING` is posted as an
+advisory comment that nothing verifies, so a severe consequence reported as `WARNING` is never checked.
+
+**`evidence_class` is how much of the claim you verified, not how bad it is.**
+
+- `deterministic` — you read every link with a tool: the code, the path that reaches it, and what consumes the
+  wrong result.
+- `inferential` — you read the fact; the trigger or the consequence is reasoned from it.
+- `insufficient` — you could not read something the claim depends on. Say what.
+
+Do not drop a finding because you are unsure. After you have read the code the claim depends on, report it and
+let `evidence_class` say how much you verified.
+
+**`causal_disposition` is how the change relates to the defect.**
+
+- `introduced` — the change adds the defective code.
+- `behavior-activated` — the defective code was already there and the change makes it reachable.
+- `worsened` — the defect was already there and the change makes its consequence larger or more frequent.
+- `pre-existing` — the defect was already there and the change neither adds nor alters it.
+- `base-only` — the defect is only in the version before the change, which removes or replaces it.
+- `unknown` — you could not tell.
+
+Two worked calibrations for this pass:
 
 - A value that renders wrong every single time it is displayed is `CRITICAL`, **even if you are unsure the
   input that produces it ever reaches production**. Users-see-it-break
-  decides the severity; "does it reach production" decides the evidence class.
+  decides the severity. Being unsure whether the input reaches production is not a condition that lowers it:
+  say what you read in the trigger link and let the evidence class carry the doubt.
 - A size read as bytes when its source produced kilobytes is `CRITICAL` if that value feeds anything a human or
   a test actually looks at. Hedging words in your own claim — "would", "plausibly", "could" — are a signal you
-  are reasoning about likelihood, so put that in `evidence_class` and leave the severity alone.
-
-This matters mechanically, not stylistically: `WARNING` and `SUGGESTION` findings are never sent to the refuter
-and can **never block a merge**. A user-visible malfunction tagged `WARNING` is posted as an advisory comment
-that nothing verifies and that cannot block.
-
-You do not filter — a downstream refuter owns precision, and a finding you suppress is simply lost.
+  are reasoning about a link you did not read: say so in that link, set `evidence_class` to match, and leave
+  the severity alone.
 
 ## Out of scope for this slot — do NOT emit these
 
@@ -120,5 +155,5 @@ taxonomy — use **12** for unit/contract mismatches, **1** for stale-derived-va
 lifecycle-dependent domain escapes, **3** for a guard that lets a bad value through. `severity` is
 `BLOCKER|CRITICAL|WARNING|SUGGESTION`. `evidence_class` is `deterministic|inferential|insufficient`.
 `causal_disposition` is `introduced|behavior-activated|worsened|pre-existing|base-only|unknown`. `hunter` is
-always `"reliability"` (this slot's schema name). `dedupe_key` is `<path>:<symbol>:<category>`. `claim` states
-the contradiction in one neutral sentence naming both sides. Do not include `tier` or `refuter_verdict`.
+always `"reliability"` (this slot's schema name). `dedupe_key` is `<path>:<symbol>:<category>`. `claim` follows
+the finding contract; its fact names both sides of the contradiction, neutrally. Do not include `tier` or `refuter_verdict`.
