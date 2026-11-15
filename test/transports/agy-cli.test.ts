@@ -170,7 +170,7 @@ describe("the agy invocation (S6)", () => {
         "name: crysk-step",
         "description: Crysk review step, read-only",
         "inheritCustomizations: false",
-        "inheritMcp: false",
+        "inheritMcp: true",
         "subagent: false",
         "tools: [read_file]",
         "---",
@@ -198,10 +198,6 @@ describe("the agy invocation (S6)", () => {
           "read_url(*)",
           "execute_url(*)",
           "download_url(*)",
-          "search_web(*)",
-          "send_message(*)",
-          "schedule(*)",
-          "generate_image(*)",
         ],
       },
     });
@@ -214,7 +210,7 @@ describe("the agy invocation (S6)", () => {
   test("a step with no agy tool lists read_file and denies it, never an empty list", () => {
     // agy tags `tools` omitempty: an empty list behaves like no list and
     // brings agy's default set (search_web, send_message, ...).
-    for (const tools of [[], ["Grep", "Glob"]]) {
+    for (const tools of [[], ["mcp__codegraph__codegraph_explore"]]) {
       expect(agyAgentFile(tools, "body")).toContain("\ntools: [read_file]\n");
       const settings = agySettings("/w", tools);
       expect(settings.permissions.allow).toEqual([]);
@@ -230,8 +226,21 @@ describe("the agy invocation (S6)", () => {
     expect(reading.trustedWorkspaces).toEqual(["/w"]);
   });
 
-  test("agy's default tools are denied on every step", () => {
-    for (const tools of [[], ["Read"]]) {
+  test("a Grep or Glob step without Read still gets read_file, to read the MCP schemas (L16, L17)", () => {
+    // agy reads each MCP tool's schema with read_file before its first call,
+    // and its deny beats allow (L8), so a denied read_file breaks the search.
+    for (const tools of [["Grep"], ["Glob"], ["Grep", "Glob"]]) {
+      expect(agyAgentFile(tools, "body")).toContain("\ntools: [read_file]\n");
+      const settings = agySettings("/w", tools);
+      expect(settings.permissions.allow).toEqual(["read_file(*)"]);
+      expect(settings.permissions.deny).not.toContain("read_file(*)");
+    }
+  });
+
+  test("only the grants proven to bind are written; the tools: list keeps agy's defaults out (L15)", () => {
+    // search_web(*) and send_message(*) did not bind (L15): the guard against
+    // agy's default tools is the agent's non-empty tools: list.
+    for (const tools of [[], ["Read"], ["Read", "Grep", "Glob"]]) {
       const deny = agySettings("/w", tools).permissions.deny;
       for (const grant of [
         "write_file(*)",
@@ -239,13 +248,18 @@ describe("the agy invocation (S6)", () => {
         "read_url(*)",
         "execute_url(*)",
         "download_url(*)",
+      ]) {
+        expect(deny).toContain(grant);
+      }
+      for (const ignored of [
         "search_web(*)",
         "send_message(*)",
         "schedule(*)",
         "generate_image(*)",
       ]) {
-        expect(deny).toContain(grant);
+        expect(deny).not.toContain(ignored);
       }
+      expect(agyAgentFile(tools, "body")).toMatch(/\ntools: \[read_file\]\n/);
     }
   });
 
@@ -258,12 +272,104 @@ describe("the agy invocation (S6)", () => {
   });
 });
 
+describe("Crysk's search MCP for agy steps (T4b, S5, L15)", () => {
+  const SEARCH = { command: "/opt/bun", args: ["/opt/crysk/src/cli.ts"] };
+
+  function mcpConfigPath(): string {
+    return path.join(home, ".gemini", "config", "mcp_config.json");
+  }
+
+  function searchTransport(): AgyCliTransport {
+    return new AgyCliTransport({ searchServer: SEARCH });
+  }
+
+  test("a step with Grep or Glob gets crysk-search rooted at its cwd and inherits MCP", async () => {
+    for (const tools of [
+      ["Read", "Grep", "Glob"],
+      ["Read", "Grep"],
+      ["Read", "Glob"],
+    ]) {
+      const outcome = await run("success", { tools }, searchTransport());
+      expect(outcome.completion).toBe("success");
+      expect(JSON.parse(readFileSync(mcpConfigPath(), "utf8"))).toEqual({
+        mcpServers: {
+          "crysk-search": {
+            command: "/opt/bun",
+            args: [
+              "--no-env-file",
+              "--config=/dev/null",
+              "/opt/crysk/src/cli.ts",
+              "mcp-search",
+              "--root",
+              cwd,
+            ],
+          },
+        },
+      });
+      expect(lstatSync(mcpConfigPath()).mode & 0o777).toBe(0o600);
+      const agent = readFileSync(agentPath(), "utf8");
+      expect(agent).toContain("\ninheritMcp: true\n");
+      expect(agent).toContain("\ntools: [read_file]\n");
+    }
+  });
+
+  test("a step without Grep or Glob gets no MCP server and inherits none", async () => {
+    for (const tools of [["Read"], [], ["mcp__codegraph__codegraph_explore"]]) {
+      await run("success", { tools }, searchTransport());
+      expect(JSON.parse(readFileSync(mcpConfigPath(), "utf8"))).toEqual({
+        mcpServers: {},
+      });
+      expect(readFileSync(agentPath(), "utf8")).toContain(
+        "\ninheritMcp: false\n",
+      );
+    }
+  });
+
+  test("each attempt rewrites the file, so a search step never leaks into the next", async () => {
+    await run("success", { tools: ["Read", "Grep"] }, searchTransport());
+    await run("success", { tools: ["Read"] }, searchTransport());
+    expect(JSON.parse(readFileSync(mcpConfigPath(), "utf8"))).toEqual({
+      mcpServers: {},
+    });
+  });
+
+  test("a symlinked mcp_config.json refuses the step before spawn", async () => {
+    const target = path.join(root, "elsewhere.json");
+    writeFileSync(target, "{}");
+    symlinkSync(target, mcpConfigPath());
+    const outcome = await run("success", {}, searchTransport());
+    expect(outcome.completion).toBe("failed");
+    expect(outcome.stderrTail).toContain("is a symlink");
+    expect(recorded("argv")).toBeUndefined();
+    expect(readFileSync(target, "utf8")).toBe("{}");
+  });
+
+  test("by default the server is this engine re-invoking itself", async () => {
+    await run("success", { tools: ["Read", "Grep"] });
+    const server = JSON.parse(readFileSync(mcpConfigPath(), "utf8")).mcpServers[
+      "crysk-search"
+    ];
+    expect(server.command).toBe(process.execPath);
+    expect(server.args.slice(-3)).toEqual(["mcp-search", "--root", cwd]);
+  });
+});
+
 describe("the stream-json result (S6)", () => {
   test("agy's nested step_update events count each finished tool step once", async () => {
     const outcome = await run("real-steps");
     expect(outcome.completion).toBe("success");
     // step_index 2 reported DONE twice, step_index 4 once: two tool steps.
     expect(outcome.toolInvocations).toBe(2);
+  });
+
+  test("agy's reads of the MCP tool schemas are not tool calls; the MCP calls are (L16, L17)", async () => {
+    const outcome = await run("mcp-steps");
+    expect(outcome.completion).toBe("success");
+    // Counted: two call_mcp_tool steps, the read of a repository file, a read
+    // in a sibling of the schema directory, and a read whose path only
+    // passes through it. Not counted: the two schema reads (one reported
+    // DONE twice).
+    expect(outcome.toolInvocations).toBe(5);
   });
 
   test("final text, tool count and usage come from the events", async () => {

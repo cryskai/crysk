@@ -16,6 +16,9 @@ case "$FAKE_AGY_SCENARIO" in
   success) cat "$dir/success.ndjson"; exit 0 ;;
   no-tools) cat "$dir/no-tools.ndjson"; exit 0 ;;
   real-steps) cat "$dir/real-steps.ndjson"; exit 0 ;;
+  # The step_update shape of a run with crysk-search (L15, L16); __HOME__ is
+  # the step's projected home, where agy writes each MCP tool's schema.
+  mcp-steps) sed "s#__HOME__#$HOME#g" "$dir/mcp-steps.ndjson"; exit 0 ;;
   print-timeout-agy-error)
     cat "$dir/print-timeout.ndjson"
     echo 'AGY_ERROR: {"short_error":"print timeout after 10m0s with the turn still in progress; the response is partial"}' >&2

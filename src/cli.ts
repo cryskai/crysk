@@ -26,6 +26,7 @@ import { configCommand } from "#commands/config";
 import { doctorCommand } from "#commands/doctor";
 import { init } from "#commands/init";
 import { mcpCommand } from "#commands/mcp";
+import { MCP_SEARCH_COMMAND, mcpSearchCommand } from "#commands/mcp-search";
 import { menuCommand } from "#commands/menu";
 import { postCommand } from "#commands/post";
 import { skillsInstallCommand } from "#commands/skills";
@@ -141,6 +142,11 @@ import { isMachineOnboarded, runWizard } from "./wizard";
 // internal catches below write `status=error` without spawning a subprocess
 // and guessing at its exit code.
 export async function main(argv: string[]): Promise<number> {
+  // T4b: the agy search MCP owns its arguments and stdout (JSON-RPC only), so
+  // it is routed before parseArgs and the help text, which never lists it.
+  if (argv[0] === MCP_SEARCH_COMMAND) {
+    return await mcpSearchCommand(argv.slice(1));
+  }
   // Bare zero-argument entry
   if (argv.length === 0) {
     if (readBrandEnv(process.env, "NO_TUI") !== undefined) {

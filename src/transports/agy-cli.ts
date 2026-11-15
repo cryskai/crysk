@@ -4,10 +4,12 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { type SelfInvocation, selfInvocation } from "../assets";
 import type {
   AntigravityFailureCredential,
   AsyncEventSink,
@@ -58,13 +60,21 @@ import {
 //    `read_file` aborts on a name conflict. `#`/`##` headings in the body do
 //    not truncate it.
 //  - `--settings` deny rules bind: `write_file(*)`, `command(*)` and the URL
-//    grants are refused even under `toolPermission: always-proceed`. That deny
-//    list, not the tool schema, is the hard guarantee.
+//    grants are refused even under `toolPermission: always-proceed`. Grants
+//    for agy's default tools (`search_web(*)`, `send_message(*)`) do NOT bind
+//    and an unknown grant loads silently (L15): the agent's non-empty
+//    `tools:` list is what keeps those tools out.
+//  - MCP servers come only from `$HOME/.gemini/config/mcp_config.json` and
+//    only with `inheritMcp: true`; `mcp(...)` grants neither allow nor deny
+//    (L15). So Crysk's own read-only search server (`crysk mcp-search`,
+//    src/search/) is the one server a step can get, and that server's
+//    confinement is the only gate on what it returns.
 //  - stream-json: one `step_update` per tool step (`step_type: "tool"`,
 //    `state` ACTIVE then DONE), then `{"event":"result","result":{...}}` with
 //    `status` SUCCESS/ERROR, `response`, `usage`, `finished_reason` and
 //    `error`. `num_turns` counts user turns and is always 1, so tools are
-//    counted from the DONE tool steps.
+//    counted from the DONE tool steps, less agy's own reads of the MCP tool
+//    schemas (L16, L17; StreamState).
 //  - Exit codes: 3 for a model or agent error and a print timeout (with an
 //    `AGY_ERROR: {...}` line on stderr), 1 for a failed login or an unknown
 //    agent, 2 for a flag error.
@@ -92,10 +102,57 @@ const NOT_A_PROJECTION = new Set([
   "production-binding",
 ]);
 
-// Crysk's tool names mapped to agy's. Only `read_file` exists for an agy step
-// today; Grep/Glob arrive with Crysk's read-only search MCP (T4b), and
-// codegraph is never used for agy (L7, L10).
-const AGY_TOOL_OF: Readonly<Record<string, string>> = { Read: "read_file" };
+// Crysk's tool names mapped to agy's built-in tools. Grep and Glob are served
+// by Crysk's search MCP (agySearchServer below), and codegraph is never used
+// for agy (L7, L10). Grep and Glob ALSO map to read_file: agy reads each MCP
+// tool's schema with read_file (`$HOME/.gemini/antigravity-cli/mcp/<server>/
+// <tool>.json`) before its first call (L15-L17), and its deny beats allow
+// (L8), so a path-scoped allow beside the tool-less `read_file(*)` deny cannot
+// work. That adds no reach: grep already returns the file's lines.
+const AGY_TOOL_OF: Readonly<Record<string, string>> = {
+  Read: "read_file",
+  Grep: "read_file",
+  Glob: "read_file",
+};
+
+// The Crysk tools the search MCP stands in for (T4b).
+const SEARCH_TOOL_NAMES: ReadonlySet<string> = new Set(["Grep", "Glob"]);
+
+export const AGY_SEARCH_SERVER = "crysk-search";
+
+export function agyUsesSearch(tools: readonly string[]): boolean {
+  return tools.some((tool) => SEARCH_TOOL_NAMES.has(tool));
+}
+
+// How agy starts the search server: this engine re-invoking itself
+// (assets.ts selfInvocation). agy starts it in the reviewed repository, and
+// bun would run that repository's bunfig.toml preload and load its .env from
+// the cwd (measured), so a script run gets both turned off. The release
+// binary is built with --no-compile-autoload-bunfig and
+// --no-compile-autoload-dotenv (release.yml) and takes no bun flags.
+export function agySearchServer(
+  self: SelfInvocation,
+  root: string,
+): { readonly command: string; readonly args: readonly string[] } {
+  const bunFlags =
+    self.args.length === 0 ? [] : ["--no-env-file", "--config=/dev/null"];
+  return {
+    command: self.command,
+    args: [...bunFlags, ...self.args, "mcp-search", "--root", root],
+  };
+}
+
+// The whole of the step's mcp_config.json: the search server for a step that
+// asked for Grep or Glob, nothing otherwise.
+export function agyMcpConfig(
+  tools: readonly string[],
+  cwd: string,
+  self: SelfInvocation,
+): { readonly mcpServers: Record<string, unknown> } {
+  return agyUsesSearch(tools)
+    ? { mcpServers: { [AGY_SEARCH_SERVER]: agySearchServer(self, cwd) } }
+    : { mcpServers: {} };
+}
 
 export function agyAgentFile(
   tools: readonly string[],
@@ -110,7 +167,7 @@ export function agyAgentFile(
     `name: ${AGY_AGENT_NAME}`,
     "description: Crysk review step, read-only",
     "inheritCustomizations: false",
-    "inheritMcp: false",
+    `inheritMcp: ${agyUsesSearch(tools)}`,
     "subagent: false",
     `tools: [${(mapped.length === 0 ? ["read_file"] : mapped).join(", ")}]`,
     "---",
@@ -142,18 +199,16 @@ function agyTools(tools: readonly string[]): string[] {
   ];
 }
 
-// Denied on every step: writes, shell, URLs (proven to bind, L6/L8) and the
-// tools agy gives an agent by default (L8), a second layer behind `tools:`.
+// Denied on every step: writes, shell and URLs, the grants proven to bind
+// (L6, L8). agy's default tools (search_web, send_message, ...) are kept out by
+// the agent's non-empty `tools:` list, not here: their grants do not bind
+// (L15), and listing them would only look like a guard.
 const AGY_DENIED_GRANTS = [
   "write_file(*)",
   "command(*)",
   "read_url(*)",
   "execute_url(*)",
   "download_url(*)",
-  "search_web(*)",
-  "send_message(*)",
-  "schedule(*)",
-  "generate_image(*)",
 ] as const;
 
 // No `enableTerminalSandbox`: shell is denied outright (L8, L9). A step with
@@ -180,6 +235,10 @@ export function agySettings(
 
 function agentFilePath(home: string): string {
   return path.join(home, ".gemini", "config", "agents", `${AGY_AGENT_NAME}.md`);
+}
+
+function mcpConfigFilePath(home: string): string {
+  return path.join(home, ".gemini", "config", "mcp_config.json");
 }
 
 function settingsFilePath(home: string): string {
@@ -348,6 +407,21 @@ function stepField(event: JsonObject, key: string): unknown {
   return undefined;
 }
 
+// The `Path` of a read_file step, from the shape recorded in L15/L16:
+// `step_update.tool_info.parameters.Path`.
+function readFilePath(event: JsonObject): string | undefined {
+  const info = stepField(event, "tool_info");
+  if (!isObject(info) || info.name !== "read_file") return undefined;
+  const parameters = info.parameters;
+  if (!isObject(parameters)) return undefined;
+  return typeof parameters.Path === "string" ? parameters.Path : undefined;
+}
+
+// Where agy writes each MCP tool's schema before reading it (L15).
+export function agyMcpSchemaDir(home: string): string {
+  return path.join(home, ".gemini", "antigravity-cli", "mcp");
+}
+
 class StreamState {
   result: AgyResult | undefined;
   private doneTools = 0;
@@ -355,6 +429,33 @@ class StreamState {
   // A step_update whose step_type or state is nowhere it looks: its tool
   // calls cannot be counted, so the count is unknown rather than short.
   private unreadableSteps = false;
+  private readonly schemaDirs: readonly string[];
+
+  // `home` is the step's projected home: agy's schema reads land under it.
+  // agy may report it as given or canonicalised (macOS /var vs /private/var),
+  // so both spellings are accepted.
+  constructor(home: string) {
+    const homes = [path.resolve(home)];
+    try {
+      homes.push(realpathSync(home));
+    } catch {
+      // A missing home is refused before spawn; nothing to add.
+    }
+    this.schemaDirs = [
+      ...new Set(homes.map((h) => `${agyMcpSchemaDir(h)}${path.sep}`)),
+    ];
+  }
+
+  // agy reads an MCP tool's schema with read_file before the tool's first
+  // call (L16, L17). That read is agy's plumbing, not the model using a tool,
+  // so it is not counted; only a positive match on the schema directory is
+  // dropped, and the call_mcp_tool steps count.
+  private isSchemaRead(event: JsonObject): boolean {
+    const read = readFilePath(event);
+    if (read === undefined) return false;
+    const resolved = path.resolve(read);
+    return this.schemaDirs.some((dir) => resolved.startsWith(dir));
+  }
 
   consume(line: string): void {
     const trimmed = line.trim();
@@ -379,6 +480,7 @@ class StreamState {
       return;
     }
     if (stepType !== "tool" || stepState !== "DONE") return;
+    if (this.isSchemaRead(event)) return;
     // agy 1.5.7 numbers steps with `step_index` (L6); `step_id` is kept for
     // other shapes. A step reported DONE twice is one tool call.
     const id = stepField(event, "step_index") ?? stepField(event, "step_id");
@@ -760,6 +862,9 @@ export interface AgyCliTransportOptions {
   // spawned from `request.isolation.verifiedBinaryPath`, the harness-verified
   // copy, never from this path.
   readonly configuredBinaryPath?: string;
+  // How agy starts Crysk's search MCP; defaults to this engine re-invoking
+  // itself (assets.ts selfInvocation).
+  readonly searchServer?: SelfInvocation;
 }
 
 export class AgyCliTransport implements ProviderTransport {
@@ -785,6 +890,7 @@ export class AgyCliTransport implements ProviderTransport {
     path: string,
   ) => PromptFileStatus | undefined;
   private readonly promptHashFn: (path: string) => string | Promise<string>;
+  private readonly searchServer: SelfInvocation;
 
   constructor(options: AgyCliTransportOptions = {}) {
     this.spawnFn = options.spawnFn ?? Bun.spawn;
@@ -796,6 +902,7 @@ export class AgyCliTransport implements ProviderTransport {
     this.promptLstatFn = options.promptLstatFn ?? systemPromptStatus;
     this.promptHashFn = options.promptHashFn ?? hashPromptFile;
     this.configuredBinaryPath = options.configuredBinaryPath;
+    this.searchServer = options.searchServer ?? selfInvocation();
   }
 
   // Static: built before any route resolves and without running agy, so a
@@ -827,12 +934,6 @@ export class AgyCliTransport implements ProviderTransport {
           code: "bounded_events_sink_missing",
           message:
             "agy's stream-json events are read for the tool count and the final result, not pushed to the event sink; usage arrives as a final snapshot",
-          blocking: false,
-        },
-        {
-          code: "agy_search_tools_unavailable",
-          message:
-            "agy steps read files with read_file only; Grep and Glob arrive with Crysk's read-only search MCP",
           blocking: false,
         },
       ],
@@ -898,6 +999,16 @@ export class AgyCliTransport implements ProviderTransport {
       writeOwnFile(
         settingsPath,
         `${JSON.stringify(agySettings(request.cwd, request.tools), null, 2)}\n`,
+      ) ??
+      // Every attempt, both ways: the broker's empty file is the default, and
+      // an earlier step's server must not carry over.
+      writeOwnFile(
+        mcpConfigFilePath(home),
+        `${JSON.stringify(
+          agyMcpConfig(request.tools, request.cwd, this.searchServer),
+          null,
+          2,
+        )}\n`,
       );
     if (writeDenial !== undefined) return denied(start, writeDenial);
 
@@ -971,7 +1082,7 @@ export class AgyCliTransport implements ProviderTransport {
         provenPgid = pgid;
       }
 
-      const state = new StreamState();
+      const state = new StreamState(home);
       const stdoutPending = readLines(
         proc.stdout as ReadableStream<Uint8Array>,
         this.maxStdoutBytes,

@@ -20,12 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reviews run on `agy:` models.** When `agy` is on PATH and an Antigravity login exists (the CI record of
   `CRYSK_ANTIGRAVITY_OAUTH`, or locally your own agy login), each step runs `agy` with the prompt on stdin and
   `--output-format stream-json`, as a `crysk-step` agent that inherits none of the repository's `AGENTS.md`,
-  `GEMINI.md` or `.agents/` and reads files with `read_file` only; its settings deny file writes, shell
+  `GEMINI.md` or `.agents/` and reads files with `read_file`; its settings deny file writes, shell
   commands and URL fetches. The tool count comes from agy's finished tool steps, usage from its result, and
   the cost is the subscription's ($0 cash). A rejected login, a spent quota or an unusable record names
   `CRYSK_ANTIGRAVITY_OAUTH` and says to connect Antigravity again in the Crysk dashboard. The action does not
-  install `agy` yet; that arrives in a later release. Grep and Glob for agy steps arrive with Crysk's
-  read-only search tools.
+  install `agy` yet; that arrives in a later release.
+- **Grep and Glob for agy steps, through Crysk's read-only search MCP.** An agy step whose tools include
+  `Grep` or `Glob` gets one MCP server, `crysk-search` (`crysk mcp-search --root <repo>`, an internal
+  command), with `grep`, `glob` and `list`. It is read-only and in-process (no shell, no network, no
+  writes), confined to the repository by `realpath` (no `..`, no escaping symlinks, never `.git`), skips
+  what `.gitignore` ignores (root and nested files, like ripgrep; a path named explicitly is still
+  searched), binary files and files over 1 MiB, runs each `grep` regex in a worker stopped after 10 s, and
+  caps matches, paths, line length and response size. Such a step also gets `read_file`, which agy needs
+  to read the MCP tool schemas; those schema reads are not counted as tool calls. Other agy steps get no
+  MCP server, and Claude and OpenCode steps are unchanged. See `docs/mcp-search.md`.
 - **The Antigravity credential projection and admission check.** Each agy step runs in its own 0700 home
   holding only agy's token file, built from the CI record of `CRYSK_ANTIGRAVITY_OAUTH` or, locally, the
   developer's own agy login, plus an empty MCP config; it is deleted after the step. An agy plan with no
