@@ -9,6 +9,7 @@ import path from "node:path";
 import {
   caseProblems,
   gradeVerdict,
+  unmatchedCases,
 } from "../../benchmarks/verifier-exam/exam";
 
 describe("gradeVerdict", () => {
@@ -92,5 +93,17 @@ describe("caseProblems", () => {
     } finally {
       rmSync(path.dirname(dir), { recursive: true, force: true });
     }
+  });
+});
+
+describe("unmatchedCases", () => {
+  test("names every requested id no case answers to, also among ids that match", () => {
+    expect(unmatchedCases(["a", "typo"], ["a", "b"])).toEqual(["typo"]);
+    expect(unmatchedCases(["typo"], [])).toEqual(["typo"]);
+  });
+
+  test("is empty when every requested id matched, or none was requested", () => {
+    expect(unmatchedCases(["a", "b"], ["a", "b", "c"])).toEqual([]);
+    expect(unmatchedCases([], ["a"])).toEqual([]);
   });
 });

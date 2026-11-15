@@ -113,6 +113,16 @@ export function caseProblems(raw: unknown, dir: string): string[] {
   return problems;
 }
 
+// The requested ids no case answers to. One mistyped id among several must
+// stop the run: dropped in silence, the others would run and read as the
+// whole request.
+export function unmatchedCases(
+  requested: readonly string[],
+  found: readonly string[],
+): string[] {
+  return requested.filter((id) => !found.includes(id));
+}
+
 async function loadCases(
   bank: string,
   only: string[],
@@ -314,9 +324,17 @@ async function main(argv: string[]): Promise<number> {
   }
   const only = (flag(argv, "--case") ?? "").split(",").filter(Boolean);
   const cases = await loadCases(path.resolve(bank), only);
-  // A mistyped --case must not read as a clean run.
+  // A mistyped --case must not read as a clean run, alone or among others.
+  const unmatched = unmatchedCases(
+    only,
+    cases.map((c) => c.id),
+  );
+  if (unmatched.length > 0) {
+    console.error(`no such case: ${unmatched.join(", ")}`);
+    return 1;
+  }
   if (cases.length === 0) {
-    console.error("no case matched");
+    console.error("the bank holds no case");
     return 1;
   }
   if (command === "check") {
