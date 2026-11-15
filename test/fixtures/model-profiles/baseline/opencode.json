@@ -28,7 +28,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "5160ce8b456ce7ee9dcb820115e302ac5154ccd5846957386dc9a8f7284ca91b",
+      "systemPromptSha256": "01d1fb9422763170e9fd3e7086e6c8c6b53afaa592805f65d20d3fbe643fbf52",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
@@ -44,7 +44,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "79dc384763dba7addf62c45cb7e121f353f70f42da6f8375c5225a7ea3db3d4a",
+      "systemPromptSha256": "6730ac620d0d9774fa9d5a42c52347e75e0a75bc1629c7ffcb823f50c56679c1",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
@@ -60,7 +60,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "252924f711cbf5e7f3dfa24145f677d796a1a26ebd55b2b57362d19a94034fe3",
+      "systemPromptSha256": "c8ac7030ad16eca72f33b1ed4de4972f03180c2ecf46a501f78a9539877b9dcb",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
@@ -76,7 +76,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "96fd60fb80fb375f227b93e468939a8194870d386aa090d0e56c4cd78a3bdd33",
+      "systemPromptSha256": "d74cc3d3183bd5c58dedaebcff3c1e92a0c734aca306c20165437891447bc55f",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
