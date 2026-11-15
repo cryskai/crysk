@@ -10,8 +10,8 @@ findings on real pull requests (that is the store).
 
 ## Status: the machinery works, the bank does not discriminate yet
 
-As of 2026-11-15 the pass rate of this exam is **not a quality metric**. On 20 single runs the logic hunter
-found every planted defect (15 of 15). An exam everything passes cannot tell a better prompt from a worse
+As of 2026-11-15 the pass rate of this exam is **not a quality metric**. On 14 single runs, one per case, the
+logic hunter found every planted defect (15 of 15). An exam everything passes cannot tell a better prompt from a worse
 one. What did move: the severity a found defect is reported at (blocking defects rated blocking in 8 of 8
 plain cases, 3 of 5 when the same defect sits inside a larger real commit), and a correct look-alike reported
 as a defect in 2 of 3 runs of the first case. Only the logic hunter has been run, and no change larger than
