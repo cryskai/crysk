@@ -32,6 +32,8 @@ import {
   openCodeProvidersOfModels,
   openCodeRoutesBillMetered,
 } from "#ci/setup";
+import { localReviewSpec } from "#review/preflight";
+import { estimateCost } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
 
 // cryskai/platform#12 item 5: the OpenCode half of the metered ceiling reads
@@ -632,7 +634,7 @@ describe("resolveCiBudgetCeiling", () => {
 
   // 0 and negatives are how an operator DISABLES the ceiling on a metered
   // route (evaluateBudgetGate's `<= 0` convention). Swallowing them into the
-  // default-metered branch would silently reimpose the $10 they just removed.
+  // default-metered branch would silently reimpose the default they just removed.
   test("an explicit 0 takes the operator branch, never the metered default", () => {
     expect(
       resolveCiBudgetCeiling({ configured: 0, billingMode: "metered" }),
@@ -643,6 +645,35 @@ describe("resolveCiBudgetCeiling", () => {
     expect(
       resolveCiBudgetCeiling({ configured: -1, billingMode: "metered" }),
     ).toEqual({ budgetUsd: -1, source: "operator" });
+  });
+
+  // The gate compares the estimate's upper bound with this ceiling, and the
+  // estimate prices one seat per hunter. A hunter added to the default set
+  // without this ceiling moving skips every pull request on a metered route:
+  // that is what the security hunter did against a ceiling of 10. The seats
+  // are read from the spec the product runs, so the next hunter added turns
+  // this red instead of turning reviews off.
+  test("the metered default admits a small change reviewed by the default hunter set", () => {
+    const alwaysOnHunters = localReviewSpec({}).agents.filter(
+      (agent) => agent.role === "hunter" && agent.trigger === undefined,
+    ).length;
+    expect(alwaysOnHunters).toBeGreaterThan(0);
+    for (const diffStat of [
+      { files: 2, insertions: 10, deletions: 2 },
+      { files: 10, insertions: 250, deletions: 50 },
+    ]) {
+      const { high } = estimateCost(
+        diffStat,
+        alwaysOnHunters,
+        true,
+        false,
+        0,
+        true,
+      );
+      expect(evaluateBudgetGate(high, CI_DEFAULT_METERED_BUDGET_USD)).toEqual({
+        allowed: true,
+      });
+    }
   });
 });
 

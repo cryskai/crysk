@@ -191,7 +191,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
         "--scout-model",
         "opencode:deepseek/deepseek-v4-flash",
       ]),
-    ).toBe(10);
+    ).toBe(12);
   });
 
   test("--model is read the way routing reads it, surrounding spaces included", async () => {
@@ -200,7 +200,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
         "--model",
         " opencode:deepseek/deepseek-v4-flash",
       ]),
-    ).toBe(10);
+    ).toBe(12);
   });
 
   test("an auth file no resolved route uses leaves a Claude run unmetered", async () => {
@@ -250,10 +250,10 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     expect(step2.ciSizeLimits?.defaultedOff).toEqual(["lines"]);
   });
 
-  test("S5: both Claude credentials, credentials.claude [api_key, subscription]: the key keeps the $10 ceiling", async () => {
+  test("S5: both Claude credentials, credentials.claude [api_key, subscription]: the key keeps the default ceiling", async () => {
     const step2 = await step2With(["api_key", "subscription"]);
     expect(step2.ciBudgetCeiling).toEqual({
-      budgetUsd: 10,
+      budgetUsd: 12,
       source: "default-metered",
     });
     expect(step2.ciSizeLimits?.defaultedOff).toEqual([]);

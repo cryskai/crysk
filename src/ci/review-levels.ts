@@ -109,7 +109,7 @@ export interface CiSetupChoices {
   // Undefined: nobody said how the review is paid, so no ceiling is written
   // and the action resolves it from the route's billing mode.
   billing?: Billing;
-  // Only with billing "api"; undefined there means the $10 default.
+  // Only with billing "api"; undefined there means the metered default.
   budgetUsd?: number;
   // Always written. Unlike the budget, a size threshold matters on any route:
   // left unset, a subscription route resolves to NO limit, so a huge PR would
@@ -219,7 +219,7 @@ export function defaultChoices(): CiSetupChoices {
 // present, default subscription then api_key; gates.ts, CiBillingMode), so a
 // subscription run already gets no ceiling. An explicit 0 would print the
 // disabled-ceiling warning on every run and, worse, stay an operator override if
-// the run later moves to an API key, defeating the $10 fail-safe a metered run
+// the run later moves to an API key, defeating the default ceiling a metered run
 // brings back.
 export function budgetInput(choices: CiSetupChoices): string | undefined {
   if (choices.billing === "api") {
@@ -302,8 +302,8 @@ export function renderChoicesSummary(
     `  budget           ${
       budget === undefined
         ? choices.billing === "subscription"
-          ? "not set: no ceiling while the review runs on CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model (a subscription spends quota, not dollars); CRYSK_CLAUDE_API_KEY chosen in its place, or an OpenCode model with its CRYSK_OPENCODE_* secret, brings back the $10 ceiling"
-          : "not set: resolved from how the review is paid (no ceiling on a subscription, $10 on an API key)"
+          ? `not set: no ceiling while the review runs on CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model (a subscription spends quota, not dollars); CRYSK_CLAUDE_API_KEY chosen in its place, or an OpenCode model with its CRYSK_OPENCODE_* secret, brings back the $${CI_DEFAULT_METERED_BUDGET_USD} ceiling`
+          : `not set: resolved from how the review is paid (no ceiling on a subscription, $${CI_DEFAULT_METERED_BUDGET_USD} on an API key)`
         : Number(budget) <= 0
           ? `none (budget-usd: ${budget}; 0 or less disables the ceiling)`
           : `$${budget} per review (budget-usd)`

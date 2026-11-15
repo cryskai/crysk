@@ -446,7 +446,7 @@ The Claude child sees only the chosen credential, under the CLI's own name: `CLA
 subscription, `ANTHROPIC_API_KEY` for the key. The other one, and `ANTHROPIC_AUTH_TOKEN`, are removed from its
 environment. `ANTHROPIC_AUTH_TOKEN` is not a credential Crysk chooses: put an API key in `ANTHROPIC_API_KEY`
 instead. How a run bills follows the choice: on the API key it is metered and the CI budget ceiling applies
-(`$10` unless `budget-usd` says otherwise); on the subscription it draws on quota with no ceiling.
+(`$12` unless `budget-usd` says otherwise); on the subscription it draws on quota with no ceiling.
 
 On macOS with `/usr/bin/security` present, a run on the subscription projects the Keychain OAuth record into
 the child. A run on the API key attaches no Keychain broker at all. If the `Claude Code-credentials` item is
