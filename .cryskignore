@@ -24,10 +24,3 @@ benchmarks/*/*.md
 benchmarks/*/corpora/*.md
 docs/history/*.md
 ROADMAP.md
-
-# The hunter exam's case data: other projects' patches, pinned commits, answer keys and proof
-# records under benchmarks/hunter-exam/cases/. The one directory rule in this file, on purpose:
-# nothing there runs in this repository, a hunter reviewing another project's reverted fix would
-# be reviewing the planted defect itself, and a batch of cases is thousands of lines. The exam's
-# own check (`exam.ts check`) is what guards those files. The code that reads them stays in scope.
-benchmarks/hunter-exam/cases/
