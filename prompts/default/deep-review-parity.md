@@ -83,21 +83,24 @@ A finding reports one defect. Write `claim` as three links, in this order:
 Say which links you read with a tool and which you are assuming. A claim that proves the fact and only asserts
 the consequence is the most common way a finding turns out to be wrong.
 
-**`severity` is the consequence, taken as if the trigger happens.** Decide it from the third link alone:
+**`severity` starts from the consequence.** Decide it in two steps:
 
-- `BLOCKER` — the consequence is irreversible or crosses a security boundary: data lost or corrupted, a change
-  that cannot be rolled back, access to something the caller is not entitled to. It stays `BLOCKER` when the
-  trigger is uncommon, as long as it is something a user or a caller can do.
-- `CRITICAL` — wrong behaviour on a path that runs in ordinary operation: a wrong result returned, a crash on
-  normal input, a command or control that does nothing, a documented contract broken.
-- `WARNING` — wrong behaviour that can be recovered from and that needs a condition the claim names: two
-  requests interleaving, a dependency failing, data in an unusual state.
-- `SUGGESTION` — no wrong behaviour.
+1. If the consequence is irreversible or crosses a security boundary (data lost or corrupted, a change that
+   cannot be rolled back, access to something the caller is not entitled to), it is `BLOCKER` whatever the
+   trigger is, as long as the trigger is something a user or a caller can do. A race that corrupts data is
+   `BLOCKER`, not `WARNING`.
+2. Otherwise the wrong behaviour can be recovered from, and the trigger separates two levels:
+   - `CRITICAL` — ordinary operation reaches it: a wrong result returned, a crash on normal input, a command
+     or control that does nothing, a documented contract broken.
+   - `WARNING` — it needs a condition the claim names: two requests interleaving, a dependency failing, data
+     in an unusual state.
 
-How likely the trigger is, how sure you are, how large the change is and how many other findings you have do
-not move severity. Likelihood belongs in the trigger link and certainty in `evidence_class`. Only `BLOCKER` and
-`CRITICAL` findings are checked by a second reviewer and can block a merge; a `WARNING` is posted as an advisory
-comment that nothing verifies, so a severe consequence reported as `WARNING` is never checked.
+`SUGGESTION` is for a finding with no wrong behaviour.
+
+How sure you are, how large the change is and how many other findings you have do not move severity. Certainty
+belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
+block a merge; a `WARNING` is posted as an advisory comment that nothing verifies, so a severe consequence
+reported as `WARNING` is never checked.
 
 **`evidence_class` is how much of the claim you verified, not how bad it is.**
 

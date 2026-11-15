@@ -38,11 +38,10 @@ describe("the bundled hunters' finding contract", () => {
 
   test("defines every value the engine's tier rule reads", async () => {
     const contract = await contractOf(HUNTERS[0] as string);
+    for (const severity of ["BLOCKER", "CRITICAL", "WARNING", "SUGGESTION"]) {
+      expect(contract).toContain(`\`${severity}\``);
+    }
     for (const value of [
-      "BLOCKER",
-      "CRITICAL",
-      "WARNING",
-      "SUGGESTION",
       "deterministic",
       "inferential",
       "insufficient",
@@ -58,6 +57,24 @@ describe("the bundled hunters' finding contract", () => {
     expect(contract).toContain("**Fact**");
     expect(contract).toContain("**Trigger**");
     expect(contract).toContain("**Consequence**");
+  });
+
+  // The first version said severity came "from the third link alone" and then
+  // separated two levels by the trigger; the review caught it. The rule has
+  // two steps, and nothing else in a hunter may give the claim another shape
+  // or send a defect the change activated to `pre-existing`.
+  test("no hunter contradicts the contract outside it", async () => {
+    for (const file of HUNTERS) {
+      const text = await readFile(path.join(DIR, file), "utf8");
+      for (const gone of [
+        "from the third link alone",
+        "in one neutral sentence",
+        "put that in `evidence_class`",
+        "use `pre-existing` when the defect is",
+      ]) {
+        expect(text).not.toContain(gone);
+      }
+    }
   });
 
   // The wording the contract replaced: a ladder written for a user interface,
