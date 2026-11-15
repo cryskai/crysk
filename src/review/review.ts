@@ -392,16 +392,16 @@ export async function review(options: CliOptions): Promise<number> {
   // same signal and refuses to start another attempt. Two controllers would
   // leave the ceiling unable to stop the steps it is waiting on.
   const ceilingController = new AbortController();
-  // Local mode has no PR, so the materiality judge reads the reviewed head's
-  // commit subject as the title (S9). Only asked for when the gate is on, so
-  // a run with it off spawns exactly the processes it always did. A failed
-  // read leaves it absent and the pipeline renders its fallback.
+  // Local mode has no PR, so the reviewed head's commit subject stands in as
+  // the title: the hunters read it as the change's stated intent (S10) and
+  // the materiality judge as its title (S9). Local mode has no description.
+  // Asked for on every run, so the hunters' request does not depend on the
+  // judge being on. A failed read leaves it absent: the hunters get no intent
+  // section and the judge's pipeline renders its fallback.
   let prTitle: string | undefined;
-  if (resolveMaterialityGate(config)) {
-    const subject = await git(repoRoot, ["log", "-1", "--format=%s", headSha]);
-    if (subject.ok && subject.stdout.trim() !== "") {
-      prTitle = subject.stdout.trim();
-    }
+  const subject = await git(repoRoot, ["log", "-1", "--format=%s", headSha]);
+  if (subject.ok && subject.stdout.trim() !== "") {
+    prTitle = subject.stdout.trim();
   }
   let productionRuntime: ProductionRuntime | undefined;
   try {
