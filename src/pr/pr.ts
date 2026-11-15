@@ -186,7 +186,7 @@ async function gh(
 // exactly these fields; change them together.
 export const PR_VIEW_JSON_FIELDS =
   "number,title,state,headRefOid,baseRefName,baseRefOid,mergeCommit," +
-  "additions,deletions,changedFiles";
+  "additions,deletions,changedFiles,body";
 
 export async function ghPrView(
   operatorRoot: string,

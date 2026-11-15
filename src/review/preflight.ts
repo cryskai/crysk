@@ -2041,6 +2041,16 @@ const RETIRED_AGENT_HINTS: Record<string, string> = {
     "CRYSK_EXTRA_HUNTERS=lifecycle:deep-review-lifecycle.md",
 };
 
+// The other direction: a hunter that JOINED the default spec. A custom set
+// copied from an older default lacks its file, and "the dir does not have it"
+// alone reads as a broken install after an upgrade.
+const ADDED_AGENT_HINTS: Record<string, string> = {
+  "deep-review-security.md":
+    "; the security hunter was added to the default spec: copy " +
+    "prompts/default/deep-review-security.md from the crysk package into " +
+    "this directory",
+};
+
 export function agentsDirProblems(
   specFiles: string[],
   presentFiles: string[],
@@ -2051,7 +2061,8 @@ export function agentsDirProblems(
   for (const file of named) {
     if (!present.has(file)) {
       problems.push(
-        `the spec references "${file}" but the dir does not have it`,
+        `the spec references "${file}" but the dir does not have it` +
+          (ADDED_AGENT_HINTS[file] ?? ""),
       );
     }
   }
@@ -2183,9 +2194,10 @@ function parseExtraHunters(read: BrandEnvValue | undefined): AgentSpec[] {
   });
 }
 
-// Local mode's wiring: the three unconditional hunters, the conditional
+// Local mode's wiring: the four unconditional hunters, the conditional
 // parity hunter, and the refuter. Deliberately NOT defaultReviewSpec() — that
-// one omits the logic hunter, and local mode targets the 5-file clean set. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
+// one omits the logic and security hunters, and local mode targets the 6-file
+// clean set. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
 // set, which validateReviewSpec enforces.
 //
 // `env` is injectable (defaults to `process.env`) so PRHERO_EXTRA_HUNTERS can
@@ -2204,6 +2216,7 @@ export function localReviewSpec(
       },
       { key: "resilience", file: "deep-review-resilience.md", role: "hunter" },
       { key: "logic", file: "deep-review-logic.md", role: "hunter" },
+      { key: "security", file: "deep-review-security.md", role: "hunter" },
       {
         key: "parity",
         file: "deep-review-parity.md",

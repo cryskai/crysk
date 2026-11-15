@@ -136,6 +136,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
     files: [
       "compare",
       "floor-test",
+      "hunter-exam",
       "loop",
       "martian-adapter",
       "materiality",

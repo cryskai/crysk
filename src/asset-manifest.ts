@@ -17,6 +17,9 @@ import reliabilityPrompt from "../prompts/default/deep-review-reliability.md" wi
 import resiliencePrompt from "../prompts/default/deep-review-resilience.md" with {
   type: "file",
 };
+import securityPrompt from "../prompts/default/deep-review-security.md" with {
+  type: "file",
+};
 import refuterPrompt from "../prompts/default/review-refuter.md" with {
   type: "file",
 };
@@ -50,6 +53,7 @@ export const BUNDLED_AGENT_FILES: Record<string, string> = {
   "deep-review-parity.md": parityPrompt,
   "deep-review-reliability.md": reliabilityPrompt,
   "deep-review-resilience.md": resiliencePrompt,
+  "deep-review-security.md": securityPrompt,
   "review-refuter.md": refuterPrompt,
 };
 

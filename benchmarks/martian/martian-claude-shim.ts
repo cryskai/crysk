@@ -24,6 +24,8 @@
 // `LLM_CALL_TIMEOUT` in the working copy before judging, and read the
 // abandoned-call lines this shim prints: there must be none.
 
+import { claudeCliFailure } from "./martian-claude-cli-error";
+
 const EXACT_MODEL = /^(?:anthropic\/)?(claude-[a-z0-9.-]+-\d{8})$/;
 
 function argValue(flag: string, fallback: string): string {
@@ -155,7 +157,7 @@ async function complete(
     children.delete(proc);
   });
   if (signal.aborted) throw new Error("client went away; claude killed");
-  if (code !== 0) throw new Error(`claude exited ${code}: ${err.slice(-500)}`);
+  if (code !== 0) throw new Error(claudeCliFailure(code, out, err));
   const result = JSON.parse(out) as {
     is_error?: boolean;
     result?: string;

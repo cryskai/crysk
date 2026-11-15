@@ -206,7 +206,7 @@ export async function askChoices(
   );
   if (choices.billing === "subscription") {
     say(
-      "  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the run uses CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model with its CRYSK_OPENCODE_* secret. A run on CRYSK_CLAUDE_API_KEY (no subscription set, or api_key first in credentials.claude) or an OpenCode model with its CRYSK_OPENCODE_* secret brings back the $10 ceiling.",
+      `  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the run uses CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model with its CRYSK_OPENCODE_* secret. A run on CRYSK_CLAUDE_API_KEY (no subscription set, or api_key first in credentials.claude) or an OpenCode model with its CRYSK_OPENCODE_* secret brings back the $${CI_DEFAULT_METERED_BUDGET_USD} ceiling.`,
     );
   } else {
     choices.budgetUsd = await askValue(

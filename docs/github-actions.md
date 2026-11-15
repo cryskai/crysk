@@ -962,11 +962,17 @@ credential, the first one in `credentials.claude` that is set (default `["subscr
 and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
 A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode provider whose
 `CRYSK_OPENCODE_*` secret is an API key, on any route the run resolves: any role or fallback of `models`,
-`--model`, `--scout-model`, a spec agent, a prompt's frontmatter or an engine default) gets a `10.00` default, because that is the
+`--model`, `--scout-model`, a spec agent, a prompt's frontmatter or an engine default) gets a `12.00` default, because that is the
 case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
 subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered,
 and neither does an `agy:` model, which runs on the Google subscription in `CRYSK_ANTIGRAVITY_OAUTH`. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
+
+The default was `10.00` until the security hunter joined the default set. The estimate prices every hunter,
+so with that set and the summary on (the default) its upper bound is above `$10` even for a small pull
+request. A workflow that sets `budget-usd: 10`, which is what `setup --ci --billing api` wrote when nobody
+chose another value, keeps that value and then skips every review until the line says `12` or more, or is
+removed.
 
 **In platform mode the Crysk platform's estimate replaces the cost band.** The connect step asks for it
 (`X-Crysk-Capabilities: estimate`) and the budget gate compares its high end to the ceiling: an estimate
@@ -989,7 +995,7 @@ either route, and `0` disables that limit.
 If **both** Claude credentials are set, the run uses the one `credentials.claude` puts first, and the
 other never reaches the Claude CLI. With the default order that is the subscription, so the review draws on
 quota with no ceiling. **This is a billing change** for repositories that hold both secrets: before
-`credentials.claude`, the Claude CLI preferred the key and the review billed per token with the `$10`
+`credentials.claude`, the Claude CLI preferred the key and the review billed per token with the default
 ceiling. Put `api_key` first to keep that (`credentials: ${{ vars.CRYSK_CREDENTIALS }}`, with
 `CRYSK_CREDENTIALS` set to `{"claude": ["api_key", "subscription"]}`). The OpenCode auth file keeps the
 conservative rule: when it is present, CI treats the run as able to invoice (metered ceiling) even if a
@@ -1020,7 +1026,7 @@ and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: wri
 | `thorough` | `every_push` | 4 | (unset) | 8 |
 | `manual` | `manual_only` | 1 | (unset) | 8 |
 
-Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and no `CRYSK_OPENCODE_*` secret builds an OpenCode auth file; a run on the API key, which `credentials.claude` decides, is metered; an explicit 0 would warn on every run and outlive a later move to the API key); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and no `CRYSK_OPENCODE_*` secret builds an OpenCode auth file; a run on the API key, which `credentials.claude` decides, is metered; an explicit 0 would warn on every run and outlive a later move to the API key); `--billing api` writes `--budget-usd` or the $12 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
 
 Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` and `budget-usd` unless a flag names them, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
 

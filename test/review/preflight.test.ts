@@ -943,6 +943,7 @@ describe("agentsDirProblems", () => {
     "deep-review-parity.md",
     "deep-review-reliability.md",
     "deep-review-resilience.md",
+    "deep-review-security.md",
     "review-refuter.md",
   ];
 
@@ -988,6 +989,31 @@ describe("agentsDirProblems", () => {
     );
   });
 
+  // The security hunter joined the default spec. A custom set copied from an
+  // older default lacks its file and stops running; the error has to say why
+  // and what to do, not only that a file is missing.
+  test("a set copied before the security hunter existed says the hunter was added and where its file is", () => {
+    const problems = agentsDirProblems(
+      CLEAN_SET,
+      CLEAN_SET.filter((f) => f !== "deep-review-security.md"),
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("deep-review-security.md");
+    expect(problems[0]).toContain("does not have it");
+    expect(problems[0]).toContain("added to the default spec");
+    expect(problems[0]).toContain("prompts/default/deep-review-security.md");
+  });
+
+  test("a missing file with no history keeps the plain message", () => {
+    const problems = agentsDirProblems(
+      CLEAN_SET,
+      CLEAN_SET.filter((f) => f !== "deep-review-parity.md"),
+    );
+    expect(problems).toEqual([
+      'the spec references "deep-review-parity.md" but the dir does not have it',
+    ]);
+  });
+
   test("a custom set keeps the lifecycle hunter through CRYSK_EXTRA_HUNTERS", () => {
     const spec = validateReviewSpec(
       localReviewSpec({
@@ -1017,6 +1043,7 @@ describe("localReviewSpec", () => {
       "reliability",
       "resilience",
       "logic",
+      "security",
       "parity",
       "refuter",
     ]);
@@ -1049,6 +1076,11 @@ describe("localReviewSpec", () => {
         },
         { key: "logic", file: "deep-review-logic.md", role: "hunter" },
         {
+          key: "security",
+          file: "deep-review-security.md",
+          role: "hunter",
+        },
+        {
           key: "parity",
           file: "deep-review-parity.md",
           role: "hunter",
@@ -1074,6 +1106,7 @@ describe("localReviewSpec", () => {
       "reliability",
       "resilience",
       "logic",
+      "security",
       "parity",
       "reliability-b",
       "refuter",
@@ -1096,6 +1129,7 @@ describe("localReviewSpec", () => {
       "reliability",
       "resilience",
       "logic",
+      "security",
       "parity",
       "reliability-b",
       "resilience-b",

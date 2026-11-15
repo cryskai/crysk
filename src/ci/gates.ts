@@ -430,7 +430,16 @@ export function deriveCiBillingMode(
     : "subscription";
 }
 
-export const CI_DEFAULT_METERED_BUDGET_USD = 10;
+// 12, raised from 10 when the default set gained its fourth always-on hunter.
+// The gate compares the estimate's UPPER bound with this ceiling, and the
+// estimate (review/report.ts) prices one seat per hunter. With the summarizer
+// on, that hunter lifted every upper bound by 20%: the smallest pull request
+// went from $8.53 to $10.24, so a ceiling of 10 skipped all of them. 12 admits
+// what 10 admitted before. With the summarizer off the rise is 25%, so a pull
+// request whose old upper bound sat between $9.60 and $10 is skipped now.
+// A workflow that WRITES `budget-usd: 10` carries an operator value and does
+// not move with this constant.
+export const CI_DEFAULT_METERED_BUDGET_USD = 12;
 
 export interface CiBudgetCeiling {
   // `undefined` means NO ceiling — the gate does not run at all. Distinct from
@@ -449,7 +458,7 @@ export interface CiBudgetCeiling {
 // removes one on a metered route (`budget-usd: 0`, which still reaches
 // `budgetDisabledWarningMessage`). The `configured !== undefined` test is what
 // keeps 0 and negatives on the operator branch: falling back to a truthiness
-// check would swallow the explicit disable and silently reimpose the $10 the
+// check would swallow the explicit disable and silently reimpose the default the
 // operator just removed.
 export function resolveCiBudgetCeiling(input: {
   configured: number | undefined;

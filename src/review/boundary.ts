@@ -32,6 +32,7 @@ export type BoundaryTag =
   | "comment_body"
   | "triage_tag"
   | "pr_title"
+  | "pr_description"
   | "review_comment"
   | "code_window"
   | "review_instructions";

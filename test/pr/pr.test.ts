@@ -39,6 +39,7 @@ import {
   ghPrFiles,
   ghPrHeadSha,
   ghPrHeroWorkflowRunHeads,
+  ghPrView,
   ghRepoWebUrl,
   listAdmissionCheckRuns,
   POSTING_GH_TIMEOUT_MS,
@@ -1056,6 +1057,21 @@ function toRef(f: Finding): PrHeroFindingRef {
 // contract is that it never throws and never guesses — the pin is what makes
 // the comments correct, this call only decides whether there is anything to
 // SAY about it, so an unanswerable question must cost nothing.
+describe("ghPrView", () => {
+  // The contract with resolvePrTarget (S10): the description is read from
+  // `body`, so the call must ask for it.
+  test("asks gh for the description alongside the fields the parser reads", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      { match: ["pr", "view"], response: { stdout: "{}" } },
+    ]);
+    await ghPrView(OPERATOR_ROOT, 42, { spawnFn });
+    const fields = (calls[0]?.argv ?? [])[5]?.split(",") ?? [];
+    expect(fields).toContain("body");
+    expect(fields).toContain("title");
+    expect(fields).toContain("headRefOid");
+  });
+});
+
 describe("ghPrHeadSha", () => {
   test("asks for exactly one field and returns the trimmed sha", async () => {
     const { spawnFn, calls } = makeFakeGh([

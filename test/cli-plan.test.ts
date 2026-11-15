@@ -153,6 +153,7 @@ const prPlanContext = (over: Partial<PrPlanContext> = {}): PrPlanContext => ({
   target: {
     number: 6,
     title: "terminal surface: print the findings",
+    body: "",
     state: "OPEN",
     headSha: "3333333333333333333333333333333333333333",
     baseRef: "main",
