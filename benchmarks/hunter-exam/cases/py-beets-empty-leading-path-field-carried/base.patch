@@ -1,0 +1,90 @@
+diff --git a/beets/library/models.py b/beets/library/models.py
+index c16e84a..1aa8293 100644
+--- a/beets/library/models.py
++++ b/beets/library/models.py
+@@ -1287,10 +1287,6 @@ class Item(LibModel):
+                 "the filename.",
+                 subpath,
+             )
+-        # The fragment is always relative to the base directory. Strip
+-        # leading separators (left by empty leading template fields when
+-        # the replacements do not remove them) which would otherwise make
+-        # `os.path.join` discard `basedir`.
+         lib_path_str = lib_path_str.lstrip(os.sep + (os.altsep or ""))
+         lib_path_bytes = util.bytestring_path(lib_path_str)
+ 
+@@ -1612,7 +1608,6 @@ class DefaultTemplateFunctions:
+             bracket_l = ""
+             bracket_r = ""
+ 
+-        # Find matching items to disambiguate with.
+         if query is None:
+             query = db_item.duplicates_query(keys_list)
+         candidate_items = (
+@@ -1639,17 +1634,12 @@ class DefaultTemplateFunctions:
+             lib._memotable[memokey] = ""
+             return ""
+ 
+-        # Find the first disambiguator that distinguishes the items.
+         for disambiguator in disam_list:
+-            # Get the value for each item for the current field.
+             disam_values = {
+                 normalized_field(item, disambiguator)
+                 for item in ambiguous_items
+             }
+ 
+-            # If the set of unique values is equal to the number of
+-            # items in the disambiguation set, we're done -- this is
+-            # sufficient disambiguation.
+             if len(disam_values) == len(ambiguous_items):
+                 break
+         else:
+diff --git a/test/test_library.py b/test/test_library.py
+index 71e2274..29ae718 100644
+--- a/test/test_library.py
++++ b/test/test_library.py
+@@ -481,20 +481,6 @@ class TestDestination(PytestItemHelper):
+         item_in_db.album = "bar"
+         assert item_in_db.destination() == np("base/ber/foo")
+ 
+-    def test_destination_stays_in_basedir_with_empty_leading_field(
+-        self, item_in_db
+-    ):
+-        # Regression test for #4889: an empty leading template field
+-        # combined with custom replacements that lack the default
+-        # separator rule must not produce an absolute path that escapes
+-        # the base directory.
+-        self.lib.directory = b"base"
+-        self.lib.replacements = [(re.compile(r"a"), "e")]
+-        self.lib.path_formats = [("default", "$album/$title")]
+-        item_in_db.album = ""
+-        item_in_db.title = "three"
+-        assert item_in_db.destination() == np("base/three")
+-
+     @unittest.skip("unimplemented: #359")
+     def test_destination_with_empty_component(self, item_in_db):
+         self.lib.directory = b"base"
+@@ -1034,7 +1020,6 @@ class TestTrackDisambiguation(TestHelper, PathFormattingMixin):
+         self._assert_dest(b"/base/Common Title", i2)
+ 
+     def test_tunique_with_flex_key_field(self, items):
+-        # Flexible field as key must be queried via field_query.
+         i1, i2 = items
+         i1.title = "Diff1"
+         i2.title = "Diff2"
+@@ -1048,7 +1033,6 @@ class TestTrackDisambiguation(TestHelper, PathFormattingMixin):
+         self._assert_dest(b"/base/Diff2 [11]", i2)
+ 
+     def test_tunique_path_formatted_disambiguator_collision(self, items):
+-        # AC/DC vs AC_DC collide after for_path sanitization.
+         i1, i2 = items
+         i1.track = 1
+         i2.track = 1
+@@ -1060,7 +1044,6 @@ class TestTrackDisambiguation(TestHelper, PathFormattingMixin):
+         i2.store()
+ 
+         self._setf("$title%tunique{title,artist}")
+-        # No disambiguator distinguishes path-formatted values -> fallback IDs.
+         self._assert_dest(b"/base/Common Title [%d]" % i1.id, i1)
+         self._assert_dest(b"/base/Common Title [%d]" % i2.id, i2)
+ 

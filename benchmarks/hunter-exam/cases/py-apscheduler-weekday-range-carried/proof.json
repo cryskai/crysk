@@ -1,0 +1,8 @@
+{
+  "tests": ["tests/triggers/test_cron.py::test_invalid_weekday_number"],
+  "command": "cd ~/.crysk/casebank/deps/apscheduler/proof-weekday-range && PYTHONPATH=src ../venv/bin/python -m pytest -p no:cacheprovider -q \"tests/triggers/test_cron.py::test_invalid_weekday_number\"",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "exc = pytest.raises(ValueError, CronTrigger, day_of_week=expr)  E   IndexError: list index out of range",
+  "carrier": "fc15dd15fd9a8e26545d288685810ea87a8da578"
+}

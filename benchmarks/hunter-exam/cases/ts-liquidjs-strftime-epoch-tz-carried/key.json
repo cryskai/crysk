@@ -1,0 +1,31 @@
+{
+  "id": "ts-liquidjs-strftime-epoch-tz-carried",
+  "language": "typescript",
+  "project": "liquidjs",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "epoch-from-shifted-date",
+      "area": "contract",
+      "severity": "blocking",
+      "class": "wrong-value-source",
+      "depth": 1,
+      "what": "%s is computed from getTime(), which reads the display date that is deliberately shifted by the timezone offset, and rounds instead of truncating, so the Unix epoch changes with the timezone argument or option and can be one second off.",
+      "sites": [
+        {
+          "path": "src/util/strftime.ts",
+          "start_line": 108,
+          "end_line": 108
+        },
+        {
+          "path": "src/util/liquid-date.ts",
+          "start_line": 53,
+          "end_line": 55
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

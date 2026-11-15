@@ -1,0 +1,1595 @@
+diff --git a/beets/ui/__init__.py b/beets/ui/__init__.py
+index 3246bae..07909a6 100644
+--- a/beets/ui/__init__.py
++++ b/beets/ui/__init__.py
+@@ -612,6 +612,33 @@ class CommonOptionsParser(optparse.OptionParser):
+         )
+         self.add_option(opt)
+ 
++    def _set_limit(
++        self,
++        option: optparse.Option,
++        opt_str: str,
++        value: int,
++        parser: optparse.OptionParser,
++    ) -> None:
++        """Validate and store a maximum query result count."""
++        if value < 0:
++            raise UserError(
++                f"{opt_str} argument must be a non-negative integer"
++            )
++        assert option.dest is not None
++        setattr(parser.values, option.dest, value)
++
++    def add_limit_option(
++        self, flags: Sequence[str] = ("-l", "--limit")
++    ) -> None:
++        """Add an option to cap the number of matched query results."""
++        self.add_option(
++            *flags,
++            type="int",
++            action="callback",
++            callback=self._set_limit,
++            help="limit query results",
++        )
++
+     def add_all_common_options(self) -> None:
+         """Add album, path and format options."""
+         self.add_album_option()
+diff --git a/beets/ui/commands/list.py b/beets/ui/commands/list.py
+index ea4c4df..6e38628 100644
+--- a/beets/ui/commands/list.py
++++ b/beets/ui/commands/list.py
+@@ -5,7 +5,6 @@ from __future__ import annotations
+ from typing import TYPE_CHECKING, Protocol
+ 
+ from beets import ui
+-from beets.exceptions import UserError
+ 
+ if TYPE_CHECKING:
+     from collections.abc import Sequence
+@@ -33,8 +32,6 @@ def list_items(
+ 
+ 
+ def list_func(lib: Library, opts: ListCLIOpts, args: list[str]) -> None:
+-    if opts.limit is not None and opts.limit < 0:
+-        raise UserError("-l / --limit argument must be a non-negative integer")
+     list_items(lib, args, opts)
+ 
+ 
+@@ -44,7 +41,5 @@ list_cmd.parser.set_usage(
+     + "\nExample: %prog -f '$album: $title' artist:beatles"
+ )
+ list_cmd.parser.add_all_common_options()
+-list_cmd.parser.add_option(
+-    "-l", "--limit", type=int, help="limit query results"
+-)
++list_cmd.parser.add_limit_option()
+ list_cmd.func = list_func
+diff --git a/beets/ui/commands/modify.py b/beets/ui/commands/modify.py
+index 0b73e78..e57442e 100644
+--- a/beets/ui/commands/modify.py
++++ b/beets/ui/commands/modify.py
+@@ -21,6 +21,7 @@ if TYPE_CHECKING:
+ class ModifyCLIOpts(Protocol):
+     album: bool
+     inherit: bool
++    limit: int | None
+     move: bool | None
+     write: bool | None
+     yes: bool | None
+@@ -139,15 +140,21 @@ def modify_objects(
+ 
+ 
+ def modify_items(
+-    lib: Library, query: Sequence[str], **kwargs: Unpack[ModifyParams]
++    lib: Library,
++    query: Sequence[str],
++    limit: int | None,
++    **kwargs: Unpack[ModifyParams],
+ ) -> None:
+-    modify_objects(Item, list(lib.items(query)), lib, **kwargs)
++    modify_objects(Item, list(lib.items(query, limit=limit)), lib, **kwargs)
+ 
+ 
+ def modify_albums(
+-    lib: Library, query: Sequence[str], **kwargs: Unpack[ModifyParams]
++    lib: Library,
++    query: Sequence[str],
++    limit: int | None,
++    **kwargs: Unpack[ModifyParams],
+ ) -> None:
+-    modify_objects(Album, list(lib.albums(query)), lib, **kwargs)
++    modify_objects(Album, list(lib.albums(query, limit=limit)), lib, **kwargs)
+ 
+ 
+ def print_and_modify(
+@@ -204,6 +211,7 @@ def modify_func(lib: Library, opts: ModifyCLIOpts, args: list[str]) -> None:
+     method(
+         lib,
+         query,
++        opts.limit,
+         mods=mods,
+         dels=dels,
+         write=ui.should_write(opts.write),
+@@ -257,4 +265,5 @@ modify_cmd.parser.add_option(
+     default=True,
+     help="when modifying albums, don't also change item data",
+ )
++modify_cmd.parser.add_limit_option()
+ modify_cmd.func = modify_func
+diff --git a/beets/ui/commands/move.py b/beets/ui/commands/move.py
+index cbd9c9b..6798273 100644
+--- a/beets/ui/commands/move.py
++++ b/beets/ui/commands/move.py
+@@ -24,6 +24,7 @@ class MoveCLIOpts(Protocol):
+     copy: bool
+     dest: str | None
+     export: bool
++    limit: int | None
+     pretend: bool
+     timid: bool
+ 
+@@ -116,7 +117,9 @@ def move_objects(
+             selected_objs = ui.input_select_objects(
+                 f"Really {act}",
+                 objs,
+-                lambda o: show_path_changes(get_paths([o])),
++                lambda o: show_path_changes(
++                    [(o.path, o.destination(basedir=dest))]
++                ),
+             )
+         else:
+             selected_objs = objs
+@@ -152,7 +155,7 @@ def move_items(
+     def get_paths(objs: Iterable[Item]) -> list[tuple[bytes, bytes]]:
+         return [(obj.path, obj.destination(basedir=dest)) for obj in objs]
+ 
+-    objs = list(lib.items(query))
++    objs = list(lib.items(query, limit=opts.limit))
+     move_objects(objs, isitemmoved, "item", get_paths, dest=dest, opts=opts)
+ 
+ 
+@@ -166,7 +169,7 @@ def move_albums(
+             for item in obj.items()
+         ]
+ 
+-    objs = list(lib.albums(query))
++    objs = list(lib.albums(query, limit=opts.limit))
+     move_objects(objs, isalbummoved, "album", get_paths, dest=dest, opts=opts)
+ 
+ 
+@@ -214,4 +217,5 @@ move_cmd.parser.add_option(
+     help="copy without changing the database path",
+ )
+ move_cmd.parser.add_album_option()
++move_cmd.parser.add_limit_option()
+ move_cmd.func = move_func
+diff --git a/beets/ui/commands/remove.py b/beets/ui/commands/remove.py
+index a605ddd..13856e0 100644
+--- a/beets/ui/commands/remove.py
++++ b/beets/ui/commands/remove.py
+@@ -18,6 +18,7 @@ class RemoveCLIOpts(Protocol):
+     album: bool
+     delete: bool
+     force: bool
++    limit: int | None
+ 
+ 
+ def remove_objects(
+@@ -84,7 +85,7 @@ def remove_items(
+     lib: Library, query: Sequence[str], opts: RemoveCLIOpts
+ ) -> None:
+     """Remove items matching query from lib."""
+-    items = list(lib.items(query))
++    items = list(lib.items(query, limit=opts.limit))
+     album_str = ""
+ 
+     remove_objects(items, fmt_item, len(items), album_str, lib, opts=opts)
+@@ -94,7 +95,7 @@ def remove_albums(
+     lib: Library, query: Sequence[str], opts: RemoveCLIOpts
+ ) -> None:
+     """Remove albums matching query from lib."""
+-    albums = list(lib.albums(query))
++    albums = list(lib.albums(query, limit=opts.limit))
+     items = [i for a in albums for i in a.items()]
+     album_str = f" and {len(albums)} album{'s' if len(albums) > 1 else ''}"
+ 
+@@ -124,4 +125,5 @@ remove_cmd.parser.add_option(
+     help="do not ask when removing items",
+ )
+ remove_cmd.parser.add_album_option()
++remove_cmd.parser.add_limit_option()
+ remove_cmd.func = remove_func
+diff --git a/beets/ui/commands/stats.py b/beets/ui/commands/stats.py
+index a9d60f2..74823fa 100644
+--- a/beets/ui/commands/stats.py
++++ b/beets/ui/commands/stats.py
+@@ -21,11 +21,14 @@ log = logging.getLogger("beets")
+ 
+ class StatsCLIOpts(Protocol):
+     exact: bool
++    limit: int | None
+ 
+ 
+-def show_stats(lib: Library, query: Sequence[str], exact: bool) -> None:
++def show_stats(
++    lib: Library, query: Sequence[str], exact: bool, limit: int | None
++) -> None:
+     """Shows some statistics about the matched items."""
+-    items = lib.items(query)
++    items = lib.items(query, limit=limit)
+ 
+     total_size = 0
+     total_time = 0.0
+@@ -63,7 +66,7 @@ Album artists: {len(album_artists)}""")
+ 
+ 
+ def stats_func(lib: Library, opts: StatsCLIOpts, args: list[str]) -> None:
+-    show_stats(lib, args, opts.exact)
++    show_stats(lib, args, opts.exact, opts.limit)
+ 
+ 
+ stats_cmd = ui.Subcommand(
+@@ -76,4 +79,5 @@ stats_cmd.parser.add_option(
+     default=False,
+     help="exact size and time",
+ )
++stats_cmd.parser.add_limit_option()
+ stats_cmd.func = stats_func
+diff --git a/beets/ui/commands/update.py b/beets/ui/commands/update.py
+index aa95a5c..9cb5abf 100644
+--- a/beets/ui/commands/update.py
++++ b/beets/ui/commands/update.py
+@@ -24,6 +24,7 @@ class UpdateCLIOpts(Protocol):
+     album: bool
+     exclude_fields: list[str] | None
+     fields: list[str] | None
++    limit: int | None
+     move: bool | None
+     pretend: bool
+ 
+@@ -173,9 +174,11 @@ def update_func(lib: Library, opts: UpdateCLIOpts, args: list[str]) -> None:
+         if not ui.input_yn("Are you sure you want to continue (y/n)?", True):
+             return
+     if opts.album:
+-        items = [i for a in lib.albums(args) for i in a.items()]
++        items = [
++            i for a in lib.albums(args, limit=opts.limit) for i in a.items()
++        ]
+     else:
+-        items = list(lib.items(args))
++        items = list(lib.items(args, limit=opts.limit))
+     update_items(
+         lib,
+         items,
+@@ -228,4 +231,5 @@ update_cmd.parser.add_option(
+     dest="exclude_fields",
+     help="list of fields to exclude from updates",
+ )
++update_cmd.parser.add_limit_option()
+ update_cmd.func = update_func
+diff --git a/beets/ui/commands/write.py b/beets/ui/commands/write.py
+index 132f248..3debf25 100644
+--- a/beets/ui/commands/write.py
++++ b/beets/ui/commands/write.py
+@@ -21,16 +21,21 @@ log = logging.getLogger("beets")
+ 
+ class WriteCLIOpts(Protocol):
+     force: bool
++    limit: int | None
+     pretend: bool
+ 
+ 
+ def write_items(
+-    lib: Library, query: Sequence[str], pretend: bool, force: bool
++    lib: Library,
++    query: Sequence[str],
++    pretend: bool,
++    force: bool,
++    limit: int | None,
+ ) -> None:
+     """Write tag information from the database to the respective files
+     in the filesystem.
+     """
+-    items = lib.items(query)
++    items = lib.items(query, limit=limit)
+ 
+     if not items:
+         raise UserError("No matching items to write.")
+@@ -59,7 +64,7 @@ def write_items(
+ 
+ 
+ def write_func(lib: Library, opts: WriteCLIOpts, args: list[str]) -> None:
+-    write_items(lib, args, opts.pretend, opts.force)
++    write_items(lib, args, opts.pretend, opts.force, opts.limit)
+ 
+ 
+ write_cmd = ui.Subcommand("write", help="write tag information to files")
+@@ -77,4 +82,5 @@ write_cmd.parser.add_option(
+     default=False,
+     help="write tags even if the existing tags match the database",
+ )
++write_cmd.parser.add_limit_option()
+ write_cmd.func = write_func
+diff --git a/beetsplug/_utils/art.py b/beetsplug/_utils/art.py
+index e712309..485c9f0 100644
+--- a/beetsplug/_utils/art.py
++++ b/beetsplug/_utils/art.py
+@@ -207,9 +207,12 @@ def clear_item(item: Item, log: Logger) -> None:
+ 
+ 
+ def clear(
+-    log: Logger, lib: Library, query: str | Sequence[str] | Query | None = None
++    log: Logger,
++    lib: Library,
++    query: str | Sequence[str] | Query | None = None,
++    limit: int | None = None,
+ ) -> None:
+-    items = lib.items(query)
++    items = lib.items(query, limit=limit)
+     log.info("Clearing album art from {} items", len(items))
+     for item in items:
+         clear_item(item, log)
+diff --git a/beetsplug/absubmit.py b/beetsplug/absubmit.py
+index d8cdfe8..c490b97 100644
+--- a/beetsplug/absubmit.py
++++ b/beetsplug/absubmit.py
+@@ -26,6 +26,7 @@ if TYPE_CHECKING:
+ 
+ class ABSubmitCLIOpts(Protocol):
+     force_refetch: bool
++    limit: int | None
+     pretend_fetch: bool
+ 
+ 
+@@ -135,6 +136,7 @@ class AcousticBrainzSubmitPlugin(plugins.BeetsPlugin):
+                 " processed"
+             ),
+         )
++        cmd.parser.add_limit_option()
+         cmd.func = self.command
+         return [cmd]
+ 
+@@ -148,7 +150,7 @@ class AcousticBrainzSubmitPlugin(plugins.BeetsPlugin):
+                 "option."
+             )
+         # Get items from arguments
+-        items = lib.items(args)
++        items = lib.items(args, limit=opts.limit)
+         self.opts = opts
+         util.par_map(self.analyze_submit, items)
+ 
+diff --git a/beetsplug/acousticbrainz.py b/beetsplug/acousticbrainz.py
+index 62f04a3..9e862c1 100644
+--- a/beetsplug/acousticbrainz.py
++++ b/beetsplug/acousticbrainz.py
+@@ -22,6 +22,7 @@ if TYPE_CHECKING:
+ 
+ class AcousticBrainzCLIOpts(Protocol):
+     force_refetch: bool
++    limit: int | None
+ 
+ 
+ LEVELS = ["/low-level", "/high-level"]
+@@ -121,13 +122,14 @@ class AcousticPlugin(plugins.BeetsPlugin):
+         def func(
+             lib: Library, opts: AcousticBrainzCLIOpts, args: list[str]
+         ) -> None:
+-            items = lib.items(args)
++            items = lib.items(args, limit=opts.limit)
+             self._fetch_info(
+                 items,
+                 ui.should_write(),
+                 opts.force_refetch or self.config["force"].get(bool),
+             )
+ 
++        cmd.parser.add_limit_option()
+         cmd.func = func
+         return [cmd]
+ 
+diff --git a/beetsplug/autobpm.py b/beetsplug/autobpm.py
+index 8df19c6..7915fd0 100644
+--- a/beetsplug/autobpm.py
++++ b/beetsplug/autobpm.py
+@@ -20,6 +20,7 @@ if TYPE_CHECKING:
+ 
+ class AutoBPMCLIOpts(Protocol):
+     force: bool
++    limit: int | None
+     quiet: bool
+ 
+ 
+@@ -66,6 +67,7 @@ class AutoBPMPlugin(BeetsPlugin):
+             default=False,
+             help="Suppress message when item already has BPM",
+         )
++        cmd.parser.add_limit_option()
+         cmd.func = self.command
+         return [cmd]
+ 
+@@ -75,7 +77,7 @@ class AutoBPMPlugin(BeetsPlugin):
+         force = self.config["force"].get(bool) or opts.force
+         quiet = self.config["quiet"].get(bool) or opts.quiet
+         self.calculate_bpm(
+-            list(lib.items(args)),
++            list(lib.items(args, limit=opts.limit)),
+             write=should_write(),
+             force=force,
+             quiet=quiet,
+diff --git a/beetsplug/badfiles.py b/beetsplug/badfiles.py
+index 4fc3edb..6849355 100644
+--- a/beetsplug/badfiles.py
++++ b/beetsplug/badfiles.py
+@@ -27,6 +27,7 @@ ImportAction = Literal["abort", "skip", "continue"]
+ 
+ 
+ class BadCLIOpts(Protocol):
++    limit: int | None
+     verbose: bool
+ 
+ 
+@@ -260,7 +261,7 @@ class BadFiles(BeetsPlugin):
+ 
+     def command(self, lib: Library, opts: BadCLIOpts, args: list[str]) -> None:
+         # Get items from arguments
+-        items = lib.items(args)
++        items = lib.items(args, limit=opts.limit)
+         self.verbose = opts.verbose
+ 
+         def check_and_print(item: Item) -> None:
+@@ -281,5 +282,6 @@ class BadFiles(BeetsPlugin):
+             dest="verbose",
+             help="view results for both the bad and uncorrupted files",
+         )
++        bad_command.parser.add_limit_option()
+         bad_command.func = self.command
+         return [bad_command]
+diff --git a/beetsplug/bareasc.py b/beetsplug/bareasc.py
+index 509ec86..7219e7a 100644
+--- a/beetsplug/bareasc.py
++++ b/beetsplug/bareasc.py
+@@ -22,6 +22,7 @@ if TYPE_CHECKING:
+ 
+ class BareascCLIOpts(Protocol):
+     album: bool
++    limit: int | None
+ 
+ 
+ class BareascQuery(StringFieldQuery[str]):
+@@ -73,6 +74,7 @@ class BareascPlugin(BeetsPlugin):
+             + "\nExample: %prog -f '$album: $title' artist:beatles"
+         )
+         cmd.parser.add_all_common_options()
++        cmd.parser.add_limit_option()
+         cmd.func = self.unidecode_list
+         return [cmd]
+ 
+@@ -83,10 +85,10 @@ class BareascPlugin(BeetsPlugin):
+         album = opts.album
+         # Copied from commands.py - list_items
+         if album:
+-            for album_obj in lib.albums(args):
++            for album_obj in lib.albums(args, limit=opts.limit):
+                 bare = unidecode(str(album_obj))
+                 print_(bare)
+         else:
+-            for item in lib.items(args):
++            for item in lib.items(args, limit=opts.limit):
+                 bare = unidecode(str(item))
+                 print_(bare)
+diff --git a/beetsplug/bench.py b/beetsplug/bench.py
+index 0da5353..aa4b687 100644
+--- a/beetsplug/bench.py
++++ b/beetsplug/bench.py
+@@ -25,6 +25,7 @@ class BenchAunique(Protocol):
+ class BenchMatch(Protocol):
+     profile: bool
+     id: str | None
++    limit: int | None
+ 
+ 
+ def aunique_benchmark(
+@@ -70,7 +71,9 @@ def match_benchmark(lib: Library, opts: BenchMatch, args: list[str]) -> None:
+     id_ = opts.id or "9c5c043e-bc69-4edb-81a4-1aaf9c81e6dc"
+ 
+     # Get an album from the library to use as the source for the match.
+-    items: Sequence[Item] = i.items() if (i := lib.albums(args).get()) else []
++    items: Sequence[Item] = (
++        i.items() if (i := lib.albums(args, limit=opts.limit).get()) else []
++    )
+ 
+     # Ensure fingerprinting is invoked (if enabled).
+     plugins.send(
+@@ -122,6 +125,7 @@ class BenchmarkPlugin(BeetsPlugin):
+         match_bench_cmd.parser.add_option(
+             "-i", "--id", default=None, help="album ID to match against"
+         )
++        match_bench_cmd.parser.add_limit_option()
+         match_bench_cmd.func = match_benchmark
+ 
+         return [aunique_bench_cmd, match_bench_cmd]
+diff --git a/beetsplug/bpm.py b/beetsplug/bpm.py
+index e57f9b5..b8df0d1 100644
+--- a/beetsplug/bpm.py
++++ b/beetsplug/bpm.py
+@@ -48,6 +48,7 @@ class BPMPlugin(BeetsPlugin):
+             "bpm",
+             help="determine bpm of a song by pressing a key to the rhythm",
+         )
++        cmd.parser.add_limit_option()
+         cmd.func = self.command
+         return [cmd]
+ 
+@@ -55,7 +56,7 @@ class BPMPlugin(BeetsPlugin):
+         self, lib: Library, opts: optparse.Values, args: list[str]
+     ) -> None:
+         write = ui.should_write()
+-        self.get_bpm(lib.items(args), write)
++        self.get_bpm(lib.items(args, limit=opts.limit), write)
+ 
+     def get_bpm(self, items: Sequence[Item], write: bool = False) -> None:
+         overwrite = self.config["overwrite"].get(bool)
+diff --git a/beetsplug/bpsync.py b/beetsplug/bpsync.py
+index e0108ff..76822d7 100644
+--- a/beetsplug/bpsync.py
++++ b/beetsplug/bpsync.py
+@@ -18,6 +18,7 @@ if TYPE_CHECKING:
+ 
+ 
+ class BPSyncCLIOpts(Protocol):
++    limit: int | None
+     move: bool | None
+     pretend: bool
+     write: bool | None
+@@ -63,6 +64,7 @@ class BPSyncPlugin(BeetsPlugin):
+             help="don't write updated metadata to files",
+         )
+         cmd.parser.add_format_option()
++        cmd.parser.add_limit_option()
+         cmd.func = self.func
+         return [cmd]
+ 
+@@ -72,8 +74,8 @@ class BPSyncPlugin(BeetsPlugin):
+         pretend = opts.pretend
+         write = ui.should_write(opts.write)
+ 
+-        self.singletons(lib, args, move, pretend, write)
+-        self.albums(lib, args, move, pretend, write)
++        self.singletons(lib, args, move, pretend, write, opts.limit)
++        self.albums(lib, args, move, pretend, write, opts.limit)
+ 
+     def singletons(
+         self,
+@@ -82,11 +84,12 @@ class BPSyncPlugin(BeetsPlugin):
+         move: bool,
+         pretend: bool,
+         write: bool,
++        limit: int | None,
+     ) -> None:
+         """Retrieve and apply info from the autotagger for items matched by
+         query.
+         """
+-        for item in lib.items([*query, "singleton:true"]):
++        for item in lib.items([*query, "singleton:true"], limit=limit):
+             if not item.mb_trackid:
+                 self._log.info(
+                     "Skipping singleton with no mb_trackid: {}", item
+@@ -146,12 +149,13 @@ class BPSyncPlugin(BeetsPlugin):
+         move: bool,
+         pretend: bool,
+         write: bool,
++        limit: int | None,
+     ) -> None:
+         """Retrieve and apply info from the autotagger for albums matched by
+         query and their items.
+         """
+         # Process matching albums.
+-        for album in lib.albums(query):
++        for album in lib.albums(query, limit=limit):
+             # Do we have a valid Beatport album?
+             items = self.get_album_tracks(album)
+             if not items:
+diff --git a/beetsplug/chroma.py b/beetsplug/chroma.py
+index 14153e7..b39eec2 100644
+--- a/beetsplug/chroma.py
++++ b/beetsplug/chroma.py
+@@ -35,6 +35,7 @@ if TYPE_CHECKING:
+ class ChromaSearchCLIOpts(Protocol):
+     count: int
+     full: bool | None
++    limit: int | None
+     search: str | None
+     write: bool | None
+ 
+@@ -290,8 +291,9 @@ class AcoustidPlugin(MetadataSourcePlugin):
+                 apikey = config["acoustid"]["apikey"].as_str()
+             except confuse.NotFoundError:
+                 raise UserError("no Acoustid user API key provided")
+-            submit_items(self._log, apikey, lib.items(args))
++            submit_items(self._log, apikey, lib.items(args, limit=opts.limit))
+ 
++        submit_cmd.parser.add_limit_option()
+         submit_cmd.func = submit_cmd_func
+ 
+         fingerprint_cmd = ui.Subcommand(
+@@ -301,9 +303,10 @@ class AcoustidPlugin(MetadataSourcePlugin):
+         def fingerprint_cmd_func(
+             lib: Library, opts: optparse.Values, args: list[str]
+         ) -> None:
+-            for item in lib.items(args):
++            for item in lib.items(args, limit=opts.limit):
+                 fingerprint_item(self._log, item, write=ui.should_write())
+ 
++        fingerprint_cmd.parser.add_limit_option()
+         fingerprint_cmd.func = fingerprint_cmd_func
+ 
+         return [submit_cmd, fingerprint_cmd, self.chromasearch_cmd()]
+@@ -343,6 +346,7 @@ class AcoustidPlugin(MetadataSourcePlugin):
+             action="store_true",
+             help="Write computed fingerprints to files",
+         )
++        cmd.parser.add_limit_option()
+ 
+         def search_cmd_func(
+             lib: Library, opts: ChromaSearchCLIOpts, args: list[str]
+@@ -355,7 +359,7 @@ class AcoustidPlugin(MetadataSourcePlugin):
+             target = (0, opts.search.encode("utf-8"))
+             top = TopN(opts.count)
+ 
+-            for item in lib.items(args):
++            for item in lib.items(args, limit=opts.limit):
+                 fp = fingerprint_item(
+                     self._log,
+                     item,
+diff --git a/beetsplug/convert.py b/beetsplug/convert.py
+index b669974..6927d8f 100644
+--- a/beetsplug/convert.py
++++ b/beetsplug/convert.py
+@@ -41,6 +41,7 @@ _temp_files: list[bytes] = []
+ class ConvertCLIOpts(Protocol):
+     album: bool
+     keep_new: bool
++    limit: int | None
+     yes: bool | None
+ 
+ 
+@@ -219,6 +220,7 @@ class ConvertPlugin(BeetsPlugin):
+             ),
+         )
+         cmd.parser.add_album_option()
++        cmd.parser.add_limit_option(flags=("--limit",))
+         cmd.func = self.convert_func
+         return [cmd]
+ 
+@@ -673,13 +675,13 @@ class ConvertPlugin(BeetsPlugin):
+         pretend = self.pretend
+ 
+         if opts.album:
+-            albums = lib.albums(args)
++            albums = lib.albums(args, limit=opts.limit)
+             items = [i for a in albums for i in a.items()]
+             if not pretend:
+                 for a in albums:
+                     ui.print_(format(a, ""))
+         else:
+-            items = list(lib.items(args))
++            items = list(lib.items(args, limit=opts.limit))
+             if not pretend:
+                 for i in items:
+                     ui.print_(format(i, ""))
+diff --git a/beetsplug/deezer.py b/beetsplug/deezer.py
+index 3c122b9..60277ee 100644
+--- a/beetsplug/deezer.py
++++ b/beetsplug/deezer.py
+@@ -49,9 +49,10 @@ class DeezerPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
+         )
+ 
+         def func(lib: Library, opts: optparse.Values, args: list[str]) -> None:
+-            items = lib.items(args)
++            items = lib.items(args, limit=opts.limit)
+             self.deezerupdate(list(items), ui.should_write())
+ 
++        deezer_update_cmd.parser.add_limit_option()
+         deezer_update_cmd.func = func
+ 
+         return [deezer_update_cmd]
+diff --git a/beetsplug/duplicates.py b/beetsplug/duplicates.py
+index 55c85f7..428e26c 100644
+--- a/beetsplug/duplicates.py
++++ b/beetsplug/duplicates.py
+@@ -137,6 +137,7 @@ class DuplicatesPlugin(BeetsPlugin):
+             help="remove items from library",
+         )
+         self._command.parser.add_all_common_options()
++        self._command.parser.add_limit_option()
+ 
+     def commands(self) -> list[Subcommand]:
+         def _dup(lib: Library, opts: optparse.Values, args: list[str]) -> None:
+@@ -145,14 +146,14 @@ class DuplicatesPlugin(BeetsPlugin):
+ 
+             if self.config["album"].get(bool):
+                 self._run_command(
+-                    lib.albums(args),
++                    lib.albums(args, limit=opts.limit),
+                     keys or ["mb_albumid"],
+                     "$albumartist - $album",
+                     merge_func=self._merge_albums,
+                 )
+             else:
+                 self._run_command(
+-                    lib.items(args),
++                    lib.items(args, limit=opts.limit),
+                     keys or ["mb_trackid", "mb_albumid"],
+                     "$albumartist - $album - $title",
+                     merge_func=self._merge_items,
+diff --git a/beetsplug/embedart.py b/beetsplug/embedart.py
+index 43858c0..3555e3f 100644
+--- a/beetsplug/embedart.py
++++ b/beetsplug/embedart.py
+@@ -27,6 +27,7 @@ if TYPE_CHECKING:
+ 
+ class EmbedArtCLIOpts(Protocol):
+     file: str | None
++    limit: int | None
+     url: str | None
+     yes: bool | None
+ 
+@@ -34,10 +35,12 @@ class EmbedArtCLIOpts(Protocol):
+ class ExtractArtCLIOpts(Protocol):
+     associate: bool | None
+     filename: str | None
++    limit: int | None
+     outpath: str | None
+ 
+ 
+ class ClearArtCLIOpts(Protocol):
++    limit: int | None
+     yes: bool | None
+ 
+ 
+@@ -132,7 +135,7 @@ class EmbedCoverArtPlugin(BeetsPlugin):
+                 if not imagepath.is_file():
+                     raise UserError(f"image file {imagepath} not found")
+ 
+-                items = lib.items(args)
++                items = lib.items(args, limit=opts.limit)
+ 
+                 # Confirm with user.
+                 if not opts.yes and not _confirm(items, not opts.file):
+@@ -168,7 +171,7 @@ class EmbedCoverArtPlugin(BeetsPlugin):
+                 except Exception as e:
+                     self._log.error("Unable to save image: {}", e)
+                     return
+-                items = lib.items(args)
++                items = lib.items(args, limit=opts.limit)
+                 # Confirm with user.
+                 if not opts.yes and not _confirm(items, not opts.url):
+                     tempimg.unlink()
+@@ -186,7 +189,7 @@ class EmbedCoverArtPlugin(BeetsPlugin):
+                     )
+                 tempimg.unlink()
+             else:
+-                albums = lib.albums(args)
++                albums = lib.albums(args, limit=opts.limit)
+                 # Confirm with user.
+                 if not opts.yes and not _confirm(albums, not opts.file):
+                     return
+@@ -202,6 +205,7 @@ class EmbedCoverArtPlugin(BeetsPlugin):
+                     )
+                     self.remove_artfile(album)
+ 
++        embed_cmd.parser.add_limit_option()
+         embed_cmd.func = embed_func
+ 
+         # Extract command.
+@@ -228,7 +232,9 @@ class EmbedCoverArtPlugin(BeetsPlugin):
+         ) -> None:
+             if opts.outpath:
+                 art.extract_first(
+-                    self._log, normpath(Path(opts.outpath)), lib.items(args)
++                    self._log,
++                    normpath(Path(opts.outpath)),
++                    lib.items(args, limit=opts.limit),
+                 )
+             else:
+                 filename = Path(opts.filename or config["art_filename"].get())
+@@ -237,7 +243,7 @@ class EmbedCoverArtPlugin(BeetsPlugin):
+                         "Only specify a name rather than a path for -n"
+                     )
+                     return
+-                for album in lib.albums(args):
++                for album in lib.albums(args, limit=opts.limit):
+                     if opts.associate and (
+                         artpath := art.extract_first(
+                             self._log, album.filepath / filename, album.items()
+@@ -246,6 +252,7 @@ class EmbedCoverArtPlugin(BeetsPlugin):
+                         album.set_art(artpath)
+                         album.store()
+ 
++        extract_cmd.parser.add_limit_option()
+         extract_cmd.func = extract_func
+ 
+         # Clear command.
+@@ -259,12 +266,13 @@ class EmbedCoverArtPlugin(BeetsPlugin):
+         def clear_func(
+             lib: Library, opts: ClearArtCLIOpts, args: list[str]
+         ) -> None:
+-            items = lib.items(args)
++            items = lib.items(args, limit=opts.limit)
+             # Confirm with user.
+             if not opts.yes and not _confirm(items, False):
+                 return
+-            art.clear(self._log, lib, args)
++            art.clear(self._log, lib, args, opts.limit)
+ 
++        clear_cmd.parser.add_limit_option()
+         clear_cmd.func = clear_func
+ 
+         return [embed_cmd, extract_cmd, clear_cmd]
+diff --git a/beetsplug/export.py b/beetsplug/export.py
+index f9b906f..15e1304 100644
+--- a/beetsplug/export.py
++++ b/beetsplug/export.py
+@@ -35,6 +35,7 @@ class ExportCLIOpts(Protocol):
+     album: bool
+     append: bool
+     included_keys: Sequence[str]
++    limit: int | None
+     output: str | None
+     format: Format | None
+ 
+@@ -132,6 +133,7 @@ class ExportPlugin(BeetsPlugin):
+             default=self.config["default_format"].get(),
+             help="the output format: json|jsonlines|csv|xml",
+         )
++        cmd.parser.add_limit_option(flags=("--limit",))
+         return [cmd]
+ 
+     def run(
+@@ -167,7 +169,9 @@ class ExportPlugin(BeetsPlugin):
+         ]
+ 
+         def collect_data() -> Iterator[JSONDict]:
+-            for data_emitter in data_collector(lib, args, album=opts.album):
++            for data_emitter in data_collector(
++                lib, args, album=opts.album, limit=opts.limit
++            ):
+                 try:
+                     data, _ = data_emitter(included_keys or "*")
+                 except (mediafile.UnreadableFileError, OSError) as ex:
+diff --git a/beetsplug/fetchart.py b/beetsplug/fetchart.py
+index 5e51f19..2b82f26 100644
+--- a/beetsplug/fetchart.py
++++ b/beetsplug/fetchart.py
+@@ -33,6 +33,7 @@ if TYPE_CHECKING:
+ 
+ class FetchArtCLIOpts(Protocol):
+     force: bool
++    limit: int | None
+     quiet: bool
+ 
+ 
+@@ -1520,9 +1521,12 @@ class FetchArtPlugin(plugins.BeetsPlugin, RequestMixin):
+             default=False,
+             help="quiet mode: do not output albums that already have artwork",
+         )
++        cmd.parser.add_limit_option()
+ 
+         def func(lib: Library, opts: FetchArtCLIOpts, args: list[str]) -> None:
+-            self.batch_fetch_art(lib, lib.albums(args), opts.force, opts.quiet)
++            self.batch_fetch_art(
++                lib, lib.albums(args, limit=opts.limit), opts.force, opts.quiet
++            )
+ 
+         cmd.func = func
+         return [cmd]
+diff --git a/beetsplug/ftintitle.py b/beetsplug/ftintitle.py
+index 200e3fa..f4c21a1 100644
+--- a/beetsplug/ftintitle.py
++++ b/beetsplug/ftintitle.py
+@@ -243,6 +243,7 @@ class FtInTitlePlugin(plugins.BeetsPlugin):
+             default=None,
+             help="drop featuring from artists and ignore title update",
+         )
++        self._command.parser.add_limit_option()
+ 
+         self.import_stages = [self.imported]
+         if self.auto:
+@@ -262,7 +263,7 @@ class FtInTitlePlugin(plugins.BeetsPlugin):
+             self.config.set_args(opts)
+             write = ui.should_write()
+ 
+-            for item in lib.items(args):
++            for item in lib.items(args, limit=opts.limit):
+                 if self.ft_in_title(item, item.get("albumartist") or ""):
+                     item.store()
+                     if write:
+diff --git a/beetsplug/info.py b/beetsplug/info.py
+index b92376e..9896385 100644
+--- a/beetsplug/info.py
++++ b/beetsplug/info.py
+@@ -30,11 +30,15 @@ class InfoCLIOpts(Protocol):
+     included_keys: list[str]
+     keys_only: bool | None
+     library: bool | None
++    limit: int | None
+     summarize: bool | None
+ 
+ 
+ def tag_data(
+-    lib: Library, args: Iterable[str], album: bool = False
++    lib: Library,
++    args: Iterable[str],
++    album: bool = False,
++    limit: int | None = None,
+ ) -> Iterator[DataEmitter]:
+     query = []
+     for arg in args:
+@@ -45,7 +49,7 @@ def tag_data(
+             query.append(arg)
+ 
+     if query:
+-        for item in lib.items(query):
++        for item in lib.items(query, limit=limit):
+             yield tag_data_emitter(item.path)
+ 
+ 
+@@ -84,9 +88,14 @@ def tag_data_emitter(path: bytes) -> DataEmitter:
+ 
+ 
+ def library_data(
+-    lib: Library, args: Sequence[str], album: bool = False
++    lib: Library,
++    args: Sequence[str],
++    album: bool = False,
++    limit: int | None = None,
+ ) -> Iterator[DataEmitter]:
+-    for item in lib.albums(args) if album else lib.items(args):
++    for item in (
++        lib.albums(args, limit=limit) if album else lib.items(args, limit=limit)
++    ):
+         yield library_data_emitter(item)
+ 
+ 
+@@ -194,6 +203,7 @@ class InfoPlugin(BeetsPlugin):
+             "-k", "--keys-only", action="store_true", help="show only the keys"
+         )
+         cmd.parser.add_format_option(target="item")
++        cmd.parser.add_limit_option(flags=("--limit",))
+         return [cmd]
+ 
+     def run(self, lib: Library, opts: InfoCLIOpts, args: list[str]) -> None:
+@@ -223,7 +233,9 @@ class InfoPlugin(BeetsPlugin):
+ 
+         first = True
+         summary: dict[str, Any] = {}
+-        for data_emitter in data_collector(lib, args, album=opts.album):
++        for data_emitter in data_collector(
++            lib, args, album=opts.album, limit=opts.limit
++        ):
+             try:
+                 data, item = data_emitter(included_keys or "*")
+             except (mediafile.UnreadableFileError, OSError) as ex:
+diff --git a/beetsplug/ipfs.py b/beetsplug/ipfs.py
+index 91bcbd3..5b754d5 100644
+--- a/beetsplug/ipfs.py
++++ b/beetsplug/ipfs.py
+@@ -26,6 +26,7 @@ class IPFSCLIOpts(Protocol):
+     _list: bool | None
+     add: bool | None
+     get: bool | None
++    limit: int | None
+     play: bool | None
+     publish: bool | None
+ 
+@@ -77,7 +78,7 @@ class IPFSPlugin(BeetsPlugin):
+ 
+         def func(lib: Library, opts: IPFSCLIOpts, args: list[str]) -> None:
+             if opts.add:
+-                for album in lib.albums(args):
++                for album in lib.albums(args, limit=opts.limit):
+                     if len(album.items()) == 0:
+                         self._log.info(
+                             "{} does not contain items, aborting", album
+@@ -96,11 +97,12 @@ class IPFSPlugin(BeetsPlugin):
+                 self.ipfs_import(lib, args)
+ 
+             if opts._list:
+-                self.ipfs_list(lib, args)
++                self.ipfs_list(lib, args, opts.limit)
+ 
+             if opts.play:
+                 self.ipfs_play(lib, opts, args)
+ 
++        cmd.parser.add_limit_option(flags=("--limit",))
+         cmd.func = func
+         return [cmd]
+ 
+@@ -118,7 +120,7 @@ class IPFSPlugin(BeetsPlugin):
+         config["play"]["relative_to"] = None
+         # set opts that `_play_command` expects
+         play_opts = SimpleNamespace(
+-            album=True, randomize=None, args=None, yes=None
++            album=True, limit=opts.limit, randomize=None, args=None, yes=None
+         )
+         with self.remote_lib(lib) as jlib:
+             player._play_command(jlib, play_opts, args)
+@@ -265,10 +267,12 @@ class IPFSPlugin(BeetsPlugin):
+                 return True
+         return False
+ 
+-    def ipfs_list(self, lib: Library, args: Sequence[str]) -> None:
++    def ipfs_list(
++        self, lib: Library, args: Sequence[str], limit: int | None = None
++    ) -> None:
+         fmt = config["format_album"].get()
+         try:
+-            albums = self.query(lib, args)
++            albums = self.query(lib, args, limit=limit)
+         except OSError:
+             ui.print_("No imported libraries yet.")
+             return
+@@ -276,9 +280,11 @@ class IPFSPlugin(BeetsPlugin):
+         for album in albums:
+             ui.print_(format(album, fmt), " : ", album.ipfs.decode())
+ 
+-    def query(self, lib: Library, args: str | Sequence[str]) -> Results[Album]:
++    def query(
++        self, lib: Library, args: str | Sequence[str], limit: int | None = None
++    ) -> Results[Album]:
+         with self.remote_lib(lib) as rlib:
+-            return rlib.albums(args)
++            return rlib.albums(args, limit=limit)
+ 
+     def _remote_libs_path(self, lib: Library) -> bytes:
+         lib_root = os.path.dirname(os.fsencode(lib.path))
+diff --git a/beetsplug/keyfinder.py b/beetsplug/keyfinder.py
+index 9b41766..c953047 100644
+--- a/beetsplug/keyfinder.py
++++ b/beetsplug/keyfinder.py
+@@ -29,13 +29,16 @@ class KeyFinderPlugin(BeetsPlugin):
+         cmd = ui.Subcommand(
+             "keyfinder", help="detect and add initial key from audio"
+         )
++        cmd.parser.add_limit_option()
+         cmd.func = self.command
+         return [cmd]
+ 
+     def command(
+         self, lib: Library, opts: optparse.Values, args: list[str]
+     ) -> None:
+-        self.find_key(lib.items(args), write=ui.should_write())
++        self.find_key(
++            lib.items(args, limit=opts.limit), write=ui.should_write()
++        )
+ 
+     def imported(self, session: ImportSession, task: ImportTask) -> None:
+         self.find_key(task.imported_items())
+diff --git a/beetsplug/limit.py b/beetsplug/limit.py
+index abd0780..3033b3d 100644
+--- a/beetsplug/limit.py
++++ b/beetsplug/limit.py
+@@ -29,6 +29,7 @@ if TYPE_CHECKING:
+ class LsLimitCLIOpts(Protocol):
+     album: bool
+     head: int | None
++    limit: int | None
+     tail: int | None
+ 
+ 
+@@ -42,9 +43,9 @@ def lslimit(lib: Library, opts: LsLimitCLIOpts, args: list[str]) -> None:
+ 
+     objs: Iterable[LibModel]
+     if opts.album:
+-        objs = lib.albums(args)
++        objs = lib.albums(args, limit=opts.limit)
+     else:
+-        objs = lib.items(args)
++        objs = lib.items(args, limit=opts.limit)
+ 
+     if opts.head is not None:
+         objs = islice(objs, opts.head)
+@@ -66,6 +67,7 @@ lslimit_cmd.parser.add_option(
+ )
+ 
+ lslimit_cmd.parser.add_all_common_options()
++lslimit_cmd.parser.add_limit_option()
+ lslimit_cmd.func = lslimit
+ 
+ 
+diff --git a/beetsplug/lyrics.py b/beetsplug/lyrics.py
+index 6d19c00..bc6bc2a 100644
+--- a/beetsplug/lyrics.py
++++ b/beetsplug/lyrics.py
+@@ -57,6 +57,7 @@ if TYPE_CHECKING:
+ 
+ 
+ class LyricsCLIOpts(Protocol):
++    limit: int | None
+     print: bool
+     rest_directory: str | None
+ 
+@@ -1231,7 +1232,7 @@ class LyricsPlugin(LyricsRequestHandler, plugins.BeetsPlugin):
+             # The "write to files" option corresponds to the
+             # import_write config value.
+             self.config.set(vars(opts))
+-            items = list(lib.items(args))
++            items = list(lib.items(args, limit=opts.limit))
+             for item in items:
+                 self.add_item_lyrics(item, ui.should_write())
+                 if item.lyrics and opts.print:
+@@ -1242,6 +1243,7 @@ class LyricsPlugin(LyricsRequestHandler, plugins.BeetsPlugin):
+             ):
+                 RestFiles(Path(opts.rest_directory).expanduser()).write(items)
+ 
++        cmd.parser.add_limit_option(flags=("--limit",))
+         cmd.func = func
+         return [cmd]
+ 
+diff --git a/beetsplug/mbsubmit.py b/beetsplug/mbsubmit.py
+index 25bc0bc..f142d07 100644
+--- a/beetsplug/mbsubmit.py
++++ b/beetsplug/mbsubmit.py
+@@ -88,9 +88,10 @@ class MBSubmitPlugin(BeetsPlugin):
+         )
+ 
+         def func(lib: Library, opts: optparse.Values, args: list[str]) -> None:
+-            items = lib.items(args)
++            items = lib.items(args, limit=opts.limit)
+             self._mbsubmit(items)
+ 
++        mbsubmit_cmd.parser.add_limit_option()
+         mbsubmit_cmd.func = func
+ 
+         return [mbsubmit_cmd]
+diff --git a/beetsplug/mbsync.py b/beetsplug/mbsync.py
+index f89d998..a193507 100644
+--- a/beetsplug/mbsync.py
++++ b/beetsplug/mbsync.py
+@@ -16,6 +16,7 @@ if TYPE_CHECKING:
+ 
+ 
+ class MBSyncCLIOpts(Protocol):
++    limit: int | None
+     move: bool | None
+     pretend: bool
+     write: bool | None
+@@ -57,6 +58,7 @@ class MBSyncPlugin(BeetsPlugin):
+             help="don't write updated metadata to files",
+         )
+         cmd.parser.add_format_option()
++        cmd.parser.add_limit_option()
+         cmd.func = self.func
+         return [cmd]
+ 
+@@ -66,8 +68,8 @@ class MBSyncPlugin(BeetsPlugin):
+         pretend = opts.pretend
+         write = ui.should_write(opts.write)
+ 
+-        self.singletons(lib, args, move, pretend, write)
+-        self.albums(lib, args, move, pretend, write)
++        self.singletons(lib, args, move, pretend, write, opts.limit)
++        self.albums(lib, args, move, pretend, write, opts.limit)
+ 
+     def singletons(
+         self,
+@@ -76,11 +78,12 @@ class MBSyncPlugin(BeetsPlugin):
+         move: bool,
+         pretend: bool,
+         write: bool,
++        limit: int | None,
+     ) -> None:
+         """Retrieve and apply info from the autotagger for items matched by
+         query.
+         """
+-        for item in lib.items([*query, "singleton:true"]):
++        for item in lib.items([*query, "singleton:true"], limit=limit):
+             if not (track_id := item.mb_trackid):
+                 self._log.info(
+                     "Skipping singleton with no mb_trackid: {}", item
+@@ -111,12 +114,13 @@ class MBSyncPlugin(BeetsPlugin):
+         move: bool,
+         pretend: bool,
+         write: bool,
++        limit: int | None,
+     ) -> None:
+         """Retrieve and apply info from the autotagger for albums matched by
+         query and their items.
+         """
+         # Process matching albums.
+-        for album in lib.albums(query):
++        for album in lib.albums(query, limit=limit):
+             if not (album_id := album.mb_albumid):
+                 self._log.info("Skipping album with no mb_albumid: {}", album)
+                 continue
+diff --git a/beetsplug/metasync/__init__.py b/beetsplug/metasync/__init__.py
+index 6663b15..1826f13 100644
+--- a/beetsplug/metasync/__init__.py
++++ b/beetsplug/metasync/__init__.py
+@@ -25,6 +25,7 @@ SOURCES = {"amarok": "Amarok", "itunes": "Itunes"}
+ 
+ 
+ class MetaSyncCLIOpts(Protocol):
++    limit: int | None
+     pretend: bool | None
+     sources: list[str]
+ 
+@@ -90,6 +91,7 @@ class MetaSyncPlugin(BeetsPlugin):
+             help="comma-separated list of sources to sync",
+         )
+         cmd.parser.add_format_option()
++        cmd.parser.add_limit_option()
+         cmd.func = self.func
+         return [cmd]
+ 
+@@ -106,7 +108,7 @@ class MetaSyncPlugin(BeetsPlugin):
+         sources = sources or self.config["source"].as_str_seq()
+ 
+         meta_source_instances = {}
+-        items = lib.items(args)
++        items = lib.items(args, limit=opts.limit)
+ 
+         # Avoid needlessly instantiating meta sources (can be expensive)
+         if not items:
+diff --git a/beetsplug/missing.py b/beetsplug/missing.py
+index fbe502c..1fc37dd 100644
+--- a/beetsplug/missing.py
++++ b/beetsplug/missing.py
+@@ -153,6 +153,7 @@ class MissingPlugin(MusicBrainzAPIMixin, BeetsPlugin):
+             ),
+         )
+         self._command.parser.add_format_option()
++        self._command.parser.add_limit_option()
+ 
+     def commands(self) -> list[Subcommand]:
+         def _miss(lib: Library, opts: optparse.Values, args: list[str]) -> None:
+@@ -160,16 +161,18 @@ class MissingPlugin(MusicBrainzAPIMixin, BeetsPlugin):
+             albms = self.config["album"].get()
+ 
+             helper = self._missing_albums if albms else self._missing_tracks
+-            helper(lib, args)
++            helper(lib, args, opts.limit)
+ 
+         self._command.func = _miss
+         return [self._command]
+ 
+-    def _missing_tracks(self, lib: Library, query: list[str]) -> None:
++    def _missing_tracks(
++        self, lib: Library, query: list[str], limit: int | None
++    ) -> None:
+         """Print a listing of tracks missing from each album in the library
+         matching query.
+         """
+-        albums = lib.albums(query)
++        albums = lib.albums(query, limit=limit)
+ 
+         count = self.config["count"].get()
+         total = self.config["total"].get()
+@@ -192,7 +195,9 @@ class MissingPlugin(MusicBrainzAPIMixin, BeetsPlugin):
+                 for item in self._missing(album):
+                     print_(format(item, fmt))
+ 
+-    def _missing_albums(self, lib: Library, query: list[str]) -> None:
++    def _missing_albums(
++        self, lib: Library, query: list[str], limit: int | None
++    ) -> None:
+         """Print a listing of albums missing from each artist in the library
+         matching query.
+         """
+@@ -200,7 +205,7 @@ class MissingPlugin(MusicBrainzAPIMixin, BeetsPlugin):
+ 
+         # build dict mapping artist to set of their release group ids in library
+         album_ids_by_artist = defaultdict(set)
+-        for album in lib.albums(query):
++        for album in lib.albums(query, limit=limit):
+             # TODO(@snejus): Some releases have different `albumartist` for the
+             # same `mb_albumartistid`. Since we're grouping by the combination
+             # of these two fields, we end up processing the same
+diff --git a/beetsplug/parentwork.py b/beetsplug/parentwork.py
+index 9e38799..4cdd143 100644
+--- a/beetsplug/parentwork.py
++++ b/beetsplug/parentwork.py
+@@ -38,7 +38,7 @@ class ParentWorkPlugin(MusicBrainzAPIMixin, BeetsPlugin):
+             force_parent = self.config["force"].get(bool)
+             write = ui.should_write()
+ 
+-            for item in lib.items(args):
++            for item in lib.items(args, limit=opts.limit):
+                 changed = self.find_work(item, force_parent, verbose=True)
+                 if changed:
+                     item.store()
+@@ -58,6 +58,7 @@ class ParentWorkPlugin(MusicBrainzAPIMixin, BeetsPlugin):
+             help="re-fetch when parent work is already present",
+         )
+ 
++        command.parser.add_limit_option()
+         command.func = func
+         return [command]
+ 
+diff --git a/beetsplug/play.py b/beetsplug/play.py
+index 8b5f46a..a3d5152 100644
+--- a/beetsplug/play.py
++++ b/beetsplug/play.py
+@@ -32,6 +32,7 @@ ARGS_MARKER = "$args"
+ class PlayCLIOpts(Protocol):
+     album: bool
+     args: str | None
++    limit: int | None
+     randomize: bool | None
+     yes: bool | None
+ 
+@@ -110,6 +111,7 @@ class PlayPlugin(BeetsPlugin):
+             action="store_true",
+             help="skip the warning threshold",
+         )
++        play_command.parser.add_limit_option()
+         play_command.func = self._play_command
+         return [play_command]
+ 
+@@ -127,7 +129,7 @@ class PlayPlugin(BeetsPlugin):
+         # playlist.
+         selection: Sequence[LibModel]
+         if opts.album:
+-            selection = lib.albums(args)
++            selection = lib.albums(args, limit=opts.limit)
+             paths = []
+ 
+             sort = lib.get_default_album_sort()
+@@ -140,7 +142,7 @@ class PlayPlugin(BeetsPlugin):
+ 
+         # Perform item query and add tracks to playlist.
+         else:
+-            selection = lib.items(args)
++            selection = lib.items(args, limit=opts.limit)
+             paths = [item.path for item in selection]
+             item_type = "track"
+ 
+diff --git a/beetsplug/random.py b/beetsplug/random.py
+index 8488fc2..4ca0d30 100644
+--- a/beetsplug/random.py
++++ b/beetsplug/random.py
+@@ -20,6 +20,7 @@ class RandomCLIOpts(Protocol):
+     album: bool
+     equal_chance: bool
+     field: str
++    limit: int | None
+     number: int
+     time: float | None
+ 
+@@ -27,7 +28,11 @@ class RandomCLIOpts(Protocol):
+ def random_func(lib: Library, opts: RandomCLIOpts, args: list[str]) -> None:
+     """Select some random items or albums and print the results."""
+     # Fetch all the objects matching the query into a list.
+-    objs = lib.albums(args) if opts.album else lib.items(args)
++    objs = (
++        lib.albums(args, limit=opts.limit)
++        if opts.album
++        else lib.items(args, limit=opts.limit)
++    )
+ 
+     # Print a random subset.
+     for obj in random_objs(
+@@ -71,6 +76,7 @@ random_cmd.parser.add_option(
+     help="field to use for equal chance sampling (default: albumartist)",
+ )
+ random_cmd.parser.add_all_common_options()
++random_cmd.parser.add_limit_option()
+ random_cmd.func = random_func
+ 
+ 
+diff --git a/beetsplug/replace.py b/beetsplug/replace.py
+index 02de6fb..8fab87b 100644
+--- a/beetsplug/replace.py
++++ b/beetsplug/replace.py
+@@ -22,12 +22,11 @@ class ReplacePlugin(BeetsPlugin):
+         cmd = ui.Subcommand(
+             "replace", help="replace audio file while keeping tags"
+         )
++        cmd.parser.add_limit_option()
+         cmd.func = self.run
+         return [cmd]
+ 
+-    def run(
+-        self, lib: Library, _opts: optparse.Values, args: list[str]
+-    ) -> None:
++    def run(self, lib: Library, opts: optparse.Values, args: list[str]) -> None:
+         if len(args) < 2:
+             raise UserError("Usage: beet replace <query> <new_file_path>")
+ 
+@@ -36,7 +35,7 @@ class ReplacePlugin(BeetsPlugin):
+ 
+         self.file_check(new_file_path)
+ 
+-        item_list = list(lib.items(item_query))
++        item_list = list(lib.items(item_query, limit=opts.limit))
+ 
+         if not item_list:
+             raise UserError("No matching songs found.")
+diff --git a/beetsplug/replaygain.py b/beetsplug/replaygain.py
+index 74252d6..d12d981 100644
+--- a/beetsplug/replaygain.py
++++ b/beetsplug/replaygain.py
+@@ -41,6 +41,7 @@ if TYPE_CHECKING:
+ class ReplayGainCLIOpts(Protocol):
+     album: bool
+     force: bool
++    limit: int | None
+     threads: int | None
+     write: bool | None
+ 
+@@ -1606,7 +1607,7 @@ class ReplayGainPlugin(BeetsPlugin):
+                 self.open_pool(threads)
+ 
+             if opts.album:
+-                albums = lib.albums(args)
++                albums = lib.albums(args, limit=opts.limit)
+                 self._log.info(
+                     f"Analyzing {len(albums)} albums ~"
+                     f" {self.backend_name} backend..."
+@@ -1614,7 +1615,7 @@ class ReplayGainPlugin(BeetsPlugin):
+                 for album in albums:
+                     self.handle_album(album, write, force)
+             else:
+-                items = lib.items(args)
++                items = lib.items(args, limit=opts.limit)
+                 self._log.info(
+                     f"Analyzing {len(items)} tracks ~"
+                     f" {self.backend_name} backend..."
+@@ -1666,5 +1667,6 @@ class ReplayGainPlugin(BeetsPlugin):
+             action="store_false",
+             help="don't write metadata (opposite of -w)",
+         )
++        cmd.parser.add_limit_option()
+         cmd.func = self.command_func
+         return [cmd]
+diff --git a/beetsplug/scrub.py b/beetsplug/scrub.py
+index 35df487..a7f4846 100644
+--- a/beetsplug/scrub.py
++++ b/beetsplug/scrub.py
+@@ -18,6 +18,7 @@ if TYPE_CHECKING:
+ 
+ 
+ class ScrubCLIOpts(Protocol):
++    limit: int | None
+     write: bool
+ 
+ 
+@@ -55,7 +56,7 @@ class ScrubPlugin(BeetsPlugin):
+             lib: Library, opts: ScrubCLIOpts, args: list[str]
+         ) -> None:
+             # Walk through matching files and remove tags.
+-            for item in lib.items(args):
++            for item in lib.items(args, limit=opts.limit):
+                 self._log.info("scrubbing: {.filepath}", item)
+                 self._scrub_item(item, opts.write)
+ 
+@@ -68,6 +69,7 @@ class ScrubPlugin(BeetsPlugin):
+             default=True,
+             help="leave tags empty",
+         )
++        scrub_cmd.parser.add_limit_option()
+         scrub_cmd.func = scrub_func
+ 
+         return [scrub_cmd]
+diff --git a/beetsplug/spotify.py b/beetsplug/spotify.py
+index e880703..9989831 100644
+--- a/beetsplug/spotify.py
++++ b/beetsplug/spotify.py
+@@ -43,6 +43,7 @@ class SpotifyCLIOpts(Protocol):
+ 
+ class SpotifySyncCLIOpts(Protocol):
+     force_refetch: bool
++    limit: int | None
+ 
+ 
+ class TrackDetails(TypedDict):
+@@ -580,11 +581,12 @@ class SpotifyPlugin(
+             default=False,
+             help="re-download data when already present",
+         )
++        sync_cmd.parser.add_limit_option()
+ 
+         def func(
+             lib: Library, opts: SpotifySyncCLIOpts, args: list[str]
+         ) -> None:
+-            items = lib.items(args)
++            items = lib.items(args, limit=opts.limit)
+             self._fetch_info(lib, items, ui.should_write(), opts.force_refetch)
+ 
+         sync_cmd.func = func
+diff --git a/beetsplug/thumbnails.py b/beetsplug/thumbnails.py
+index 355ef20..8c1a7d1 100644
+--- a/beetsplug/thumbnails.py
++++ b/beetsplug/thumbnails.py
+@@ -61,6 +61,7 @@ class ThumbnailsPlugin(BeetsPlugin):
+             default=False,
+             help="create Dolphin-compatible thumbnail information (for KDE)",
+         )
++        thumbnails_command.parser.add_limit_option()
+         thumbnails_command.func = self.process_query
+ 
+         return [thumbnails_command]
+@@ -70,7 +71,7 @@ class ThumbnailsPlugin(BeetsPlugin):
+     ) -> None:
+         self.config.set_args(opts)
+         if self._check_local_ok():
+-            for album in lib.albums(args):
++            for album in lib.albums(args, limit=opts.limit):
+                 self.process_album(album)
+ 
+     def _check_local_ok(self) -> bool:
+diff --git a/beetsplug/tidal/__init__.py b/beetsplug/tidal/__init__.py
+index eed45d4..2f85166 100644
+--- a/beetsplug/tidal/__init__.py
++++ b/beetsplug/tidal/__init__.py
+@@ -43,6 +43,7 @@ class TidalCLIOpts(Protocol):
+ class TidalSyncCLIOpts(Protocol):
+     album: bool
+     force: bool
++    limit: int | None
+     write: bool
+ 
+ 
+@@ -664,6 +665,7 @@ class TidalPlugin(MetadataSourcePlugin):
+             default=False,
+             help="write updated tags to media files (default: False)",
+         )
++        tidalsync_cmd.parser.add_limit_option()
+         tidalsync_cmd.parser.set_usage(
+             "Usage: beet tidalsync <query> [options]"
+         )
+@@ -675,11 +677,15 @@ class TidalPlugin(MetadataSourcePlugin):
+ 
+             if opts.album:
+                 self.sync_album_popularity(
+-                    lib.albums(query), write=opts.write, force=opts.force
++                    lib.albums(query, limit=opts.limit),
++                    write=opts.write,
++                    force=opts.force,
+                 )
+             else:
+                 self.sync_item_popularity(
+-                    lib.items(query), write=opts.write, force=opts.force
++                    lib.items(query, limit=opts.limit),
++                    write=opts.write,
++                    force=opts.force,
+                 )
+ 
+         tidalsync_cmd.func = sync_func
+diff --git a/beetsplug/titlecase.py b/beetsplug/titlecase.py
+index 831db31..0d3a310 100644
+--- a/beetsplug/titlecase.py
++++ b/beetsplug/titlecase.py
+@@ -159,13 +159,14 @@ class TitlecasePlugin(BeetsPlugin):
+     def commands(self) -> list[ui.Subcommand]:
+         def func(lib: Library, opts: optparse.Values, args: list[str]) -> None:
+             write = ui.should_write()
+-            for item in lib.items(args):
++            for item in lib.items(args, limit=opts.limit):
+                 self._log.info(f"titlecasing {item.title}:")
+                 self.titlecase_fields(item)
+                 item.store()
+                 if write:
+                     item.try_write()
+ 
++        self._command.parser.add_limit_option()
+         self._command.func = func
+         return [self._command]
+ 
+diff --git a/beetsplug/zero.py b/beetsplug/zero.py
+index 7934463..e0d7755 100644
+--- a/beetsplug/zero.py
++++ b/beetsplug/zero.py
+@@ -90,9 +90,10 @@ class ZeroPlugin(BeetsPlugin):
+                 "Remove fields for all items? (Y/n)", True
+             ):
+                 return
+-            for item in lib.items(args):
++            for item in lib.items(args, limit=opts.limit):
+                 self.process_item(item)
+ 
++        zero_command.parser.add_limit_option()
+         zero_command.func = zero_fields
+         return [zero_command]
+ 

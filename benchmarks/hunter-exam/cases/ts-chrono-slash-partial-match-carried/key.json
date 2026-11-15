@@ -1,0 +1,26 @@
+{
+  "id": "ts-chrono-slash-partial-match-carried",
+  "language": "typescript",
+  "project": "chrono",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "partial-match-in-invalid-date",
+      "area": "logic",
+      "severity": "advisory",
+      "class": "missing-guard",
+      "depth": 3,
+      "what": "The month/year slash parser extracts \"6/2018\" from inside an invalid numeric date such as \"50/6/2018\" (parsing resumes within the rejected match), returning a bogus June 2018 result because it no longer checks that the match is not the tail of a longer number or date.",
+      "sites": [
+        {
+          "path": "src/locales/en/parsers/ENSlashMonthFormatParser.ts",
+          "start_line": 20,
+          "end_line": 25
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

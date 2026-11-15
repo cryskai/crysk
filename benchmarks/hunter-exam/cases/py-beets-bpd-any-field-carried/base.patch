@@ -1,0 +1,64 @@
+diff --git a/beetsplug/plexupdate.py b/beetsplug/plexupdate.py
+index 8b1feca..d954c3c 100644
+--- a/beetsplug/plexupdate.py
++++ b/beetsplug/plexupdate.py
+@@ -35,10 +35,8 @@ def get_music_section(
+     api_endpoint = append_token("library/sections", token)
+     url = urljoin(f"{get_protocol(secure)}://{host}:{port}", api_endpoint)
+ 
+-    # Sends request.
+     r = requests.get(url, verify=not ignore_cert_errors, timeout=10)
+ 
+-    # Parse xml tree and extract music section key.
+     tree = ElementTree.fromstring(r.content)
+     for child in tree.findall("Directory"):
+         if child.get("title") == library_name:
+@@ -61,7 +59,6 @@ def update_plex(
+         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+     """Sends request to the Plex api to start a library refresh.
+     """
+-    # Getting section key and build url.
+     section_key = get_music_section(
+         host, port, token, library_name, secure, ignore_cert_errors
+     )
+@@ -69,7 +66,6 @@ def update_plex(
+     api_endpoint = append_token(api_endpoint, token)
+     url = urljoin(f"{get_protocol(secure)}://{host}:{port}", api_endpoint)
+ 
+-    # Sends request and returns requests object.
+     return requests.get(url, verify=not ignore_cert_errors, timeout=10)
+ 
+ 
+@@ -90,7 +86,6 @@ class PlexUpdate(BeetsPlugin):
+     def __init__(self) -> None:
+         super().__init__()
+ 
+-        # Adding defaults.
+         config["plex"].add(
+             {
+                 "host": "localhost",
+@@ -113,7 +108,6 @@ class PlexUpdate(BeetsPlugin):
+         """When the client exists try to send refresh request to Plex server."""
+         self._log.info("Updating Plex library...")
+ 
+-        # Try to send update request.
+         try:
+             update_plex(
+                 config["plex"]["host"].get(),
+diff --git a/test/plugins/test_bpd.py b/test/plugins/test_bpd.py
+index e95f9e1..e21a8d7 100644
+--- a/test/plugins/test_bpd.py
++++ b/test/plugins/test_bpd.py
+@@ -1010,12 +1010,6 @@ class BPDDatabaseTest(BPDTestHelper):
+         self._assert_ok(response)
+         assert self.item1.title == response.data["Title"]
+ 
+-    def test_cmd_search_any(self):
+-        with self.run_bpd() as client:
+-            response = client.send_command("search", "any", "1")
+-        self._assert_ok(response)
+-        assert self.item1.title == response.data["Title"]
+-
+     def test_cmd_list(self):
+         with self.run_bpd() as client:
+             responses = client.send_commands(

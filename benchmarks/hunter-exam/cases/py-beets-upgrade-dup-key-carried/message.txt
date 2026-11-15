@@ -1,0 +1,1 @@
+Add "Rescan directory" import prompt choice

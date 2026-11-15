@@ -1,0 +1,26 @@
+{
+  "id": "py-beets-empty-leading-path-field-carried",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "leading-separator-escapes-basedir",
+      "area": "security",
+      "severity": "blocking",
+      "class": "path-traversal",
+      "depth": 2,
+      "what": "The legalized path fragment is joined to basedir without stripping leading separators; when an empty leading template field and custom replacements leave the fragment starting with a separator, os.path.join discards basedir and the item's destination becomes an absolute path outside the library directory.",
+      "sites": [
+        {
+          "path": "beets/library/models.py",
+          "start_line": 1277,
+          "end_line": 1291
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

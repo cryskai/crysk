@@ -1,0 +1,917 @@
+diff --git a/src/context/context.ts b/src/context/context.ts
+index 9dcb711..ece6da1 100644
+--- a/src/context/context.ts
++++ b/src/context/context.ts
+@@ -31,6 +31,10 @@ export class Context {
+    * The normalized liquid options object
+    */
+   public opts: NormalizedFullOptions
++  /**
++   * Reference to the Liquid instance for filter resolution
++   */
++  public liquid?: any
+   /**
+    * Throw when accessing undefined variable?
+    */
+@@ -38,7 +42,7 @@ export class Context {
+   public ownPropertyOnly: boolean;
+   public memoryLimit: Limiter;
+   public renderLimit: Limiter;
+-  public constructor (env: object = {}, opts: NormalizedFullOptions = defaultOptions, renderOptions: RenderOptions = {}, { memoryLimit, renderLimit }: { [key: string]: Limiter } = {}) {
++  public constructor (env: object = {}, opts: NormalizedFullOptions = defaultOptions, renderOptions: RenderOptions = {}, { memoryLimit, renderLimit, liquid }: { memoryLimit?: Limiter, renderLimit?: Limiter, liquid?: any } = {}) {
+     this.sync = !!renderOptions.sync
+     this.opts = opts
+     this.globals = renderOptions.globals ?? opts.globals
+@@ -47,6 +51,7 @@ export class Context {
+     this.ownPropertyOnly = renderOptions.ownPropertyOnly ?? opts.ownPropertyOnly
+     this.memoryLimit = memoryLimit ?? new Limiter('memory alloc', renderOptions.memoryLimit ?? opts.memoryLimit)
+     this.renderLimit = renderLimit ?? new Limiter('template render', getPerformance().now() + (renderOptions.renderLimit ?? opts.renderLimit))
++    this.liquid = liquid
+   }
+   public getRegister<T> (key: string, defaultValue: T = undefined as T): T {
+     return (this.registers[key] = this.registers[key] || defaultValue)
+@@ -110,7 +115,8 @@ export class Context {
+       ownPropertyOnly: this.ownPropertyOnly
+     }, {
+       renderLimit: this.renderLimit,
+-      memoryLimit: this.memoryLimit
++      memoryLimit: this.memoryLimit,
++      liquid: this.liquid
+     })
+   }
+   private findScope (key: string | number) {
+diff --git a/src/index.ts b/src/index.ts
+index 721c21b..b6e6abc 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -11,7 +11,7 @@ export { Context, Scope } from './context'
+ export { Value, Hash, Template, FilterImplOptions, Tag, Filter, Output, Variable, VariableLocation, VariableSegments, Variables, StaticAnalysis, StaticAnalysisOptions, analyze, analyzeSync, Arguments, PartialScope } from './template'
+ export type { TagRenderReturn } from './template'
+ export { Token, TopLevelToken, TagToken, ValueToken } from './tokens'
+-export type { RangeToken, LiteralToken, QuotedToken, PropertyAccessToken, NumberToken } from './tokens'
++export type { RangeToken, LiteralToken, QuotedToken, PropertyAccessToken, NumberToken, FilteredValueToken } from './tokens'
+ export { TokenKind, Tokenizer, ParseStream, Parser } from './parser'
+ export { filters } from './filters'
+ export * from './tags'
+diff --git a/src/liquid-options.ts b/src/liquid-options.ts
+index 7ab1cbe..9588e0b 100644
+--- a/src/liquid-options.ts
++++ b/src/liquid-options.ts
+@@ -87,6 +87,8 @@ export interface LiquidOptions {
+   operators?: Operators;
+   /** Respect parameter order when using filters like "for ... reversed limit", Defaults to `false`. */
+   orderedFilterParameters?: boolean;
++  /** Allow parenthesized expressions as operands in conditions and loops, e.g. `{% if (foo | upcase) == "BAR" %}`. This is a non-standard extension to Liquid. Defaults to `false`. */
++  groupedExpressions?: boolean;
+   /** For DoS handling, limit total length of templates parsed in one `parse()` call. A typical PC can handle 1e8 (100M) characters without issues. */
+   parseLimit?: number;
+   /** For DoS handling, limit total time (in ms) for each `render()` call. */
+@@ -162,6 +164,7 @@ export interface NormalizedFullOptions extends NormalizedOptions {
+   globals: object;
+   keepOutputType: boolean;
+   operators: Operators;
++  groupedExpressions: boolean;
+   parseLimit: number;
+   renderLimit: number;
+   memoryLimit: number;
+@@ -198,6 +201,7 @@ export const defaultOptions: NormalizedFullOptions = {
+   globals: {},
+   keepOutputType: false,
+   operators: defaultOperators,
++  groupedExpressions: false,
+   memoryLimit: Infinity,
+   parseLimit: Infinity,
+   renderLimit: Infinity
+diff --git a/src/liquid.ts b/src/liquid.ts
+index 57ff273..057ab63 100644
+--- a/src/liquid.ts
++++ b/src/liquid.ts
+@@ -31,7 +31,7 @@ export class Liquid {
+   }
+ 
+   public _render (tpl: Template[], scope: Context | object | undefined, renderOptions: RenderOptions): IterableIterator<any> {
+-    const ctx = scope instanceof Context ? scope : new Context(scope, this.options, renderOptions)
++    const ctx = scope instanceof Context ? scope : new Context(scope, this.options, renderOptions, { liquid: this })
+     return this.renderer.renderTemplates(tpl, ctx)
+   }
+   public async render (tpl: Template[], scope?: object, renderOptions?: RenderOptions): Promise<any> {
+@@ -41,7 +41,7 @@ export class Liquid {
+     return toValueSync(this._render(tpl, scope, { ...renderOptions, sync: true }))
+   }
+   public renderToNodeStream (tpl: Template[], scope?: object, renderOptions: RenderOptions = {}): NodeJS.ReadableStream {
+-    const ctx = new Context(scope, this.options, renderOptions)
++    const ctx = new Context(scope, this.options, renderOptions, { liquid: this })
+     return this.renderer.renderTemplatesToNodeStream(tpl, ctx)
+   }
+ 
+@@ -88,7 +88,7 @@ export class Liquid {
+ 
+   public _evalValue (str: string, scope?: object | Context): IterableIterator<any> {
+     const value = new Value(str, this)
+-    const ctx = scope instanceof Context ? scope : new Context(scope, this.options)
++    const ctx = scope instanceof Context ? scope : new Context(scope, this.options, {}, { liquid: this })
+     return value.value(ctx)
+   }
+   public async evalValue (str: string, scope?: object | Context): Promise<any> {
+diff --git a/src/parser/parser.ts b/src/parser/parser.ts
+index f61f232..0485f35 100644
+--- a/src/parser/parser.ts
++++ b/src/parser/parser.ts
+@@ -33,7 +33,7 @@ export class Parser {
+   public parse (html: string, filepath?: string): Template[] {
+     html = String(html)
+     this.parseLimit.use(html.length)
+-    const tokenizer = new Tokenizer(html, this.liquid.options.operators, filepath)
++    const tokenizer = new Tokenizer(html, this.liquid.options.operators, filepath, undefined, this.liquid.options.groupedExpressions)
+     const tokens = tokenizer.readTopLevelTokens(this.liquid.options)
+     return this.parseTokens(tokens)
+   }
+diff --git a/src/parser/token-kind.ts b/src/parser/token-kind.ts
+index f091519..a29017c 100644
+--- a/src/parser/token-kind.ts
++++ b/src/parser/token-kind.ts
+@@ -12,5 +12,6 @@ export enum TokenKind {
+   Quoted = 1024,
+   Operator = 2048,
+   FilteredValue = 4096,
++  GroupedExpression = 8192,
+   Delimited = Tag | Output
+ }
+diff --git a/src/parser/tokenizer.spec.ts b/src/parser/tokenizer.spec.ts
+index 08cf084..776e018 100644
+--- a/src/parser/tokenizer.spec.ts
++++ b/src/parser/tokenizer.spec.ts
+@@ -1,4 +1,4 @@
+-import { LiquidTagToken, HTMLToken, QuotedToken, OutputToken, TagToken, OperatorToken, RangeToken, PropertyAccessToken, NumberToken, IdentifierToken } from '../tokens'
++import { LiquidTagToken, HTMLToken, QuotedToken, OutputToken, TagToken, OperatorToken, RangeToken, PropertyAccessToken, NumberToken, IdentifierToken, FilteredValueToken } from '../tokens'
+ import { Tokenizer } from './tokenizer'
+ import { defaultOperators } from '../render/operator'
+ import { createTrie } from '../util/operator-trie'
+@@ -229,24 +229,115 @@ describe('Tokenizer', function () {
+   })
+   describe('#readRange()', () => {
+     it('should read `(1..3)`', () => {
+-      const range = new Tokenizer('(1..3)').readRange()
++      const range = new Tokenizer('(1..3)').readGroupOrRange()
++      expect(range).toBeDefined()
+       expect(range).toBeInstanceOf(RangeToken)
+       expect(range!.getText()).toEqual('(1..3)')
+-      const { lhs, rhs } = range!
+-      expect(lhs).toBeInstanceOf(NumberToken)
+-      expect(lhs.getText()).toBe('1')
+-      expect(rhs).toBeInstanceOf(NumberToken)
+-      expect(rhs.getText()).toBe('3')
++      expect((range as RangeToken).lhs).toBeInstanceOf(NumberToken)
++      expect((range as RangeToken).lhs.getText()).toBe('1')
++      expect((range as RangeToken).rhs).toBeInstanceOf(NumberToken)
++      expect((range as RangeToken).rhs.getText()).toBe('3')
+     })
+     it('should throw for `(..3)`', () => {
+-      expect(() => new Tokenizer('(..3)').readRange()).toThrow('unexpected token "..3)", value expected')
++      expect(() => new Tokenizer('(..3)').readGroupOrRange()).toThrow('unexpected token "..3)", value expected')
+     })
+     it('should read `(a.b..c["..d"])`', () => {
+-      const range = new Tokenizer('(a.b..c["..d"])').readRange()
++      const range = new Tokenizer('(a.b..c["..d"])').readGroupOrRange()
++      expect(range).toBeDefined()
+       expect(range).toBeInstanceOf(RangeToken)
+       expect(range!.getText()).toEqual('(a.b..c["..d"])')
+     })
+   })
++  describe('#readGroupedExpression()', () => {
++    function createGrouped (input: string): Tokenizer {
++      const t = new Tokenizer(input, defaultOperators)
++      t.groupedExpressions = true
++      return t
++    }
++    it('should read `(foo | upcase)` as FilteredValueToken', () => {
++      const token = createGrouped('(foo | upcase)').readValue()
++      expect(token).toBeInstanceOf(FilteredValueToken)
++      const grouped = token as FilteredValueToken
++      expect(grouped.getText()).toBe('(foo | upcase)')
++      expect(grouped.initial.postfix).toHaveLength(1)
++      expect(grouped.filters).toHaveLength(1)
++      expect(grouped.filters[0].name).toBe('upcase')
++    })
++    it('should read `(foo | append: "!")` with filter argument', () => {
++      const token = createGrouped('(foo | append: "!")').readValue()
++      expect(token).toBeInstanceOf(FilteredValueToken)
++      const grouped = token as FilteredValueToken
++      expect(grouped.filters).toHaveLength(1)
++      expect(grouped.filters[0].name).toBe('append')
++      expect(grouped.filters[0].args).toHaveLength(1)
++    })
++    it('should read nested `((foo | append: "!") | upcase)`', () => {
++      const token = createGrouped('((foo | append: "!") | upcase)').readValue()
++      expect(token).toBeInstanceOf(FilteredValueToken)
++      const grouped = token as FilteredValueToken
++      expect(grouped.filters).toHaveLength(1)
++      expect(grouped.filters[0].name).toBe('upcase')
++      expect(grouped.initial.postfix).toHaveLength(1)
++      expect(grouped.initial.postfix[0]).toBeInstanceOf(FilteredValueToken)
++    })
++    it('should parse `(a | upcase) == "BAR"` as expression', () => {
++      const exp = [...createGrouped('(a | upcase) == "BAR"').readExpressionTokens()]
++      expect(exp).toHaveLength(3)
++      expect(exp[0]).toBeInstanceOf(FilteredValueToken)
++      expect(exp[1]).toBeInstanceOf(OperatorToken)
++      expect(exp[1].getText()).toBe('==')
++      expect(exp[2]).toBeInstanceOf(QuotedToken)
++    })
++    it('should read `((a | upcase) > 3)` as outer FilteredValueToken with comparison inside parens', () => {
++      const token = createGrouped('((a | upcase) > 3)').readValue()
++      expect(token).toBeInstanceOf(FilteredValueToken)
++      const outer = token as FilteredValueToken
++      expect(outer.filters).toHaveLength(0)
++      expect(outer.getText()).toBe('((a | upcase) > 3)')
++      const [first, second, third] = outer.initial.postfix
++      expect(first).toBeInstanceOf(FilteredValueToken)
++      expect(second).toBeInstanceOf(NumberToken)
++      expect(third).toBeInstanceOf(OperatorToken)
++      expect((first as FilteredValueToken).filters[0].name).toBe('upcase')
++    })
++    it('should read `(1 < 3)` as grouped comparison with no filters', () => {
++      const token = createGrouped('(1 < 3)').readValue() as FilteredValueToken
++      expect(token.filters).toHaveLength(0)
++      expect(token.initial.postfix).toHaveLength(3)
++      expect(token.initial.postfix[0]).toBeInstanceOf(NumberToken)
++      expect(token.initial.postfix[1]).toBeInstanceOf(NumberToken)
++      expect((token.initial.postfix[2] as OperatorToken).operator).toBe('<')
++    })
++    it('should read redundant parens `(x)` as FilteredValueToken', () => {
++      const token = createGrouped('(x)').readValue() as FilteredValueToken
++      expect(token.filters).toHaveLength(0)
++      expect(token.initial.postfix).toHaveLength(1)
++    })
++    it('should read expression plus filters inside parens `(a == b | default: "x")`', () => {
++      const token = createGrouped('(a == b | default: "x")').readValue() as FilteredValueToken
++      expect(token.filters).toHaveLength(1)
++      expect(token.filters[0].name).toBe('default')
++      expect(token.initial.postfix.map((t) => t.getText()).join(' ')).toMatch(/a.*b.*==/)
++    })
++    it('should parse `((a | upcase) > 3) and (1 < 3)` as three expression tokens', () => {
++      const exp = [...createGrouped('((a | upcase) > 3) and (1 < 3)').readExpressionTokens()]
++      expect(exp).toHaveLength(3)
++      expect(exp[0]).toBeInstanceOf(FilteredValueToken)
++      expect(exp[1]).toBeInstanceOf(OperatorToken)
++      expect(exp[1].getText()).toBe('and')
++      expect(exp[2]).toBeInstanceOf(FilteredValueToken)
++    })
++    it('should still parse `(1..3)` as RangeToken', () => {
++      const token = createGrouped('(1..3)').readValue()
++      expect(token).toBeInstanceOf(RangeToken)
++    })
++    it('should throw for unclosed parens', () => {
++      expect(() => createGrouped('(foo | upcase').readValue()).toThrow('unbalanced parentheses')
++    })
++    it('should fall back to readRange when flag is off', () => {
++      expect(() => new Tokenizer('(foo | upcase)', defaultOperators).readValue()).toThrow('invalid range syntax')
++    })
++  })
+   describe('#readFilter()', () => {
+     it('should read a simple filter', function () {
+       const tokenizer = new Tokenizer('| plus')
+diff --git a/src/parser/tokenizer.ts b/src/parser/tokenizer.ts
+index be8ac13..3a605af 100644
+--- a/src/parser/tokenizer.ts
++++ b/src/parser/tokenizer.ts
+@@ -9,6 +9,7 @@ import { whiteSpaceCtrl } from './whitespace-ctrl'
+ export class Tokenizer {
+   p: number
+   N: number
++  public groupedExpressions: boolean
+   private rawBeginAt = -1
+   private opTrie: Trie<OperatorHandler>
+   private literalTrie: Trie<LiteralValue>
+@@ -17,12 +18,14 @@ export class Tokenizer {
+     public input: string,
+     operators: Operators = defaultOptions.operators,
+     public file?: string,
+-    range?: [number, number]
++    range?: [number, number],
++    groupedExpressions = false
+   ) {
+     this.p = range ? range[0] : 0
+     this.N = range ? range[1] : input.length
+     this.opTrie = createTrie(operators)
+     this.literalTrie = createTrie(literalValues)
++    this.groupedExpressions = groupedExpressions
+   }
+ 
+   readExpression () {
+@@ -80,6 +83,7 @@ export class Tokenizer {
+   readFilter (): FilterToken | null {
+     this.skipBlank()
+     if (this.end()) return null
++    if (this.peek() === ')') return null
+     this.assert(this.read() === '|', `expected "|" before filter`)
+     const name = this.readIdentifier()
+     if (!name.size()) {
+@@ -94,9 +98,9 @@ export class Tokenizer {
+         const arg = this.readFilterArg()
+         arg && args.push(arg)
+         this.skipBlank()
+-        this.assert(this.end() || this.peek() === ',' || this.peek() === '|', () => `unexpected character ${this.snapshot()}`)
++        this.assert(this.end() || this.peek() === ',' || this.peek() === '|' || this.peek() === ')', () => `unexpected character ${this.snapshot()}`)
+       } while (this.peek() === ',')
+-    } else if (this.peek() === '|' || this.end()) {
++    } else if (this.peek() === '|' || this.peek() === ')' || this.end()) {
+       // do nothing
+     } else {
+       throw this.error('expected ":" after filter name')
+@@ -307,10 +311,13 @@ export class Tokenizer {
+     return -1
+   }
+ 
+-  readValue (): ValueToken | undefined {
++  readValue (): ValueToken | FilteredValueToken | undefined {
+     this.skipBlank()
+     const begin = this.p
+-    const variable = this.readLiteral() || this.readQuoted() || this.readRange() || this.readNumber()
++    let variable: ValueToken | FilteredValueToken | undefined = this.readLiteral() || this.readQuoted() || this.readNumber()
++    if (!variable && this.peek() === '(') {
++      variable = this.readGroupOrRange()
++    }
+     const props = this.readProperties(!variable)
+     if (!props.length) return variable
+     return new PropertyAccessToken(variable, props, this.input, begin, this.p)
+@@ -385,18 +392,32 @@ export class Tokenizer {
+     return literal
+   }
+ 
+-  readRange (): RangeToken | undefined {
++  readGroupOrRange (): FilteredValueToken | RangeToken | undefined {
+     this.skipBlank()
+     const begin = this.p
+     if (this.peek() !== '(') return
+     ++this.p
+     const lhs = this.readValueOrThrow()
+     this.skipBlank()
+-    this.assert(this.read() === '.' && this.read() === '.', 'invalid range syntax')
+-    const rhs = this.readValueOrThrow()
+-    this.skipBlank()
+-    this.assert(this.read() === ')', 'invalid range syntax')
+-    return new RangeToken(this.input, begin, this.p, lhs, rhs, this.file)
++
++    if (this.peek() === '.' && this.peek(1) === '.') {
++      this.p += 2
++      const rhs = this.readValueOrThrow()
++      this.skipBlank()
++      this.assert(this.read() === ')', 'invalid range syntax')
++      return new RangeToken(this.input, begin, this.p, lhs, rhs, this.file)
++    }
++
++    if (this.groupedExpressions) {
++      const initial = new Expression([lhs, ...this.readExpressionTokens()])
++      this.assert(initial.valid(), () => `invalid value expression: ${this.snapshot()}`)
++      const filters = this.readFilters()
++      this.skipBlank()
++      this.assert(this.read() === ')', 'unbalanced parentheses')
++      return new FilteredValueToken(initial, filters, this.input, begin, this.p, this.file)
++    }
++
++    throw this.error('invalid range syntax')
+   }
+ 
+   readValueOrThrow (): ValueToken {
+diff --git a/src/render/expression.ts b/src/render/expression.ts
+index 62041ae..0e04ba9 100644
+--- a/src/render/expression.ts
++++ b/src/render/expression.ts
+@@ -1,13 +1,14 @@
+-import { QuotedToken, RangeToken, OperatorToken, Token, PropertyAccessToken, OperatorType, operatorTypes } from '../tokens'
+-import { isRangeToken, isPropertyAccessToken, UndefinedVariableError, range, isOperatorToken, assert } from '../util'
++import { QuotedToken, RangeToken, OperatorToken, Token, PropertyAccessToken, OperatorType, operatorTypes, FilteredValueToken } from '../tokens'
++import { isRangeToken, isPropertyAccessToken, isFilteredValueToken, UndefinedVariableError, range, isOperatorToken, assert } from '../util'
+ import type { Context } from '../context'
+ import type { UnaryOperatorHandler } from '../render'
+ import { Drop } from '../drop'
++import { Filter } from '../template/filter'
+ 
+ export class Expression {
+   readonly postfix: Token[]
+ 
+-  public constructor (tokens: IterableIterator<Token>) {
++  public constructor (tokens: Iterable<Token>) {
+     this.postfix = [...toPostfix(tokens)]
+   }
+   public * evaluate (ctx: Context, lenient?: boolean): Generator<unknown, unknown, unknown> {
+@@ -40,6 +41,22 @@ export function * evalToken (token: Token | undefined, ctx: Context, lenient = f
+   if ('content' in token) return token.content
+   if (isPropertyAccessToken(token)) return yield evalPropertyAccessToken(token, ctx, lenient)
+   if (isRangeToken(token)) return yield evalRangeToken(token, ctx)
++  if (isFilteredValueToken(token)) return yield evalFilteredValueToken(token, ctx, lenient)
++}
++
++function * evalFilteredValueToken (token: FilteredValueToken, ctx: Context, lenient: boolean): IterableIterator<unknown> {
++  assert(ctx.liquid, 'FilteredValueToken evaluation requires liquid instance in context')
++  lenient = lenient || (ctx.opts.lenientIf && token.filters.length > 0 && token.filters[0].name === 'default')
++  let val = yield token.initial.evaluate(ctx, lenient)
++
++  for (const filterToken of token.filters) {
++    const filterImpl = ctx.liquid.filters[filterToken.name]
++    assert(filterImpl || !ctx.liquid.options.strictFilters, () => `undefined filter: ${filterToken.name}`)
++    const filter = new Filter(filterToken, filterImpl, ctx.liquid)
++    val = yield filter.render(val, ctx)
++  }
++
++  return val
+ }
+ 
+ function * evalPropertyAccessToken (token: PropertyAccessToken, ctx: Context, lenient: boolean): IterableIterator<unknown> {
+@@ -71,7 +88,7 @@ function * evalRangeToken (token: RangeToken, ctx: Context) {
+   return range(+low, +high + 1)
+ }
+ 
+-function * toPostfix (tokens: IterableIterator<Token>): IterableIterator<Token> {
++function * toPostfix (tokens: Iterable<Token>): IterableIterator<Token> {
+   const ops: OperatorToken[] = []
+   for (const token of tokens) {
+     if (isOperatorToken(token)) {
+diff --git a/src/tags/case.ts b/src/tags/case.ts
+index 63e90c6..b254d89 100644
+--- a/src/tags/case.ts
++++ b/src/tags/case.ts
+@@ -1,11 +1,11 @@
+-import { ValueToken, Liquid, toValue, evalToken, Value, Emitter, TagToken, TopLevelToken, Context, Template, Tag, ParseStream } from '..'
++import { ValueToken, Liquid, toValue, evalToken, Value, Emitter, TagToken, TopLevelToken, Context, Template, Tag, ParseStream, FilteredValueToken } from '..'
+ import { Parser } from '../parser'
+ import { equals } from '../render'
+ import { Arguments } from '../template'
+ 
+ export default class extends Tag {
+   value: Value
+-  branches: { values: ValueToken[], templates: Template[] }[] = []
++  branches: { values: (ValueToken | FilteredValueToken)[], templates: Template[] }[] = []
+   elseTemplates: Template[] = []
+   constructor (tagToken: TagToken, remainTokens: TopLevelToken[], liquid: Liquid, parser: Parser) {
+     super(tagToken, remainTokens, liquid)
+@@ -22,7 +22,7 @@ export default class extends Tag {
+ 
+         p = []
+ 
+-        const values: ValueToken[] = []
++        const values: (ValueToken | FilteredValueToken)[] = []
+         while (!token.tokenizer.end()) {
+           values.push(token.tokenizer.readValueOrThrow())
+           token.tokenizer.skipBlank()
+diff --git a/src/tags/for.ts b/src/tags/for.ts
+index 1987501..b9d44a0 100644
+--- a/src/tags/for.ts
++++ b/src/tags/for.ts
+@@ -1,4 +1,4 @@
+-import { Hash, ValueToken, Liquid, Tag, evalToken, Emitter, TagToken, TopLevelToken, Context, Template, ParseStream } from '..'
++import { Hash, ValueToken, Liquid, Tag, evalToken, Emitter, TagToken, TopLevelToken, Context, Template, ParseStream, FilteredValueToken } from '..'
+ import { assertEmpty, isValueToken, toEnumerable } from '../util'
+ import { createScope } from '../context/scope'
+ import { ForloopDrop } from '../drop/forloop-drop'
+@@ -11,7 +11,7 @@ type valueOf<T> = T[keyof T]
+ 
+ export default class extends Tag {
+   variable: string
+-  collection: ValueToken
++  collection: ValueToken | FilteredValueToken
+   hash: Hash
+   templates: Template[]
+   elseTemplates: Template[]
+diff --git a/src/tags/tablerow.ts b/src/tags/tablerow.ts
+index 1676fe4..bc04277 100644
+--- a/src/tags/tablerow.ts
++++ b/src/tags/tablerow.ts
+@@ -1,6 +1,6 @@
+ import { isValueToken, toEnumerable } from '../util'
+ import { createScope } from '../context/scope'
+-import { ValueToken, Liquid, Tag, evalToken, Emitter, Hash, TagToken, TopLevelToken, Context, Template, ParseStream } from '..'
++import { ValueToken, Liquid, Tag, evalToken, Emitter, Hash, TagToken, TopLevelToken, Context, Template, ParseStream, FilteredValueToken } from '..'
+ import { TablerowloopDrop } from '../drop/tablerowloop-drop'
+ import { Parser } from '../parser'
+ import { Arguments } from '../template'
+@@ -9,7 +9,7 @@ export default class extends Tag {
+   variable: string
+   args: Hash
+   templates: Template[]
+-  collection: ValueToken
++  collection: ValueToken | FilteredValueToken
+   constructor (tagToken: TagToken, remainTokens: TopLevelToken[], liquid: Liquid, parser: Parser) {
+     super(tagToken, remainTokens, liquid)
+     const variable = this.tokenizer.readIdentifier()
+diff --git a/src/template/analysis.ts b/src/template/analysis.ts
+index 0ad859b..39b9a10 100644
+--- a/src/template/analysis.ts
++++ b/src/template/analysis.ts
+@@ -2,6 +2,7 @@ import { Argument, Template, Value } from '.'
+ import { isKeyValuePair } from '../parser/filter-arg'
+ import { PropertyAccessToken, ValueToken } from '../tokens'
+ import {
++  isFilteredValueToken,
+   isNumberToken,
+   isPropertyAccessToken,
+   isQuotedToken,
+@@ -371,11 +372,31 @@ function * extractValueTokenVariables (token: ValueToken): Generator<Variable> {
+   if (isRangeToken(token)) {
+     yield * extractValueTokenVariables(token.lhs)
+     yield * extractValueTokenVariables(token.rhs)
++  } else if (isFilteredValueToken(token)) {
++    yield * extractGroupedExpressionTokenVariables(token)
+   } else if (isPropertyAccessToken(token)) {
+     yield extractPropertyAccessVariable(token)
+   }
+ }
+ 
++function * extractGroupedExpressionTokenVariables (token: ValueToken): Generator<Variable> {
++  if (!isFilteredValueToken(token)) return
++
++  for (const t of token.initial.postfix) {
++    if (isValueToken(t)) yield * extractValueTokenVariables(t)
++  }
++
++  for (const filter of token.filters) {
++    for (const arg of filter.args) {
++      if (isKeyValuePair(arg) && arg[1]) {
++        yield * extractValueTokenVariables(arg[1])
++      } else if (isValueToken(arg)) {
++        yield * extractValueTokenVariables(arg)
++      }
++    }
++  }
++}
++
+ function extractPropertyAccessVariable (token: PropertyAccessToken): Variable {
+   const segments: VariableSegments = []
+ 
+diff --git a/src/template/output.ts b/src/template/output.ts
+index cd75ea0..38f4748 100644
+--- a/src/template/output.ts
++++ b/src/template/output.ts
+@@ -12,7 +12,7 @@ export class Output extends TemplateImpl<OutputToken> implements Template {
+   value: Value
+   public constructor (token: OutputToken, liquid: Liquid) {
+     super(token)
+-    const tokenizer = new Tokenizer(token.input, liquid.options.operators, token.file, token.contentRange)
++    const tokenizer = new Tokenizer(token.input, liquid.options.operators, token.file, token.contentRange, liquid.options.groupedExpressions)
+     this.value = new Value(tokenizer.readFilteredValue(), liquid)
+     const filters = this.value.filters
+     const outputEscape = liquid.options.outputEscape
+diff --git a/src/template/value.ts b/src/template/value.ts
+index 52c8ad7..2140c90 100644
+--- a/src/template/value.ts
++++ b/src/template/value.ts
+@@ -15,7 +15,7 @@ export class Value {
+    */
+   public constructor (input: string | FilteredValueToken, liquid: Liquid) {
+     const token: FilteredValueToken = typeof input === 'string'
+-      ? new Tokenizer(input, liquid.options.operators).readFilteredValue()
++      ? new Tokenizer(input, liquid.options.operators, undefined, undefined, liquid.options.groupedExpressions).readFilteredValue()
+       : input
+     this.initial = token.initial
+     this.filters = token.filters.map(token => new Filter(token, this.getFilter(liquid, token.name), liquid))
+diff --git a/src/tokens/liquid-tag-token.ts b/src/tokens/liquid-tag-token.ts
+index 91f119f..ef1a9fc 100644
+--- a/src/tokens/liquid-tag-token.ts
++++ b/src/tokens/liquid-tag-token.ts
+@@ -16,7 +16,7 @@ export class LiquidTagToken extends DelimitedToken {
+     file?: string
+   ) {
+     super(TokenKind.Tag, [begin, end], input, begin, end, false, false, file)
+-    this.tokenizer = new Tokenizer(input, options.operators, file, this.contentRange)
++    this.tokenizer = new Tokenizer(input, options.operators, file, this.contentRange, options.groupedExpressions)
+     this.name = this.tokenizer.readTagName()
+     this.tokenizer.assert(this.name, 'illegal liquid tag syntax')
+     this.tokenizer.skipBlank()
+diff --git a/src/tokens/property-access-token.ts b/src/tokens/property-access-token.ts
+index 8496da2..073c3f8 100644
+--- a/src/tokens/property-access-token.ts
++++ b/src/tokens/property-access-token.ts
+@@ -5,11 +5,12 @@ import { IdentifierToken } from './identifier-token'
+ import { NumberToken } from './number-token'
+ import { RangeToken } from './range-token'
+ import { QuotedToken } from './quoted-token'
++import { FilteredValueToken } from './filtered-value-token'
+ import { TokenKind } from '../parser'
+ 
+ export class PropertyAccessToken extends Token {
+   constructor (
+-    public variable: QuotedToken | RangeToken | LiteralToken | NumberToken | undefined,
++    public variable: QuotedToken | RangeToken | LiteralToken | NumberToken | FilteredValueToken | undefined,
+     public props: (ValueToken | IdentifierToken)[],
+     input: string,
+     begin: number,
+diff --git a/src/tokens/tag-token.ts b/src/tokens/tag-token.ts
+index e42268e..44a2719 100644
+--- a/src/tokens/tag-token.ts
++++ b/src/tokens/tag-token.ts
+@@ -17,7 +17,7 @@ export class TagToken extends DelimitedToken {
+     const [valueBegin, valueEnd] = [begin + tagDelimiterLeft.length, end - tagDelimiterRight.length]
+     super(TokenKind.Tag, [valueBegin, valueEnd], input, begin, end, trimTagLeft, trimTagRight, file)
+ 
+-    this.tokenizer = new Tokenizer(input, options.operators, file, this.contentRange)
++    this.tokenizer = new Tokenizer(input, options.operators, file, this.contentRange, options.groupedExpressions)
+     this.name = this.tokenizer.readTagName()
+     this.tokenizer.assert(this.name, `illegal tag syntax, tag name expected`)
+     this.tokenizer.skipBlank()
+diff --git a/src/tokens/value-token.ts b/src/tokens/value-token.ts
+index 37e2239..1fd6751 100644
+--- a/src/tokens/value-token.ts
++++ b/src/tokens/value-token.ts
+@@ -3,5 +3,6 @@ import { LiteralToken } from './literal-token'
+ import { NumberToken } from './number-token'
+ import { QuotedToken } from './quoted-token'
+ import { PropertyAccessToken } from './property-access-token'
++import { FilteredValueToken } from './filtered-value-token'
+ 
+-export type ValueToken = RangeToken | LiteralToken | QuotedToken | PropertyAccessToken | NumberToken
++export type ValueToken = RangeToken | LiteralToken | QuotedToken | PropertyAccessToken | NumberToken | FilteredValueToken
+diff --git a/src/util/liquid-date.ts b/src/util/liquid-date.ts
+index 7d380aa..d3d141f 100644
+--- a/src/util/liquid-date.ts
++++ b/src/util/liquid-date.ts
+@@ -53,9 +53,6 @@ export class LiquidDate {
+   getTime () {
+     return this.displayDate.getTime()
+   }
+-  dateValue () {
+-    return this.date.getTime()
+-  }
+   getMilliseconds () {
+     return this.displayDate.getMilliseconds()
+   }
+diff --git a/src/util/strftime.ts b/src/util/strftime.ts
+index cfbcd58..1d303c1 100644
+--- a/src/util/strftime.ts
++++ b/src/util/strftime.ts
+@@ -105,7 +105,7 @@ const formatCodes: Record<string, FormatCodeHandler> = {
+   p: (d: LiquidDate) => (d.getHours() < 12 ? 'AM' : 'PM'),
+   P: (d: LiquidDate) => (d.getHours() < 12 ? 'am' : 'pm'),
+   q: (d: LiquidDate) => ordinal(d),
+-  s: (d: LiquidDate) => Math.floor(d.dateValue() / 1000),
++  s: (d: LiquidDate) => Math.round(d.getTime() / 1000),
+   S: (d: LiquidDate) => d.getSeconds(),
+   u: (d: LiquidDate) => d.getDay() || 7,
+   U: (d: LiquidDate) => getWeekOfYear(d, 0),
+diff --git a/src/util/type-guards.ts b/src/util/type-guards.ts
+index 3ad72df..332fd7a 100644
+--- a/src/util/type-guards.ts
++++ b/src/util/type-guards.ts
+@@ -1,4 +1,4 @@
+-import { RangeToken, NumberToken, QuotedToken, LiteralToken, PropertyAccessToken, OutputToken, HTMLToken, TagToken, IdentifierToken, DelimitedToken, OperatorToken, ValueToken } from '../tokens'
++import { RangeToken, NumberToken, QuotedToken, LiteralToken, PropertyAccessToken, OutputToken, HTMLToken, TagToken, IdentifierToken, DelimitedToken, OperatorToken, ValueToken, FilteredValueToken } from '../tokens'
+ import { TokenKind } from '../parser'
+ 
+ export function isDelimitedToken (val: any): val is DelimitedToken {
+@@ -45,8 +45,13 @@ export function isRangeToken (val: any): val is RangeToken {
+   return getKind(val) === TokenKind.Range
+ }
+ 
++export function isFilteredValueToken (val: any): val is FilteredValueToken {
++  return getKind(val) === TokenKind.FilteredValue
++}
++
+ export function isValueToken (val: any): val is ValueToken {
+-  return (getKind(val) & 1667) > 0
++  // valueTokenBitMask = TokenKind.Number | TokenKind.Literal | TokenKind.Quoted | TokenKind.PropertyAccess | TokenKind.Range | TokenKind.FilteredValue
++  return (getKind(val) & 5763) > 0
+ }
+ 
+ function getKind (val: any) {
+diff --git a/test/integration/static_analysis/variables.spec.ts b/test/integration/static_analysis/variables.spec.ts
+index 15b8af4..da874f3 100644
+--- a/test/integration/static_analysis/variables.spec.ts
++++ b/test/integration/static_analysis/variables.spec.ts
+@@ -1085,4 +1085,24 @@ describe('Variable analysis', () => {
+       locals: { y: [new Variable(['y'], { row: 1, col: 11, file: 'a' })] }
+     })
+   })
++
++  describe('grouped expressions', () => {
++    const ge = new Liquid({ groupedExpressions: true })
++
++    it('should report variables inside a grouped output expression', () => {
++      const analysis = analyzeSync(ge.parse('{{ (a | append: b) }}'))
++      expect(Object.keys(analysis.variables).sort()).toStrictEqual(['a', 'b'])
++    })
++
++    it('should report variables inside a grouped condition', () => {
++      const analysis = analyzeSync(ge.parse('{% if (a | append: b) == c %}{% endif %}'))
++      expect(Object.keys(analysis.globals).sort()).toStrictEqual(['a', 'b', 'c'])
++    })
++
++    it('should separate locals from globals for grouped assign', () => {
++      const analysis = analyzeSync(ge.parse('{% assign x = (a | upcase) %}{{ x }}'))
++      expect(Object.keys(analysis.globals)).toStrictEqual(['a'])
++      expect(Object.keys(analysis.locals)).toStrictEqual(['x'])
++    })
++  })
+ })
+diff --git a/test/integration/tags/assign.spec.ts b/test/integration/tags/assign.spec.ts
+index 6ece66f..e2bbf0c 100644
+--- a/test/integration/tags/assign.spec.ts
++++ b/test/integration/tags/assign.spec.ts
+@@ -99,4 +99,13 @@ describe('tags/assign', function () {
+     const html = liquid.parseAndRenderSync(src)
+     return expect(html).toBe('bar')
+   })
++  describe('grouped expressions', function () {
++    const ge = new Liquid({ groupedExpressions: true })
++    it('should assign a grouped expression', async () => {
++      expect(await ge.parseAndRender('{% assign x = (name | upcase) %}{{ x }}', { name: 'bar' })).toBe('BAR')
++    })
++    it('should assign a grouped range', async () => {
++      expect(await ge.parseAndRender('{% assign x = (1..(items | size)) %}{{ x }}', { items: ['a', 'b', 'c'] })).toBe('123')
++    })
++  })
+ })
+diff --git a/test/integration/tags/case.spec.ts b/test/integration/tags/case.spec.ts
+index c5de34b..8a9721e 100644
+--- a/test/integration/tags/case.spec.ts
++++ b/test/integration/tags/case.spec.ts
+@@ -132,4 +132,30 @@ describe('tags/case', function () {
+       TRUE
+     `)
+   })
++  describe('parenthesized filter chains', function () {
++    describe('when enabled', () => {
++      const ge = new Liquid({ groupedExpressions: true })
++      it('should support grouped expression in case value', () => {
++        const src = '{% case (status | downcase) %}{% when "active" %}active{% when "pending" %}pending{% else %}other{% endcase %}'
++        const html = ge.parseAndRenderSync(src, { status: 'ACTIVE' })
++        expect(html).toBe('active')
++      })
++      it('should support grouped expression in when value', () => {
++        const src = '{% case status %}{% when (expected | downcase) %}match{% else %}no match{% endcase %}'
++        const html = ge.parseAndRenderSync(src, { status: 'active', expected: 'ACTIVE' })
++        expect(html).toBe('match')
++      })
++    })
++    describe('when disabled', () => {
++      const ge = new Liquid({ groupedExpressions: false })
++      it('should throw error for grouped expression in case value', () => {
++        const src = '{% case (status | downcase) %}{% when "active" %}active{% when "pending" %}pending{% else %}other{% endcase %}'
++        expect(() => ge.parseAndRenderSync(src, { status: 'ACTIVE' })).toThrow('invalid range syntax')
++      })
++      it('should throw error for grouped expression in when value', () => {
++        const src = '{% case status %}{% when (expected | downcase) %}match{% else %}no match{% endcase %}'
++        expect(() => ge.parseAndRenderSync(src, { status: 'active', expected: 'ACTIVE' })).toThrow('invalid range syntax')
++      })
++    })
++  })
+ })
+diff --git a/test/integration/tags/echo.spec.ts b/test/integration/tags/echo.spec.ts
+index ddd394e..0db081b 100644
+--- a/test/integration/tags/echo.spec.ts
++++ b/test/integration/tags/echo.spec.ts
+@@ -36,4 +36,14 @@ describe('tags/echo', function () {
+     const html = await liquid.parseAndRender(src, { user: { name: 'Sally' } })
+     return expect(html).toBe('Hello, SALLY!')
+   })
++
++  describe('grouped expressions', function () {
++    const ge = new Liquid({ groupedExpressions: true })
++    it('should echo a grouped expression', async () => {
++      expect(await ge.parseAndRender('{% echo (name | upcase) %}', { name: 'bar' })).toBe('BAR')
++    })
++    it('should render a grouped expression in an output statement', async () => {
++      expect(await ge.parseAndRender('{{ (name | upcase | append: "!") }}', { name: 'bar' })).toBe('BAR!')
++    })
++  })
+ })
+diff --git a/test/integration/tags/for.spec.ts b/test/integration/tags/for.spec.ts
+index 034800d..fa4addf 100644
+--- a/test/integration/tags/for.spec.ts
++++ b/test/integration/tags/for.spec.ts
+@@ -426,4 +426,21 @@ describe('tags/for', function () {
+       return expect(html).toBe('i-someDrop i-someDrop i-someDrop ')
+     })
+   })
++  describe('parenthesized filter chains', function () {
++    describe('when enabled', function () {
++      const ge = new Liquid({ groupedExpressions: true })
++      it('should support range with filtered RHS', function () {
++        const src = '{% for i in (1..(items | size)) %}{{i}} {% endfor %}'
++        const html = ge.parseAndRenderSync(src, { items: ['a', 'b', 'c'] })
++        expect(html).toBe('1 2 3 ')
++      })
++    })
++    describe('when disabled', function () {
++      const ge = new Liquid({ groupedExpressions: false })
++      it('should throw for range with filtered RHS', function () {
++        const src = '{% for i in (1..(items | size)) %}{{i}} {% endfor %}'
++        expect(() => ge.parseAndRenderSync(src, { items: ['a', 'b', 'c'] })).toThrow('invalid range syntax')
++      })
++    })
++  })
+ })
+diff --git a/test/integration/tags/if.spec.ts b/test/integration/tags/if.spec.ts
+index 2573861..631fe42 100644
+--- a/test/integration/tags/if.spec.ts
++++ b/test/integration/tags/if.spec.ts
+@@ -169,4 +169,84 @@ describe('tags/if', function () {
+     expect(() => liquid.parseAndRenderSync('{% if false %}{% else %}{% elsif true %}{% endif %}'))
+       .toThrow(`unexpected elsif after else`)
+   })
++  describe('parenthesized filter chains', function () {
++    describe('when enabled', function () {
++      const ge = new Liquid({ groupedExpressions: true })
++      it('should support (foo | upcase) == "BAR"', async function () {
++        const src = '{% if (foo | upcase) == "BAR" %}yes{% else %}no{% endif %}'
++        const html = await ge.parseAndRender(src, { foo: 'bar' })
++        return expect(html).toBe('yes')
++      })
++      it('should support both sides parenthesized', async function () {
++        const src = '{% if (a | upcase) == (b | upcase) %}yes{% else %}no{% endif %}'
++        const html = await ge.parseAndRender(src, { a: 'hi', b: 'hi' })
++        return expect(html).toBe('yes')
++      })
++      it('should support with logical operators', async function () {
++        const src = '{% if (a | upcase) == "FOO" and (b | downcase) == "bar" %}yes{% else %}no{% endif %}'
++        const html = await ge.parseAndRender(src, { a: 'foo', b: 'BAR' })
++        return expect(html).toBe('yes')
++      })
++      it('should support standalone parenthesized filter via evalValueSync', function () {
++        const result = ge.evalValueSync('(foo | upcase)', { foo: 'bar' })
++        return expect(result).toBe('BAR')
++      })
++      it('should support comparison via evalValueSync', function () {
++        const result = ge.evalValueSync('(foo | upcase) == "BAR"', { foo: 'bar' })
++        return expect(result).toBe(true)
++      })
++      it('should keep range syntax working', function () {
++        const result = ge.evalValueSync('(1..5)', {})
++        return expect(result).toEqual([1, 2, 3, 4, 5])
++      })
++      it('should support chained filters in condition', async function () {
++        const src = '{% if (name | downcase | size) > 3 %}long{% else %}short{% endif %}'
++        const html = await ge.parseAndRender(src, { name: 'Alice' })
++        return expect(html).toBe('long')
++      })
++      it('should support real parenthesis grouping with comparisons and and', async function () {
++        const src = '{% if (((name | downcase | size) > 3) and (one < three)) %}long{% else %}short{% endif %}'
++        const html = await ge.parseAndRender(src, { name: 'Alice', one: 1, three: 3 })
++        return expect(html).toBe('long')
++      })
++      it('should support nested parenthesized expressions in if condition', async function () {
++        const src = '{% if ((foo | append: "!") | upcase) == "BAR!" %}match{% else %}no match{% endif %}'
++        const html = await ge.parseAndRender(src, { foo: 'bar' })
++        return expect(html).toBe('match')
++      })
++      it('should support or with grouped operands', async function () {
++        const src = '{% if (a | upcase) == "X" or (b | upcase) == "B" %}yes{% else %}no{% endif %}'
++        expect(await ge.parseAndRender(src, { a: 'z', b: 'b' })).toBe('yes')
++      })
++      it('should support not with a grouped operand', async function () {
++        const src = '{% if not (a | upcase) == "B" %}no{% else %}yes{% endif %}'
++        expect(await ge.parseAndRender(src, { a: 'b' })).toBe('yes')
++      })
++      it('should support contains with a grouped operand', async function () {
++        const src = '{% if (csv | split: ",") contains "b" %}yes{% else %}no{% endif %}'
++        expect(await ge.parseAndRender(src, { csv: 'a,b,c' })).toBe('yes')
++      })
++      it('should support property access on a grouped result', function () {
++        expect(ge.evalValueSync('(items | first).name', { items: [{ name: 'Sally' }] })).toBe('Sally')
++      })
++      it('should support a grouped expression inside a bracket index', function () {
++        expect(ge.evalValueSync('arr[(i | plus: 1)]', { arr: [10, 20, 30], i: 1 })).toBe(30)
++      })
++      it('should support an async filter inside a grouped expression', async function () {
++        ge.registerFilter('asyncUpcase', (v: string) => Promise.resolve(String(v).toUpperCase()))
++        const src = '{% if (name | asyncUpcase) == "BAR" %}yes{% else %}no{% endif %}'
++        expect(await ge.parseAndRender(src, { name: 'bar' })).toBe('yes')
++      })
++    })
++    describe('when disabled', function () {
++      const ge = new Liquid({ groupedExpressions: false })
++      it('should throw for parenthesized filter in condition', () => {
++        const src = '{% if (foo | upcase) == "BAR" %}yes{% else %}no{% endif %}'
++        expect(() => ge.parseAndRenderSync(src, { foo: 'bar' })).toThrow('invalid range syntax')
++      })
++      it('should throw for parenthesized filter via evalValueSync', () => {
++        expect(() => ge.evalValueSync('(foo | upcase)', { foo: 'bar' })).toThrow('invalid range syntax')
++      })
++    })
++  })
+ })
+diff --git a/test/integration/tags/unless.spec.ts b/test/integration/tags/unless.spec.ts
+index 5ca0446..406da1d 100644
+--- a/test/integration/tags/unless.spec.ts
++++ b/test/integration/tags/unless.spec.ts
+@@ -83,4 +83,21 @@ describe('tags/unless', function () {
+       expect(html).toBe('yes')
+     })
+   })
++  describe('parenthesized filter chains', function () {
++    describe('when enabled', function () {
++      const ge = new Liquid({ groupedExpressions: true })
++      it('should support grouped expression in unless condition', function () {
++        const src = '{% unless (content | size) == 0 %}has content{% else %}empty{% endunless %}'
++        const html = ge.parseAndRenderSync(src, { content: 'hello' })
++        expect(html).toBe('has content')
++      })
++    })
++    describe('when disabled', function () {
++      const ge = new Liquid({ groupedExpressions: false })
++      it('should throw for grouped expression in unless condition', function () {
++        const src = '{% unless (content | size) == 0 %}has content{% else %}empty{% endunless %}'
++        expect(() => ge.parseAndRenderSync(src, { content: 'hello' })).toThrow('invalid range syntax')
++      })
++    })
++  })
+ })

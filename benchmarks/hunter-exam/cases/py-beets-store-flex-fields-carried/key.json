@@ -1,0 +1,26 @@
+{
+  "id": "py-beets-store-flex-fields-carried",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "flex-key-in-column-update",
+      "area": "data",
+      "severity": "blocking",
+      "class": "contract-mismatch",
+      "depth": 1,
+      "what": "Model.store(fields=...) no longer restricts the main-table UPDATE to real columns, so a flexible attribute listed in `fields` (for example a plugin media field stored as a flex attr by `beet update`) is added to the SET clause of the UPDATE and fails with `no such column`.",
+      "sites": [
+        {
+          "path": "beets/dbcore/db.py",
+          "start_line": 603,
+          "end_line": 608
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

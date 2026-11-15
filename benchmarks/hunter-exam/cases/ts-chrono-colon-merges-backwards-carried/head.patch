@@ -1,0 +1,214 @@
+diff --git a/src/common/refiners/AbstractMergeDateTimeRefiner.ts b/src/common/refiners/AbstractMergeDateTimeRefiner.ts
+index 8e06c92..2ee043a 100644
+--- a/src/common/refiners/AbstractMergeDateTimeRefiner.ts
++++ b/src/common/refiners/AbstractMergeDateTimeRefiner.ts
+@@ -10,14 +10,11 @@ export default abstract class AbstractMergeDateTimeRefiner extends MergingRefine
+     abstract patternBetween(): RegExp;
+ 
+     shouldMergeResults(textBetween: string, currentResult: ParsingResult, nextResult: ParsingResult): boolean {
+-        const isDateThenTime = currentResult.start.isOnlyDate() && nextResult.start.isOnlyTime();
+-        const isTimeThenDate = currentResult.start.isOnlyTime() && nextResult.start.isOnlyDate();
+-
+-        if (isTimeThenDate && textBetween.trim() === ":") {
+-            return false;
+-        }
+-
+-        return (isDateThenTime || isTimeThenDate) && textBetween.match(this.patternBetween()) != null;
++        return (
++            ((currentResult.start.isOnlyDate() && nextResult.start.isOnlyTime()) ||
++                (nextResult.start.isOnlyDate() && currentResult.start.isOnlyTime())) &&
++            textBetween.match(this.patternBetween()) != null
++        );
+     }
+ 
+     mergeResults(textBetween: string, currentResult: ParsingResult, nextResult: ParsingResult): ParsingResult {
+diff --git a/src/locales/id/index.ts b/src/locales/id/index.ts
+index 53c202b..a17d689 100644
+--- a/src/locales/id/index.ts
++++ b/src/locales/id/index.ts
+@@ -13,6 +13,7 @@ import IDCasualDateParser from "./parsers/IDCasualDateParser";
+ import IDCasualTimeParser from "./parsers/IDCasualTimeParser";
+ import IDMonthNameLittleEndianParser from "./parsers/IDMonthNameLittleEndianParser";
+ import IDMonthNameParser from "./parsers/IDMonthNameParser";
++import IDMonthNameMiddleEndianParser from "./parsers/IDMonthNameMiddleEndianParser";
+ import IDWeekdayParser from "./parsers/IDWeekdayParser";
+ import IDTimeExpressionParser from "./parsers/IDTimeExpressionParser";
+ import IDTimeUnitAgoFormatParser from "./parsers/IDTimeUnitAgoFormatParser";
+@@ -62,6 +63,7 @@ export function createConfiguration(strictMode = true, littleEndian = true): Con
+             parsers: [
+                 new SlashDateFormatParser(littleEndian),
+                 new IDMonthNameLittleEndianParser(),
++                new IDMonthNameMiddleEndianParser(),
+                 new IDWeekdayParser(),
+                 new IDTimeExpressionParser(strictMode),
+                 new IDTimeUnitWithinFormatParser(),
+diff --git a/src/locales/id/parsers/IDMonthNameMiddleEndianParser.ts b/src/locales/id/parsers/IDMonthNameMiddleEndianParser.ts
+new file mode 100644
+index 0000000..7d1aec9
+--- /dev/null
++++ b/src/locales/id/parsers/IDMonthNameMiddleEndianParser.ts
+@@ -0,0 +1,73 @@
++import { ParsingContext } from "../../../chrono";
++import { findYearClosestToRef } from "../../../calculation/years";
++import { MONTH_DICTIONARY, YEAR_PATTERN, parseYear } from "../constants";
++import { matchAnyPattern } from "../../../utils/pattern";
++import { AbstractParserWithWordBoundaryChecking } from "../../../common/parsers/AbstractParserWithWordBoundary";
++
++// prettier-ignore
++const PATTERN = new RegExp(
++    `(${matchAnyPattern(MONTH_DICTIONARY)})` +
++        "(?:-|/|\\s*,?\\s*)" +
++        "([0-9]{1,2})" +
++        "(?:" +
++            "\\s*(?:-|–|s\\.d\\.?|s/d|sampai(?:\\s+dengan)?|hingga)\\s*" +
++            "([0-9]{1,2})" +
++        ")?" +
++        "(?:" +
++            "(?:-|/|\\s*,\\s*|\\s+)" +
++            `(?:tahun\\s+)?(${YEAR_PATTERN})` +
++        ")?" +
++        "(?=\\W|$)(?![.:]\\d)",
++    "i"
++);
++
++const MONTH_NAME_GROUP = 1;
++const DATE_GROUP = 2;
++const DATE_TO_GROUP = 3;
++const YEAR_GROUP = 4;
++
++/**
++ * The parser for parsing dates that begin with the month name (month before day)
++ * - September 23
++ * - September 23, 2026
++ * - Januari 5 - 7, 2024
++ * Note: Watch out for:
++ * - Januari 12:00
++ * - Januari 12.30
++ */
++export default class IDMonthNameMiddleEndianParser extends AbstractParserWithWordBoundaryChecking {
++    innerPattern(): RegExp {
++        return PATTERN;
++    }
++
++    innerExtract(context: ParsingContext, match: RegExpMatchArray) {
++        const month = MONTH_DICTIONARY[match[MONTH_NAME_GROUP].toLowerCase()];
++        const day = parseInt(match[DATE_GROUP]);
++        if (day > 31) {
++            return null;
++        }
++
++        const components = context.createParsingComponents({ day: day, month: month });
++        if (match[YEAR_GROUP]) {
++            components.assign("year", parseYear(match[YEAR_GROUP]));
++        } else {
++            components.imply("year", findYearClosestToRef(context.refDate, day, month));
++        }
++
++        if (!match[DATE_TO_GROUP]) {
++            return components;
++        }
++
++        const endDate = parseInt(match[DATE_TO_GROUP]);
++        if (endDate > 31) {
++            return null;
++        }
++
++        const result = context.createParsingResult(match.index, match[0]);
++        result.start = components;
++        result.end = components.clone();
++        result.end.assign("day", endDate);
++
++        return result;
++    }
++}
+diff --git a/test/en/en.test.ts b/test/en/en.test.ts
+index 880935d..bde8c23 100644
+--- a/test/en/en.test.ts
++++ b/test/en/en.test.ts
+@@ -115,6 +115,12 @@ test("Test - Random text", function () {
+         expect(result.start.get("hour")).toBe(2);
+         expect(result.start.get("meridiem")).toBe(Meridiem.AM);
+     });
++
++    testSingleCase(chrono, "September 23, 2026", new Date(2017, 7 - 1, 7), (result) => {
++        expect(result.start.get("day")).toBe(23);
++        expect(result.start.get("month")).toBe(9);
++        expect(result.start.get("year")).toBe(2026);
++    });
+ });
+ 
+ test("Test - Wikipedia Texts", function () {
+@@ -182,7 +188,7 @@ test("Test - Customize by removing time extraction", () => {
+ 
+     custom.parse("Thursday 9AM");
+ 
+-    testSingleCase(custom, "Thursday 9AM", new Date(2020, 11 - 1, 29), (result, text) => {
++    testSingleCase(custom, "Thursday 9AM", new Date(2020, 11 - 1, 29), (result) => {
+         expect(result.text).toBe("Thursday");
+         expect(result.start.get("year")).toBe(2020);
+         expect(result.start.get("month")).toBe(11);
+diff --git a/test/id/id_month_name.test.ts b/test/id/id_month_name.test.ts
+index 11e2382..c759d64 100644
+--- a/test/id/id_month_name.test.ts
++++ b/test/id/id_month_name.test.ts
+@@ -63,6 +63,44 @@ test("Test - Day and month name range", () => {
+     });
+ });
+ 
++test("Test - Month name and day", () => {
++    testSingleCase(chrono.id, "September 23, 2026", new Date(2012, 7, 10), (result) => {
++        expect(result.text).toBe("September 23, 2026");
++        expect(result.start.get("year")).toBe(2026);
++        expect(result.start.get("month")).toBe(9);
++        expect(result.start.get("day")).toBe(23);
++        expect(result.start).toBeDate(new Date(2026, 8, 23, 12));
++    });
++
++    testSingleCase(chrono.id, "Rapatnya Januari 5 2024 di kantor", new Date(2012, 7, 10), (result) => {
++        expect(result.index).toBe(9);
++        expect(result.text).toBe("Januari 5 2024");
++        expect(result.start).toBeDate(new Date(2024, 0, 5, 12));
++    });
++
++    testSingleCase(chrono.id, "Acaranya Nov 10", new Date(2012, 7, 10), (result) => {
++        expect(result.index).toBe(9);
++        expect(result.text).toBe("Nov 10");
++        expect(result.start.get("year")).toBe(2012);
++        expect(result.start.isCertain("year")).toBe(false);
++        expect(result.start).toBeDate(new Date(2012, 10, 10, 12));
++    });
++});
++
++test("Test - Month name and day range", () => {
++    testSingleCase(chrono.id, "Januari 5 - 7, 2024", new Date(2012, 7, 10), (result) => {
++        expect(result.text).toBe("Januari 5 - 7, 2024");
++        expect(result.start).toBeDate(new Date(2024, 0, 5, 12));
++        expect(result.end).toBeDate(new Date(2024, 0, 7, 12));
++    });
++
++    testSingleCase(chrono.id, "Maret 1 sampai 3", new Date(2012, 7, 10), (result) => {
++        expect(result.text).toBe("Maret 1 sampai 3");
++        expect(result.start).toBeDate(new Date(2012, 2, 1, 12));
++        expect(result.end).toBeDate(new Date(2012, 2, 3, 12));
++    });
++});
++
+ test("Test - Month name and year", () => {
+     testSingleCase(chrono.id, "Januari 2024", new Date(2012, 7, 10), (result) => {
+         expect(result.text).toBe("Januari 2024");
+@@ -102,6 +140,15 @@ test("Test - Negative cases", () => {
+     testUnexpectedResult(chrono.id, "Jan pergi ke pasar");
+ });
+ 
++test("Test - Month name followed by a time is not taken as a day", () => {
++    for (const text of ["Januari 12:00", "Januari 12.30"]) {
++        const results = chrono.id.parse(text, new Date(2012, 7, 10));
++        for (const result of results) {
++            expect(result.start.isCertain("day")).toBe(false);
++        }
++    }
++});
++
+ test("Test - Out of range day is not taken as a day", () => {
+     testSingleCase(chrono.id, "96 Agustus 2024", new Date(2012, 7, 10), (result) => {
+         expect(result.text).toBe("Agustus 2024");

@@ -1,0 +1,1 @@
+feat: await promises returned by Drop.valueOf()

@@ -1,0 +1,31 @@
+{
+  "id": "py-apscheduler-sync-cleanup-default-carried",
+  "language": "python",
+  "project": "apscheduler",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "sync-cleanup-default",
+      "area": "contract",
+      "severity": "blocking",
+      "class": "wrong-default",
+      "depth": 2,
+      "what": "the synchronous Scheduler defaults cleanup_interval to None and forwards it unconditionally to AsyncScheduler, where None means 'disable automatic clean-up', so a default-configured Scheduler never cleans up expired data or releases expired leases, unlike AsyncScheduler whose default is 15 minutes",
+      "sites": [
+        {
+          "path": "src/apscheduler/_schedulers/sync.py",
+          "start_line": 54,
+          "end_line": 63
+        },
+        {
+          "path": "src/apscheduler/_schedulers/sync.py",
+          "start_line": 80,
+          "end_line": 89
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

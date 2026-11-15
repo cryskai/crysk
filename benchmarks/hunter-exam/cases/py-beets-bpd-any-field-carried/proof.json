@@ -1,0 +1,8 @@
+{
+  "tests": ["test/plugins/test_bpd.py::BPDDatabaseTest::test_cmd_search_any"],
+  "command": "cd ~/.crysk/casebank/deps/beets/proof-bpd && ../venv/bin/python -m pytest -p no:cov -p no:randomly -q test/plugins/test_bpd.py -k test_cmd_search",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "AssertionError: Response failed: (52, 0, 'search', 'server error')",
+  "carrier": "ad51786d104ac2ff1d63ba06f0c45ed1daa5a444"
+}

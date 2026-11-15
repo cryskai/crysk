@@ -1,0 +1,1 @@
+Use PyMongo AsyncCursor.to_list() instead of list comprehension

@@ -1,0 +1,75 @@
+diff --git a/beets/dbcore/queryparse.py b/beets/dbcore/queryparse.py
+index 5743aa7..111ca7f 100644
+--- a/beets/dbcore/queryparse.py
++++ b/beets/dbcore/queryparse.py
+@@ -189,7 +189,6 @@ def construct_sort_part(
+     elif field in model_cls._fields:
+         sort_cls = sort.FixedFieldSort
+     else:
+-        # Flexible or computed.
+         sort_cls = sort.SlowFieldSort
+ 
+     return sort_cls(field, is_ascending, case_insensitive)
+diff --git a/test/dbcore/test_db.py b/test/dbcore/test_db.py
+index 022be19..e3a7a65 100644
+--- a/test/dbcore/test_db.py
++++ b/test/dbcore/test_db.py
+@@ -283,15 +283,6 @@ class ModelTest(unittest.TestCase):
+         other_model = self.db._get(ModelFixture1, model.id)
+         assert other_model.foo == "bar"
+ 
+-    def test_store_flexattr_in_fields(self):
+-        model = ModelFixture1()
+-        model.add(self.db)
+-        model.foo = "bar"
+-        model.store(fields=["foo"])
+-
+-        other_model = self.db._get(ModelFixture1, model.id)
+-        assert other_model.foo == "bar"
+-
+     def test_delete_flexattr(self):
+         model = ModelFixture1()
+         model["foo"] = "bar"
+diff --git a/test/ui/commands/test_update.py b/test/ui/commands/test_update.py
+index c1fa8eb..a2cadc7 100644
+--- a/test/ui/commands/test_update.py
++++ b/test/ui/commands/test_update.py
+@@ -1,8 +1,6 @@
+-import mediafile
+ from mediafile import MediaFile
+ 
+ from beets import library
+-from beets.plugins import BeetsPlugin
+ from beets.test import _common
+ from beets.test.helper import BeetsTestCase, IOMixin
+ from beets.util import MoveOperation, remove
+@@ -67,29 +65,6 @@ class UpdateTest(IOMixin, BeetsTestCase):
+         item = self.lib.items().get()
+         assert item.title == "differentTitle"
+ 
+-    def test_modified_plugin_media_field_detected(self):
+-        plugin = BeetsPlugin()
+-        plugin.add_media_field(
+-            "customtag",
+-            mediafile.MediaField(
+-                mediafile.MP3DescStorageStyle("customtag"),
+-                mediafile.StorageStyle("customtag"),
+-            ),
+-        )
+-
+-        try:
+-            mf = MediaFile(self.i.filepath)
+-            mf.customtag = "F#"
+-            mf.save()
+-
+-            self._update()
+-
+-            item = self.lib.get_item(self.i.id)
+-            assert item["customtag"] == "F#"
+-        finally:
+-            delattr(mediafile.MediaFile, "customtag")
+-            library.Item._media_fields.remove("customtag")
+-
+     def test_modified_metadata_moved(self):
+         mf = MediaFile(self.i.filepath)
+         mf.title = "differentTitle"

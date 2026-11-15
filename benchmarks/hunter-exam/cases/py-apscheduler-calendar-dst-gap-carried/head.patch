@@ -1,0 +1,934 @@
+diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml
+index d6ae014..6679c53 100644
+--- a/.github/workflows/test.yml
++++ b/.github/workflows/test.yml
+@@ -10,7 +10,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
++        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+     runs-on: ubuntu-latest
+     steps:
+     - uses: actions/checkout@v7
+diff --git a/pyproject.toml b/pyproject.toml
+index 5943349..51d3dd1 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -17,21 +17,20 @@ classifiers = [
+     "Typing :: Typed",
+     "Programming Language :: Python",
+     "Programming Language :: Python :: 3 :: Only",
+-    "Programming Language :: Python :: 3.10",
+     "Programming Language :: Python :: 3.11",
+     "Programming Language :: Python :: 3.12",
+     "Programming Language :: Python :: 3.13",
+     "Programming Language :: Python :: 3.14",
++    "Programming Language :: Python :: 3.15",
+ ]
+ keywords = ["scheduling", "cron"]
+ license = "MIT"
+-requires-python = ">= 3.10"
++requires-python = ">= 3.11"
+ dependencies = [
+     "anyio ~= 4.0",
+     "attrs >= 22.1",
+     "tenacity >= 8.0, < 10.0",
+     "tzlocal >= 3.0",
+-    "typing_extensions >= 4.0; python_version < '3.11'"
+ ]
+ dynamic = ["version"]
+ 
+@@ -131,7 +130,7 @@ ignore_missing_imports = true
+ disable_error_code = "type-abstract"
+ 
+ [tool.tox]
+-env_list = ["py310", "py311", "py312", "py313", "py314", "pypy3"]
++env_list = ["py311", "py312", "py313", "py314", "py315", "pypy3"]
+ skip_missing_interpreters = true
+ requires = ["tox >= 4.22"]
+ 
+diff --git a/src/apscheduler/_converters.py b/src/apscheduler/_converters.py
+index 46e9932..d66cd45 100644
+--- a/src/apscheduler/_converters.py
++++ b/src/apscheduler/_converters.py
+@@ -1,7 +1,7 @@
+ from __future__ import annotations
+ 
+ from collections.abc import Callable
+-from datetime import date, datetime, timedelta, timezone, tzinfo
++from datetime import UTC, date, datetime, timedelta, tzinfo
+ from typing import Any
+ from uuid import UUID
+ from zoneinfo import ZoneInfo
+@@ -45,7 +45,7 @@ def as_date(value: date | str) -> date:
+ def as_timezone(value: tzinfo | str) -> tzinfo:
+     if isinstance(value, str):
+         return get_localzone() if value == "local" else ZoneInfo(value)
+-    elif value is timezone.utc:
++    elif value is UTC:
+         return ZoneInfo("UTC")
+ 
+     return value
+diff --git a/src/apscheduler/_events.py b/src/apscheduler/_events.py
+index ec73669..ff7af6d 100644
+--- a/src/apscheduler/_events.py
++++ b/src/apscheduler/_events.py
+@@ -1,6 +1,6 @@
+ from __future__ import annotations
+ 
+-from datetime import datetime, timezone
++from datetime import UTC, datetime
+ from functools import partial
+ from traceback import format_tb
+ from typing import Any, TypeVar
+@@ -26,7 +26,7 @@ class Event:
+     """
+ 
+     timestamp: datetime = attrs.field(
+-        factory=partial(datetime.now, timezone.utc), converter=as_aware_datetime
++        factory=partial(datetime.now, UTC), converter=as_aware_datetime
+     )
+ 
+     def marshal(self) -> dict[str, Any]:
+diff --git a/src/apscheduler/_schedulers/async_.py b/src/apscheduler/_schedulers/async_.py
+index fb5cb54..8537176 100644
+--- a/src/apscheduler/_schedulers/async_.py
++++ b/src/apscheduler/_schedulers/async_.py
+@@ -3,15 +3,14 @@ from __future__ import annotations
+ import os
+ import platform
+ import random
+-import sys
+ from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+ from contextlib import AsyncExitStack
+-from datetime import datetime, timedelta, timezone
++from datetime import UTC, datetime, timedelta
+ from functools import partial
+ from inspect import isbuiltin, isclass, ismethod, ismodule
+ from logging import Logger, getLogger
+ from types import TracebackType
+-from typing import Any, Literal, TypeAlias, TypeVar, cast, overload
++from typing import Any, Literal, Self, TypeAlias, TypeVar, cast, overload
+ from uuid import UUID, uuid4
+ 
+ import anyio
+@@ -68,11 +67,6 @@ from ..executors.async_ import AsyncJobExecutor
+ from ..executors.subprocess import ProcessPoolJobExecutor
+ from ..executors.thread import ThreadPoolJobExecutor
+ 
+-if sys.version_info >= (3, 11):
+-    from typing import Self
+-else:
+-    from typing_extensions import Self
+-
+ _microsecond_delta = timedelta(microseconds=1)
+ _zero_timedelta = timedelta()
+ 
+@@ -625,7 +619,7 @@ class AsyncScheduler:
+         schedule = await self.get_schedule(id)
+ 
+         if resume_from == "now":
+-            resume_from = datetime.now(tz=timezone.utc)
++            resume_from = datetime.now(tz=UTC)
+ 
+         if resume_from is None:
+             next_fire_time = schedule.next_fire_time
+@@ -969,7 +963,7 @@ class AsyncScheduler:
+                     )
+                     exit_stack.callback(tg.cancel_scope.cancel)
+ 
+-                    now = datetime.now(timezone.utc)
++                    now = datetime.now(UTC)
+                     results: list[ScheduleResult] = []
+                     for schedule in schedules:
+                         # Calculate a next fire time for the schedule, if possible
+@@ -1072,7 +1066,7 @@ class AsyncScheduler:
+                     wakeup_deadline = await self.data_store.get_next_schedule_run_time()
+                     if wakeup_deadline:
+                         wait_time = (
+-                            wakeup_deadline - datetime.now(timezone.utc)
++                            wakeup_deadline - datetime.now(UTC)
+                         ).total_seconds()
+                         self.logger.debug(
+                             "Sleeping %.3f seconds until the next fire time (%s)",
+@@ -1178,7 +1172,7 @@ class AsyncScheduler:
+     async def _run_job(self, job: Job, func: Callable[..., Any], executor: str) -> None:
+         try:
+             # Check if the job started before the deadline
+-            start_time = datetime.now(timezone.utc)
++            start_time = datetime.now(UTC)
+             if job.start_deadline is not None and start_time > job.start_deadline:
+                 result = JobResult.from_job(
+                     job, JobOutcome.missed_start_deadline, finished_at=start_time
+diff --git a/src/apscheduler/_schedulers/sync.py b/src/apscheduler/_schedulers/sync.py
+index 68ea6d0..c0216fb 100644
+--- a/src/apscheduler/_schedulers/sync.py
++++ b/src/apscheduler/_schedulers/sync.py
+@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
+ from functools import partial
+ from logging import Logger
+ from types import TracebackType
+-from typing import Any, Literal, overload
++from typing import Any, Literal, Self, overload
+ from uuid import UUID
+ 
+ import attrs
+@@ -23,11 +23,6 @@ from .._utils import UnsetValue, create_repr, unset
+ from ..abc import DataStore, EventBroker, JobExecutor, Subscription, Trigger
+ from .async_ import AsyncScheduler, TaskType
+ 
+-if sys.version_info >= (3, 11):
+-    from typing import Self
+-else:
+-    from typing_extensions import Self
+-
+ 
+ @attrs.define(init=False, repr=False)
+ class Scheduler:
+diff --git a/src/apscheduler/_structures.py b/src/apscheduler/_structures.py
+index 6993990..94074b3 100644
+--- a/src/apscheduler/_structures.py
++++ b/src/apscheduler/_structures.py
+@@ -1,6 +1,6 @@
+ from __future__ import annotations
+ 
+-from datetime import datetime, timedelta, timezone
++from datetime import UTC, datetime, timedelta
+ from functools import partial
+ from typing import Any, TypeAlias
+ from uuid import UUID, uuid4
+@@ -310,7 +310,7 @@ class Job:
+     metadata: MetadataType = attrs.field(validator=valid_metadata, factory=dict)
+     created_at: datetime = attrs.field(
+         converter=as_aware_datetime,
+-        factory=partial(datetime.now, timezone.utc),
++        factory=partial(datetime.now, UTC),
+         on_setattr=frozen,
+     )
+     acquired_by: str | None = attrs.field(default=None, repr=False)
+@@ -393,7 +393,7 @@ class JobResult:
+         exception: BaseException | None = None,
+         return_value: Any = None,
+     ) -> JobResult:
+-        real_finished_at = finished_at or datetime.now(timezone.utc)
++        real_finished_at = finished_at or datetime.now(UTC)
+         expires_at = real_finished_at + job.result_expiration_time
+         return cls(
+             job_id=job.id,
+diff --git a/src/apscheduler/abc.py b/src/apscheduler/abc.py
+index d302f04..c2311df 100644
+--- a/src/apscheduler/abc.py
++++ b/src/apscheduler/abc.py
+@@ -1,19 +1,13 @@
+ from __future__ import annotations
+ 
+-import sys
+ from abc import ABCMeta, abstractmethod
+ from collections.abc import Callable, Iterable, Iterator, Sequence
+ from contextlib import AsyncExitStack
+ from datetime import datetime, timedelta
+ from logging import Logger
+-from typing import TYPE_CHECKING, Any
++from typing import TYPE_CHECKING, Any, Self
+ from uuid import UUID
+ 
+-if sys.version_info >= (3, 11):
+-    from typing import Self
+-else:
+-    from typing_extensions import Self
+-
+ if TYPE_CHECKING:
+     from ._enums import ConflictPolicy
+     from ._events import Event, T_Event
+diff --git a/src/apscheduler/datastores/memory.py b/src/apscheduler/datastores/memory.py
+index bc53ea9..6ec481e 100644
+--- a/src/apscheduler/datastores/memory.py
++++ b/src/apscheduler/datastores/memory.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ from bisect import bisect_left, bisect_right, insort_right
+ from collections import defaultdict
+ from collections.abc import Iterable, Sequence
+-from datetime import MAXYEAR, datetime, timedelta, timezone
++from datetime import MAXYEAR, UTC, datetime, timedelta
+ from functools import partial
+ from uuid import UUID
+ 
+@@ -27,7 +27,7 @@ from .._structures import Job, JobResult, Schedule, ScheduleResult, Task
+ from .._utils import create_repr
+ from .base import BaseDataStore
+ 
+-max_datetime = datetime(MAXYEAR, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
++max_datetime = datetime(MAXYEAR, 12, 31, 23, 59, 59, 999999, tzinfo=UTC)
+ 
+ 
+ @attrs.define(eq=False, repr=False)
+@@ -144,7 +144,7 @@ class MemoryDataStore(BaseDataStore):
+     async def acquire_schedules(
+         self, scheduler_id: str, lease_duration: timedelta, limit: int
+     ) -> list[Schedule]:
+-        now = datetime.now(timezone.utc)
++        now = datetime.now(UTC)
+         acquired_until = now + lease_duration
+         schedules: list[Schedule] = []
+         for schedule in self._schedules:
+@@ -225,7 +225,7 @@ class MemoryDataStore(BaseDataStore):
+     async def acquire_jobs(
+         self, scheduler_id: str, lease_duration: timedelta, limit: int | None = None
+     ) -> list[Job]:
+-        now = datetime.now(timezone.utc)
++        now = datetime.now(UTC)
+         acquired_until = now + lease_duration
+         jobs: list[Job] = []
+         job_results: dict[Job, JobResult] = {}
+@@ -330,7 +330,7 @@ class MemoryDataStore(BaseDataStore):
+     async def extend_acquired_schedule_leases(
+         self, scheduler_id: str, schedule_ids: set[str], duration: timedelta
+     ) -> None:
+-        acquired_until = datetime.now(timezone.utc) + duration
++        acquired_until = datetime.now(UTC) + duration
+         for schedule in self._schedules:
+             if schedule.acquired_by == scheduler_id and schedule.id in schedule_ids:
+                 schedule.acquired_until = acquired_until
+@@ -338,13 +338,13 @@ class MemoryDataStore(BaseDataStore):
+     async def extend_acquired_job_leases(
+         self, scheduler_id: str, job_ids: set[UUID], duration: timedelta
+     ) -> None:
+-        acquired_until = datetime.now(timezone.utc) + duration
++        acquired_until = datetime.now(UTC) + duration
+         for job in self._jobs_by_id.values():
+             if job.acquired_by == scheduler_id and job.id in job_ids:
+                 job.acquired_until = acquired_until
+ 
+     async def reap_abandoned_jobs(self, scheduler_id: str) -> None:
+-        now = datetime.now(timezone.utc)
++        now = datetime.now(UTC)
+         for job in list(self._jobs_by_id.values()):
+             if job.acquired_by == scheduler_id:
+                 result = JobResult.from_job(
+@@ -354,7 +354,7 @@ class MemoryDataStore(BaseDataStore):
+ 
+     async def cleanup(self) -> None:
+         # Clean up expired job results
+-        now = datetime.now(timezone.utc)
++        now = datetime.now(UTC)
+         expired_job_ids = [
+             result.job_id
+             for result in self._job_results.values()
+diff --git a/src/apscheduler/datastores/mongodb.py b/src/apscheduler/datastores/mongodb.py
+index f47fc0e..9bd5fc2 100644
+--- a/src/apscheduler/datastores/mongodb.py
++++ b/src/apscheduler/datastores/mongodb.py
+@@ -8,7 +8,7 @@ from collections.abc import (
+     Sequence,
+ )
+ from contextlib import AsyncExitStack
+-from datetime import datetime, timedelta, timezone
++from datetime import UTC, datetime, timedelta, timezone
+ from logging import Logger
+ from typing import Any, ClassVar, TypeVar, cast
+ from uuid import UUID
+@@ -342,7 +342,7 @@ class MongoDBDataStore(BaseExternalDataStore):
+                     session = await exit_stack.enter_async_context(
+                         self._client.start_session()
+                     )
+-                    now = datetime.now(timezone.utc)
++                    now = datetime.now(UTC)
+                     documents = await self._schedules.find(
+                         {
+                             "next_fire_time": {"$lte": now.timestamp()},
+@@ -371,7 +371,7 @@ class MongoDBDataStore(BaseExternalDataStore):
+                     if not documents:
+                         return schedules
+ 
+-                    now = datetime.now(timezone.utc)
++                    now = datetime.now(UTC)
+                     acquired_until = now + lease_duration
+                     schedule_ids = [doc["_id"] for doc in documents]
+                     result = await self._schedules.update_many(
+@@ -541,7 +541,7 @@ class MongoDBDataStore(BaseExternalDataStore):
+                 )
+ 
+                 # Fetch up to {limit} jobs
+-                now = datetime.now(timezone.utc)
++                now = datetime.now(UTC)
+                 documents = await self._jobs.find(
+                     {
+                         "$or": [
+@@ -766,9 +766,7 @@ class MongoDBDataStore(BaseExternalDataStore):
+         async for attempt in self._retry():
+             with attempt:
+                 async with self._client.start_session() as session:
+-                    new_acquired_until = (
+-                        datetime.now(timezone.utc) + duration
+-                    ).timestamp()
++                    new_acquired_until = (datetime.now(UTC) + duration).timestamp()
+                     await self._schedules.update_many(
+                         filter={
+                             "acquired_by": scheduler_id,
+@@ -784,9 +782,7 @@ class MongoDBDataStore(BaseExternalDataStore):
+         async for attempt in self._retry():
+             with attempt:
+                 async with self._client.start_session() as session:
+-                    new_acquired_until = (
+-                        datetime.now(timezone.utc) + duration
+-                    ).timestamp()
++                    new_acquired_until = (datetime.now(UTC) + duration).timestamp()
+                     await self._jobs.update_many(
+                         filter={
+                             "acquired_by": scheduler_id,
+@@ -833,7 +829,7 @@ class MongoDBDataStore(BaseExternalDataStore):
+             with attempt:
+                 async with self._client.start_session() as session:
+                     # Purge expired job results
+-                    now = datetime.now(timezone.utc)
++                    now = datetime.now(UTC)
+                     await self._jobs_results.delete_many(
+                         {"expires_at": {"$lte": now.timestamp()}}, session=session
+                     )
+diff --git a/src/apscheduler/datastores/sqlalchemy.py b/src/apscheduler/datastores/sqlalchemy.py
+index 599f285..8fc7a0e 100644
+--- a/src/apscheduler/datastores/sqlalchemy.py
++++ b/src/apscheduler/datastores/sqlalchemy.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ from collections import defaultdict
+ from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+ from contextlib import AsyncExitStack, asynccontextmanager
+-from datetime import datetime, timedelta, timezone
++from datetime import UTC, datetime, timedelta, timezone
+ from functools import partial
+ from logging import Logger
+ from typing import Any, cast
+@@ -650,7 +650,7 @@ class SQLAlchemyDataStore(BaseExternalDataStore):
+         async for attempt in self._retry():
+             with attempt:
+                 async with self._begin_transaction() as conn:
+-                    now = datetime.now(timezone.utc)
++                    now = datetime.now(UTC)
+                     acquired_until = now + lease_duration
+                     if self._supports_tzaware_timestamps:
+                         comparison = self._t_schedules.c.next_fire_time <= now
+@@ -875,7 +875,7 @@ class SQLAlchemyDataStore(BaseExternalDataStore):
+         async for attempt in self._retry():
+             with attempt:
+                 async with self._begin_transaction() as conn:
+-                    now = datetime.now(timezone.utc)
++                    now = datetime.now(UTC)
+                     acquired_until = now + lease_duration
+                     query = (
+                         select(
+@@ -1107,7 +1107,7 @@ class SQLAlchemyDataStore(BaseExternalDataStore):
+         async for attempt in self._retry():
+             with attempt:
+                 async with self._begin_transaction() as conn:
+-                    new_acquired_until = datetime.now(timezone.utc) + duration
++                    new_acquired_until = datetime.now(UTC) + duration
+                     update = (
+                         self._t_schedules.update()
+                         .values(acquired_until=new_acquired_until)
+@@ -1124,7 +1124,7 @@ class SQLAlchemyDataStore(BaseExternalDataStore):
+         async for attempt in self._retry():
+             with attempt:
+                 async with self._begin_transaction() as conn:
+-                    new_acquired_until = datetime.now(timezone.utc) + duration
++                    new_acquired_until = datetime.now(UTC) + duration
+                     update = (
+                         self._t_jobs.update()
+                         .values(acquired_until=new_acquired_until)
+@@ -1172,12 +1172,12 @@ class SQLAlchemyDataStore(BaseExternalDataStore):
+                 async with self._begin_transaction() as conn:
+                     # Purge expired job results
+                     delete = self._t_job_results.delete().where(
+-                        self._t_job_results.c.expires_at <= datetime.now(timezone.utc)
++                        self._t_job_results.c.expires_at <= datetime.now(UTC)
+                     )
+                     await self._execute(conn, delete)
+ 
+                     # Finish any jobs whose leases have expired
+-                    now = datetime.now(timezone.utc)
++                    now = datetime.now(UTC)
+                     query = select(
+                         self._t_jobs.c.id,
+                         self._t_jobs.c.task_id,
+diff --git a/src/apscheduler/triggers/calendarinterval.py b/src/apscheduler/triggers/calendarinterval.py
+index 357e6a0..980e805 100644
+--- a/src/apscheduler/triggers/calendarinterval.py
++++ b/src/apscheduler/triggers/calendarinterval.py
+@@ -119,7 +119,7 @@ class CalendarIntervalTrigger(Trigger):
+ 
+             # Check if the time is off due to normalization and a forward DST shift
+             if next_time.timetz() != self._time:
+-                previous_date = next_date
++                previous_date = next_time.date()
+             else:
+                 self._last_fire_date = next_date
+                 return next_time
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 078a481..812e760 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -227,7 +227,7 @@ async def asyncpg_store() -> AsyncGenerator[DataStore, None]:
+     from apscheduler.datastores.sqlalchemy import SQLAlchemyDataStore
+ 
+     # Workaround for AnyIO 4.0.0rc1 compatibility
+-    async def patched_wait_for(fut, timeout):
++    async def patched_wait_for(fut, timeout):  # noqa: ASYNC109
+         import asyncio
+ 
+         if timeout is None:
+diff --git a/tests/test_datastores.py b/tests/test_datastores.py
+index c366943..332a3a2 100644
+--- a/tests/test_datastores.py
++++ b/tests/test_datastores.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ import platform
+ from collections.abc import AsyncGenerator
+ from contextlib import AsyncExitStack, asynccontextmanager
+-from datetime import datetime, timedelta, timezone
++from datetime import UTC, datetime, timedelta
+ from logging import Logger
+ from pathlib import Path
+ from typing import TYPE_CHECKING
+@@ -58,19 +58,19 @@ async def datastore(
+ 
+ @pytest.fixture
+ def schedules() -> list[Schedule]:
+-    trigger = DateTrigger(datetime(2020, 9, 13, tzinfo=timezone.utc))
++    trigger = DateTrigger(datetime(2020, 9, 13, tzinfo=UTC))
+     schedule1 = Schedule(
+         id="s1", task_id="task1", job_executor="async", trigger=trigger
+     )
+     schedule1.next_fire_time = trigger.next()
+ 
+-    trigger = DateTrigger(datetime(2020, 9, 14, tzinfo=timezone.utc))
++    trigger = DateTrigger(datetime(2020, 9, 14, tzinfo=UTC))
+     schedule2 = Schedule(
+         id="s2", task_id="task2", job_executor="async", trigger=trigger
+     )
+     schedule2.next_fire_time = trigger.next()
+ 
+-    trigger = DateTrigger(datetime(2020, 9, 15, tzinfo=timezone.utc))
++    trigger = DateTrigger(datetime(2020, 9, 15, tzinfo=UTC))
+     schedule3 = Schedule(
+         id="s3", task_id="task1", job_executor="async", trigger=trigger
+     )
+@@ -160,7 +160,7 @@ async def test_replace_schedules(
+         for schedule in schedules:
+             await datastore.add_schedule(schedule, ConflictPolicy.exception)
+ 
+-        trigger = DateTrigger(datetime(2020, 9, 16, tzinfo=timezone.utc))
++        trigger = DateTrigger(datetime(2020, 9, 16, tzinfo=UTC))
+         next_fire_time = trigger.next()
+         schedule = Schedule(
+             id="s3",
+@@ -187,7 +187,7 @@ async def test_replace_schedules(
+     assert isinstance(received_event, ScheduleUpdated)
+     assert received_event.schedule_id == "s3"
+     assert received_event.task_id == "foo"
+-    assert received_event.next_fire_time == datetime(2020, 9, 16, tzinfo=timezone.utc)
++    assert received_event.next_fire_time == datetime(2020, 9, 16, tzinfo=UTC)
+     assert not events
+ 
+ 
+@@ -219,7 +219,7 @@ async def test_remove_schedules(
+ async def test_acquire_release_schedules(
+     datastore: DataStore, schedules: list[Schedule], time_machine: TimeMachineFixture
+ ) -> None:
+-    time_machine.move_to(datetime(2020, 9, 14, tzinfo=timezone.utc))
++    time_machine.move_to(datetime(2020, 9, 14, tzinfo=UTC))
+ 
+     event_types = {ScheduleRemoved, ScheduleUpdated}
+     async with capture_events(datastore, 2, event_types) as events:
+@@ -259,7 +259,7 @@ async def test_acquire_release_schedules(
+                 schedule_id=schedules1[0].id,
+                 task_id=schedules1[0].task_id,
+                 trigger=schedules1[0].trigger,
+-                last_fire_time=datetime(2020, 9, 14, tzinfo=timezone.utc),
++                last_fire_time=datetime(2020, 9, 14, tzinfo=UTC),
+                 next_fire_time=None,
+             )
+         )
+@@ -268,8 +268,8 @@ async def test_acquire_release_schedules(
+                 schedule_id=schedules2[0].id,
+                 task_id=schedules2[0].task_id,
+                 trigger=schedules1[0].trigger,
+-                last_fire_time=datetime(2020, 9, 14, tzinfo=timezone.utc),
+-                next_fire_time=datetime(2020, 9, 15, tzinfo=timezone.utc),
++                last_fire_time=datetime(2020, 9, 14, tzinfo=UTC),
++                next_fire_time=datetime(2020, 9, 15, tzinfo=UTC),
+             )
+         )
+ 
+@@ -282,14 +282,14 @@ async def test_acquire_release_schedules(
+         assert len(schedules) == 3
+         schedules.sort(key=lambda s: s.id)
+         assert schedules[0].id == "s1"
+-        assert schedules[0].last_fire_time == datetime(2020, 9, 14, tzinfo=timezone.utc)
++        assert schedules[0].last_fire_time == datetime(2020, 9, 14, tzinfo=UTC)
+         assert schedules[0].next_fire_time is None
+         assert schedules[1].id == "s2"
+-        assert schedules[1].last_fire_time == datetime(2020, 9, 14, tzinfo=timezone.utc)
+-        assert schedules[1].next_fire_time == datetime(2020, 9, 15, tzinfo=timezone.utc)
++        assert schedules[1].last_fire_time == datetime(2020, 9, 14, tzinfo=UTC)
++        assert schedules[1].next_fire_time == datetime(2020, 9, 15, tzinfo=UTC)
+         assert schedules[2].id == "s3"
+         assert schedules[2].last_fire_time is None
+-        assert schedules[2].next_fire_time == datetime(2020, 9, 15, tzinfo=timezone.utc)
++        assert schedules[2].next_fire_time == datetime(2020, 9, 15, tzinfo=UTC)
+ 
+     # Check for the appropriate update and delete events
+     received_event = events.pop(0)
+@@ -300,7 +300,7 @@ async def test_acquire_release_schedules(
+     received_event = events.pop(0)
+     assert isinstance(received_event, ScheduleUpdated)
+     assert received_event.schedule_id == "s2"
+-    assert received_event.next_fire_time == datetime(2020, 9, 15, tzinfo=timezone.utc)
++    assert received_event.next_fire_time == datetime(2020, 9, 15, tzinfo=UTC)
+ 
+     assert not events
+ 
+@@ -308,7 +308,7 @@ async def test_acquire_release_schedules(
+ async def test_release_schedule_two_identical_fire_times(datastore: DataStore) -> None:
+     """Regression test for #616."""
+     for i in range(1, 3):
+-        trigger = DateTrigger(datetime(2020, 9, 13, tzinfo=timezone.utc))
++        trigger = DateTrigger(datetime(2020, 9, 13, tzinfo=UTC))
+         schedule = Schedule(
+             id=f"s{i}", task_id="task1", job_executor="async", trigger=trigger
+         )
+@@ -325,7 +325,7 @@ async def test_release_schedule_two_identical_fire_times(datastore: DataStore) -
+             schedule_id=schedules[0].id,
+             task_id=schedules[0].task_id,
+             trigger=schedules[0].trigger,
+-            last_fire_time=datetime(2020, 9, 10, tzinfo=timezone.utc),
++            last_fire_time=datetime(2020, 9, 10, tzinfo=UTC),
+             next_fire_time=None,
+         ),
+     ]
+@@ -343,7 +343,7 @@ async def test_release_schedule_two_identical_fire_times(datastore: DataStore) -
+ async def test_release_two_schedules_at_once(datastore: DataStore) -> None:
+     """Regression test for #621."""
+     for i in range(2):
+-        trigger = DateTrigger(datetime(2020, 9, 13, tzinfo=timezone.utc))
++        trigger = DateTrigger(datetime(2020, 9, 13, tzinfo=UTC))
+         schedule = Schedule(
+             id=f"s{i}", task_id="task1", job_executor="async", trigger=trigger
+         )
+@@ -356,7 +356,7 @@ async def test_release_two_schedules_at_once(datastore: DataStore) -> None:
+             schedule_id=schedules[0].id,
+             task_id=schedules[0].task_id,
+             trigger=schedules[0].trigger,
+-            last_fire_time=datetime(2020, 9, 10, tzinfo=timezone.utc),
++            last_fire_time=datetime(2020, 9, 10, tzinfo=UTC),
+             next_fire_time=None,
+         ),
+     ]
+@@ -380,7 +380,7 @@ async def test_acquire_schedules_lock_timeout(
+     scheduler but not released within the lock timeout period.
+ 
+     """
+-    time_machine.move_to(datetime.now(timezone.utc), tick=False)
++    time_machine.move_to(datetime.now(UTC), tick=False)
+     await datastore.add_schedule(schedules[0], ConflictPolicy.exception)
+ 
+     # First, one scheduler acquires the first available schedule
+@@ -585,7 +585,7 @@ async def test_acquire_jobs_lock_timeout(
+     await datastore.add_job(job)
+ 
+     # First, one worker acquires the first available job
+-    time_machine.move_to(datetime.now(timezone.utc), tick=False)
++    time_machine.move_to(datetime.now(UTC), tick=False)
+     acquired = await datastore.acquire_jobs("worker1", timedelta(seconds=30), 1)
+     assert len(acquired) == 1
+     assert acquired[0].id == job.id
+@@ -691,7 +691,7 @@ async def test_next_schedule_run_time(datastore: DataStore, schedules: list[Sche
+         await datastore.add_schedule(schedule, ConflictPolicy.exception)
+ 
+     next_schedule_run_time = await datastore.get_next_schedule_run_time()
+-    assert next_schedule_run_time == datetime(2020, 9, 13, tzinfo=timezone.utc)
++    assert next_schedule_run_time == datetime(2020, 9, 13, tzinfo=UTC)
+ 
+ 
+ @pytest.mark.skipif(
+@@ -706,7 +706,7 @@ async def test_cleanup_expired_schedule_leases(
+     schedulers about it.
+ 
+     """
+-    time_machine.move_to(datetime(2020, 9, 14, tzinfo=timezone.utc))
++    time_machine.move_to(datetime(2020, 9, 14, tzinfo=UTC))
+     await datastore.add_schedule(schedules[0], ConflictPolicy.exception)
+ 
+     # Acquire the schedule with a scheduler that then dies without releasing it
+@@ -746,7 +746,7 @@ async def test_extend_acquired_schedule_leases(
+     from acquiring them.
+ 
+     """
+-    time_machine.move_to(datetime(2020, 9, 14, tzinfo=timezone.utc))
++    time_machine.move_to(datetime(2020, 9, 14, tzinfo=UTC))
+ 
+     # Add a schedule to the data store
+     await datastore.add_schedule(schedules[0], ConflictPolicy.exception)
+@@ -805,7 +805,7 @@ async def test_extend_acquired_job_leases(
+     up as if they had been abandoned.
+ 
+     """
+-    time_machine.move_to(datetime(2020, 9, 14, tzinfo=timezone.utc))
++    time_machine.move_to(datetime(2020, 9, 14, tzinfo=UTC))
+ 
+     # Add a task to the data store
+     task = Task(id="task1", func="contextlib:asynccontextmanager", job_executor="async")
+@@ -911,9 +911,7 @@ class TestRepr:
+         engine = create_engine(f"sqlite:///{tmp_path}")
+         data_store = SQLAlchemyDataStore(engine)
+         data_store_repr = unquote(repr(data_store)).replace("\\\\", "\\")
+-        assert data_store_repr == (
+-            f"SQLAlchemyDataStore(url='sqlite:///{tmp_path}')"
+-        )
++        assert data_store_repr == (f"SQLAlchemyDataStore(url='sqlite:///{tmp_path}')")
+ 
+     async def test_psycopg(self) -> None:
+         from sqlalchemy.ext.asyncio import create_async_engine
+diff --git a/tests/test_eventbrokers.py b/tests/test_eventbrokers.py
+index 66796c4..38cf499 100644
+--- a/tests/test_eventbrokers.py
++++ b/tests/test_eventbrokers.py
+@@ -1,8 +1,7 @@
+ from __future__ import annotations
+ 
+-import sys
+ from contextlib import AsyncExitStack
+-from datetime import datetime, timezone
++from datetime import UTC, datetime
+ from logging import Logger
+ 
+ import pytest
+@@ -12,11 +11,6 @@ from anyio import CancelScope, create_memory_object_stream, fail_after
+ from apscheduler import Event, ScheduleAdded
+ from apscheduler.abc import EventBroker
+ 
+-if sys.version_info >= (3, 11):
+-    from datetime import UTC
+-else:
+-    UTC = timezone.utc
+-
+ pytestmark = pytest.mark.anyio
+ 
+ 
+diff --git a/tests/test_schedulers.py b/tests/test_schedulers.py
+index 0f59271..1471cb4 100644
+--- a/tests/test_schedulers.py
++++ b/tests/test_schedulers.py
+@@ -7,13 +7,14 @@ import time
+ from collections import defaultdict
+ from collections.abc import Callable
+ from contextlib import AsyncExitStack
+-from datetime import datetime, timedelta, timezone
++from datetime import UTC, datetime, timedelta
+ from functools import partial
+ from inspect import signature
+ from queue import Queue
+ from types import ModuleType
+ from typing import Any, cast
+ from unittest.mock import patch
++from zoneinfo import ZoneInfo
+ 
+ import anyio
+ import attrs
+@@ -66,14 +67,6 @@ from apscheduler.triggers.cron import CronTrigger
+ from apscheduler.triggers.date import DateTrigger
+ from apscheduler.triggers.interval import IntervalTrigger
+ 
+-if sys.version_info >= (3, 11):
+-    from datetime import UTC
+-else:
+-    UTC = timezone.utc
+-    from exceptiongroup import ExceptionGroup
+-
+-from zoneinfo import ZoneInfo
+-
+ pytestmark = pytest.mark.anyio
+ 
+ 
+@@ -859,7 +852,7 @@ class TestAsyncScheduler:
+             event = anyio.Event()
+             scheduler.subscribe(lambda _: event.set(), {JobReleased}, one_shot=True)
+             await scheduler.add_schedule(
+-                dummy_async_job, DateTrigger(datetime.now(timezone.utc)), id="event_set"
++                dummy_async_job, DateTrigger(datetime.now(UTC)), id="event_set"
+             )
+             with fail_after(3):
+                 await event.wait()
+@@ -897,7 +890,7 @@ class TestAsyncScheduler:
+             dummy_event = anyio.Event()
+             await scheduler.configure_task("event_set", func=dummy_event.wait)
+             schedule_id = await scheduler.add_schedule(
+-                "event_set", DateTrigger(datetime.now(timezone.utc)), id="event_set"
++                "event_set", DateTrigger(datetime.now(UTC)), id="event_set"
+             )
+ 
+             # Wait for the job to be submitted
+@@ -1484,7 +1477,7 @@ class TestSyncScheduler:
+         with Scheduler(cleanup_interval=None) as scheduler:
+             event = threading.Event()
+             scheduler.add_schedule(
+-                event.set, DateTrigger(datetime.now(timezone.utc)), id="event_set"
++                event.set, DateTrigger(datetime.now(UTC)), id="event_set"
+             )
+             scheduler.start_in_background()
+             assert event.wait(3)
+diff --git a/tests/test_serializers.py b/tests/test_serializers.py
+index 0de7f7d..4271081 100644
+--- a/tests/test_serializers.py
++++ b/tests/test_serializers.py
+@@ -1,6 +1,6 @@
+ from __future__ import annotations
+ 
+-from datetime import datetime, timezone
++from datetime import UTC, datetime
+ from typing import NoReturn
+ from uuid import uuid4
+ 
+@@ -35,8 +35,8 @@ from apscheduler.abc import Serializer
+                 task_id="task",
+                 schedule_id="schedule",
+                 outcome=JobOutcome.success,
+-                scheduled_start=datetime.now(timezone.utc),
+-                started_at=datetime.now(timezone.utc),
++                scheduled_start=datetime.now(UTC),
++                started_at=datetime.now(UTC),
+             ),
+             id="job_released",
+         ),
+diff --git a/tests/triggers/test_combining.py b/tests/triggers/test_combining.py
+index 03df3a7..64c6665 100644
+--- a/tests/triggers/test_combining.py
++++ b/tests/triggers/test_combining.py
+@@ -1,6 +1,6 @@
+ from __future__ import annotations
+ 
+-from datetime import datetime, timedelta, timezone
++from datetime import UTC, datetime, timedelta
+ 
+ import pytest
+ 
+@@ -68,84 +68,72 @@ class TestAndTrigger:
+         "left_trigger,right_trigger,expected_datetimes",
+         [
+             (
+-                IntervalTrigger(
+-                    hours=6, start_time=datetime(2024, 5, 1, tzinfo=timezone.utc)
+-                ),
+-                IntervalTrigger(
+-                    hours=12, start_time=datetime(2024, 5, 1, tzinfo=timezone.utc)
+-                ),
++                IntervalTrigger(hours=6, start_time=datetime(2024, 5, 1, tzinfo=UTC)),
++                IntervalTrigger(hours=12, start_time=datetime(2024, 5, 1, tzinfo=UTC)),
+                 [
+-                    datetime(2024, 5, 1, 0, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 1, 12, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 2, 0, tzinfo=timezone.utc),
++                    datetime(2024, 5, 1, 0, tzinfo=UTC),
++                    datetime(2024, 5, 1, 12, tzinfo=UTC),
++                    datetime(2024, 5, 2, 0, tzinfo=UTC),
+                 ],
+             ),
+             (
+-                IntervalTrigger(
+-                    days=1, start_time=datetime(2024, 5, 1, tzinfo=timezone.utc)
+-                ),
+-                IntervalTrigger(
+-                    weeks=1, start_time=datetime(2024, 5, 1, tzinfo=timezone.utc)
+-                ),
++                IntervalTrigger(days=1, start_time=datetime(2024, 5, 1, tzinfo=UTC)),
++                IntervalTrigger(weeks=1, start_time=datetime(2024, 5, 1, tzinfo=UTC)),
+                 [
+-                    datetime(2024, 5, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 8, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 15, tzinfo=timezone.utc),
++                    datetime(2024, 5, 1, tzinfo=UTC),
++                    datetime(2024, 5, 8, tzinfo=UTC),
++                    datetime(2024, 5, 15, tzinfo=UTC),
+                 ],
+             ),
+             (
+                 CronTrigger(
+                     day_of_week="mon-fri",
+                     hour="*",
+-                    timezone=timezone.utc,
+-                    start_time=datetime(2024, 5, 3, tzinfo=timezone.utc),
+-                ),
+-                IntervalTrigger(
+-                    hours=12, start_time=datetime(2024, 5, 3, tzinfo=timezone.utc)
++                    timezone=UTC,
++                    start_time=datetime(2024, 5, 3, tzinfo=UTC),
+                 ),
++                IntervalTrigger(hours=12, start_time=datetime(2024, 5, 3, tzinfo=UTC)),
+                 [
+-                    datetime(2024, 5, 3, 0, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 3, 12, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 6, 0, tzinfo=timezone.utc),
++                    datetime(2024, 5, 3, 0, tzinfo=UTC),
++                    datetime(2024, 5, 3, 12, tzinfo=UTC),
++                    datetime(2024, 5, 6, 0, tzinfo=UTC),
+                 ],
+             ),
+             (
+                 CronTrigger(
+                     day_of_week="mon-fri",
+-                    timezone=timezone.utc,
+-                    start_time=datetime(2024, 5, 13, tzinfo=timezone.utc),
+-                ),
+-                IntervalTrigger(
+-                    days=4, start_time=datetime(2024, 5, 13, tzinfo=timezone.utc)
++                    timezone=UTC,
++                    start_time=datetime(2024, 5, 13, tzinfo=UTC),
+                 ),
++                IntervalTrigger(days=4, start_time=datetime(2024, 5, 13, tzinfo=UTC)),
+                 [
+-                    datetime(2024, 5, 13, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 17, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 21, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 29, tzinfo=timezone.utc),
++                    datetime(2024, 5, 13, tzinfo=UTC),
++                    datetime(2024, 5, 17, tzinfo=UTC),
++                    datetime(2024, 5, 21, tzinfo=UTC),
++                    datetime(2024, 5, 29, tzinfo=UTC),
+                 ],
+             ),
+             (
+                 CalendarIntervalTrigger(
+                     months=1,
+-                    timezone=timezone.utc,
+-                    start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
++                    timezone=UTC,
++                    start_date=datetime(2024, 1, 1, tzinfo=UTC),
+                 ),
+                 CronTrigger(
+                     day_of_week="mon-fri",
+-                    timezone=timezone.utc,
+-                    start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
++                    timezone=UTC,
++                    start_time=datetime(2024, 1, 1, tzinfo=UTC),
+                 ),
+                 [
+-                    datetime(2024, 1, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 2, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 3, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 4, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 5, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 7, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 8, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 10, 1, tzinfo=timezone.utc),
+-                    datetime(2024, 11, 1, tzinfo=timezone.utc),
++                    datetime(2024, 1, 1, tzinfo=UTC),
++                    datetime(2024, 2, 1, tzinfo=UTC),
++                    datetime(2024, 3, 1, tzinfo=UTC),
++                    datetime(2024, 4, 1, tzinfo=UTC),
++                    datetime(2024, 5, 1, tzinfo=UTC),
++                    datetime(2024, 7, 1, tzinfo=UTC),
++                    datetime(2024, 8, 1, tzinfo=UTC),
++                    datetime(2024, 10, 1, tzinfo=UTC),
++                    datetime(2024, 11, 1, tzinfo=UTC),
+                 ],
+             ),
+         ],

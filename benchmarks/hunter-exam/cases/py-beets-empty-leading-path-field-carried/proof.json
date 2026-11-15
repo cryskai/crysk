@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "test/test_library.py::TestDestination::test_destination_stays_in_basedir_with_empty_leading_field"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/beets/proof-leading && ../venv/bin/python -m pytest -p no:cov -p no:randomly -q test/test_library.py::TestDestination::test_destination_stays_in_basedir_with_empty_leading_field",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "AssertionError: assert b'/three' == b'<library>/base/three'",
+  "carrier": "50c89a2522275cce4f45870ad42f43686a843ac3"
+}

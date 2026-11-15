@@ -1,0 +1,26 @@
+{
+  "id": "ts-chrono-two-digit-year-pattern-carried",
+  "language": "typescript",
+  "project": "chrono",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "year-pattern-too-narrow",
+      "area": "logic",
+      "severity": "blocking",
+      "class": "pattern-too-loose",
+      "depth": 1,
+      "what": "YEAR_PATTERN accepts a two-digit year only for 50-99 and 20-25, so valid two-digit years such as 16 are rejected and \"21-APR-16\" is not parsed as a date with year 2016; the year-like-day check in the middle-endian parser was narrowed to match.",
+      "sites": [
+        {
+          "path": "src/locales/en/constants.ts",
+          "start_line": 233,
+          "end_line": 233
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

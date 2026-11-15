@@ -1,0 +1,823 @@
+diff --git a/docs/source/tutorials/parse-parameters.md b/docs/source/tutorials/parse-parameters.md
+index ee84c46..eacc200 100644
+--- a/docs/source/tutorials/parse-parameters.md
++++ b/docs/source/tutorials/parse-parameters.md
+@@ -38,7 +38,7 @@ The following modified template also contains 3 values to random from, but they'
+ It can be tricky to parse all these cases manually, but there's a [Tokenizer][Tokenizer] class in LiquidJS you can make use of.
+ 
+ ```javascript
+-const { Liquid, Tokenizer, evalToken } = require('liquidjs')
++const { Liquid, Tokenizer, evalTokenValue } = require('liquidjs')
+ engine.registerTag('random', {
+   parse(tagToken) {
+     const tokenizer = new Tokenizer(tagToken.args)
+@@ -52,7 +52,7 @@ engine.registerTag('random', {
+     const index = Math.floor(this.items.length * Math.random())
+     const token = this.items[index]
+     // in LiquidJS, we use yield to wait for async call
+-    const value = yield evalToken(token, context)
++    const value = yield evalTokenValue(token, context)
+     emitter.write(value)
+   }
+ })
+diff --git a/src/drop/blank-drop.ts b/src/drop/blank-drop.ts
+index 8ddafed..9a415bd 100644
+--- a/src/drop/blank-drop.ts
++++ b/src/drop/blank-drop.ts
+@@ -2,11 +2,11 @@ import { isNil, isString, toValue } from '../util'
+ import { EmptyDrop } from '../drop'
+ 
+ export class BlankDrop extends EmptyDrop {
+-  public equals (value: any) {
++  public * equals (value: any): Generator<unknown, boolean, any> {
+     if (value === false) return true
+-    if (isNil(toValue(value))) return true
++    if (isNil(yield toValue(value))) return true
+     if (isString(value)) return /^\s*$/.test(value)
+-    return super.equals(value)
++    return yield super.equals(value)
+   }
+   static is (value: unknown) {
+     return value instanceof BlankDrop
+diff --git a/src/drop/comparable.ts b/src/drop/comparable.ts
+index b950dc3..0fdd1d4 100644
+--- a/src/drop/comparable.ts
++++ b/src/drop/comparable.ts
+@@ -1,11 +1,18 @@
+ import { isFunction } from '../util'
+ 
++/**
++ * Comparison methods may return a boolean, a promise, or a generator.
++ * Operators yield the result, so sync implementations stay valid and async
++ * `valueOf()` can be awaited with `yield`.
++ */
++export type ComparableResult = boolean | Promise<boolean> | Generator<unknown, boolean, any>
++
+ export interface Comparable {
+-  equals: (rhs: any) => boolean;
+-  gt: (rhs: any) => boolean;
+-  geq: (rhs: any) => boolean;
+-  lt: (rhs: any) => boolean;
+-  leq: (rhs: any) => boolean;
++  equals: (rhs: any) => ComparableResult;
++  gt: (rhs: any) => ComparableResult;
++  geq: (rhs: any) => ComparableResult;
++  lt: (rhs: any) => ComparableResult;
++  leq: (rhs: any) => ComparableResult;
+ }
+ 
+ export function isComparable (arg: any): arg is Comparable {
+diff --git a/src/drop/empty-drop.ts b/src/drop/empty-drop.ts
+index d6bec01..bd8afed 100644
+--- a/src/drop/empty-drop.ts
++++ b/src/drop/empty-drop.ts
+@@ -3,9 +3,9 @@ import { Comparable } from './comparable'
+ import { isObject, isString, isArray, toValue } from '../util'
+ 
+ export class EmptyDrop extends Drop implements Comparable {
+-  public equals (value: any) {
++  public * equals (value: any): Generator<unknown, boolean, any> {
+     if (value instanceof EmptyDrop) return false
+-    value = toValue(value)
++    value = yield toValue(value)
+     if (isString(value) || isArray(value)) return value.length === 0
+     if (isObject(value)) return Object.keys(value).length === 0
+     return false
+diff --git a/src/drop/null-drop.ts b/src/drop/null-drop.ts
+index 4908fd4..c6e29a9 100644
+--- a/src/drop/null-drop.ts
++++ b/src/drop/null-drop.ts
+@@ -3,8 +3,8 @@ import { Comparable } from './comparable'
+ import { isNil, toValue } from '../util'
+ 
+ export class NullDrop extends Drop implements Comparable {
+-  public equals (value: any) {
+-    return isNil(toValue(value))
++  public * equals (value: any): Generator<unknown, boolean, any> {
++    return isNil(yield toValue(value))
+   }
+   public gt () {
+     return false
+diff --git a/src/filters/array.ts b/src/filters/array.ts
+index 09761f8..9c58426 100644
+--- a/src/filters/array.ts
++++ b/src/filters/array.ts
+@@ -121,26 +121,26 @@ export function slice<T> (this: FilterImpl, v: T[] | string, begin: number, leng
+     : String.prototype.slice.call(v, begin, begin + length)
+ }
+ 
+-function expectedMatcher (this: FilterImpl, expected: any): (v: any) => boolean {
++function * matches (this: FilterImpl, value: unknown, expected: unknown): Generator<unknown, boolean, any> {
+   if (this.context.opts.jekyllWhere) {
+-    return (v: any) => EmptyDrop.is(expected) ? equals(v, expected) : (isArray(v) ? arrayIncludes(v, expected) : equals(v, expected))
+-  } else if (expected === undefined) {
+-    return (v: any) => isTruthy(v, this.context)
+-  } else {
+-    return (v: any) => equals(v, expected)
++    if (EmptyDrop.is(expected)) return yield equals(value, expected)
++    if (isArray(value)) return yield arrayIncludes(value, expected)
++    return yield equals(value, expected)
+   }
++  if (expected === undefined) return isTruthy(value, this.context)
++  return yield equals(value, expected)
+ }
+ 
+ function * filter<T extends object> (this: FilterImpl, include: boolean, arr: T[], property: string, expected: any): IterableIterator<unknown> {
+-  const values: unknown[] = []
+   arr = toArray(arr)
+   this.context.memoryLimit.use(arr.length)
+   const token = new Tokenizer(stringify(property)).readScopeValue()
++  const result: T[] = []
+   for (const item of arr) {
+-    values.push(yield evalToken(token, this.context.spawn(item)))
++    const value = yield evalToken(token, this.context.spawn(item))
++    if ((yield matches.call(this, value, expected)) === include) result.push(item)
+   }
+-  const matcher = expectedMatcher.call(this, expected)
+-  return Array.prototype.filter.call(arr, (_, i) => matcher(values[i]) === include)
++  return result
+ }
+ 
+ function * filter_exp<T extends object> (this: FilterImpl, include: boolean, arr: T[], itemName: string, exp: string): IterableIterator<unknown> {
+@@ -204,10 +204,9 @@ export function * group_by_exp<T extends object> (this: FilterImpl, arr: T[], it
+ function * search<T extends object> (this: FilterImpl, arr: T[], property: string, expected: string): IterableIterator<unknown> {
+   const token = new Tokenizer(stringify(property)).readScopeValue()
+   const array = toArray(arr)
+-  const matcher = expectedMatcher.call(this, expected)
+   for (let index = 0; index < array.length; index++) {
+     const value = yield evalToken(token, this.context.spawn(array[index]))
+-    if (matcher(value)) return [index, array[index]]
++    if (yield matches.call(this, value, expected)) return [index, array[index]]
+   }
+ }
+ 
+diff --git a/src/filters/string.ts b/src/filters/string.ts
+index 849eb41..6cfb56e 100644
+--- a/src/filters/string.ts
++++ b/src/filters/string.ts
+@@ -34,32 +34,16 @@ export function prepend (this: FilterImpl, v: string, arg: string) {
+   return rhs + lhs
+ }
+ 
+-function getTrimStart (str: string, chars: Set<string>): number {
+-  let start = 0
+-  for (const char of str) {
+-    if (!chars.has(char)) break
+-    start += char.length
+-  }
+-  return start
+-}
+-
+-function getTrimEnd (str: string, chars: Set<string>, start = 0): number {
+-  let end = str.length
+-  while (end > start) {
+-    const size = end - start >= 2 && str.codePointAt(end - 2)! > 0xFFFF ? 2 : 1
+-    if (!chars.has(str.slice(end - size, end))) break
+-    end -= size
+-  }
+-  return end
+-}
+-
+ export function lstrip (this: FilterImpl, v: string, chars?: string) {
+   const str = stringify(v)
+   this.context.memoryLimit.use(str.length)
+   if (chars) {
+     chars = stringify(chars)
+     this.context.memoryLimit.use(chars.length)
+-    return str.slice(getTrimStart(str, new Set(chars)))
++    for (let i = 0, set = new Set(chars); i < str.length; i++) {
++      if (!set.has(str[i])) return str.slice(i)
++    }
++    return ''
+   }
+   return str.trimStart()
+ }
+@@ -105,7 +89,10 @@ export function rstrip (this: FilterImpl, str: string, chars?: string) {
+   if (chars) {
+     chars = stringify(chars)
+     this.context.memoryLimit.use(chars.length)
+-    return str.slice(0, getTrimEnd(str, new Set(chars)))
++    for (let i = str.length - 1, set = new Set(chars); i >= 0; i--) {
++      if (!set.has(str[i])) return str.slice(0, i + 1)
++    }
++    return ''
+   }
+   return str.trimEnd()
+ }
+@@ -126,8 +113,11 @@ export function strip (this: FilterImpl, v: string, chars?: string) {
+   if (chars) {
+     const set = new Set(stringify(chars))
+     this.context.memoryLimit.use(set.size)
+-    const start = getTrimStart(str, set)
+-    return str.slice(start, getTrimEnd(str, set, start))
++    let i = 0
++    let j = str.length - 1
++    while (set.has(str[i])) i++
++    while (j >= i && set.has(str[j])) j--
++    return str.slice(i, j + 1)
+   }
+   return str.trim()
+ }
+diff --git a/src/index.ts b/src/index.ts
+index b6e6abc..e6b2d62 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -4,9 +4,9 @@ export * as TypeGuards from './util/type-guards'
+ export { toValue, createTrie, Trie, toPromise, toValueSync, assert, LiquidError, ParseError, RenderError, UndefinedVariableError, TokenizationError, AssertionError } from './util'
+ export type { LiquidErrors } from './util/error'
+ export { Drop } from './drop'
+-export type { Comparable } from './drop'
++export type { Comparable, ComparableResult } from './drop'
+ export { Emitter } from './emitters'
+-export { defaultOperators, Operators, evalToken, evalQuotedToken, Expression, isFalsy, isTruthy } from './render'
++export { defaultOperators, Operators, evalToken, evalTokenValue, evalQuotedToken, Expression, isFalsy, isTruthy } from './render'
+ export { Context, Scope } from './context'
+ export { Value, Hash, Template, FilterImplOptions, Tag, Filter, Output, Variable, VariableLocation, VariableSegments, Variables, StaticAnalysis, StaticAnalysisOptions, analyze, analyzeSync, Arguments, PartialScope } from './template'
+ export type { TagRenderReturn } from './template'
+diff --git a/src/render/expression.ts b/src/render/expression.ts
+index 0e04ba9..33385fc 100644
+--- a/src/render/expression.ts
++++ b/src/render/expression.ts
+@@ -1,5 +1,5 @@
+ import { QuotedToken, RangeToken, OperatorToken, Token, PropertyAccessToken, OperatorType, operatorTypes, FilteredValueToken } from '../tokens'
+-import { isRangeToken, isPropertyAccessToken, isFilteredValueToken, UndefinedVariableError, range, isOperatorToken, assert } from '../util'
++import { isRangeToken, isPropertyAccessToken, isFilteredValueToken, UndefinedVariableError, range, isOperatorToken, assert, toValue } from '../util'
+ import type { Context } from '../context'
+ import type { UnaryOperatorHandler } from '../render'
+ import { Drop } from '../drop'
+@@ -36,6 +36,11 @@ export class Expression {
+   }
+ }
+ 
++/**
++ * Evaluate `token`, preserving Drops.
++ * Operators use this so `Comparable` drops (`empty`, `nil`, `blank`) and custom drops
++ * are compared as drops rather than as their `valueOf()` result.
++ */
+ export function * evalToken (token: Token | undefined, ctx: Context, lenient = false): IterableIterator<unknown> {
+   if (!token) return
+   if ('content' in token) return token.content
+@@ -59,10 +64,18 @@ function * evalFilteredValueToken (token: FilteredValueToken, ctx: Context, leni
+   return val
+ }
+ 
++/**
++ * Evaluate `token` to the value filters and tags consume.
++ * Awaits a promise returned by `Drop.valueOf()`.
++ */
++export function * evalTokenValue (token: Token | undefined, ctx: Context, lenient = false): IterableIterator<unknown> {
++  return yield toValue(yield evalToken(token, ctx, lenient))
++}
++
+ function * evalPropertyAccessToken (token: PropertyAccessToken, ctx: Context, lenient: boolean): IterableIterator<unknown> {
+   const props: (string | number | Drop)[] = []
+   for (const prop of token.props) {
+-    props.push((yield evalToken(prop, ctx, false)) as unknown as string | number | Drop)
++    props.push((yield evalTokenValue(prop, ctx, false)) as unknown as string | number | Drop)
+   }
+   try {
+     if (token.variable) {
+@@ -81,9 +94,9 @@ export function evalQuotedToken (token: QuotedToken) {
+   return token.content
+ }
+ 
+-function * evalRangeToken (token: RangeToken, ctx: Context) {
+-  const low: number = yield evalToken(token.lhs, ctx)
+-  const high: number = yield evalToken(token.rhs, ctx)
++function * evalRangeToken (token: RangeToken, ctx: Context): IterableIterator<unknown> {
++  const low = (yield evalTokenValue(token.lhs, ctx)) as unknown as number
++  const high = (yield evalTokenValue(token.rhs, ctx)) as unknown as number
+   ctx.memoryLimit.use(high - low + 1)
+   return range(+low, +high + 1)
+ }
+diff --git a/src/render/operator.ts b/src/render/operator.ts
+index c27aed8..01d39b6 100644
+--- a/src/render/operator.ts
++++ b/src/render/operator.ts
+@@ -4,61 +4,74 @@ import { toValue } from '../util'
+ import { isFalsy, isTruthy } from '../render/boolean'
+ import { isArray, isFunction } from '../util/underscore'
+ 
+-export type UnaryOperatorHandler = (operand: any, ctx: Context) => boolean;
+-export type BinaryOperatorHandler = (lhs: any, rhs: any, ctx: Context) => boolean;
++/**
++ * A handler may return a `boolean` (legacy interface), a `Promise`, or a generator
++ * that `yield`s to await async values. The render driver resolves all three, so
++ * operators written against the legacy `=> boolean` signature keep working.
++ */
++export type OperatorGenerator = Generator<unknown, boolean, any>
++export type OperatorResult = boolean | Promise<boolean> | OperatorGenerator
++export type UnaryOperatorHandler = (operand: any, ctx: Context) => OperatorResult;
++export type BinaryOperatorHandler = (lhs: any, rhs: any, ctx: Context) => OperatorResult;
+ export type OperatorHandler = UnaryOperatorHandler | BinaryOperatorHandler;
+ export type Operators = Record<string, OperatorHandler>
+ 
+ export const defaultOperators: Operators = {
+-  '==': equals,
+-  '!=': (l: any, r: any) => !equals(l, r),
+-  '>': (l: any, r: any) => {
+-    if (isComparable(l)) return l.gt(r)
+-    if (isComparable(r)) return r.lt(l)
+-    return toValue(l) > toValue(r)
++  '==': function * (l: any, r: any): OperatorGenerator { return yield equals(l, r) },
++  '!=': function * (l: any, r: any): OperatorGenerator { return !(yield equals(l, r)) },
++  '>': function * (l: any, r: any): OperatorGenerator {
++    if (isComparable(l)) return yield l.gt(r)
++    if (isComparable(r)) return yield r.lt(l)
++    return (yield toValue(l)) > (yield toValue(r))
+   },
+-  '<': (l: any, r: any) => {
+-    if (isComparable(l)) return l.lt(r)
+-    if (isComparable(r)) return r.gt(l)
+-    return toValue(l) < toValue(r)
++  '<': function * (l: any, r: any): OperatorGenerator {
++    if (isComparable(l)) return yield l.lt(r)
++    if (isComparable(r)) return yield r.gt(l)
++    return (yield toValue(l)) < (yield toValue(r))
+   },
+-  '>=': (l: any, r: any) => {
+-    if (isComparable(l)) return l.geq(r)
+-    if (isComparable(r)) return r.leq(l)
+-    return toValue(l) >= toValue(r)
++  '>=': function * (l: any, r: any): OperatorGenerator {
++    if (isComparable(l)) return yield l.geq(r)
++    if (isComparable(r)) return yield r.leq(l)
++    return (yield toValue(l)) >= (yield toValue(r))
+   },
+-  '<=': (l: any, r: any) => {
+-    if (isComparable(l)) return l.leq(r)
+-    if (isComparable(r)) return r.geq(l)
+-    return toValue(l) <= toValue(r)
++  '<=': function * (l: any, r: any): OperatorGenerator {
++    if (isComparable(l)) return yield l.leq(r)
++    if (isComparable(r)) return yield r.geq(l)
++    return (yield toValue(l)) <= (yield toValue(r))
+   },
+-  'contains': (l: any, r: any) => {
+-    l = toValue(l)
+-    if (isArray(l)) return l.some((i) => equals(i, r))
+-    if (isFunction(l?.indexOf)) return l.indexOf(toValue(r)) > -1
++  'contains': function * (l: any, r: any): OperatorGenerator {
++    l = yield toValue(l)
++    if (isArray(l)) return yield arrayIncludes(l, r)
++    if (isFunction(l?.indexOf)) return l.indexOf(yield toValue(r)) > -1
+     return false
+   },
+-  'not': (v: any, ctx: Context) => isFalsy(toValue(v), ctx),
+-  'and': (l: any, r: any, ctx: Context) => isTruthy(toValue(l), ctx) && isTruthy(toValue(r), ctx),
+-  'or': (l: any, r: any, ctx: Context) => isTruthy(toValue(l), ctx) || isTruthy(toValue(r), ctx)
++  'not': function * (v: any, ctx: Context): OperatorGenerator { return isFalsy(yield toValue(v), ctx) },
++  'and': function * (l: any, r: any, ctx: Context): OperatorGenerator { return isTruthy(yield toValue(l), ctx) && isTruthy(yield toValue(r), ctx) },
++  'or': function * (l: any, r: any, ctx: Context): OperatorGenerator { return isTruthy(yield toValue(l), ctx) || isTruthy(yield toValue(r), ctx) }
+ }
+ 
+-export function equals (lhs: any, rhs: any): boolean {
+-  if (isComparable(lhs)) return lhs.equals(rhs)
+-  if (isComparable(rhs)) return rhs.equals(lhs)
+-  lhs = toValue(lhs)
+-  rhs = toValue(rhs)
++export function * equals (lhs: any, rhs: any): Generator<unknown, boolean, any> {
++  if (isComparable(lhs)) return yield lhs.equals(rhs)
++  if (isComparable(rhs)) return yield rhs.equals(lhs)
++  lhs = yield toValue(lhs)
++  rhs = yield toValue(rhs)
+   if (isArray(lhs)) {
+-    return isArray(rhs) && arrayEquals(lhs, rhs)
++    return isArray(rhs) && (yield arrayEquals(lhs, rhs))
+   }
+   return lhs === rhs
+ }
+ 
+-function arrayEquals (lhs: any[], rhs: any[]): boolean {
++function * arrayEquals (lhs: any[], rhs: any[]): Generator<unknown, boolean, any> {
+   if (lhs.length !== rhs.length) return false
+-  return !lhs.some((value, i) => !equals(value, rhs[i]))
++  for (let i = 0; i < lhs.length; i++) {
++    if (!(yield equals(lhs[i], rhs[i]))) return false
++  }
++  return true
+ }
+ 
+-export function arrayIncludes (arr: any[], item: any): boolean {
+-  return arr.some(value => equals(value, item))
++export function * arrayIncludes (arr: any[], item: any): Generator<unknown, boolean, any> {
++  for (const value of arr) {
++    if (yield equals(value, item)) return true
++  }
++  return false
+ }
+diff --git a/src/tags/case.ts b/src/tags/case.ts
+index b254d89..cda1d77 100644
+--- a/src/tags/case.ts
++++ b/src/tags/case.ts
+@@ -56,12 +56,12 @@ export default class extends Tag {
+ 
+   * render (ctx: Context, emitter: Emitter): Generator<unknown, void, unknown> {
+     const r = this.liquid.renderer
+-    const target = toValue(yield this.value.value(ctx, ctx.opts.lenientIf))
++    const target = yield toValue(yield this.value.value(ctx, ctx.opts.lenientIf))
+     let branchHit = false
+     for (const branch of this.branches) {
+       for (const valueToken of branch.values) {
+         const value = yield evalToken(valueToken, ctx, ctx.opts.lenientIf)
+-        if (equals(target, value)) {
++        if (yield equals(target, value)) {
+           yield r.renderTemplates(branch.templates, ctx, emitter)
+           branchHit = true
+           break
+diff --git a/src/tags/echo.ts b/src/tags/echo.ts
+index d7e7508..d96561c 100644
+--- a/src/tags/echo.ts
++++ b/src/tags/echo.ts
+@@ -1,5 +1,6 @@
+ import { Liquid, TopLevelToken, Emitter, Value, TagToken, Context, Tag } from '..'
+ import { Arguments } from '../template'
++import { toValue } from '../util'
+ 
+ export default class extends Tag {
+   private value?: Value
+@@ -13,7 +14,7 @@ export default class extends Tag {
+   }
+   * render (ctx: Context, emitter: Emitter): Generator<unknown, void, unknown> {
+     if (!this.value) return
+-    const val = yield this.value.value(ctx, false)
++    const val = yield toValue(yield this.value.value(ctx, false))
+     emitter.write(val)
+   }
+ 
+diff --git a/src/tags/if.ts b/src/tags/if.ts
+index 083cacb..5698f3d 100644
+--- a/src/tags/if.ts
++++ b/src/tags/if.ts
+@@ -1,7 +1,7 @@
+ import { Liquid, Tag, Value, Emitter, isTruthy, TagToken, TopLevelToken, Context, Template } from '..'
+ import { Parser } from '../parser'
+ import { Arguments } from '../template'
+-import { assert, assertEmpty } from '../util'
++import { assert, assertEmpty, toValue } from '../util'
+ 
+ export default class extends Tag {
+   branches: { value: Value, templates: Template[] }[] = []
+@@ -37,7 +37,7 @@ export default class extends Tag {
+     const r = this.liquid.renderer
+ 
+     for (const { value, templates } of this.branches) {
+-      const v = yield value.value(ctx, ctx.opts.lenientIf)
++      const v = yield toValue(yield value.value(ctx, ctx.opts.lenientIf))
+       if (isTruthy(v, ctx)) {
+         yield r.renderTemplates(templates, ctx, emitter)
+         return
+diff --git a/src/tags/unless.ts b/src/tags/unless.ts
+index 0fa2b9f..2a2208a 100644
+--- a/src/tags/unless.ts
++++ b/src/tags/unless.ts
+@@ -1,6 +1,7 @@
+ import { Liquid, Tag, Value, TopLevelToken, Template, Emitter, isTruthy, isFalsy, Context, TagToken } from '..'
+ import { Parser } from '../parser'
+ import { Arguments } from '../template'
++import { toValue } from '../util'
+ 
+ export default class extends Tag {
+   branches: { value: Value, test: (val: any, ctx: Context) => boolean, templates: Template[] }[] = []
+@@ -44,7 +45,7 @@ export default class extends Tag {
+     const r = this.liquid.renderer
+ 
+     for (const { value, test, templates } of this.branches) {
+-      const v = yield value.value(ctx, ctx.opts.lenientIf)
++      const v = yield toValue(yield value.value(ctx, ctx.opts.lenientIf))
+       if (test(v, ctx)) {
+         yield r.renderTemplates(templates, ctx, emitter)
+         return
+diff --git a/src/template/output.ts b/src/template/output.ts
+index 38f4748..387ad7c 100644
+--- a/src/template/output.ts
++++ b/src/template/output.ts
+@@ -7,6 +7,7 @@ import { Tokenizer } from '../parser'
+ import { Liquid } from '../liquid'
+ import { Filter } from './filter'
+ import { FilterToken } from '../tokens'
++import { toValue } from '../util'
+ 
+ export class Output extends TemplateImpl<OutputToken> implements Template {
+   value: Value
+@@ -22,7 +23,7 @@ export class Output extends TemplateImpl<OutputToken> implements Template {
+     }
+   }
+   public * render (ctx: Context, emitter: Emitter): IterableIterator<unknown> {
+-    const val = yield this.value.value(ctx, false)
++    const val = yield toValue(yield this.value.value(ctx, false))
+     emitter.write(val)
+   }
+ 
+diff --git a/test/integration/drop/drop.spec.ts b/test/integration/drop/drop.spec.ts
+index 8ca0fb1..7dedc6d 100644
+--- a/test/integration/drop/drop.spec.ts
++++ b/test/integration/drop/drop.spec.ts
+@@ -1,4 +1,5 @@
+ import { Liquid, Drop } from '../../../src'
++import { mock, restore } from '../../stub/mockfs'
+ 
+ describe('drop/drop', function () {
+   let liquid: Liquid
+@@ -71,6 +72,19 @@ describe('drop/drop', function () {
+     const html = await liquid.parseAndRender(tpl, { drop: new CustomDrop() })
+     expect(html).toBe('foobar: foo;bar;')
+   })
++  it('should support promise returned by valueOf', async () => {
++    class AsyncValueOfDrop extends Drop {
++      id = '42'
++      async valueOf () {
++        return 'serialized'
++      }
++    }
++    const html = await liquid.parseAndRender(
++      `{{o.id}}:{{o}}:{% if o %}yes{% endif %}:{% unless o %}no{% endunless %}`,
++      { o: new AsyncValueOfDrop() }
++    )
++    expect(html).toBe('42:serialized:yes:')
++  })
+   it('should support valueOf in == expression', async () => {
+     class AddressDrop extends Drop {
+       valueOf () {
+@@ -119,4 +133,192 @@ describe('drop/drop', function () {
+     const html = await liquid.parseAndRender(`{{obj.number}} {{obj.string}} {{obj.boolean}} {{obj.array | first}} {{obj.object.foo}} {{obj.drop.getName}}`, { obj: new DynamicTypeDrop() })
+     expect(html).toBe('42 foo true 1 bar GET NAME')
+   })
++
++  describe('async valueOf', function () {
++    beforeEach(() => {
++      liquid = new Liquid({ root: '/', extname: '.html' })
++    })
++    afterEach(restore)
++
++    class AsyncStringDrop extends Drop {
++      constructor (private value: string) { super() }
++      async valueOf () {
++        return this.value
++      }
++    }
++
++    class AsyncFalsyDrop extends Drop {
++      async valueOf () {
++        return false
++      }
++    }
++
++    class AsyncArrayDrop extends Drop {
++      constructor (private value: string[]) { super() }
++      async valueOf () {
++        return this.value
++      }
++    }
++
++    class AsyncNumberDrop extends Drop {
++      constructor (private value: number) { super() }
++      async valueOf () {
++        return this.value
++      }
++    }
++
++    describe('output & filters', function () {
++      it('output {{ drop }}', async function () {
++        const html = await liquid.parseAndRender(`{{a}}`, { a: new AsyncStringDrop('x') })
++        expect(html).toBe('x')
++      })
++      it('where_exp resolves async properties', async function () {
++        const items = [{ v: new AsyncStringDrop('x'), id: '1' }, { v: new AsyncStringDrop('y'), id: '2' }]
++        const html = await liquid.parseAndRender(`{% assign r = items | where_exp: 'item', 'item.v == "y"' %}{{ r[0].id }}`, { items })
++        expect(html).toBe('2')
++      })
++      it('where by async property', async function () {
++        const items = [{ v: new AsyncStringDrop('x'), id: '1' }, { v: new AsyncStringDrop('y'), id: '2' }]
++        const html = await liquid.parseAndRender(`{% assign r = items | where: 'v', 'y' %}{{ r[0].id }}`, { items })
++        expect(html).toBe('2')
++      })
++      it('find by async property', async function () {
++        const items = [{ v: new AsyncStringDrop('x'), id: '1' }, { v: new AsyncStringDrop('y'), id: '2' }]
++        const html = await liquid.parseAndRender(`{% assign f = items | find: 'v', 'y' %}{{ f.id }}`, { items })
++        expect(html).toBe('2')
++      })
++    })
++
++    describe('branch conditions', function () {
++      it('if truthy', async function () {
++        const html = await liquid.parseAndRender(`{% if a %}yes{% else %}no{% endif %}`, { a: new AsyncStringDrop('x') })
++        expect(html).toBe('yes')
++      })
++      it('if falsy', async function () {
++        const html = await liquid.parseAndRender(`{% if a %}yes{% else %}no{% endif %}`, { a: new AsyncFalsyDrop() })
++        expect(html).toBe('no')
++      })
++      it('unless', async function () {
++        const html = await liquid.parseAndRender(`{% unless a %}yes{% else %}no{% endunless %}`, { a: new AsyncFalsyDrop() })
++        expect(html).toBe('yes')
++      })
++      it('elsif', async function () {
++        const html = await liquid.parseAndRender(
++          `{% if false %}a{% elsif b %}b{% else %}c{% endif %}`,
++          { b: new AsyncStringDrop('x') }
++        )
++        expect(html).toBe('b')
++      })
++      it('case/when', async function () {
++        const html = await liquid.parseAndRender(
++          `{% case a %}{% when "x" %}X{% when "y" %}Y{% else %}Z{% endcase %}`,
++          { a: new AsyncStringDrop('y') }
++        )
++        expect(html).toBe('Y')
++      })
++      it('case when empty uses Comparable on the resolved value', async function () {
++        const html = await liquid.parseAndRender(
++          `{% case a %}{% when empty %}E{% else %}X{% endcase %}`,
++          { a: new AsyncArrayDrop([]) }
++        )
++        expect(html).toBe('E')
++      })
++    })
++
++    describe('operators', function () {
++      it('== / !=', async function () {
++        const html = await liquid.parseAndRender(
++          `{% if a == b %}eq{% endif %}/{% if a != c %}ne{% endif %}`,
++          { a: new AsyncStringDrop('t'), b: new AsyncStringDrop('t'), c: new AsyncStringDrop('u') }
++        )
++        expect(html).toBe('eq/ne')
++      })
++      it('< / >', async function () {
++        const html = await liquid.parseAndRender(
++          `{% if a < b %}lt{% endif %}/{% if b > a %}gt{% endif %}`,
++          { a: new AsyncNumberDrop(1), b: new AsyncNumberDrop(2) }
++        )
++        expect(html).toBe('lt/gt')
++      })
++      it('contains', async function () {
++        const html = await liquid.parseAndRender(
++          `{% if a contains "od" %}yes{% endif %}`,
++          { a: new AsyncStringDrop('product') }
++        )
++        expect(html).toBe('yes')
++      })
++      it('and / or', async function () {
++        const html = await liquid.parseAndRender(
++          `{% if a and b %}both{% endif %}/{% if f or a %}either{% endif %}`,
++          { a: new AsyncStringDrop('x'), b: new AsyncStringDrop('y'), f: new AsyncFalsyDrop() }
++        )
++        expect(html).toBe('both/either')
++      })
++      it('not (unless)', async function () {
++        const html = await liquid.parseAndRender(
++          `{% unless a %}yes{% else %}no{% endunless %}`,
++          { a: new AsyncFalsyDrop() }
++        )
++        expect(html).toBe('yes')
++      })
++    })
++
++    describe('pass-through tags', function () {
++      it('assign then output', async function () {
++        const html = await liquid.parseAndRender(`{% assign b = a %}{{ b }}`, { a: new AsyncStringDrop('z') })
++        expect(html).toBe('z')
++      })
++      it('assign keeps the drop so properties stay readable', async function () {
++        class NamedDrop extends Drop {
++          id = '42'
++          async valueOf () { return 'serialized' }
++        }
++        const html = await liquid.parseAndRender(`{% assign b = a %}{{ b.id }}:{{ b }}`, { a: new NamedDrop() })
++        expect(html).toBe('42:serialized')
++      })
++      it('supports async Comparable.equals', async function () {
++        class EqDrop extends Drop {
++          constructor (private n: string) { super() }
++          async equals (rhs: unknown) {
++            const other = rhs instanceof Drop ? await rhs.valueOf() : rhs
++            return (await this.valueOf()) === other
++          }
++          async valueOf () { return this.n }
++          gt () { return false }
++          geq () { return false }
++          lt () { return false }
++          leq () { return false }
++        }
++        const html = await liquid.parseAndRender(
++          `{% if a == b %}eq{% endif %}/{% if a == c %}bad{% else %}ne{% endif %}`,
++          { a: new EqDrop('t'), b: new EqDrop('t'), c: new EqDrop('u') }
++        )
++        expect(html).toBe('eq/ne')
++      })
++      it('echo', async function () {
++        const html = await liquid.parseAndRender(`{% echo a %}`, { a: new AsyncStringDrop('z') })
++        expect(html).toBe('z')
++      })
++      it('render with', async function () {
++        mock({
++          '/c.html': '{{ color }}'
++        })
++        const html = await liquid.parseAndRender(
++          `{% render "c" with a as color %}`,
++          { a: new AsyncStringDrop('red') }
++        )
++        expect(html).toBe('red')
++      })
++      it('include with', async function () {
++        mock({
++          '/color.html': '{{ color }}'
++        })
++        const html = await liquid.parseAndRender(
++          `{% include "color" with a %}`,
++          { a: new AsyncStringDrop('red') }
++        )
++        expect(html).toBe('red')
++      })
++    })
++  })
+ })
+diff --git a/test/integration/tags/if.spec.ts b/test/integration/tags/if.spec.ts
+index 631fe42..4aedfe9 100644
+--- a/test/integration/tags/if.spec.ts
++++ b/test/integration/tags/if.spec.ts
+@@ -65,6 +65,16 @@ describe('tags/if', function () {
+       const html = await liquid.parseAndRender(src, scope)
+       return expect(html).toBe('yes')
+     })
++    it('should keep comparable operands uncoerced', async function () {
++      const src = '{% if empty == empty %}yes{%else%}no{%endif%}'
++      const html = await liquid.parseAndRender(src, scope)
++      return expect(html).toBe('no')
++    })
++    it('should keep comparable operands uncoerced in elsif', async function () {
++      const src = '{% if false %}a{% elsif empty == empty %}b{% else %}c{% endif %}'
++      const html = await liquid.parseAndRender(src, scope)
++      return expect(html).toBe('c')
++    })
+     it('should support value and expression', async function () {
+       const src = `X{%if version and version != '' %}x{{version}}y{%endif%}Y`
+       const scope = { 'version': '' }
+diff --git a/test/integration/tags/include.spec.ts b/test/integration/tags/include.spec.ts
+index 9698cab..1ed70ab 100644
+--- a/test/integration/tags/include.spec.ts
++++ b/test/integration/tags/include.spec.ts
+@@ -142,6 +142,21 @@ describe('tags/include', function () {
+     const html = await liquid.renderFile('with.html', { color: new ColorDrop() })
+     expect(html).toBe('ColorDrop')
+   })
++  it('should await async valueOf when the included Drop is output', async function () {
++    class ColorDrop extends Drop {
++      label = 'blue'
++      public async valueOf () {
++        return 'red!'
++      }
++    }
++    liquid.registerFilter('name', x => x.constructor.name)
++    mock({
++      '/with.html': '{% include "color" with color %}',
++      '/color.html': '{{color.label}}:{{color}}:{{color | name}}'
++    })
++    const html = await liquid.renderFile('with.html', { color: new ColorDrop() })
++    expect(html).toBe('blue:red!:ColorDrop')
++  })
+ 
+   it('should support nested includes', async function () {
+     mock({
+diff --git a/test/integration/tags/render.spec.ts b/test/integration/tags/render.spec.ts
+index 2530cec..5f3289d 100644
+--- a/test/integration/tags/render.spec.ts
++++ b/test/integration/tags/render.spec.ts
+@@ -226,6 +226,21 @@ describe('tags/render', function () {
+     const html = await liquid.renderFile('with.html', { color: new ColorDrop() })
+     expect(html).toBe('ColorDrop')
+   })
++  it('should await async valueOf when the rendered Drop is output', async function () {
++    class ColorDrop extends Drop {
++      label = 'blue'
++      public async valueOf () {
++        return 'red!'
++      }
++    }
++    liquid.registerFilter('name', x => x.constructor.name)
++    mock({
++      '/with.html': '{% render "color" with color %}',
++      '/color.html': '{{color.label}}:{{color}}:{{color | name}}'
++    })
++    const html = await liquid.renderFile('with.html', { color: new ColorDrop() })
++    expect(html).toBe('blue:red!:ColorDrop')
++  })
+ 
+   it('should support nested renders', async function () {
+     mock({
+diff --git a/test/integration/tags/unless.spec.ts b/test/integration/tags/unless.spec.ts
+index 406da1d..1f6e481 100644
+--- a/test/integration/tags/unless.spec.ts
++++ b/test/integration/tags/unless.spec.ts
+@@ -35,6 +35,11 @@ describe('tags/unless', function () {
+     const html = await liquid.parseAndRender(src)
+     return expect(html).toBe('')
+   })
++  it('should keep comparable operands uncoerced', async function () {
++    const src = '{% unless empty == empty %}yes{%else%}no{%endunless%}'
++    const html = await liquid.parseAndRender(src)
++    return expect(html).toBe('yes')
++  })
+ 
+   it('should output unless contents in order', async function () {
+     const src = `

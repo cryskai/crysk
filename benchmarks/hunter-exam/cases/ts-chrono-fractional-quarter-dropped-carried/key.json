@@ -1,0 +1,26 @@
+{
+  "id": "ts-chrono-fractional-quarter-dropped-carried",
+  "language": "typescript",
+  "project": "chrono",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "quarter-fraction-dropped",
+      "area": "logic",
+      "severity": "advisory",
+      "class": "contract-mismatch",
+      "depth": 1,
+      "what": "The quarter branch of addDuration applies only the whole quarters and discards the fractional remainder, unlike the year branch which carries it into months, so half a quarter or 2.5 quarters resolves to the same date as the floored value.",
+      "sites": [
+        {
+          "path": "src/calculation/duration.ts",
+          "start_line": 77,
+          "end_line": 80
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

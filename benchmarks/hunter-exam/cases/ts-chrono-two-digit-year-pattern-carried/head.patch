@@ -1,0 +1,318 @@
+diff --git a/src/locales/en/configuration.ts b/src/locales/en/configuration.ts
+index 84f4f3a..2edeeff 100644
+--- a/src/locales/en/configuration.ts
++++ b/src/locales/en/configuration.ts
+@@ -26,9 +26,8 @@ import ENMergeRelativeFollowByDateRefiner from "./refiners/ENMergeRelativeFollow
+ import OverlapRemovalRefiner from "../../common/refiners/OverlapRemovalRefiner";
+ import ENExtractYearSuffixRefiner from "./refiners/ENExtractYearSuffixRefiner";
+ import ENUnlikelyFormatFilter from "./refiners/ENUnlikelyFormatFilter";
+-import ENEndOfMonthRefiner from "./refiners/ENEndOfMonthRefiner";
++import ENEndOfPeriodRefiner from "./refiners/ENEndOfPeriodRefiner";
+ import ENEndOfCurrentMonthParser from "./parsers/ENEndOfCurrentMonthParser";
+-import ENEndOfRelativePeriodParser from "./parsers/ENEndOfRelativePeriodParser";
+ 
+ export default class ENDefaultConfiguration {
+     /**
+@@ -40,11 +39,10 @@ export default class ENDefaultConfiguration {
+         option.parsers.push(new ENCasualDateParser());
+         option.parsers.push(new ENCasualTimeParser());
+         option.parsers.push(new ENEndOfCurrentMonthParser());
+-        option.parsers.push(new ENEndOfRelativePeriodParser());
+         option.parsers.push(new ENMonthNameParser());
+         option.parsers.push(new ENRelativeDateFormatParser());
+         option.parsers.push(new ENTimeUnitCasualRelativeFormatParser());
+-        option.refiners.unshift(new ENEndOfMonthRefiner());
++        option.refiners.unshift(new ENEndOfPeriodRefiner());
+         option.refiners.push(new ENUnlikelyFormatFilter());
+         return option;
+     }
+diff --git a/src/locales/en/constants.ts b/src/locales/en/constants.ts
+index 29fb188..b3fde99 100644
+--- a/src/locales/en/constants.ts
++++ b/src/locales/en/constants.ts
+@@ -230,7 +230,7 @@ export function parseOrdinalNumberPattern(match: string): number {
+ 
+ //-----------------------------
+ 
+-export const YEAR_PATTERN = `(?:[1-9][0-9]{0,3}\\s{0,2}(?:BE|AD|BC|BCE|CE)|[1-9][0-9]{3}|[0-9]{2}(?!\\w|:\\d|\\s+(?:am|pm|o\\s*clock|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)))`;
++export const YEAR_PATTERN = `(?:[1-9][0-9]{0,3}\\s{0,2}(?:BE|AD|BC|BCE|CE)|[1-9][0-9]{3}|[5-9][0-9]|2[0-5])`;
+ export function parseYear(match: string): number {
+     if (/BE/i.test(match)) {
+         // Buddhist Era
+diff --git a/src/locales/en/parsers/ENEndOfRelativePeriodParser.ts b/src/locales/en/parsers/ENEndOfRelativePeriodParser.ts
+deleted file mode 100644
+index b0b8bda..0000000
+--- a/src/locales/en/parsers/ENEndOfRelativePeriodParser.ts
++++ /dev/null
+@@ -1,38 +0,0 @@
+-import { ParsingContext } from "../../../chrono";
+-import { ParsingComponents } from "../../../results";
+-import { AbstractParserWithWordBoundaryChecking } from "../../../common/parsers/AbstractParserWithWordBoundary";
+-
+-const PATTERN = /(?:last\s+day|end)\s+of\s+(?:the\s+)?(this|last|past|next)\s+(week|month|year)(?=\W|$)/i;
+-
+-const MODIFIER_GROUP = 1;
+-const PERIOD_GROUP = 2;
+-
+-export default class ENEndOfRelativePeriodParser extends AbstractParserWithWordBoundaryChecking {
+-    innerPattern(): RegExp {
+-        return PATTERN;
+-    }
+-
+-    innerExtract(context: ParsingContext, match: RegExpMatchArray): ParsingComponents {
+-        const modifier = match[MODIFIER_GROUP].toLowerCase();
+-        const period = match[PERIOD_GROUP].toLowerCase();
+-        const offset = modifier === "next" ? 1 : modifier === "last" || modifier === "past" ? -1 : 0;
+-        const referenceDate = context.reference.getDateWithAdjustedTimezone();
+-        let targetDate: Date;
+-
+-        if (period === "week") {
+-            targetDate = new Date(referenceDate.getTime());
+-            targetDate.setDate(referenceDate.getDate() + (6 - referenceDate.getDay()) + offset * 7);
+-        } else if (period === "month") {
+-            targetDate = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + offset + 1, 0);
+-        } else {
+-            targetDate = new Date(referenceDate.getFullYear() + offset, 11, 31);
+-        }
+-
+-        const components = context.createParsingComponents();
+-        components.assign("day", targetDate.getDate());
+-        components.assign("month", targetDate.getMonth() + 1);
+-        components.assign("year", targetDate.getFullYear());
+-        components.addTag("parser/ENEndOfRelativePeriodParser");
+-        return components;
+-    }
+-}
+diff --git a/src/locales/en/parsers/ENMonthNameMiddleEndianParser.ts b/src/locales/en/parsers/ENMonthNameMiddleEndianParser.ts
+index c0dd966..e18f59d 100644
+--- a/src/locales/en/parsers/ENMonthNameMiddleEndianParser.ts
++++ b/src/locales/en/parsers/ENMonthNameMiddleEndianParser.ts
+@@ -60,7 +60,7 @@ export default class ENMonthNameMiddleEndianParser extends AbstractParserWithWor
+ 
+         // Skip the case where the day looks like a year (ex: January 21)
+         if (this.shouldSkipYearLikeDate) {
+-            if (!match[DATE_TO_GROUP] && !match[YEAR_GROUP] && match[DATE_GROUP].match(/^\d{2}$/)) {
++            if (!match[DATE_TO_GROUP] && !match[YEAR_GROUP] && match[DATE_GROUP].match(/^2[0-5]$/)) {
+                 return null;
+             }
+         }
+diff --git a/src/locales/en/refiners/ENEndOfMonthRefiner.ts b/src/locales/en/refiners/ENEndOfMonthRefiner.ts
+deleted file mode 100644
+index 5ac1f78..0000000
+--- a/src/locales/en/refiners/ENEndOfMonthRefiner.ts
++++ /dev/null
+@@ -1,53 +0,0 @@
+-import { ParsingContext, Refiner } from "../../../chrono";
+-import { ParsingResult } from "../../../results";
+-import { findYearClosestToRef } from "../../../calculation/years";
+-
+-const PREFIX_PATTERN = /\b(?:last\s+day|end)\s+of\s+(?:the\s+)?$/i;
+-const RELATIVE_YEAR_SUFFIX_PATTERN = /^\s+(this|last|past|next)\s+year(?=\W|$)/i;
+-
+-export default class ENEndOfMonthRefiner implements Refiner {
+-    refine(context: ParsingContext, results: ParsingResult[]): ParsingResult[] {
+-        results.forEach((result) => {
+-            if (!result.start.isCertain("month") || result.start.isCertain("day")) {
+-                return;
+-            }
+-
+-            const prefix = context.text.substring(0, result.index).match(PREFIX_PATTERN);
+-            if (!prefix) {
+-                return;
+-            }
+-
+-            let year = result.start.get("year");
+-            const month = result.start.get("month");
+-            const suffix = context.text
+-                .substring(result.index + result.text.length)
+-                .match(RELATIVE_YEAR_SUFFIX_PATTERN);
+-
+-            if (suffix) {
+-                const modifier = suffix[1].toLowerCase();
+-                const referenceYear = context.reference.getDateWithAdjustedTimezone().getFullYear();
+-                year = referenceYear + (modifier === "next" ? 1 : modifier === "last" || modifier === "past" ? -1 : 0);
+-                result.start.assign("year", year);
+-                result.text += suffix[0];
+-            }
+-
+-            if (!result.start.isCertain("year")) {
+-                const lastDayInReferenceYear = new Date(year, month, 0).getDate();
+-                year = findYearClosestToRef(
+-                    context.reference.getDateWithAdjustedTimezone(),
+-                    lastDayInReferenceYear,
+-                    month
+-                );
+-                result.start.imply("year", year);
+-            }
+-
+-            const lastDay = new Date(year, month, 0).getDate();
+-            result.start.assign("day", lastDay);
+-            result.index -= prefix[0].length;
+-            result.text = prefix[0] + result.text;
+-            result.addTag("refiner/ENEndOfMonthRefiner");
+-        });
+-
+-        return results;
+-    }
+-}
+diff --git a/src/locales/en/refiners/ENEndOfPeriodRefiner.ts b/src/locales/en/refiners/ENEndOfPeriodRefiner.ts
+new file mode 100644
+index 0000000..08f8dfe
+--- /dev/null
++++ b/src/locales/en/refiners/ENEndOfPeriodRefiner.ts
+@@ -0,0 +1,101 @@
++import { ParsingContext, Refiner } from "../../../chrono";
++import { ParsingResult } from "../../../results";
++import { findYearClosestToRef } from "../../../calculation/years";
++
++const PREFIX_PATTERN = /\b(?:last\s+day|end)\s+of\s+(?:the\s+)?$/i;
++const RELATIVE_PERIOD_PATTERN = /^(this|last|past|next)\s*(week|month|year)$/i;
++const RELATIVE_YEAR_SUFFIX_PATTERN = /^\s+(this|last|past|next)\s+year(?=\W|$)/i;
++
++function modifierOffset(modifier: string): number {
++    return modifier === "next" ? 1 : modifier === "last" || modifier === "past" ? -1 : 0;
++}
++
++/**
++ * Moves a result preceded by "end of" or "last day of" to the last day of its period.
++ * A relative period ("next week", "this year") comes from the relative parsers. Its end is computed from the
++ * reference date, because the relative parsers add months with overflow ("next month" on Jan 31 is Mar 3).
++ * A named month ("July", "February 2024") has a certain month and no certain day.
++ */
++export default class ENEndOfPeriodRefiner implements Refiner {
++    refine(context: ParsingContext, results: ParsingResult[]): ParsingResult[] {
++        results.forEach((result) => {
++            const prefix = context.text.substring(0, result.index).match(PREFIX_PATTERN);
++            if (!prefix) {
++                return;
++            }
++
++            const relativePeriod = result.text.match(RELATIVE_PERIOD_PATTERN);
++            if (relativePeriod) {
++                const modifier = relativePeriod[1].toLowerCase();
++                this.moveToEndOfRelativePeriod(context, result, modifier, relativePeriod[2].toLowerCase());
++            } else if (result.start.isCertain("month") && !result.start.isCertain("day")) {
++                this.moveToEndOfMonth(context, result);
++            } else {
++                return;
++            }
++
++            // The relative parsers imply the reference time and UTC offset, but the end of a period is a whole day
++            // like a named month, and the reference offset is wrong when a DST change lies in between
++            result.start.imply("hour", 12);
++            result.start.imply("minute", 0);
++            result.start.imply("second", 0);
++            result.start.imply("millisecond", 0);
++            if (!result.start.isCertain("timezoneOffset")) {
++                result.start.delete("timezoneOffset");
++            }
++            result.index -= prefix[0].length;
++            result.text = prefix[0] + result.text;
++            result.addTag("refiner/ENEndOfPeriodRefiner");
++        });
++
++        return results;
++    }
++
++    private moveToEndOfRelativePeriod(
++        context: ParsingContext,
++        result: ParsingResult,
++        modifier: string,
++        period: string
++    ) {
++        const offset = modifierOffset(modifier);
++        const referenceDate = context.reference.getDateWithAdjustedTimezone();
++        let lastDay: Date;
++
++        if (period === "week") {
++            lastDay = new Date(referenceDate.getTime());
++            lastDay.setDate(referenceDate.getDate() + (6 - referenceDate.getDay()) + offset * 7);
++        } else if (period === "month") {
++            lastDay = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + offset + 1, 0);
++        } else {
++            lastDay = new Date(referenceDate.getFullYear() + offset, 11, 31);
++        }
++
++        result.start.assign("day", lastDay.getDate());
++        result.start.assign("month", lastDay.getMonth() + 1);
++        result.start.assign("year", lastDay.getFullYear());
++        result.start.delete("weekday");
++        result.start.imply("weekday", lastDay.getDay());
++    }
++
++    private moveToEndOfMonth(context: ParsingContext, result: ParsingResult) {
++        let year = result.start.get("year");
++        const month = result.start.get("month");
++        const suffix = context.text.substring(result.index + result.text.length).match(RELATIVE_YEAR_SUFFIX_PATTERN);
++
++        if (suffix) {
++            const modifier = suffix[1].toLowerCase();
++            const referenceYear = context.reference.getDateWithAdjustedTimezone().getFullYear();
++            year = referenceYear + modifierOffset(modifier);
++            result.start.assign("year", year);
++            result.text += suffix[0];
++        }
++
++        if (!result.start.isCertain("year")) {
++            const lastDayInReferenceYear = new Date(year, month, 0).getDate();
++            year = findYearClosestToRef(context.reference.getDateWithAdjustedTimezone(), lastDayInReferenceYear, month);
++            result.start.imply("year", year);
++        }
++
++        result.start.assign("day", new Date(year, month, 0).getDate());
++    }
++}
+diff --git a/test/en/en_relative.test.ts b/test/en/en_relative.test.ts
+index 117de0f..a8e736e 100644
+--- a/test/en/en_relative.test.ts
++++ b/test/en/en_relative.test.ts
+@@ -78,6 +78,49 @@ test("Test - End of current month", () => {
+     });
+ });
+ 
++test("Test - End of relative period", () => {
++    testSingleCase(chrono, "end of this week", new Date(2022, 7, 2, 15), (result, text) => {
++        expect(result.text).toBe(text);
++        expect(result.start).toBeDate(new Date(2022, 7, 6, 12));
++        expect(result.start.get("weekday")).toBe(6);
++    });
++
++    testSingleCase(chrono, "last day of last week", new Date(2022, 7, 2, 15), (result, text) => {
++        expect(result.text).toBe(text);
++        expect(result.start).toBeDate(new Date(2022, 6, 30, 12));
++    });
++
++    testSingleCase(chrono, "end of the next week", new Date(2022, 11, 28, 15), (result, text) => {
++        expect(result.text).toBe(text);
++        expect(result.start).toBeDate(new Date(2023, 0, 7, 12));
++    });
++
++    testSingleCase(chrono, "end of last month", new Date(2024, 2, 15, 15), (result, text) => {
++        expect(result.text).toBe(text);
++        expect(result.start).toBeDate(new Date(2024, 1, 29, 12));
++    });
++
++    testSingleCase(chrono, "end of next month", new Date(2023, 0, 31, 15), (result, text) => {
++        expect(result.text).toBe(text);
++        expect(result.start).toBeDate(new Date(2023, 1, 28, 12));
++    });
++
++    testSingleCase(chrono, "end of last month", new Date(2023, 11, 31, 15), (result, text) => {
++        expect(result.text).toBe(text);
++        expect(result.start).toBeDate(new Date(2023, 10, 30, 12));
++    });
++
++    testSingleCase(chrono, "end of this year", new Date(2020, 10, 22, 15), (result, text) => {
++        expect(result.text).toBe(text);
++        expect(result.start).toBeDate(new Date(2020, 11, 31, 12));
++    });
++
++    testSingleCase(chrono, "end of the past year", new Date(2020, 10, 22, 15), (result, text) => {
++        expect(result.text).toBe(text);
++        expect(result.start).toBeDate(new Date(2019, 11, 31, 12));
++    });
++});
++
+ test("Test - Past relative expressions", () => {
+     testSingleCase(chrono, "last week", new Date(2016, 10 - 1, 1, 12), (result, text) => {
+         expect(result.text).toBe(text);

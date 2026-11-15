@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "tests/triggers/test_calendarinterval.py::test_missing_time_crossing_midnight"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/apscheduler/proof-calendar-dst-gap && PYTHONPATH=src ../venv/bin/python -m pytest -p no:cacheprovider -q \"tests/triggers/test_calendarinterval.py::test_missing_time_crossing_midnight\"",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "AssertionError: assert datetime.datetime(2025, 3, 31, 23, 30, tzinfo=zoneinfo.ZoneInfo(key='America/Nuuk')) == datetime.datetime(2025, 3, 30, 23, 30, tzinfo=zoneinfo.ZoneInfo(key='America/Nuuk')) (18 of 18 variants fail)",
+  "carrier": "fc15dd15fd9a8e26545d288685810ea87a8da578"
+}

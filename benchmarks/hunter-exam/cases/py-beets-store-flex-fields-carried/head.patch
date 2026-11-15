@@ -1,0 +1,198 @@
+diff --git a/beets/dbcore/db.py b/beets/dbcore/db.py
+index fc9cf6c..186c59a 100755
+--- a/beets/dbcore/db.py
++++ b/beets/dbcore/db.py
+@@ -601,7 +601,7 @@ class Model(ABC, Generic[D]):
+         assignments = []
+         subvars: list[SQLiteType] = []
+         for key in fields:
+-            if key != "id" and key in self._fields and key in self._dirty:
++            if key != "id" and key in self._dirty:
+                 self._dirty.remove(key)
+                 assignments.append(f"{key}=?")
+                 value = self._type(key).to_sql(self[key])
+@@ -1452,7 +1452,14 @@ class Database:
+             # if we try to order directly.
+             # Since the join is required only for filtering, we can filter in
+             # a subquery and order the result, which returns unique fields.
+-            sql = f"SELECT * FROM ({sql}) ORDER BY {order_by} "
++            select = f"{table}.* FROM ({sql}) {table}"
++            if (
++                sort.field_names & model_cls.other_db_fields
++            ) - model_cls._getters().keys():
++                # only applies to db fields on the other model
++                select += f" {model_cls.relation_join}"
++
++            sql = f"SELECT {select} ORDER BY {order_by} "
+ 
+         if sql_limit is not None:
+             sql += f"LIMIT {sql_limit}"
+diff --git a/beets/dbcore/queryparse.py b/beets/dbcore/queryparse.py
+index 111ca7f..bfc9a77 100644
+--- a/beets/dbcore/queryparse.py
++++ b/beets/dbcore/queryparse.py
+@@ -183,15 +183,7 @@ def construct_sort_part(
+     assert direction in ("+", "-"), "part must end with + or -"
+     is_ascending = direction == "+"
+ 
+-    if sort_cls := model_cls._sorts.get(field):
+-        if isinstance(sort_cls, sort.SmartArtistSort):
+-            field = "albumartist" if model_cls.__name__ == "Album" else "artist"
+-    elif field in model_cls._fields:
+-        sort_cls = sort.FixedFieldSort
+-    else:
+-        sort_cls = sort.SlowFieldSort
+-
+-    return sort_cls(field, is_ascending, case_insensitive)
++    return model_cls.field_sort(field, is_ascending, case_insensitive)
+ 
+ 
+ def sort_from_strings(
+diff --git a/beets/dbcore/sort.py b/beets/dbcore/sort.py
+index f21f12a..df56de0 100644
+--- a/beets/dbcore/sort.py
++++ b/beets/dbcore/sort.py
+@@ -122,27 +122,36 @@ class FieldSort(Sort):
+     """
+ 
+     def __init__(
+-        self, field: str, ascending: bool = True, case_insensitive: bool = True
++        self,
++        field_name: str,
++        ascending: bool = True,
++        case_insensitive: bool = True,
+     ) -> None:
+-        self.field = field
++        self.table, _, self.field_name = field_name.rpartition(".")
+         self.ascending = ascending
+         self.case_insensitive = case_insensitive
+ 
++    @property
++    def field(self) -> str:
++        return (
++            f"{self.table}.{self.field_name}" if self.table else self.field_name
++        )
++
+     @property
+     def field_names(self) -> set[str]:
+         """A set with fields in this sort."""
+-        return {self.field}
++        return {self.field_name}
+ 
+     def sort(self, objs: Sequence[AnyModel]) -> Sequence[AnyModel]:
+         # TODO: Support flexible attributes with different types (e.g. a mix
+         # of strings and numbers) without falling over.
+ 
+         def key(obj: Model) -> Any:
+-            field_val = obj.get(self.field, None)
++            field_val = obj.get(self.field_name, None)
+             if field_val is None:
+-                if _type := obj._types.get(self.field):
++                if _type := obj._types.get(self.field_name):
+                     # If the field is typed, use its null value.
+-                    field_val = obj._types[self.field].null
++                    field_val = obj._types[self.field_name].null
+                 else:
+                     # If not, fall back to using an empty string.
+                     field_val = ""
+diff --git a/beets/library/models.py b/beets/library/models.py
+index eed4a78..8d8531d 100644
+--- a/beets/library/models.py
++++ b/beets/library/models.py
+@@ -13,10 +13,9 @@ from typing_extensions import Self
+ 
+ import beets
+ from beets import dbcore, logging, plugins, util
+-from beets.dbcore import types
++from beets.dbcore import sort, types
+ from beets.dbcore.db import FormattedMapping
+ from beets.dbcore.pathutils import normalize_path_for_db
+-from beets.dbcore.sort import SmartArtistSort
+ from beets.util import (
+     MoveOperation,
+     bytestring_path,
+@@ -116,6 +115,22 @@ class LibModel(dbcore.Model["Library"]):
+         return self.__str__().encode("utf-8")
+ 
+     # Convenient queries.
++    @classmethod
++    def field_sort(
++        cls, field: str, is_ascending: bool, case_insensitive: bool
++    ) -> FieldSort:
++        if sort_cls := cls._sorts.get(field):
++            if issubclass(sort_cls, sort.SmartArtistSort):
++                field = "albumartist" if cls.__name__ == "Album" else "artist"
++        elif field in cls.all_db_fields and field not in cls._getters():
++            sort_cls = sort.FixedFieldSort
++            if field in cls.other_db_fields:
++                field = f"{cls._relation._table}.{field}"
++        else:
++            # Flexible or computed.
++            sort_cls = sort.SlowFieldSort
++
++        return sort_cls(field, is_ascending, case_insensitive)
+ 
+     @classmethod
+     def field_query(
+@@ -326,8 +341,8 @@ class Album(LibModel):
+     _formatter = FormattedMapping
+ 
+     _sorts: ClassVar[dict[str, type[FieldSort]]] = {
+-        "albumartist": SmartArtistSort,
+-        "artist": SmartArtistSort,
++        "albumartist": sort.SmartArtistSort,
++        "artist": sort.SmartArtistSort,
+     }
+ 
+     # List of keys that are set on an album's items.
+@@ -740,7 +755,9 @@ class Item(LibModel):
+ 
+     _formatter = FormattedItemMapping
+ 
+-    _sorts: ClassVar[dict[str, type[FieldSort]]] = {"artist": SmartArtistSort}
++    _sorts: ClassVar[dict[str, type[FieldSort]]] = {
++        "artist": sort.SmartArtistSort
++    }
+ 
+     @cached_classproperty
+     def _queries(cls) -> dict[str, FieldQueryType]:
+diff --git a/test/dbcore/test_sort.py b/test/dbcore/test_sort.py
+index 0edd163..a81aeec 100644
+--- a/test/dbcore/test_sort.py
++++ b/test/dbcore/test_sort.py
+@@ -1,7 +1,5 @@
+ """Various tests for querying the library database."""
+ 
+-import os
+-
+ import pytest
+ 
+ import beets.library
+@@ -15,8 +13,8 @@ from beets.test import _common
+ _p = pytest.param
+ 
+ 
+-def abs_test_path(path: str) -> str:
+-    return os.fsdecode(util.normpath(path))
++def abs_test_path(path: str) -> bytes:
++    return util.normpath(path)
+ 
+ 
+ @pytest.fixture(scope="class")
+@@ -36,6 +34,7 @@ def setup_library(request: pytest.FixtureRequest, helper):
+                 flex1=flex1,
+                 flex2=flex2,
+                 albumartist=albumartist,
++                artpath=abs_test_path(f"{id_}cover.jpg"),
+             )
+         )
+         for id_, album, genres, year, flex1, flex2, albumartist in (
+@@ -114,6 +113,8 @@ class TestSort:
+             _p(Album, "path+ year+", [1, 2, 3], id="computed"),
+             _p(Album, "year+ path+", [1, 2, 3], id="computed-reverse"),
+             _p(Item, "flex2- flex1+", [1, 2, 4, 3], id="item-multi-flex-field"),
++            _p(Item, "artpath+", [1, 2, 3, 4], id="item-album-field"),
++            _p(Item, "artpath-", [4, 3, 1, 2], id="item-album-field-reverse"),
+         ],
+     )
+     def test_sort(self, model, query, expected_ids):

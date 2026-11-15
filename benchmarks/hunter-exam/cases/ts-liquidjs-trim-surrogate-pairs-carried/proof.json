@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "filters/string lstrip with Unicode characters (and rstrip, strip) should trim <input> using <chars>"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/liquidjs/proof-trim-surrogate-pairs && npx jest test/integration/filters/string.spec.ts -t Unicode",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Expected: \"text𠮷\"  Received: \"𠮷𠮷text𠮷\" (lstrip of '𠮷𠮷text𠮷' with '𠮷'); 15 of the 24 Unicode-trim tests fail on the head tree",
+  "carrier": "7dfa76b7b2559f46b71e993e002e3f434ca30814"
+}

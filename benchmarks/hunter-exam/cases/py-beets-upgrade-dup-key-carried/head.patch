@@ -1,0 +1,680 @@
+diff --git a/beets/importer/actions.py b/beets/importer/actions.py
+index 1a4b07a..5a76e6e 100644
+--- a/beets/importer/actions.py
++++ b/beets/importer/actions.py
+@@ -17,6 +17,9 @@ class Action(Enum):
+     # The RETAG action represents "don't apply any match, but do record
+     # new metadata". It's not reachable via the standard command prompt but
+     # can be used by plugins.
++    RESCAN = "RESCAN"
++    # RESCAN re-reads the task's directories from disk and re-runs the
++    # match, so the user can clean up files without restarting the import.
+ 
+ 
+ class DuplicateAction(str, Enum):
+diff --git a/beets/importer/stages.py b/beets/importer/stages.py
+index 1f8718e..ad8fd95 100644
+--- a/beets/importer/stages.py
++++ b/beets/importer/stages.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import contextvars
+ import itertools
+ import logging
++import os
+ from typing import TYPE_CHECKING, TypeAlias
+ 
+ from beets import config, plugins
+@@ -14,6 +15,7 @@ from .tasks import (
+     ImportTaskFactory,
+     SentinelImportTask,
+     SingletonImportTask,
++    is_subdir_of_any_in_list,
+     resolve_upgrade_target,
+ )
+ 
+@@ -87,6 +89,65 @@ def query_tasks(session: ImportSession) -> Iterator[BaseImportTask]:
+                 yield task
+ 
+ 
++def rescan_tasks(
++    session: ImportSession, task: ImportTask
++) -> Iterator[BaseImportTask]:
++    """Re-read `task`'s directories from disk and yield fresh tasks.
++
++    Backs the "Rescan directory" prompt choice: the user may have cleaned
++    up the directory while the import was paused, so `task.items` is stale
++    and can't be reused. Discovery is delegated to
++    `ImportTaskFactory.paths()`, the same logic the initial scan uses.
++    """
++    assert task.toppath is not None
++
++    # Walk from `task.paths[0]` when every original directory lives under
++    # it (single album, or nested multi-disc). Otherwise (sibling discs
++    # with no wrapping directory) walk their shared parent and filter its
++    # results back down to groups related to the original directories,
++    # leaving unrelated siblings alone.
++    scan_root = task.paths[0]
++    filter_to_scope = not all(
++        d == scan_root or is_subdir_of_any_in_list(d, [scan_root])
++        for d in task.paths
++    )
++    if filter_to_scope:
++        scan_root = os.path.dirname(scan_root)
++
++    discovery_factory = ImportTaskFactory(scan_root, session)
++    groups = discovery_factory.paths()
++    if filter_to_scope:
++        original_dirs = task.paths
++        groups = (
++            (dirs, paths)
++            for dirs, paths in groups
++            if any(
++                d == o
++                or is_subdir_of_any_in_list(d, [o])
++                or is_subdir_of_any_in_list(o, [d])
++                for d in dirs
++                for o in original_dirs
++            )
++        )
++
++    # Emitted tasks keep the original `toppath`, not `scan_root`: pruning
++    # stops at `toppath` (else the emptied source dir is stranded after a
++    # move) and resume progress is keyed by it.
++    factory = ImportTaskFactory(task.toppath, session)
++    found = False
++    for dirs, paths in groups:
++        if (album_task := factory.album(paths, dirs)) is not None:
++            found = True
++            yield from album_task.handle_created(session)
++
++    if not found:
++        log.info(
++            "No music found after rescanning: {}", displayable_path(task.paths)
++        )
++
++    yield SentinelImportTask(task.toppath, task.paths)
++
++
+ # ---------------------------------- Stages ---------------------------------- #
+ # Functions that process import tasks, may transform or filter them
+ # They are chained together in the pipeline e.g. stage2(stage1(task)) -> task
+@@ -114,6 +175,9 @@ def group_albums(session: ImportSession) -> StageCoro:
+         for _, items in itertools.groupby(sorted_items, group):
+             l_items = list(items)
+             task = ImportTask(task.toppath, [i.path for i in l_items], l_items)
++            # Grouped by tag, not by directory: nothing for a rescan to
++            # reconstruct, so the choice is withheld (see `_get_choices`).
++            task.is_grouped = True
+             tasks += task.handle_created(session)
+         tasks.append(SentinelImportTask(task.toppath, task.paths))
+ 
+@@ -164,6 +228,25 @@ def user_query(session: ImportSession, task: ImportTask) -> StageReturn:
+     task.choose_match(session)
+     plugins.send("import_task_choice", session=session, task=task)
+ 
++    # Rescan: re-read the directory from disk and re-run the match.
++    if task.choice_flag is Action.RESCAN:
++        # A plugin can force `choice_flag` via `import_task_choice`,
++        # bypassing `_get_choices`. Skip when there's no directory scope
++        # to rescan: singleton, toppath-less (query/merge), or grouped.
++        if not task.is_album or task.toppath is None or task.is_grouped:
++            log.warning(
++                "Ignoring a Rescan directory choice for a task with no "
++                "directory scope to rescan: {}",
++                displayable_path(task.paths),
++            )
++            task.choice_flag = Action.SKIP
++        else:
++            return _extend_pipeline(
++                rescan_tasks(session, task),
++                lookup_candidates(session),
++                user_query(session),
++            )
++
+     # As-tracks: transition to singleton workflow.
+     if task.choice_flag is Action.TRACKS:
+         # Set up a little pipeline for dealing with the singletons.
+diff --git a/beets/importer/tasks.py b/beets/importer/tasks.py
+index 832c292..ee9862e 100644
+--- a/beets/importer/tasks.py
++++ b/beets/importer/tasks.py
+@@ -100,24 +100,19 @@ def resolve_upgrade(
+     Returns `(kept_new_items, superseded_old_items)`. New items with no
+     matching old item are always kept (they aren't duplicates of
+     anything). New items matching an old item are kept only if their
+-    bitrate is higher than every old item's with the same key;
+-    otherwise they're dropped and the old items are left untouched.
+-    When multiple old items share a key, all of them are superseded
+-    when the new item is better.
++    bitrate is higher than the old item's; otherwise they're dropped
++    and the old item is left untouched.
+     """
+-    by_key: dict[tuple[Any, ...], list[library.Item]] = defaultdict(list)
+-    for item in old_items:
+-        by_key[_item_dup_key(item, keys)].append(item)
+-
++    by_key = {_item_dup_key(i, keys): i for i in old_items}
+     kept = []
+     superseded = []
+     for new in new_items:
+-        old_group = by_key.get(_item_dup_key(new, keys))
+-        if old_group is None:
++        old = by_key.get(_item_dup_key(new, keys))
++        if old is None:
+             kept.append(new)
+-        elif new.bitrate > max(o.bitrate for o in old_group):
++        elif new.bitrate > old.bitrate:
+             kept.append(new)
+-            superseded.extend(old_group)
++            superseded.append(old)
+     return kept, superseded
+ 
+ 
+@@ -236,6 +231,11 @@ class ImportTask(BaseImportTask):
+     choice_flag: Action | None = None
+     match: AlbumMatch | TrackMatch | None = None
+ 
++    # Set by `group_albums` when items were grouped by tag, not by
++    # directory. No scope for a filesystem rescan, so the "Rescan
++    # directory" choice is withheld (see `_get_choices`).
++    is_grouped: bool = False
++
+     # Set by `add()`; only valid afterwards (see class docstring).
+     album: library.Album
+ 
+@@ -279,6 +279,7 @@ class ImportTask(BaseImportTask):
+             Action.TRACKS,
+             Action.ALBUMS,
+             Action.RETAG,
++            Action.RESCAN,
+         ):
+             # TODO: redesign to stricten the type
+             self.choice_flag = choice  # type: ignore[assignment]
+diff --git a/beets/ui/commands/import_/session.py b/beets/ui/commands/import_/session.py
+index 59d4b24..589df94 100644
+--- a/beets/ui/commands/import_/session.py
++++ b/beets/ui/commands/import_/session.py
+@@ -97,7 +97,12 @@ class TerminalImportSession(importer.ImportSession):
+             # or, basic choices that require no more action here.
+             if isinstance(choice, AlbumMatch) or (
+                 isinstance(choice, importer.Action)
+-                and choice in (importer.Action.SKIP, importer.Action.ASIS)
++                and choice
++                in (
++                    importer.Action.SKIP,
++                    importer.Action.ASIS,
++                    importer.Action.RESCAN,
++                )
+             ):
+                 # Pass selection to main control flow.
+                 return choice
+@@ -249,6 +254,16 @@ class TerminalImportSession(importer.ImportSession):
+                     "g", "Group albums", lambda s, t: importer.Action.ALBUMS
+                 ),
+             ]
++            # Withheld for "Group albums" output: grouped by tag, not by
++            # directory, so there's nothing for a rescan to reconstruct.
++            if task.toppath and not task.is_grouped:
++                choices.append(
++                    PromptChoice(
++                        "r",
++                        "Rescan directory",
++                        lambda s, t: importer.Action.RESCAN,
++                    )
++                )
+         choices += [
+             # TODO: introduce beets.autotag.Candidates to remove these ignores
+             #  context: Candidates is a Sequence which will be updated in place
+diff --git a/docs/guides/tagger.rst b/docs/guides/tagger.rst
+index f7a507a..e0ee6aa 100644
+--- a/docs/guides/tagger.rst
++++ b/docs/guides/tagger.rst
+@@ -165,10 +165,10 @@ When beets needs your input about a match, it says something like this:
+         Beirut - Lon Gisland
+     (Similarity: 94.4%)
+     * Scenic World (Second Version) -> Scenic World
+-    [A]pply, More candidates, Skip, Use as-is, as Tracks, Enter search, enter Id, or aBort?
++    [A]pply, More candidates, Skip, Use as-is, as Tracks, Group albums, Rescan directory, Enter search, enter Id, or aBort?
+ 
+ When beets asks you this question, it wants you to enter one of the capital
+-letters: A, M, S, U, T, G, E, I or B. That is, you can choose one of the
++letters: A, M, S, U, T, G, R, E, I or B. That is, you can choose one of the
+ following:
+ 
+ - *A*: Apply the suggested changes shown and move on.
+@@ -185,6 +185,10 @@ following:
+   groups as albums. If the album artist for a track is not set then the artist
+   is used to group that track. For each group importing proceeds as for
+   directories. This is helpful if a directory contains multiple albums.
++- *R*: Rescan the directory from disk and re-run the match. Use this if you want
++  to clean up the files (remove duplicates or junk, add missing tracks, etc.)
++  without restarting the whole ``beet import`` run---just make your changes on
++  disk before choosing this option.
+ - *E*: Enter an artist and album to use as a search in the database. Use this
+   option if beets hasn't found any good options because the album is mistagged
+   or untagged.
+diff --git a/test/test_importer.py b/test/test_importer.py
+index 120dae5..ae1c37f 100644
+--- a/test/test_importer.py
++++ b/test/test_importer.py
+@@ -22,8 +22,9 @@ from zipfile import ZipFile
+ import pytest
+ from mediafile import MediaFile
+ 
+-from beets import config, importer, logging, util
++from beets import config, importer, logging, plugins, ui, util
+ from beets.autotag import AlbumInfo, AlbumMatch, Distance, TrackInfo
++from beets.importer.state import ImportState
+ from beets.importer.tasks import (
+     ImportTaskFactory,
+     albums_in_dir,
+@@ -42,6 +43,8 @@ from beets.test.helper import (
+     BeetsTestCase,
+     ImportHelper,
+     PluginMixin,
++    TerminalImportMixin,
++    TerminalImportSessionFixture,
+     TestHelper,
+     has_program,
+ )
+@@ -639,6 +642,349 @@ class ImportTracksTest(AutotagImportTestCase):
+         assert (self.lib_path / "singletons" / "Applied Track 1.mp3").exists()
+ 
+ 
++class ImportRescanTest(AutotagImportTestCase):
++    """Test the Rescan directory action.
++
++    Directory mutations must land when the first prompt is answered, not
++    before ``run()`` -- an edit made earlier would be visible to the
++    initial scan too and wouldn't exercise rescanning. Hence
++    ``_run_with_cleanup_before_first_prompt``.
++    """
++
++    def setUp(self):
++        super().setUp()
++        self.album_path = self.prepare_album_for_import(2)[0].parent
++        self.setup_importer()
++
++    def _run_with_cleanup_before_first_prompt(self, cleanup):
++        """Run the importer, calling `cleanup` as the first prompt is
++        answered -- the user editing the directory while paused there.
++        """
++        original_choose_match = self.importer.choose_match
++        state = {"done": False}
++
++        def choose_match_and_cleanup(task):
++            if not state["done"]:
++                state["done"] = True
++                cleanup()
++            return original_choose_match(task)
++
++        with patch.object(
++            self.importer, "choose_match", side_effect=choose_match_and_cleanup
++        ):
++            self.importer.run()
++
++    def test_rescan_picks_up_file_added_after_initial_scan(self):
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(
++            lambda: self.prepare_track_for_import(3, self.album_path)
++        )
++
++        assert len(self.lib.items()) == 3
++
++    def test_rescan_picks_up_file_removed_after_initial_scan(self):
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(
++            lambda: (self.album_path / "track_2.mp3").unlink()
++        )
++
++        assert len(self.lib.items()) == 1
++
++    def test_rescan_of_emptied_directory_imports_nothing(self):
++        self.importer.add_choice(importer.Action.RESCAN)
++
++        def cleanup():
++            for track in self.album_path.glob("*.mp3"):
++                track.unlink()
++
++        self._run_with_cleanup_before_first_prompt(cleanup)
++
++        assert not self.lib.items()
++
++    def test_rescan_with_only_unreadable_files_imports_nothing(self):
++        self.importer.add_choice(importer.Action.RESCAN)
++
++        def cleanup():
++            # Directory still has a music file by extension, but it can't
++            # actually be read as an item.
++            for track in self.album_path.glob("*.mp3"):
++                track.unlink()
++            (self.album_path / "track_1.mp3").write_bytes(b"not a real mp3")
++
++        self._run_with_cleanup_before_first_prompt(cleanup)
++
++        assert not self.lib.items()
++
++    def test_rescan_with_multiple_subdirectories_finds_all_albums(self):
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        def cleanup():
++            # Simulate the user splitting the messy directory into two
++            # proper album subdirectories.
++            for track in self.album_path.glob("*.mp3"):
++                track.unlink()
++            self.prepare_album_for_import(2, album_path=self.album_path / "one")
++            self.prepare_album_for_import(2, album_path=self.album_path / "two")
++
++        self._run_with_cleanup_before_first_prompt(cleanup)
++
++        assert len(self.lib.albums()) == 2
++
++    def test_rescan_of_multidisc_album_does_not_duplicate_tasks(self):
++        """`task.paths` for a multi-disc album holds the album root and
++        each disc subdirectory. Rescanning must not walk each
++        independently -- that produced three tasks for a two-disc album.
++        """
++        for track in self.album_path.glob("*.mp3"):
++            track.unlink()
++        self.prepare_album_for_import(1, album_path=self.album_path / "CD1")
++        self.prepare_album_for_import(1, album_path=self.album_path / "CD2")
++        self.setup_importer()
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(lambda: None)
++
++        assert len(self.lib.albums()) == 1
++        assert len(self.lib.items()) == 2
++
++    def test_rescan_preserves_multidisc_album_grouping(self):
++        for track in self.album_path.glob("*.mp3"):
++            track.unlink()
++        self.prepare_album_for_import(1, album_path=self.album_path / "CD1")
++        self.prepare_album_for_import(1, album_path=self.album_path / "CD2")
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(lambda: None)
++
++        assert len(self.lib.albums()) == 1
++
++    def test_rescan_preserves_flat_album_grouping(self):
++        self.prepare_album_for_import(2, album_id=2)
++        self.setup_importer(flat=True)
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(lambda: None)
++
++        assert len(self.lib.albums()) == 1
++
++    def test_rescan_of_single_file_import(self):
++        """When the import path is a single file, rescanning must still
++        find it (walking a file with `albums_in_dir` finds no music).
++        """
++        track_path = self.prepare_album_for_import(1)[0]
++        self.setup_importer(import_dir=track_path)
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(lambda: None)
++
++        assert len(self.lib.items()) == 1
++
++    def test_rescan_preserves_toppath_for_move_pruning(self):
++        """Rescanned tasks must keep the original `toppath`. Pruning
++        stops at `toppath`, so using the album directory itself would
++        leave it behind, empty and un-pruned, after a move.
++        """
++        self.setup_importer(move=True)
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(lambda: None)
++
++        assert not self.album_path.exists()
++
++    def test_rescan_preserves_toppath_for_resume_state(self):
++        """Rescanned tasks must keep the original `toppath`. Resume
++        progress is keyed by `toppath`, so using the album directory
++        itself would leave stale, never-reset progress behind.
++        """
++        self.setup_importer(resume=True)
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(lambda: None)
++
++        # A completed import resets progress for its toppath at the end.
++        assert not ImportState().tagprogress
++
++    def test_rescan_of_sibling_multidisc_album_does_not_duplicate_tasks(self):
++        """Sibling disc directories with no wrapping album directory can
++        only be reconstructed by walking their shared parent, which also
++        finds an unrelated sibling album. The rescan must regroup the
++        discs into one task and leave the sibling alone.
++        """
++        for track in self.album_path.glob("*.mp3"):
++            track.unlink()
++        self.album_path.rmdir()
++        self.prepare_album_for_import(
++            1, album_path=self.import_path / "Set Disc 1"
++        )
++        self.prepare_album_for_import(
++            1, album_path=self.import_path / "Set Disc 2"
++        )
++        self.prepare_album_for_import(
++            1, album_path=self.import_path / "Other Album"
++        )
++        self.setup_importer()
++
++        # "Other Album" sorts first; leave it as-is, then no-op rescan
++        # the two-disc album.
++        self.importer.add_choice(importer.Action.ASIS)
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        self._run_with_cleanup_before_first_prompt(lambda: None)
++
++        albums = self.lib.albums()
++        assert len(albums) == 2
++        assert sorted(len(list(a.items())) for a in albums) == [1, 2]
++
++    def test_rescan_of_normal_album_scans_only_its_own_directory(self):
++        """A plain album under a larger toppath must be rediscovered
++        from its own directory, not from `toppath` -- otherwise every
++        rescan walks far more of the filesystem than necessary.
++        """
++        self.importer.add_choice(importer.Action.RESCAN)
++        self.importer.add_choice(importer.Action.APPLY)
++
++        with patch(
++            "beets.importer.stages.ImportTaskFactory", wraps=ImportTaskFactory
++        ) as mock_factory:
++            self._run_with_cleanup_before_first_prompt(lambda: None)
++
++        scanned_toppaths = [
++            call.args[0] for call in mock_factory.call_args_list
++        ]
++        album_path_bytes = os.fsencode(str(self.album_path))
++        import_path_bytes = os.fsencode(str(self.import_path))
++
++        # Discovery is scoped to the album's own directory; `toppath` is
++        # only touched by the initial scan and the task-emitting factory
++        # (see `rescan_tasks`), never by a discovery walk.
++        assert scanned_toppaths.count(album_path_bytes) == 1
++        assert scanned_toppaths.count(import_path_bytes) == 2
++
++
++class TestRescanChoiceAvailability(
++    TerminalImportMixin, PluginMixin, AutotagImportHelper
++):
++    """The "Rescan directory" choice must not be offered for tasks with
++    no directory scope to rescan: "Group albums" output, toppath-less
++    query tasks, singletons.
++    """
++
++    @pytest.fixture(autouse=True)
++    def setup_prompt_choice(self, io):
++        self.prepare_album_for_import(2)
++        self.setup_importer()
++        self.input_options_patcher = patch(
++            "beets.ui.input_options", side_effect=ui.input_options
++        )
++        self.mock_input_options = self.input_options_patcher.start()
++        yield
++        self.input_options_patcher.stop()
++
++    def test_rescan_choice_withheld_after_group_albums(self):
++        self.importer.add_choice(importer.Action.ALBUMS)
++        self.importer.add_choice(importer.Action.SKIP)
++        self.importer.run()
++
++        assert self.mock_input_options.call_count >= 2
++        first_opts, second_opts = (
++            call.args[0] for call in self.mock_input_options.call_args_list[:2]
++        )
++        assert "Rescan directory" in first_opts
++        assert "Rescan directory" not in second_opts
++
++    def test_rescan_choice_forced_by_plugin_on_singleton_task_is_ignored(self):
++        """A singleton task's `paths` is a single item file, not an
++        album directory. A plugin forcing Rescan there must not wrap it
++        back into a mismatched album-style task.
++        """
++
++        class ForceRescanPlugin(plugins.BeetsPlugin):
++            def __init__(self):
++                super().__init__()
++                self.register_listener("import_task_choice", self.force_rescan)
++
++            def force_rescan(self, session, task):
++                if not task.is_album:
++                    task.choice_flag = importer.Action.RESCAN
++
++        self.register_plugin(ForceRescanPlugin)
++        self.importer.add_choice(importer.Action.TRACKS)
++        self.importer.run()
++
++        assert not self.lib.items()
++
++    def test_rescan_choice_forced_by_plugin_on_grouped_task_is_ignored(self):
++        """A plugin forcing Rescan onto a Group-albums task must be
++        ignored (falling back to Skip) rather than misbehave.
++        """
++
++        class ForceRescanPlugin(plugins.BeetsPlugin):
++            def __init__(self):
++                super().__init__()
++                self.register_listener("import_task_choice", self.force_rescan)
++
++            def force_rescan(self, session, task):
++                if task.is_grouped:
++                    task.choice_flag = importer.Action.RESCAN
++
++        self.register_plugin(ForceRescanPlugin)
++        self.importer.add_choice(importer.Action.ALBUMS)
++        self.importer.run()
++
++        assert not self.lib.albums()
++
++    def test_rescan_choice_forced_by_plugin_on_toppathless_task_is_ignored(
++        self,
++    ):
++        """`task.toppath` is None for library-query tasks (`beet import
++        -L`). A plugin forcing Rescan there must not reach
++        `rescan_tasks`'s `assert task.toppath is not None`.
++        """
++
++        class ForceRescanPlugin(plugins.BeetsPlugin):
++            def __init__(self):
++                super().__init__()
++                self.register_listener("import_task_choice", self.force_rescan)
++
++            def force_rescan(self, session, task):
++                task.choice_flag = importer.Action.RESCAN
++
++        # Get an album into the library first, via the normal importer.
++        self.importer.add_choice(importer.Action.ASIS)
++        self.importer.run()
++        assert len(self.lib.albums()) == 1
++
++        self.register_plugin(ForceRescanPlugin)
++
++        query_session = TerminalImportSessionFixture(
++            self.lib,
++            loghandler=None,
++            query="album:'Tag Album'",
++            io=self.io,
++            paths=None,
++        )
++        query_session.default_choice = importer.Action.APPLY
++
++        query_session.run()  # Must not raise.
++
++        assert len(self.lib.albums()) == 1
++
++
+ class ImportCompilationTest(AutotagImportTestCase):
+     """Test ASIS import of a folder containing tracks with different artists."""
+ 
+diff --git a/test/test_plugins.py b/test/test_plugins.py
+index e62121e..c46b2e5 100644
+--- a/test/test_plugins.py
++++ b/test/test_plugins.py
+@@ -271,7 +271,7 @@ class TestPromptChoices(TerminalImportMixin, PluginImportHelper):
+             def return_choices(self, session, task):
+                 return [
+                     PromptChoice("f", "Foo", None),
+-                    PromptChoice("r", "baR", None),
++                    PromptChoice("z", "baZ", None),
+                 ]
+ 
+         self.register_plugin(DummyPlugin)
+@@ -283,11 +283,12 @@ class TestPromptChoices(TerminalImportMixin, PluginImportHelper):
+             "Use as-is",
+             "as Tracks",
+             "Group albums",
++            "Rescan directory",
+             "Enter search",
+             "enter Id",
+             "aBort",
+             "Foo",
+-            "baR",
++            "baZ",
+         )
+ 
+         self.importer.add_choice(Action.SKIP)
+@@ -360,6 +361,7 @@ class TestPromptChoices(TerminalImportMixin, PluginImportHelper):
+             "Use as-is",
+             "as Tracks",
+             "Group albums",
++            "Rescan directory",
+             "Enter search",
+             "enter Id",
+             "aBort",
+@@ -396,6 +398,7 @@ class TestPromptChoices(TerminalImportMixin, PluginImportHelper):
+             "Use as-is",
+             "as Tracks",
+             "Group albums",
++            "Rescan directory",
+             "Enter search",
+             "enter Id",
+             "aBort",
+@@ -440,6 +443,7 @@ class TestPromptChoices(TerminalImportMixin, PluginImportHelper):
+             "Use as-is",
+             "as Tracks",
+             "Group albums",
++            "Rescan directory",
+             "Enter search",
+             "enter Id",
+             "aBort",

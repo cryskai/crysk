@@ -1,0 +1,52 @@
+diff --git a/src/util/liquid-date.ts b/src/util/liquid-date.ts
+index e92ffef..7d380aa 100644
+--- a/src/util/liquid-date.ts
++++ b/src/util/liquid-date.ts
+@@ -53,12 +53,6 @@ export class LiquidDate {
+   getTime () {
+     return this.displayDate.getTime()
+   }
+-  /**
+-   * The underlying UTC timestamp in milliseconds, unaffected by the display
+-   * timezone. Use this (not `getTime()`) for timezone-invariant values like
+-   * `%s`: `getTime()` reads `displayDate`, which is deliberately shifted by
+-   * the display timezone offset so wall-clock getters can delegate to Date.
+-   */
+   dateValue () {
+     return this.date.getTime()
+   }
+diff --git a/src/util/type-guards.ts b/src/util/type-guards.ts
+index 04fca1c..3ad72df 100644
+--- a/src/util/type-guards.ts
++++ b/src/util/type-guards.ts
+@@ -46,7 +46,6 @@ export function isRangeToken (val: any): val is RangeToken {
+ }
+ 
+ export function isValueToken (val: any): val is ValueToken {
+-  // valueTokenBitMask = TokenKind.Number | TokenKind.Literal | TokenKind.Quoted | TokenKind.PropertyAccess | TokenKind.Range
+   return (getKind(val) & 1667) > 0
+ }
+ 
+diff --git a/test/integration/filters/date.spec.ts b/test/integration/filters/date.spec.ts
+index 707886b..9928769 100644
+--- a/test/integration/filters/date.spec.ts
++++ b/test/integration/filters/date.spec.ts
+@@ -140,18 +140,6 @@ describe('filters/date', function () {
+     it('should support timezone name argument when DST is active', function () {
+       return test('{{ "2021-06-01T23:00:00Z" | date: "%Y-%m-%dT%H:%M:%S", "America/New_York" }}', '2021-06-01T19:00:00')
+     })
+-    it('should not shift %s by the timezone name argument', function () {
+-      return test('{{ "2026-06-30T21:00:00Z" | date: "%s", "America/Toronto" }}', '1782853200')
+-    })
+-    it('should not shift %s by the timezone offset argument', function () {
+-      return test('{{ "2026-06-30T21:00:00Z" | date: "%s", 360 }}', '1782853200')
+-    })
+-    it('should not shift %s by the timezoneOffset option', function () {
+-      return test('{{ "2026-06-30T21:00:00Z" | date: "%s" }}', '1782853200', undefined, opts)
+-    })
+-    it('should truncate %s toward the epoch like Ruby strftime', function () {
+-      return test('{{ "2026-06-30T17:00:00.500Z" | date: "%s" }}', '1782838800')
+-    })
+     it('should offset date literal with timezone 00:00 specified', function () {
+       return test('{{ "1990-12-31T23:00:00+00:00" | date: "%Y-%m-%dT%H:%M:%S"}}', '1990-12-31T17:00:00', undefined, opts)
+     })

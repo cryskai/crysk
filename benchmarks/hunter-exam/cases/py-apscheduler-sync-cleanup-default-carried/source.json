@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/agronholm/apscheduler",
+  "commit": "81e9fdcaac8d6c72f4318cb7ff393c913c7f9440",
+  "fix": "b38973eba40b4845d0c8b3687c546ff0bfaa5d2f",
+  "carrier": "b227d21fce2c8cca56dc421cbc07fa6eca7db541",
+  "drop": ["docs/versionhistory.rst"]
+}

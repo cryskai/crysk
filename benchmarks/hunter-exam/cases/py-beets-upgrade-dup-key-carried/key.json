@@ -1,0 +1,26 @@
+{
+  "id": "py-beets-upgrade-dup-key-carried",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "old-items-collapsed-by-key",
+      "area": "data",
+      "severity": "advisory",
+      "class": "non-unique-key",
+      "depth": 1,
+      "what": "resolve_upgrade indexes old items in a dict keyed by the duplicate key, so when several old items share a key only the last one survives: the others are never compared against the new item's bitrate and are never marked superseded, leaving stale duplicates in the library after an upgrade.",
+      "sites": [
+        {
+          "path": "beets/importer/tasks.py",
+          "start_line": 106,
+          "end_line": 115
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

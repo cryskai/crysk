@@ -1,0 +1,83 @@
+diff --git a/src/common/refiners/AbstractMergeDateTimeRefiner.ts b/src/common/refiners/AbstractMergeDateTimeRefiner.ts
+index 756a7ce..8e06c92 100644
+--- a/src/common/refiners/AbstractMergeDateTimeRefiner.ts
++++ b/src/common/refiners/AbstractMergeDateTimeRefiner.ts
+@@ -13,11 +13,6 @@ export default abstract class AbstractMergeDateTimeRefiner extends MergingRefine
+         const isDateThenTime = currentResult.start.isOnlyDate() && nextResult.start.isOnlyTime();
+         const isTimeThenDate = currentResult.start.isOnlyTime() && nextResult.start.isOnlyDate();
+ 
+-        // A bare ":" between a time-only result and a date-only result is only a real connector
+-        // in the "date:time" direction (e.g. "05/31/2024:14:15"). In the reverse direction, a lone
+-        // number like "24" immediately followed by ":" is far more likely to be a stray label or
+-        // count (e.g. "24: July 23, 2026") than someone writing a time using a colon with no minutes,
+-        // so don't let it swallow the date that follows.
+         if (isTimeThenDate && textBetween.trim() === ":") {
+             return false;
+         }
+diff --git a/test/en/en_time_exp.test.ts b/test/en/en_time_exp.test.ts
+index 557f5f0..87aeb3f 100644
+--- a/test/en/en_time_exp.test.ts
++++ b/test/en/en_time_exp.test.ts
+@@ -132,38 +132,6 @@ test("Test - Time expression before date", () => {
+     });
+ });
+ 
+-test("Test - A bare number followed by a colon should not merge backwards over the date that follows", () => {
+-    // "24:" here is a stray label, not "24:00" written with a colon and no minutes. Before the fix,
+-    // this bare hour would greedily merge with "July 23, 2026" across the colon, produce an invalid
+-    // 24 o'clock result, and get dropped entirely, taking the date with it and leaving only "at 3:30 PM".
+-    testSingleCase(chrono.strict, "24: July 23, 2026 at 3:30 PM", new Date(2026, 7 - 1, 1, 8), (result, text) => {
+-        expect(result.text).toBe("July 23, 2026 at 3:30 PM");
+-        expect(text).not.toBe(result.text);
+-
+-        expect(result.start.get("year")).toBe(2026);
+-        expect(result.start.get("month")).toBe(7);
+-        expect(result.start.get("day")).toBe(23);
+-
+-        expect(result.start.get("hour")).toBe(15);
+-        expect(result.start.get("minute")).toBe(30);
+-        expect(result.start.get("meridiem")).toBe(Meridiem.PM);
+-    });
+-
+-    // The forward direction ("date:time", no space) must keep working, since that's the case the
+-    // colon connector was added for in the first place.
+-    testSingleCase(chrono, "05/31/2024:14:15", new Date(2016, 10 - 1, 1, 8), (result, text) => {
+-        expect(result.text).toBe(text);
+-
+-        expect(result.start.get("year")).toBe(2024);
+-        expect(result.start.get("month")).toBe(5);
+-        expect(result.start.get("day")).toBe(31);
+-
+-        expect(result.start.get("hour")).toBe(14);
+-        expect(result.start.get("minute")).toBe(15);
+-        expect(result.start.get("meridiem")).toBe(Meridiem.PM);
+-    });
+-});
+-
+ test("Test - Time range expression", function () {
+     testSingleCase(chrono, "10:00:00 - 21:45:00", new Date(2016, 10 - 1, 1, 8), (result, text) => {
+         expect(result.text).toBe(text);
+diff --git a/test/it/it_merging_relative_dates.test.ts b/test/it/it_merging_relative_dates.test.ts
+index 4e012d4..fa62c86 100644
+--- a/test/it/it_merging_relative_dates.test.ts
++++ b/test/it/it_merging_relative_dates.test.ts
+@@ -23,19 +23,3 @@ test("Test - Merging dates with time", function () {
+         expect(result.start.get("minute")).toBe(0);
+     });
+ });
+-
+-test("Test - A bare number followed by a colon should not merge backwards over the date that follows", function () {
+-    // Same failure mode as in English: a stray "24:" label must not eat the date after it just
+-    // because ":" is also a valid date/time connector in Italian.
+-    testSingleCase(chrono.it.strict, "24: 23 luglio 2026 alle 15:30", new Date(2026, 7 - 1, 1, 8), (result, text) => {
+-        expect(result.text).toBe("23 luglio 2026 alle 15:30");
+-        expect(text).not.toBe(result.text);
+-
+-        expect(result.start.get("year")).toBe(2026);
+-        expect(result.start.get("month")).toBe(7);
+-        expect(result.start.get("day")).toBe(23);
+-
+-        expect(result.start.get("hour")).toBe(15);
+-        expect(result.start.get("minute")).toBe(30);
+-    });
+-});

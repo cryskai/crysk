@@ -1,0 +1,13 @@
+{
+  "tests": [
+    "filters/date timezoneOffset should not shift %s by the timezone name argument",
+    "... by the timezone offset argument",
+    "... by the timezoneOffset option",
+    "should truncate %s toward the epoch like Ruby strftime"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/liquidjs/proof-strftime-epoch-tz && npx jest test/integration/filters/date.spec.ts -t '%s'",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "truncation test Expected \"1782838800\" Received \"1782838801\"; the three timezone tests receive an epoch shifted by the timezone offset instead of \"1782853200\"",
+  "carrier": "afa5f5400428fc1ec935aca0282e579224660c95"
+}

@@ -1,0 +1,647 @@
+diff --git a/README.md b/README.md
+index ea9ceda..30f338b 100644
+--- a/README.md
++++ b/README.md
+@@ -212,7 +212,7 @@ chrono.en.GB.parseDate('6/10/2018');    // October 6th, 2018
+ chrono.ja.parseDate('昭和６４年１月７日'); 
+ ```
+ 
+-In addition to English, Chrono supports the following languages: `ar`, `fi`, `fr`, `id`, `it`, `ja`, `nl`, `ru`, `uk`, and `vi`. We also have partial support for `de`, `es`, `pt`, `sv`, `zh.hans`, and `zh.hant`.
++In addition to English, Chrono supports the following languages: `ar`, `fi`, `fr`, `id`, `it`, `ja`, `nl`, `ru`, `uk`, and `vi`. We also have partial support for `de`, `es`, `ko`, `pt`, `sv`, `zh.hans`, and `zh.hant`.
+ 
+ #### Importing specific locales
+ 
+diff --git a/src/calculation/duration.ts b/src/calculation/duration.ts
+index 586308c..843f7ec 100644
+--- a/src/calculation/duration.ts
++++ b/src/calculation/duration.ts
+@@ -77,11 +77,6 @@ export function addDuration(ref: Date, duration: Duration): Date {
+     if ("quarter" in duration) {
+         const floor = Math.floor(duration["quarter"]);
+         date.setMonth(date.getMonth() + floor * 3);
+-        const remainingFraction = duration["quarter"] - floor;
+-        if (remainingFraction > 0) {
+-            duration.month = duration?.month ?? 0;
+-            duration.month += remainingFraction * 3;
+-        }
+     }
+     if ("month" in duration) {
+         const floor = Math.floor(duration["month"]);
+diff --git a/src/index.ts b/src/index.ts
+index 08a77c8..390d225 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -22,8 +22,9 @@ import * as fi from "./locales/fi";
+ import * as vi from "./locales/vi";
+ import * as id from "./locales/id";
+ import * as ar from "./locales/ar";
++import * as ko from "./locales/ko";
+ 
+-export { de, fr, ja, pt, nl, zh, ru, es, uk, it, sv, fi, vi, id, ar };
++export { de, fr, ja, pt, nl, zh, ru, es, uk, it, sv, fi, vi, id, ar, ko };
+ 
+ /**
+  * A shortcut for {@link en | chrono.en.strict}
+diff --git a/src/locales/ko/constants.ts b/src/locales/ko/constants.ts
+new file mode 100644
+index 0000000..6d9a8ef
+--- /dev/null
++++ b/src/locales/ko/constants.ts
+@@ -0,0 +1,48 @@
++/**
++ * Korean weekdays. "월요일" (Monday) is written as the weekday character + "요일".
++ */
++export const WEEKDAY_OFFSET: { [word: string]: number } = {
++    "일": 0, // 일요일 Sunday
++    "월": 1, // 월요일 Monday
++    "화": 2, // 화요일 Tuesday
++    "수": 3, // 수요일 Wednesday
++    "목": 4, // 목요일 Thursday
++    "금": 5, // 금요일 Friday
++    "토": 6, // 토요일 Saturday
++};
++
++/**
++ * Native Korean numbers used for hours: "세 시" (3 o'clock), "열두 시" (12 o'clock).
++ * Korean uses native numbers for hours and Sino-Korean numbers (arabic digits) for minutes and dates.
++ */
++export const HOUR_WORD: { [word: string]: number } = {
++    "한": 1,
++    "두": 2,
++    "세": 3,
++    "네": 4,
++    "다섯": 5,
++    "여섯": 6,
++    "일곱": 7,
++    "여덟": 8,
++    "아홉": 9,
++    "열": 10,
++    "열한": 11,
++    "열두": 12,
++};
++
++export function parseHour(text: string): number {
++    if (/^\d+$/.test(text)) return parseInt(text);
++    return HOUR_WORD[text.replace(/\s/g, "")];
++}
++
++/**
++ * Relative week words: "지난주" (last week), "이번주" (this week), "다음주" (next week), "다다음주" (the week after next).
++ */
++export const WEEK_OFFSET: { [word: string]: number } = {
++    "지난": -1,
++    "저번": -1,
++    "이번": 0,
++    "다음": 1,
++    "담": 1,
++    "다다음": 2,
++};
+diff --git a/src/locales/ko/index.ts b/src/locales/ko/index.ts
+new file mode 100644
+index 0000000..d64b584
+--- /dev/null
++++ b/src/locales/ko/index.ts
+@@ -0,0 +1,54 @@
++/**
++ * Chrono components for Korean support (*parsers*, *refiners*, and *configuration*)
++ *
++ * @module
++ */
++
++import KOCasualDateParser from "./parsers/KOCasualDateParser";
++import KOWeekdayParser from "./parsers/KOWeekdayParser";
++import KOStandardParser from "./parsers/KOStandardParser";
++import KOTimeExpressionParser from "./parsers/KOTimeExpressionParser";
++import KOMergeDateTimeRefiner from "./refiners/KOMergeDateTimeRefiner";
++import KOMergeDateRangeRefiner from "./refiners/KOMergeDateRangeRefiner";
++
++import { Chrono, Configuration, Parser, Refiner } from "../../chrono";
++import { ParsingResult, ParsingComponents, ReferenceWithTimezone } from "../../results";
++import { Component, ParsedResult, ParsingOption, ParsingReference, Meridiem, Weekday } from "../../types";
++import { includeCommonConfiguration } from "../../configurations";
++
++export { Chrono, Parser, Refiner, ParsingResult, ParsingComponents, ReferenceWithTimezone };
++export { Component, ParsedResult, ParsingOption, ParsingReference, Meridiem, Weekday };
++
++// Shortcuts
++export const casual = new Chrono(createCasualConfiguration());
++export const strict = new Chrono(createConfiguration(true));
++
++export function parse(text: string, ref?: ParsingReference | Date, option?: ParsingOption): ParsedResult[] {
++    return casual.parse(text, ref, option);
++}
++
++export function parseDate(text: string, ref?: ParsingReference | Date, option?: ParsingOption): Date {
++    return casual.parseDate(text, ref, option);
++}
++
++/**
++ * @ignore (to be documented later)
++ */
++export function createCasualConfiguration(): Configuration {
++    const option = createConfiguration(false);
++    option.parsers.unshift(new KOCasualDateParser());
++    return option;
++}
++
++/**
++ * @ignore (to be documented later)
++ */
++export function createConfiguration(strictMode = true): Configuration {
++    return includeCommonConfiguration(
++        {
++            parsers: [new KOStandardParser(), new KOWeekdayParser(), new KOTimeExpressionParser()],
++            refiners: [new KOMergeDateTimeRefiner(), new KOMergeDateRangeRefiner()],
++        },
++        strictMode
++    );
++}
+diff --git a/src/locales/ko/parsers/KOCasualDateParser.ts b/src/locales/ko/parsers/KOCasualDateParser.ts
+new file mode 100644
+index 0000000..8ef9c68
+--- /dev/null
++++ b/src/locales/ko/parsers/KOCasualDateParser.ts
+@@ -0,0 +1,36 @@
++import { Parser, ParsingContext } from "../../../chrono";
++import * as references from "../../../common/casualReferences";
++
++/**
++ * 오늘 (today), 내일 (tomorrow), 모레 (the day after tomorrow), 글피 (3 days later),
++ * 어제 (yesterday), 그저께 / 그제 (the day before yesterday).
++ *
++ * "내일모레" literally reads "tomorrow + the day after tomorrow" but means the day after tomorrow.
++ */
++const PATTERN = /내일모레|그저께|그제|어제|오늘|내일|모레|글피/;
++
++export default class KOCasualDateParser implements Parser {
++    pattern(): RegExp {
++        return PATTERN;
++    }
++
++    extract(context: ParsingContext, match: RegExpMatchArray) {
++        switch (match[0]) {
++            case "오늘":
++                return references.today(context.reference);
++            case "내일":
++                return references.tomorrow(context.reference);
++            case "모레":
++            case "내일모레":
++                return references.theDayAfter(context.reference, 2);
++            case "글피":
++                return references.theDayAfter(context.reference, 3);
++            case "어제":
++                return references.yesterday(context.reference);
++            case "그저께":
++            case "그제":
++                return references.theDayBefore(context.reference, 2);
++        }
++        return null;
++    }
++}
+diff --git a/src/locales/ko/parsers/KOStandardParser.ts b/src/locales/ko/parsers/KOStandardParser.ts
+new file mode 100644
+index 0000000..1d63741
+--- /dev/null
++++ b/src/locales/ko/parsers/KOStandardParser.ts
+@@ -0,0 +1,32 @@
++import { Parser, ParsingContext } from "../../../chrono";
++import { findYearClosestToRef } from "../../../calculation/years";
++
++/**
++ * "2026년 11월 5일" (Nov 5, 2026), "11월 5일" (Nov 5). 년 = year, 월 = month, 일 = day.
++ */
++const PATTERN = /(?:(\d{4})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일/;
++const YEAR_GROUP = 1;
++const MONTH_GROUP = 2;
++const DAY_GROUP = 3;
++
++export default class KOStandardParser implements Parser {
++    pattern(): RegExp {
++        return PATTERN;
++    }
++
++    extract(context: ParsingContext, match: RegExpMatchArray) {
++        const month = parseInt(match[MONTH_GROUP]);
++        const day = parseInt(match[DAY_GROUP]);
++        if (month < 1 || month > 12 || day < 1 || day > 31) {
++            return null;
++        }
++
++        const components = context.createParsingComponents({ day, month });
++        if (match[YEAR_GROUP]) {
++            components.assign("year", parseInt(match[YEAR_GROUP]));
++        } else {
++            components.imply("year", findYearClosestToRef(context.refDate, day, month));
++        }
++        return components;
++    }
++}
+diff --git a/src/locales/ko/parsers/KOTimeExpressionParser.ts b/src/locales/ko/parsers/KOTimeExpressionParser.ts
+new file mode 100644
+index 0000000..3937713
+--- /dev/null
++++ b/src/locales/ko/parsers/KOTimeExpressionParser.ts
+@@ -0,0 +1,58 @@
++import { Parser, ParsingContext } from "../../../chrono";
++import { Meridiem } from "../../../types";
++import { HOUR_WORD, parseHour } from "../constants";
++
++/**
++ * "오후 3시" (3 PM), "오전 10시 30분" (10:30 AM), "3시 반" (half past 3), "세 시" (3 o'clock).
++ *
++ * - 시 = hour, 분 = minute, 반 = half (30 minutes)
++ * - 오전 = AM, 오후 = PM
++ * - Time-of-day words: 새벽 (early morning) and 아침 (morning) are AM; 낮 (daytime), 저녁 (evening) and 밤 (night) are PM.
++ *   "밤 12시" (12 at night) is midnight.
++ */
++const PATTERN = new RegExp(
++    "(?:(?<period>오전|오후|새벽|아침|낮|저녁|밤)\\s*)?" +
++        "(?<hour>\\d{1,2}|" +
++        Object.keys(HOUR_WORD)
++            .sort((a, b) => b.length - a.length)
++            .join("|") +
++        ")\\s*시(?!간)" +
++        "(?:\\s*(?:(?<half>반)|(?<minute>\\d{1,2})\\s*분))?",
++    "i"
++);
++
++const AM_PERIODS = ["오전", "새벽", "아침"];
++
++export default class KOTimeExpressionParser implements Parser {
++    pattern(): RegExp {
++        return PATTERN;
++    }
++
++    extract(context: ParsingContext, match: RegExpMatchArray) {
++        let hour = parseHour(match.groups.hour);
++        const minute = match.groups.half ? 30 : match.groups.minute ? parseInt(match.groups.minute) : 0;
++        if (hour === undefined || hour > 24 || minute > 59) {
++            return null;
++        }
++
++        const components = context.createParsingComponents();
++        const period = match.groups.period;
++        if (period) {
++            const isAM = AM_PERIODS.includes(period);
++            if (period === "밤" && hour === 12) {
++                hour = 0;
++            } else if (isAM && hour === 12) {
++                hour = 0;
++            } else if (!isAM && hour < 12) {
++                hour += 12;
++            }
++            components.assign("meridiem", hour >= 12 ? Meridiem.PM : Meridiem.AM);
++        } else if (hour > 12) {
++            components.assign("meridiem", Meridiem.PM);
++        }
++
++        components.assign("hour", hour === 24 ? 0 : hour);
++        components.assign("minute", minute);
++        return components;
++    }
++}
+diff --git a/src/locales/ko/parsers/KOWeekdayParser.ts b/src/locales/ko/parsers/KOWeekdayParser.ts
+new file mode 100644
+index 0000000..346b55b
+--- /dev/null
++++ b/src/locales/ko/parsers/KOWeekdayParser.ts
+@@ -0,0 +1,52 @@
++import { Parser, ParsingContext } from "../../../chrono";
++import { ParsingComponents } from "../../../results";
++import { Weekday } from "../../../types";
++import { createParsingComponentsAtWeekday } from "../../../calculation/weekdays";
++import { WEEK_OFFSET, WEEKDAY_OFFSET } from "../constants";
++
++/**
++ * - "금요일" (Friday): the coming Friday, including today.
++ * - "다음주 화요일" (next week's Tuesday), "지난주 수요일" (last week's Wednesday), "이번주 일요일" (this week's Sunday).
++ *   These refer to a day *in that calendar week* (weeks start on Monday), not to the nearest weekday.
++ *   e.g. on Friday, "다음주 월요일" is 3 days later and "지난주 수요일" is 9 days earlier.
++ *
++ * A weekday must end with "요일" (or the casual "욜"). A single character such as "월" also means "month",
++ * so it is only accepted right after a week word ("다음주 월").
++ */
++const PATTERN = new RegExp(
++    "(?:(?<week>지난|저번|이번|다다음|다음|담)\\s*주\\s*)?" + "(?<weekday>[일월화수목금토])" + "(?<suffix>요일|욜)?",
++    "i"
++);
++
++export default class KOWeekdayParser implements Parser {
++    pattern(): RegExp {
++        return PATTERN;
++    }
++
++    extract(context: ParsingContext, match: RegExpMatchArray): ParsingComponents {
++        const weekday = WEEKDAY_OFFSET[match.groups.weekday] as Weekday;
++        const week = match.groups.week;
++        if (!week && !match.groups.suffix) {
++            return null;
++        }
++        // "일" right before another character is usually not Sunday ("일정" schedule, "일요일" is fine)
++        if (!week && match.index > 0 && /[가-힣]/.test(context.text[match.index - 1])) {
++            return null;
++        }
++
++        if (!week) {
++            return createParsingComponentsAtWeekday(context.reference, weekday, "this");
++        }
++
++        // Day offset from the reference date to the target weekday in the target calendar week (Monday start)
++        const refDate = context.reference.getDateWithAdjustedTimezone();
++        const daysFromMonday = (refDate.getDay() + 6) % 7;
++        const targetFromMonday = (weekday + 6) % 7;
++        const days = WEEK_OFFSET[week] * 7 + targetFromMonday - daysFromMonday;
++
++        let components = new ParsingComponents(context.reference);
++        components = components.addDurationAsImplied({ day: days });
++        components.assign("weekday", weekday);
++        return components;
++    }
++}
+diff --git a/src/locales/ko/refiners/KOMergeDateRangeRefiner.ts b/src/locales/ko/refiners/KOMergeDateRangeRefiner.ts
+new file mode 100644
+index 0000000..f2686c2
+--- /dev/null
++++ b/src/locales/ko/refiners/KOMergeDateRangeRefiner.ts
+@@ -0,0 +1,11 @@
++import AbstractMergeDateRangeRefiner from "../../../common/refiners/AbstractMergeDateRangeRefiner";
++
++/**
++ * Merging date ranges: "11월 1일부터 11월 3일까지" (from Nov 1 to Nov 3), "월요일~금요일" (Monday–Friday).
++ * 부터 = from, 까지 = until. 까지 comes after the second date and is not part of the text between.
++ */
++export default class KOMergeDateRangeRefiner extends AbstractMergeDateRangeRefiner {
++    patternBetween(): RegExp {
++        return /^\s*(부터|~|～|-|–)\s*$/i;
++    }
++}
+diff --git a/src/locales/ko/refiners/KOMergeDateTimeRefiner.ts b/src/locales/ko/refiners/KOMergeDateTimeRefiner.ts
+new file mode 100644
+index 0000000..32f6d45
+--- /dev/null
++++ b/src/locales/ko/refiners/KOMergeDateTimeRefiner.ts
+@@ -0,0 +1,11 @@
++import AbstractMergeDateTimeRefiner from "../../../common/refiners/AbstractMergeDateTimeRefiner";
++
++/**
++ * Merging date and time: "내일 오후 3시" (tomorrow 3 PM), "내일은 오후 3시" (tomorrow[topic] 3 PM).
++ * 에 = at/on, 의 = of, 은/는 = topic markers.
++ */
++export default class KOMergeDateTimeRefiner extends AbstractMergeDateTimeRefiner {
++    patternBetween(): RegExp {
++        return /^\s*(에|의|은|는)?\s*$/i;
++    }
++}
+diff --git a/test/ko/ko_casual.test.ts b/test/ko/ko_casual.test.ts
+new file mode 100644
+index 0000000..046df35
+--- /dev/null
++++ b/test/ko/ko_casual.test.ts
+@@ -0,0 +1,66 @@
++import * as chrono from "../../src/";
++import { testSingleCase, testUnexpectedResult } from "../test_util";
++
++// Reference: 2012-08-10 (Friday) 12:00
++
++test("Test - Single Expression", function () {
++    // "오늘 만나요" = "Let's meet today"
++    testSingleCase(chrono.ko, "오늘 만나요", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("오늘");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 10, 12));
++    });
++
++    // "내일 회의" = "meeting tomorrow"
++    testSingleCase(chrono.ko, "내일 회의", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("내일");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 11, 12));
++    });
++
++    // 모레 = the day after tomorrow
++    testSingleCase(chrono.ko, "모레", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 12, 12));
++    });
++
++    // 내일모레 reads "tomorrow + the day after tomorrow" but means the day after tomorrow
++    testSingleCase(chrono.ko, "내일모레 시간 돼?", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("내일모레");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 12, 12));
++    });
++
++    // 글피 = 3 days later
++    testSingleCase(chrono.ko, "글피", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 13, 12));
++    });
++
++    // 어제 = yesterday
++    testSingleCase(chrono.ko, "어제 본 영화", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("어제");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 9, 12));
++    });
++
++    // 그저께 = the day before yesterday
++    testSingleCase(chrono.ko, "그저께", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 8, 12));
++    });
++});
++
++test("Test - Casual date with time", function () {
++    // "내일 오후 3시에 만나요" = "Let's meet tomorrow at 3 PM"
++    testSingleCase(chrono.ko, "내일 오후 3시에 만나요", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("내일 오후 3시");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 11, 15));
++    });
++
++    // "내일은 오전 10시" = "tomorrow[topic marker] 10 AM"
++    testSingleCase(chrono.ko, "내일은 오전 10시", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("내일은 오전 10시");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 11, 10));
++    });
++});
++
++test("Test - Negative cases", function () {
++    // "내가 낼게" = "I'll pay" (낼 is a verb here, not "tomorrow")
++    testUnexpectedResult(chrono.ko, "내가 낼게");
++    // "오일 교환" = "oil change"
++    testUnexpectedResult(chrono.ko, "오일 교환");
++});
+diff --git a/test/ko/ko_standard.test.ts b/test/ko/ko_standard.test.ts
+new file mode 100644
+index 0000000..eafdc18
+--- /dev/null
++++ b/test/ko/ko_standard.test.ts
+@@ -0,0 +1,46 @@
++import * as chrono from "../../src/";
++import { testSingleCase } from "../test_util";
++
++// Reference: 2012-08-10 (Friday) 12:00. 년 = year, 월 = month, 일 = day.
++
++test("Test - Single Expression", function () {
++    // "2012년 8월 15일" = Aug 15, 2012
++    testSingleCase(chrono.ko, "2012년 8월 15일", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("2012년 8월 15일");
++        expect(result.start.get("year")).toBe(2012);
++        expect(result.start.get("month")).toBe(8);
++        expect(result.start.get("day")).toBe(15);
++    });
++
++    // "8월 15일 광복절" = "Aug 15, Liberation Day" (year implied from the reference)
++    testSingleCase(chrono.ko, "8월 15일 광복절", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("8월 15일");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 15, 12));
++    });
++
++    // Spaces are often omitted in chats: "8월15일"
++    testSingleCase(chrono.ko, "8월15일", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 15, 12));
++    });
++
++    // "8월 15일 오후 7시" = Aug 15, 7 PM
++    testSingleCase(chrono.ko, "8월 15일 오후 7시", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("8월 15일 오후 7시");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 15, 19));
++    });
++});
++
++test("Test - Range Expression", function () {
++    // "11월 1일부터 11월 3일까지" = "from Nov 1 until Nov 3" (부터 = from, 까지 = until)
++    testSingleCase(chrono.ko, "11월 1일부터 11월 3일까지 휴가", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("11월 1일부터 11월 3일");
++        expect(result.start).toBeDate(new Date(2012, 11 - 1, 1, 12));
++        expect(result.end).toBeDate(new Date(2012, 11 - 1, 3, 12));
++    });
++
++    // "월요일~금요일" = Monday–Friday
++    testSingleCase(chrono.ko, "월요일~금요일", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 13, 12));
++        expect(result.end).toBeDate(new Date(2012, 8 - 1, 17, 12));
++    });
++});
+diff --git a/test/ko/ko_time_exp.test.ts b/test/ko/ko_time_exp.test.ts
+new file mode 100644
+index 0000000..21f43bc
+--- /dev/null
++++ b/test/ko/ko_time_exp.test.ts
+@@ -0,0 +1,58 @@
++import * as chrono from "../../src/";
++import { testSingleCase, testUnexpectedResult } from "../test_util";
++
++// Reference: 2012-08-10 (Friday) 12:00. 시 = hour, 분 = minute, 반 = half past, 오전 = AM, 오후 = PM.
++
++test("Test - Single Expression", function () {
++    // 오후 3시 = 3 PM
++    testSingleCase(chrono.ko, "오후 3시", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("오후 3시");
++        expect(result.start.get("hour")).toBe(15);
++        expect(result.start.get("meridiem")).toBe(chrono.Meridiem.PM);
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 10, 15));
++    });
++
++    // 오전 10시 30분 = 10:30 AM
++    testSingleCase(chrono.ko, "오전 10시 30분", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 10, 10, 30));
++    });
++
++    // 3시 반 = half past 3 (no AM/PM given: kept as 3)
++    testSingleCase(chrono.ko, "3시 반", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("3시 반");
++        expect(result.start.get("hour")).toBe(3);
++        expect(result.start.get("minute")).toBe(30);
++    });
++
++    // 저녁 7시 = 7 in the evening
++    testSingleCase(chrono.ko, "저녁 7시", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start.get("hour")).toBe(19);
++    });
++
++    // 새벽 2시 = 2 in the early morning
++    testSingleCase(chrono.ko, "새벽 2시", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start.get("hour")).toBe(2);
++        expect(result.start.get("meridiem")).toBe(chrono.Meridiem.AM);
++    });
++
++    // 밤 12시 = 12 at night (midnight)
++    testSingleCase(chrono.ko, "밤 12시", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start.get("hour")).toBe(0);
++    });
++
++    // 세 시 = 3 o'clock, written with a native Korean number
++    testSingleCase(chrono.ko, "세 시", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start.get("hour")).toBe(3);
++    });
++
++    // 열두시 반 = half past 12 (native number, no space)
++    testSingleCase(chrono.ko, "열두시 반", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start.get("hour")).toBe(12);
++        expect(result.start.get("minute")).toBe(30);
++    });
++});
++
++test("Test - Negative cases", function () {
++    // "2시간" = "2 hours" (a duration, not 2 o'clock)
++    testUnexpectedResult(chrono.ko, "2시간 걸려요");
++});
+diff --git a/test/ko/ko_weekday.test.ts b/test/ko/ko_weekday.test.ts
+new file mode 100644
+index 0000000..a1bd171
+--- /dev/null
++++ b/test/ko/ko_weekday.test.ts
+@@ -0,0 +1,59 @@
++import * as chrono from "../../src/";
++import { testSingleCase, testUnexpectedResult } from "../test_util";
++
++// Reference: 2012-08-10 (Friday) 12:00. Korean weeks start on Monday.
++
++test("Test - Weekday", function () {
++    // "금요일에 봐요" = "See you on Friday": the coming Friday, including today
++    testSingleCase(chrono.ko, "금요일에 봐요", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("금요일");
++        expect(result.start.get("weekday")).toBe(5);
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 10, 12));
++    });
++
++    // 월요일 = Monday
++    testSingleCase(chrono.ko, "월요일", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 13, 12));
++    });
++
++    // 화욜 = casual form of 화요일 (Tuesday)
++    testSingleCase(chrono.ko, "화욜 저녁 어때", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("화욜");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 14, 12));
++    });
++});
++
++test("Test - Weekday in a relative week", function () {
++    // "다음주 월요일" = Monday of next week. On Friday that is 3 days later.
++    testSingleCase(chrono.ko, "다음주 월요일", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 13, 12));
++    });
++
++    // "다음주 토요일" = Saturday of next week (not tomorrow)
++    testSingleCase(chrono.ko, "다음주 토요일", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 18, 12));
++    });
++
++    // "지난주 수요일" = Wednesday of last week (not this week's Wednesday two days ago)
++    testSingleCase(chrono.ko, "지난주 수요일", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 1, 12));
++    });
++
++    // "이번주 일요일" = Sunday of this week (the week ends on Sunday)
++    testSingleCase(chrono.ko, "이번주 일요일", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 12, 12));
++    });
++
++    // "담주 월" = casual "next week Mon" (a bare weekday character is allowed after a week word)
++    testSingleCase(chrono.ko, "담주 월 2시", new Date(2012, 8 - 1, 10, 12), (result) => {
++        expect(result.text).toBe("담주 월 2시");
++        expect(result.start).toBeDate(new Date(2012, 8 - 1, 13, 2));
++    });
++});
++
++test("Test - Negative cases", function () {
++    // "일정 공유" = "share the schedule" (일 is not Sunday here)
++    testUnexpectedResult(chrono.ko, "일정 공유");
++    // "월급" = "monthly salary"; a bare 월 means "month", not Monday
++    testUnexpectedResult(chrono.ko, "월급");
++});

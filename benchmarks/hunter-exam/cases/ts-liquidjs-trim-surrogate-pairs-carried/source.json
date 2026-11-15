@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/harttle/liquidjs",
+  "commit": "e68514f0667c958b578d580d11482ae881d7b803",
+  "fix": "3fe244f0610af74305d1c5b928ccf0fceed0b027",
+  "carrier": "7dfa76b7b2559f46b71e993e002e3f434ca30814",
+  "drop": ["CHANGELOG.md"]
+}
