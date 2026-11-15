@@ -254,7 +254,7 @@ async function review(
 if (mode === "plan") {
   const gate = DEFAULT_SIZE_GATE;
   console.log(
-    "pr   files   +/−      lines  gate   gold  band (3 hunters, no summary, no scout)",
+    `pr   files   +/−      lines  gate   gold  band (${HUNTERS} hunters, no summary, no scout)`,
   );
   console.log(
     "---- ----- --------  ------  -----  ----  ---------------------------------------",

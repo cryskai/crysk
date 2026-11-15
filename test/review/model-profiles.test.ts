@@ -68,6 +68,7 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
       "hunter-parity": ["opus", "opus", "medium", "opus", "medium"],
       "hunter-reliability": ["opus", "opus", "medium", "opus", "medium"],
       "hunter-resilience": ["opus", "opus", "medium", "opus", "medium"],
+      "hunter-security": ["opus", "opus", "medium", "opus", "medium"],
       "refuter-F001": ["haiku", "haiku", "low", "haiku", "low"],
       // prompts/scout.md names no model: the profile's scout.
       scout: ["haiku", "haiku", "low", "haiku", "low"],

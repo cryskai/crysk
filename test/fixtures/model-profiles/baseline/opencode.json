@@ -82,6 +82,22 @@
       "argv": null
     },
     {
+      "name": "hunter-security",
+      "backend": "opencode",
+      "provider": "openai",
+      "model": "sonnet",
+      "modelSnapshot": "gpt-x",
+      "modelVariant": "high",
+      "effort": "xhigh",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "5eaf8812360217a8d09a7f8f61df12be7e4d506350206454b6ad31d0a3788581",
+      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
+      "cliModel": null,
+      "argv": null
+    },
+    {
       "name": "refuter-F001",
       "backend": "opencode",
       "provider": "openai",
@@ -131,7 +147,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "29afc5fd08070afe4eea36aae00c1f735da1a3d0d318ef73e9b813b679a4ea79",
+    "routeFingerprint": "47d4653dd900ca4bef5d0b5700c3486dc5ee46ba29af3659c6134169fb4f5a22",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -165,6 +181,21 @@
       },
       {
         "stepKey": "hunter-logic",
+        "role": "hunter",
+        "logicalIdentity": "opencode:openai/gpt-x",
+        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
+        "effort": "high",
+        "route": {
+          "backend": "opencode",
+          "provider": "openai",
+          "modelFamily": "gpt-x",
+          "modelSnapshot": "gpt-x",
+          "modelVariant": "high"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "hunter-security",
         "role": "hunter",
         "logicalIdentity": "opencode:openai/gpt-x",
         "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
@@ -289,6 +320,14 @@
     },
     {
       "name": "hunter-resilience",
+      "model": "gpt-x",
+      "effort": "xhigh",
+      "effort_applied": true,
+      "variant": "high",
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "hunter-security",
       "model": "gpt-x",
       "effort": "xhigh",
       "effort_applied": true,

@@ -1095,6 +1095,7 @@ describe("doctor tri-state evaluation", () => {
       "deep-review-reliability.md": "/embedded/reliability-aaaa.md",
       "deep-review-resilience.md": "/embedded/resilience-bbbb.md",
       "deep-review-logic.md": "/embedded/logic-ffff.md",
+      "deep-review-security.md": "/embedded/security-gggg.md",
       "deep-review-parity.md": "/embedded/parity-dddd.md",
       "review-refuter.md": "/embedded/refuter-eeee.md",
     };
@@ -1128,7 +1129,7 @@ describe("doctor tri-state evaluation", () => {
 
       const check = report.checks.find((c) => c.name === "agents_dir");
       expect(check?.severity).toBe("healthy");
-      expect(check?.message).toContain("5 prompts read");
+      expect(check?.message).toContain("6 prompts read");
     });
 
     test("a prompt that cannot be read is blocking, named by its logical file", async () => {
