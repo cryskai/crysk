@@ -303,7 +303,7 @@ Each credential gets one secret, with one name per kind:
 | `CRYSK_CLAUDE_API_KEY` | Claude Code on an Anthropic API key (replaces `ANTHROPIC_API_KEY`) |
 | `CRYSK_OPENCODE_<P>_API_KEY` | An OpenCode provider's API key |
 | `CRYSK_OPENCODE_<P>_OAUTH` | That provider's `opencode auth login` record, base64 on one line (`base64 -w0`) |
-| `CRYSK_ANTIGRAVITY_OAUTH` | The Antigravity (Google) subscription record, `{"type": "oauth", "access", "refresh", "expires", "accountId"}`, base64 on one line. The Crysk platform writes and renews it; the engine checks and masks it like an `_OAUTH` record. Reviews of `agy:` models run on it where `agy` is installed; the action does not install `agy` yet |
+| `CRYSK_ANTIGRAVITY_OAUTH` | The Antigravity (Google) subscription record, `{"type": "oauth", "access", "refresh", "expires", "accountId"}`, base64 on one line. The Crysk platform writes and renews it; the engine checks and masks it like an `_OAUTH` record. Reviews of `agy:` models run on it: the setup step writes it, `0600`, where agy steps read it, and the action installs `agy` when the models name an `agy:` model (see [Antigravity in CI](#antigravity-in-ci)) |
 
 `<P>` is the [Models.dev](https://models.dev) provider id in upper case, with `-` and `.` written as `_`:
 `deepseek` becomes `DEEPSEEK`, `github-copilot` becomes `GITHUB_COPILOT`, and `wafer.ai` becomes `WAFER_AI`.
@@ -338,8 +338,9 @@ What the action does with the input:
   strings inside a decoded `_OAUTH` record, which GitHub would not otherwise know are secret.
 - **Later steps learn only what exists**, through the step's outputs: `crysk-secrets` (the names
   kept), `claude-credentials` (`subscription`, `api_key`), `opencode-providers` (the `<P>`
-  tokens) and `opencode-auth-file` (`true` when it wrote the OpenCode auth file, which also installs the
-  OpenCode CLI). Nothing is written to `GITHUB_ENV`.
+  tokens), `opencode-auth-file` (`true` when it wrote the OpenCode auth file, which also installs the
+  OpenCode CLI) and `antigravity-models` (`true` when the models in effect name an `agy:` model, which
+  installs the Antigravity CLI). Nothing is written to `GITHUB_ENV`.
 - **The step fails** with `CRYSK-CRED-UNUSABLE` (`malformed_payload`) and names the secret when:
   - an `_OAUTH` value is not padded standard base64, does not decode to a JSON object, or decodes to a
     record whose `type` is not `oauth`;
@@ -503,6 +504,44 @@ OpenCode-only `CRYSK_MODELS` included.
   rather than skipping as a clean review, unless the provider serves that model free.
 - **48 KB** is the GitHub variable size cap for `CRYSK_MODELS`; a `models` object is far smaller (at most
   three models per role).
+
+## Antigravity in CI
+
+Reviews run on Google Antigravity (`agy:<model-id>` models, the `agy` CLI) on the Google subscription in
+`CRYSK_ANTIGRAVITY_OAUTH`. Connect Antigravity in the Crysk dashboard, which stores that secret and renews
+it, and name `agy:` models in your model settings, `CRYSK_MODELS` or the `model` input:
+
+```bash
+gh variable set CRYSK_MODELS --body '{"default": ["agy:gemini-4-argon-high"]}'
+```
+
+The effort is part of the id (`agy:gemini-4-argon-high`, `agy:claude-sonnet-5-5-high`), so an `agy:` entry
+takes no `effort`. The materiality judge runs only the Claude models it was measured on, so an `agy:` model
+listed for `judge` adds nothing.
+
+- **The record.** When `crysk-secrets` carries `CRYSK_ANTIGRAVITY_OAUTH`, the setup step writes the decoded
+  record, refresh token included, to `$XDG_DATA_HOME/crysk/antigravity-auth.json` (or
+  `~/.local/share/crysk/antigravity-auth.json`), mode `0600` in a `0700` directory. Each agy step gets its
+  own copy in agy's token format, in a home of its own that is removed after the step; agy renews the
+  hour-long access token at startup from the refresh token, which Google does not rotate. In CI only that
+  record is read, never a login already on the runner, and a record an earlier run left is removed when
+  the run has no such secret.
+- **The CLI.** The `Install Antigravity CLI` step runs only when the models in effect name an `agy:` model
+  (the setup step's `antigravity-models` output: any role or fallback of the platform's models or the
+  `models` input, the judge aside) or the `model` input starts with `agy:`. It reads the auto-updater's
+  manifest for the runner (`linux_amd64`, `linux_arm64`, `darwin_arm64` or `darwin_amd64`), downloads the
+  release it names, and checks its `sha512` against the manifest **before** extracting anything. The
+  archive must hold exactly one regular file, `antigravity`: a second entry, a link, a directory or a path
+  refuses it. That file is installed as `agy`, `0755`, under the runner's temp directory, which is added to
+  `GITHUB_PATH`, and the step runs `agy --version`. A run with no `agy:` model fetches nothing. Any other
+  runner OS or CPU fails the step, naming it.
+- **What an agy step can do.** It reads files with agy's `read_file` and searches the repository through
+  Crysk's read-only search MCP (`grep`, `glob`, `list`; see [mcp-search.md](mcp-search.md)). No shell, no
+  web, no writes, and the repository's `AGENTS.md`, `GEMINI.md` and `.agents/` do not reach it.
+- **Billing.** An `agy:` route bills the subscription, cash cost `0`, like a ChatGPT subscription: it never
+  makes a run metered on its own. The ceilings still follow the run's Claude credential: a run that chose
+  `CRYSK_CLAUDE_API_KEY`, or that has an OpenCode model on an API key, keeps the metered defaults
+  ([Spend controls](#spend-controls)).
 
 ## Token permissions
 
@@ -915,7 +954,8 @@ A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode pr
 `CRYSK_OPENCODE_*` secret is an API key, on any route the run resolves: any role or fallback of `models`,
 `--model`, `--scout-model`, a spec agent, a prompt's frontmatter or an engine default) gets a `10.00` default, because that is the
 case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
-subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered. Setting
+subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered,
+and neither does an `agy:` model, which runs on the Google subscription in `CRYSK_ANTIGRAVITY_OAUTH`. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
 
 **In platform mode the Crysk platform's estimate replaces the cost band.** The connect step asks for it
@@ -1497,13 +1537,13 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. A `/crysk review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. A forced run that reviews a head clears a size or budget skip's `failure` status. |
 | `mode` | `gate` | The commit status the review sets: `gate` turns it `failure` on blocking findings and on a size or budget skip, `advisory` keeps it `success` for a finished review. See [Gate mode](#gate-mode-the-status-is-the-check). |
 | `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). A `/crysk review --full` comment sets it on its own; a legacy `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
-| `model` | empty | One model for every step but the materiality judge's (`claude:opus-latest`, `opencode:<provider>/<model>`; a bare `sonnet`, `opus`, `haiku` or `fable` means its `-latest` model), outranking `models`. No effort and no fallbacks. It builds no OpenCode auth file: name an OpenCode model in `models`. |
+| `model` | empty | One model for every step but the materiality judge's (`claude:opus-latest`, `opencode:<provider>/<model>`, `agy:<model-id>`; a bare `sonnet`, `opus`, `haiku` or `fable` means its `-latest` model), outranking `models`. No effort and no fallbacks. It builds no OpenCode auth file: name an OpenCode model in `models`. An `agy:` model installs the Antigravity CLI and runs on `CRYSK_ANTIGRAVITY_OAUTH` ([Antigravity in CI](#antigravity-in-ci)). |
 | `scout` | `false` | Experimental diff-only pre-hunt stage; off by default. |
 | `post` | `true` | Set `false` to run the review and write outputs/summary without posting to the PR. |
 | `step-summary` | `true` | Set `false` to skip the `$GITHUB_STEP_SUMMARY` write. |
 | `anthropic-api-key`, `claude-token`, `opencode-auth`, `routing` | empty | Removed. A value in any of them stops the run with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed): pass the `CRYSK_*` secrets in `crysk-secrets`, and the models per role in `models`. |
 | `crysk-secrets` | empty | The credentials: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets](#crysk_-secrets). |
-| `models` | empty | The models per role, as JSON (the `models` object of a person config), from `vars.CRYSK_MODELS`. See [OpenCode in CI](#opencode-in-ci) and [Configuration, Models](configuration.md#models). Empty: every step runs its prompt's model. Ignored, with a warning, on a repository whose platform settings apply. |
+| `models` | empty | The models per role, as JSON (the `models` object of a person config), from `vars.CRYSK_MODELS`. See [OpenCode in CI](#opencode-in-ci), [Antigravity in CI](#antigravity-in-ci) and [Configuration, Models](configuration.md#models). Empty: every step runs its prompt's model. Ignored, with a warning, on a repository whose platform settings apply. |
 | `operation` | `review` | `review` reviews a pull request; `refresh-credential` renews a subscription login, and only the Crysk platform dispatches it. See [Subscription logins](#subscription-logins). Empty is a review. |
 | `refresh-provider` | empty | With `operation: refresh-credential`, the subscription provider whose login is renewed: `openai` (read from `CRYSK_OPENCODE_OPENAI_OAUTH`) or `antigravity` (read from `CRYSK_ANTIGRAVITY_OAUTH`). Ignored by a review. |
 | `credentials` | empty | The Claude credential order, as JSON (`{"claude": ["subscription", "api_key"]}`), from `vars.CRYSK_CREDENTIALS`. Empty: the subscription first. Ignored like `models`. |

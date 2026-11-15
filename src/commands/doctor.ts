@@ -68,6 +68,7 @@ export async function runDoctorCommand(input: {
     repoRoot: input.repoRoot,
     cwd: input.repoRoot,
     claudeRequired,
+    antigravityRequired: routing.antigravityRequired,
     probeExactBindings: () =>
       collectDoctorExactBindingReports({
         workspaceRoot: input.workspaceRoot,

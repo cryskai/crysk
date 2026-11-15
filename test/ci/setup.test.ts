@@ -35,7 +35,11 @@ import { parseArgs } from "#review/preflight";
 import { runDoctor } from "../../src/doctor";
 import { prheroLayout } from "../../src/home-preflight";
 import { resolveRunClaudeCredential } from "../../src/security/claude-credential";
-import { resolveOpenCodeAuthPath } from "../../src/security/credential-broker";
+import {
+  lookupAntigravityRecord,
+  resolveAntigravityRecordPath,
+  resolveOpenCodeAuthPath,
+} from "../../src/security/credential-broker";
 import { openCodeSecretManifestPath } from "../../src/security/opencode-secret-manifest";
 import { checkCiConfiguration } from "../../src/system-tools";
 
@@ -1127,6 +1131,27 @@ describe("setup.ts reads the crysk-secrets input", () => {
     "CRYSK_CLAUDE_OAUTH_TOKEN_BACKUP=SENTINEL-BACKUP-55aa",
   ].join("\n");
 
+  // odd/tasks/antigravity-oauth.md T5: the record AgyCredentialBroker reads in
+  // CI, at the path it resolves from this step's own env and HOME.
+  async function agyRecordOf(home: string, env: Record<string, string>) {
+    const recordPath = resolveAntigravityRecordPath(
+      { XDG_DATA_HOME: env.XDG_DATA_HOME ?? "" },
+      home,
+    );
+    if (!existsSync(recordPath)) {
+      return {
+        agyRecordText: undefined,
+        agyRecordMode: undefined,
+        agyDirMode: undefined,
+      };
+    }
+    return {
+      agyRecordText: await readFile(recordPath, "utf8"),
+      agyRecordMode: statSync(recordPath).mode & 0o777,
+      agyDirMode: statSync(path.dirname(recordPath)).mode & 0o777,
+    };
+  }
+
   async function runSetup(
     env: Record<string, string>,
     options: {
@@ -1251,6 +1276,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
         manifestMode: existsSync(manifestPath)
           ? statSync(manifestPath).mode & 0o777
           : undefined,
+        ...(await agyRecordOf(home, env)),
       };
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -1870,6 +1896,126 @@ describe("setup.ts reads the crysk-secrets input", () => {
       expect(result.output).toBe("");
     });
   });
+
+  // odd/tasks/antigravity-oauth.md T5 (S7): CRYSK_ANTIGRAVITY_OAUTH becomes the
+  // record AgyCredentialBroker reads in CI, and an `agy:` model in effect sets the
+  // antigravity-models output the Install Antigravity CLI step keys on.
+  describe("the Antigravity record and the antigravity-models output", () => {
+    const AGY_VALUE = b64({
+      type: "oauth",
+      access: "SENTINEL-AGY-ACCESS-77bb",
+      refresh: "SENTINEL-AGY-REFRESH-77bb",
+      expires: 1_700_000_000_000,
+      accountId: "dev@example.test",
+    });
+    const AGY_LINE = `CRYSK_ANTIGRAVITY_OAUTH=${AGY_VALUE}`;
+    const agyModels = JSON.stringify({
+      default: ["claude:sonnet-latest"],
+      "hunter.logic": ["agy:gemini-4-argon-high", "claude:sonnet-latest"],
+    });
+    const lines = (result: { output: string }) =>
+      result.output.split("\n").filter((line) => line !== "");
+
+    test("an agy: model with the secret writes the record 0600 in a 0700 dir and reports antigravity-models=true", async () => {
+      const result = await runSetup({
+        MODELS_INPUT: agyModels,
+        CRYSK_SECRETS_INPUT: AGY_LINE,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(lines(result)).toEqual([
+        "crysk-secrets=CRYSK_ANTIGRAVITY_OAUTH",
+        "claude-credentials=",
+        "opencode-providers=",
+        "antigravity-models=true",
+      ]);
+      expect(result.agyRecordMode).toBe(0o600);
+      expect(result.agyDirMode).toBe(0o700);
+      // The broker reads exactly what this step wrote.
+      const lookup = await lookupAntigravityRecord(async () =>
+        String(result.agyRecordText),
+      );
+      expect(lookup.ok).toBe(true);
+      expect(
+        lookup.ok &&
+          lookup.token.token.refresh_token === "SENTINEL-AGY-REFRESH-77bb",
+      ).toBe(true);
+      expect(result.stdout).toContain("::add-mask::SENTINEL-AGY-REFRESH-77bb");
+      expect(result.stdout).toContain("::add-mask::SENTINEL-AGY-ACCESS-77bb");
+      expect(result.stderr).not.toContain("SENTINEL");
+      expect(result.envFile).toBe("PRE_EXISTING=1\n");
+    });
+
+    test("the record lands under XDG_DATA_HOME when the runner sets one", async () => {
+      const dataHome = await mkdtemp(path.join(tmpdir(), "crysk-agy-xdg-"));
+      try {
+        const result = await runSetup({
+          XDG_DATA_HOME: dataHome,
+          MODELS_INPUT: agyModels,
+          CRYSK_SECRETS_INPUT: AGY_LINE,
+        });
+        expect(result.exitCode).toBe(0);
+        expect(
+          existsSync(path.join(dataHome, "crysk", "antigravity-auth.json")),
+        ).toBe(true);
+        expect(result.agyRecordMode).toBe(0o600);
+      } finally {
+        await rm(dataHome, { recursive: true, force: true });
+      }
+    });
+
+    test("the secret with no agy: model writes the record but no antigravity-models output", async () => {
+      const result = await runSetup({
+        MODELS_INPUT: JSON.stringify({ default: ["claude:sonnet-latest"] }),
+        CRYSK_SECRETS_INPUT: AGY_LINE,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.output).not.toContain("antigravity-models");
+      expect(result.agyRecordMode).toBe(0o600);
+      expect(result.stderr).not.toContain("ntigravity");
+    });
+
+    test("an agy: model with no secret reports antigravity-models=true and writes no record", async () => {
+      const result = await runSetup({ MODELS_INPUT: agyModels });
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toBe("antigravity-models=true\n");
+      expect(result.agyRecordText).toBeUndefined();
+    });
+
+    test("a record an earlier run left is removed when this run has no secret", async () => {
+      const result = await runSetup(
+        { CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-55aa" },
+        {
+          prepareHome: async (home) => {
+            const file = resolveAntigravityRecordPath({}, home);
+            await mkdir(path.dirname(file), { recursive: true });
+            await writeFile(file, "{}\n");
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.agyRecordText).toBeUndefined();
+    });
+
+    test("an agy: model in the platform's person layer reports antigravity-models=true", async () => {
+      const result = await runSetup(
+        { CRYSK_SECRETS_INPUT: AGY_LINE },
+        withModels({ default: ["agy:claude-sonnet-5-5-high"] }),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(lines(result)).toContain("antigravity-models=true");
+      expect(result.agyRecordMode).toBe(0o600);
+    });
+
+    test("an OpenCode-only plan reports no antigravity-models output", async () => {
+      const result = await runSetup(
+        { CRYSK_SECRETS_INPUT: SECRETS_INPUT },
+        withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.output).not.toContain("antigravity");
+      expect(result.agyRecordText).toBeUndefined();
+    });
+  });
 });
 
 describe("action.yml hands crysk-secrets only to the steps that read it", () => {
@@ -1926,6 +2072,50 @@ describe("action.yml hands crysk-secrets only to the steps that read it", () => 
     expect(setup.run).toBe(
       `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin`,
     );
+  });
+});
+
+// odd/tasks/antigravity-oauth.md T5 (S7): agy is installed only for a run that
+// names an `agy:` model, by the setup step's output or the `model` input, and by
+// the sha512-checking script, never inline shell.
+describe("action.yml installs agy only for an agy: plan", () => {
+  type Step = {
+    id?: string;
+    name?: string;
+    if?: string;
+    run?: string;
+    env?: Record<string, string>;
+  };
+  const steps = (
+    Bun.YAML.parse(
+      readFileSync(path.resolve(__dirname, "..", "..", "action.yml"), "utf8"),
+    ) as { runs: { steps: Step[] } }
+  ).runs.steps;
+  const index = (predicate: (step: Step) => boolean) =>
+    steps.findIndex(predicate);
+  const install = steps.find((step) => step.name === "Install Antigravity CLI");
+
+  test("runs after the setup step and before Run Crysk", () => {
+    const at = index((step) => step.name === "Install Antigravity CLI");
+    expect(at).toBeGreaterThan(index((step) => step.id === "materialize"));
+    expect(at).toBeLessThan(index((step) => step.id === "run-crysk"));
+  });
+
+  test("keys on antigravity-models or a model input naming agy:, for a review only", () => {
+    expect(install?.if).toBe(
+      `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.antigravity-models == 'true' || startsWith(inputs.model, 'agy:')) && (inputs.operation == 'review' || inputs.operation == '') }}`,
+    );
+  });
+
+  test("runs the installer script with Bun's autoload off, into the runner's temp dir", () => {
+    expect(install?.run).toBe(
+      `bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/agy-install.ts"`,
+    );
+    expect(install?.env?.AGY_INSTALL_DIR).toBe(
+      `\${{ runner.temp }}/crysk-agy/bin`,
+    );
+    expect(JSON.stringify(install)).not.toContain("crysk-secrets");
+    expect(install?.env?.ANTHROPIC_API_KEY).toBe("");
   });
 });
 

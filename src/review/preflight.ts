@@ -529,9 +529,11 @@ Options:
                       a positive integer; unset = unlimited)
   --model <model>     Override every step's model but the materiality judge's:
                       claude:<name>-latest, claude:<full model name>,
-                      opencode:<provider>/<model>, or a bare alias (sonnet,
-                      opus, haiku, fable). A model only: per-role models and
-                      their effort go in "models" in ~/.crysk/config.json
+                      opencode:<provider>/<model>, agy:<model-id> (Google
+                      Antigravity, effort in the id), or a bare alias
+                      (sonnet, opus, haiku, fable). A model only: per-role
+                      models and their effort go in "models" in
+                      ~/.crysk/config.json
   --summary           Enable the engine-owned PR summary (default)
   --no-summary        Disable the engine-owned PR summary
   --scout             review only: run the diff-only scout stage before the

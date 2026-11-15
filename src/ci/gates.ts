@@ -416,6 +416,11 @@ export type CiBillingMode = "subscription" | "metered";
 // from the routes the run resolves (openCodeRoutesBillMetered, ci/setup.ts):
 // an OpenCode provider bound to an API key can invoice; an auth file that only
 // holds providers no model uses cannot (cryskai/platform#12).
+//
+// An `agy:` route (odd/tasks/antigravity-oauth.md S6, T5) has no half here on
+// purpose: it runs only on the Google subscription in CRYSK_ANTIGRAVITY_OAUTH,
+// cash cost 0, like a ChatGPT subscription route, so it can never invoice and
+// leaves the answer to the two halves above (test/ci/gates.test.ts pins it).
 export function deriveCiBillingMode(
   env: Record<string, string | undefined>,
   opts?: { openCodeBillsMetered?: boolean },

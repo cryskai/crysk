@@ -23,8 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GEMINI.md` or `.agents/` and reads files with `read_file`; its settings deny file writes, shell
   commands and URL fetches. The tool count comes from agy's finished tool steps, usage from its result, and
   the cost is the subscription's ($0 cash). A rejected login, a spent quota or an unusable record names
-  `CRYSK_ANTIGRAVITY_OAUTH` and says to connect Antigravity again in the Crysk dashboard. The action does not
-  install `agy` yet; that arrives in a later release.
+  `CRYSK_ANTIGRAVITY_OAUTH` and says to connect Antigravity again in the Crysk dashboard.
+- **The action installs `agy` when the models name an `agy:` model.** A new `Install Antigravity CLI` step runs
+  only when the models in effect (the platform's or the `models` input's, any role or fallback, the judge
+  aside) or the `model` input name an `agy:` model. It reads the Antigravity auto-updater's manifest for the
+  runner (Linux or macOS, x64 or arm64), checks the download's `sha512` against it before extracting, refuses
+  an archive with anything but its single `antigravity` file (a second entry, a link, a directory or a
+  path), and installs it as `agy` under the runner's temp directory on `PATH`. The setup step writes the
+  `CRYSK_ANTIGRAVITY_OAUTH` record (`0600`, in a `0700` directory) where agy steps read it in CI, removes
+  one an earlier run left when the secret is absent, and sets the `antigravity-models` output. A run with
+  no `agy:` model fetches nothing and its setup outputs are unchanged. `crysk doctor` checks `agy` and its
+  login when the configuration names an `agy:` model. An `agy:` route bills the subscription and never makes
+  a run metered on its own; a run whose Claude credential is `CRYSK_CLAUDE_API_KEY` keeps the metered
+  defaults as before.
 - **Grep and Glob for agy steps, through Crysk's read-only search MCP.** An agy step whose tools include
   `Grep` or `Glob` gets one MCP server, `crysk-search` (`crysk mcp-search --root <repo>`, an internal
   command), with `grep`, `glob` and `list`. It is read-only and in-process (no shell, no network, no

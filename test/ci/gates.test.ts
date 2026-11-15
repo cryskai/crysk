@@ -93,6 +93,38 @@ describe("openCodeRoutesBillMetered", () => {
     ).toBe(true);
   });
 
+  // odd/tasks/antigravity-oauth.md T5 (S7): an agy: route runs on the Google
+  // subscription (cash cost 0), like a ChatGPT subscription route: it adds no
+  // OpenCode provider, so it never makes a run metered, and with the subscription
+  // the ceilings resolve to none.
+  test("an agy: plan is not metered and gets no ceiling or size limit", () => {
+    const models = {
+      default: ["agy:gemini-4-argon-high"],
+      refuter: ["agy:claude-sonnet-5-5-high", "agy:gemini-4-argon-medium"],
+    };
+    expect(openCodeProvidersOfModels(models)).toEqual([]);
+    const openCodeBillsMetered = metered(models, deepseek);
+    expect(openCodeBillsMetered).toBe(false);
+    const billingMode = deriveCiBillingMode(
+      { ANTHROPIC_API_KEY: "" },
+      { openCodeBillsMetered },
+    );
+    expect(billingMode).toBe("subscription");
+    expect(
+      resolveCiBudgetCeiling({ configured: undefined, billingMode }),
+    ).toEqual({ budgetUsd: undefined, source: "unlimited-subscription" });
+    const limits = resolveCiSizeLimits({
+      flags: {},
+      config: undefined,
+      billingMode,
+    });
+    expect(limits).toEqual({
+      maxChangedLines: 0,
+      maxChangedFiles: 0,
+      defaultedOff: ["lines", "files"],
+    });
+  });
+
   test("no auth file stays unmetered, as before: a free opencode/* model invoices nothing", () => {
     expect(
       openCodeRoutesBillMetered({

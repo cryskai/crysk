@@ -5,7 +5,10 @@ are not exposed to a custom agent, and its way to search is the shell, which Cry
 that asks for `Grep` or `Glob`, Crysk starts its own small MCP server and lets agy call it. Claude and
 OpenCode steps never get this server; they use their own `Grep` and `Glob`.
 
-You do not run it yourself. It is an internal command, so `crysk --help` does not list it.
+You do not run it yourself. It is an internal command, so `crysk --help` does not list it. In CI it needs
+nothing more than the action already installs for an `agy:` model (see
+[Antigravity in CI](github-actions.md#antigravity-in-ci)): agy steps there read files with `read_file`
+and search through this server, with no shell and no web.
 
 ## How a step gets it
 

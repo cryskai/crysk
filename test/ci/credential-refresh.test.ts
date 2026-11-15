@@ -41,6 +41,10 @@ const REVIEW_STEPS_BEFORE: ReadonlyArray<readonly [string, string | null]> = [
     "Install OpenCode CLI",
     `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') }}`,
   ],
+  [
+    "Install Antigravity CLI",
+    `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.antigravity-models == 'true' || startsWith(inputs.model, 'agy:')) }}`,
+  ],
   ["Run Crysk", "steps.trigger.outputs.run == 'true'"],
   [
     "Refresh the Crysk token",
