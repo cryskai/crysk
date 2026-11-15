@@ -1,0 +1,7 @@
+{
+  "tests": ["tests/test_schedulers.py::TestAsyncScheduler::test_trigger_error"],
+  "command": "cd ~/.crysk/casebank/deps/apscheduler/tree && ../venv/bin/python -m pytest -p no:cacheprovider -q \"tests/test_schedulers.py::TestAsyncScheduler::test_trigger_error\"",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "AssertionError: assert datetime.datetime(2026, 11, 15, 3, 49, 56, 549018, tzinfo=datetime.timezone.utc) is None"
+}

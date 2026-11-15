@@ -1,0 +1,1 @@
+refactor(triggers): simplify numeric day_of_week conversion

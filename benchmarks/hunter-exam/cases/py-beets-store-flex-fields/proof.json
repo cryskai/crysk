@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "test/dbcore/test_db.py::ModelTest::test_store_flexattr_in_fields",
+    "test/ui/commands/test_update.py::UpdateTest::test_modified_plugin_media_field_detected"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/beets/tree && ../venv/bin/python -m pytest -p no:cov -p no:randomly -q test/dbcore/test_db.py::ModelTest::test_store_flexattr_in_fields test/ui/commands/test_update.py::UpdateTest::test_modified_plugin_media_field_detected",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "sqlite3.OperationalError: no such column: customtag"
+}

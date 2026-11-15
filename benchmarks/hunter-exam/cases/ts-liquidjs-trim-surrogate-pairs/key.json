@@ -1,0 +1,36 @@
+{
+  "id": "ts-liquidjs-trim-surrogate-pairs",
+  "language": "typescript",
+  "project": "liquidjs",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "trim-splits-surrogate-pairs",
+      "area": "logic",
+      "severity": "advisory",
+      "class": "wrong-unit-of-iteration",
+      "depth": 0,
+      "what": "lstrip, rstrip and strip with a characters argument index the string by UTF-16 code unit, so characters outside the BMP (a surrogate pair) are never matched as one unit: they are left untrimmed or a half pair is matched and removed.",
+      "sites": [
+        {
+          "path": "src/filters/string.ts",
+          "start_line": 37,
+          "end_line": 49
+        },
+        {
+          "path": "src/filters/string.ts",
+          "start_line": 86,
+          "end_line": 98
+        },
+        {
+          "path": "src/filters/string.ts",
+          "start_line": 110,
+          "end_line": 123
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

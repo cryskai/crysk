@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "filters/string array_to_sentence_string should render nil as an empty string",
+    "should treat a non-array as a single item"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/liquidjs/tree && npx jest test/integration/filters/string.spec.ts -t array_to_sentence_string",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "RenderError: Cannot read properties of undefined (reading 'length'); RenderError: array.slice(...).join is not a function"
+}

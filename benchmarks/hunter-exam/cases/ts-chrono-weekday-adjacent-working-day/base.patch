@@ -1,0 +1,46 @@
+diff --git a/src/locales/en/parsers/ENWeekdayParser.ts b/src/locales/en/parsers/ENWeekdayParser.ts
+index e7c39b0..4718bd0 100644
+--- a/src/locales/en/parsers/ENWeekdayParser.ts
++++ b/src/locales/en/parsers/ENWeekdayParser.ts
+@@ -63,8 +63,6 @@ export default class ENWeekdayParser extends AbstractParserWithWordBoundaryCheck
+                 weekday = modifier == "last" ? weekday - 1 : weekday + 1;
+                 weekday = ((weekday + 5) % 5) + 1;
+             }
+-            // The weekday above is already the adjacent working day. Use "this" to count forward to it,
+-            // because "next" would skip to the following week (e.g. "next Tuesday" on Monday).
+             if (modifier == "next") {
+                 modifier = "this";
+             }
+diff --git a/test/en/en_weekday.test.ts b/test/en/en_weekday.test.ts
+index 1ae9e2b..90ec705 100644
+--- a/test/en/en_weekday.test.ts
++++ b/test/en/en_weekday.test.ts
+@@ -249,28 +249,6 @@ test("Test - Casual 'weekday' mentioning", () => {
+             expect(result.start).toBeDate(new Date(2024, 10 - 1, 21, 12)); // Monday
+         });
+     }
+-    {
+-        const refDateOnMonday = new Date(2024, 10 - 1, 21, 12, 0);
+-        testSingleCase(chrono.casual, "last weekday", refDateOnMonday, (result, text) => {
+-            expect(result.text).toBe(text);
+-            expect(result.start).toBeDate(new Date(2024, 10 - 1, 18, 12)); // Friday
+-        });
+-        testSingleCase(chrono.casual, "next weekday", refDateOnMonday, (result, text) => {
+-            expect(result.text).toBe(text);
+-            expect(result.start).toBeDate(new Date(2024, 10 - 1, 22, 12)); // Tuesday
+-        });
+-    }
+-    {
+-        const refDateOnWednesday = new Date(2024, 10 - 1, 23, 12, 0);
+-        testSingleCase(chrono.casual, "last weekday", refDateOnWednesday, (result, text) => {
+-            expect(result.text).toBe(text);
+-            expect(result.start).toBeDate(new Date(2024, 10 - 1, 22, 12)); // Tuesday
+-        });
+-        testSingleCase(chrono.casual, "next weekday", refDateOnWednesday, (result, text) => {
+-            expect(result.text).toBe(text);
+-            expect(result.start).toBeDate(new Date(2024, 10 - 1, 24, 12)); // Thursday
+-        });
+-    }
+     {
+         const refDateOnSaturday = new Date(2024, 10 - 1, 19, 12, 0);
+         testSingleCase(chrono.casual, "last weekday", refDateOnSaturday, (result, text) => {

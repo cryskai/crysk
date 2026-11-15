@@ -1,0 +1,1 @@
+refactor(echo): emit the evaluated value directly in render

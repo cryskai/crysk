@@ -1,0 +1,26 @@
+diff --git a/src/locales/en/constants.ts b/src/locales/en/constants.ts
+index 29fb188..b3fde99 100644
+--- a/src/locales/en/constants.ts
++++ b/src/locales/en/constants.ts
+@@ -230,7 +230,7 @@ export function parseOrdinalNumberPattern(match: string): number {
+ 
+ //-----------------------------
+ 
+-export const YEAR_PATTERN = `(?:[1-9][0-9]{0,3}\\s{0,2}(?:BE|AD|BC|BCE|CE)|[1-9][0-9]{3}|[0-9]{2}(?!\\w|:\\d|\\s+(?:am|pm|o\\s*clock|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)))`;
++export const YEAR_PATTERN = `(?:[1-9][0-9]{0,3}\\s{0,2}(?:BE|AD|BC|BCE|CE)|[1-9][0-9]{3}|[5-9][0-9]|2[0-5])`;
+ export function parseYear(match: string): number {
+     if (/BE/i.test(match)) {
+         // Buddhist Era
+diff --git a/src/locales/en/parsers/ENMonthNameMiddleEndianParser.ts b/src/locales/en/parsers/ENMonthNameMiddleEndianParser.ts
+index c0dd966..e18f59d 100644
+--- a/src/locales/en/parsers/ENMonthNameMiddleEndianParser.ts
++++ b/src/locales/en/parsers/ENMonthNameMiddleEndianParser.ts
+@@ -60,7 +60,7 @@ export default class ENMonthNameMiddleEndianParser extends AbstractParserWithWor
+ 
+         // Skip the case where the day looks like a year (ex: January 21)
+         if (this.shouldSkipYearLikeDate) {
+-            if (!match[DATE_TO_GROUP] && !match[YEAR_GROUP] && match[DATE_GROUP].match(/^\d{2}$/)) {
++            if (!match[DATE_TO_GROUP] && !match[YEAR_GROUP] && match[DATE_GROUP].match(/^2[0-5]$/)) {
+                 return null;
+             }
+         }

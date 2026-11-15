@@ -1,0 +1,8 @@
+{
+  "tests": ["test/plugins/test_bpd.py::BPDDatabaseTest::test_cmd_search_any"],
+  "command": "cd ~/.crysk/casebank/deps/beets/tree && ../venv/bin/python -m pytest -p no:cov -p no:randomly -q test/plugins/test_bpd.py -k test_cmd_search",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "AssertionError: Response failed: (52, 0, 'search', 'server error')",
+  "note": "beetsplug.bpd cannot be imported without PyGObject/GStreamer, so the venv holds a MagicMock stand-in for the gi module (venv/lib/python3.14/site-packages/gi); the tests fork a bpd server whose player is not exercised by the search command."
+}

@@ -1,0 +1,17 @@
+diff --git a/src/tags/echo.ts b/src/tags/echo.ts
+index 18b4fa7..d96561c 100644
+--- a/src/tags/echo.ts
++++ b/src/tags/echo.ts
+@@ -14,11 +14,7 @@ export default class extends Tag {
+   }
+   * render (ctx: Context, emitter: Emitter): Generator<unknown, void, unknown> {
+     if (!this.value) return
+-    let val = yield toValue(yield this.value.value(ctx, false))
+-    const outputEscape = this.liquid.options.outputEscape
+-    if (outputEscape && !this.value.filters[this.value.filters.length - 1]?.raw) {
+-      val = yield outputEscape.call({ context: ctx, token: this.token, liquid: this.liquid }, val)
+-    }
++    const val = yield toValue(yield this.value.value(ctx, false))
+     emitter.write(val)
+   }
+ 

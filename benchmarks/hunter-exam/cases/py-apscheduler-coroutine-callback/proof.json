@@ -1,0 +1,12 @@
+{
+  "tests": [
+    "tests/test_eventbrokers.py::test_subscribe_coroutine_function[local-function]",
+    "tests/test_eventbrokers.py::test_subscribe_coroutine_function[local-callable_object]",
+    "tests/test_schedulers.py::TestAsyncScheduler::test_subscribe_coroutine_function",
+    "tests/test_schedulers.py::TestSyncScheduler::test_subscribe_coroutine_function"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/apscheduler/tree && ../venv/bin/python -m pytest -p no:cacheprovider -q \"tests/test_eventbrokers.py::test_subscribe_coroutine_function[local-function]\" \"tests/test_eventbrokers.py::test_subscribe_coroutine_function[local-callable_object]\" \"tests/test_schedulers.py::TestAsyncScheduler::test_subscribe_coroutine_function\" \"tests/test_schedulers.py::TestSyncScheduler::test_subscribe_coroutine_function\"",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "TimeoutError (asyncio.exceptions.CancelledError: Cancelled via cancel scope; reason: deadline exceeded): the coroutine callback is never awaited"
+}

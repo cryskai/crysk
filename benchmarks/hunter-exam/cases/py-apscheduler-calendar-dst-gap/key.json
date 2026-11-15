@@ -1,0 +1,26 @@
+{
+  "id": "py-apscheduler-calendar-dst-gap",
+  "language": "python",
+  "project": "apscheduler",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "calendar-dst-gap",
+      "area": "logic",
+      "severity": "advisory",
+      "class": "wrong-variable",
+      "depth": 1,
+      "what": "after rejecting a nonexistent local time the loop advances from next_time.date(), the date produced by timezone normalization (the following day), instead of from the attempted next_date, so the next occurrence is shifted by a day or skipped for daily, monthly and yearly intervals across a midnight DST gap",
+      "sites": [
+        {
+          "path": "src/apscheduler/triggers/calendarinterval.py",
+          "start_line": 116,
+          "end_line": 125
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

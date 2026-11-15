@@ -1,0 +1,67 @@
+diff --git a/docs/versionhistory.rst b/docs/versionhistory.rst
+index af868a1..bf42ce6 100644
+--- a/docs/versionhistory.rst
++++ b/docs/versionhistory.rst
+@@ -46,11 +46,6 @@ APScheduler, see the :doc:`migration section <migration>`.
+ - Fixed ``configure_task()`` dropping the callable reference when passed a ``Task``
+   object, causing the configured task to be stored with ``func=None``
+   (`#1001 <https://github.com/agronholm/apscheduler/issues/1001>`_)
+-- Fixed ``MemoryDataStore`` and ``MongoDBDataStore`` returning the fire time of a paused
+-  or already acquired schedule from ``get_next_schedule_run_time()``, which made the
+-  scheduler wake up past a deadline that had already passed and process schedules in a
+-  tight loop
+-  (`#1158 <https://github.com/agronholm/apscheduler/pull/1158>`_; PR by @feiiiiii5)
+ 
+ **4.0.0a6**
+ 
+diff --git a/src/apscheduler/datastores/memory.py b/src/apscheduler/datastores/memory.py
+index 770430d..2fe0e85 100644
+--- a/src/apscheduler/datastores/memory.py
++++ b/src/apscheduler/datastores/memory.py
+@@ -198,11 +198,8 @@ class MemoryDataStore(BaseDataStore):
+     async def get_next_schedule_run_time(self) -> datetime | None:
+         for schedule in self._schedules:
+             if schedule.next_fire_time is None:
+-                # Exhausted schedules sort last, so no eligible schedule can follow
+                 break
+             elif schedule.paused or schedule.acquired_by is not None:
+-                # Paused and already acquired schedules are not active; they will be
+-                # announced via an event when they become relevant again
+                 continue
+ 
+             return schedule.next_fire_time
+diff --git a/tests/test_datastores.py b/tests/test_datastores.py
+index a01756d..332a3a2 100644
+--- a/tests/test_datastores.py
++++ b/tests/test_datastores.py
+@@ -694,30 +694,6 @@ async def test_next_schedule_run_time(datastore: DataStore, schedules: list[Sche
+     assert next_schedule_run_time == datetime(2020, 9, 13, tzinfo=UTC)
+ 
+ 
+-async def test_next_schedule_run_time_skips_inactive_schedules(
+-    datastore: DataStore, schedules: list[Schedule]
+-) -> None:
+-    """
+-    Test that paused and already acquired schedules are not offered as the next run
+-    time.
+-
+-    """
+-    schedules[0].paused = True
+-    await datastore.add_schedule(schedules[0], ConflictPolicy.exception)
+-    assert await datastore.get_next_schedule_run_time() is None
+-
+-    await datastore.add_schedule(schedules[1], ConflictPolicy.exception)
+-    acquired = await datastore.acquire_schedules("scheduler1", timedelta(seconds=30), 1)
+-    assert [schedule.id for schedule in acquired] == ["s2"]
+-    assert await datastore.get_next_schedule_run_time() is None
+-
+-    # A schedule that is neither paused nor acquired is still offered
+-    await datastore.add_schedule(schedules[2], ConflictPolicy.exception)
+-    assert await datastore.get_next_schedule_run_time() == datetime(
+-        2020, 9, 15, tzinfo=UTC
+-    )
+-
+-
+ @pytest.mark.skipif(
+     platform.python_implementation() != "CPython",
+     reason="time-machine is not available",

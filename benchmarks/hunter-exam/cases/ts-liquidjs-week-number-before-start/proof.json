@@ -1,0 +1,11 @@
+{
+  "tests": [
+    "util/strftime Week number should format %U and %W as 00 before the first Sunday/Monday",
+    "should keep Sunday in the previous %W week",
+    "should format %U and %W when January 1st is the start day"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/liquidjs/tree && npx jest src/util/strftime.spec.ts",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Expected: \"01 00\"  Received: \"01 01\" (2021-01-03 %U %W); Expected \"00\" Received \"01\" (2000-01-02 %W)"
+}

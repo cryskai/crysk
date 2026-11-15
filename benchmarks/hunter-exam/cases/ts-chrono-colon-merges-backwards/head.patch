@@ -1,0 +1,24 @@
+diff --git a/src/common/refiners/AbstractMergeDateTimeRefiner.ts b/src/common/refiners/AbstractMergeDateTimeRefiner.ts
+index 8e06c92..2ee043a 100644
+--- a/src/common/refiners/AbstractMergeDateTimeRefiner.ts
++++ b/src/common/refiners/AbstractMergeDateTimeRefiner.ts
+@@ -10,14 +10,11 @@ export default abstract class AbstractMergeDateTimeRefiner extends MergingRefine
+     abstract patternBetween(): RegExp;
+ 
+     shouldMergeResults(textBetween: string, currentResult: ParsingResult, nextResult: ParsingResult): boolean {
+-        const isDateThenTime = currentResult.start.isOnlyDate() && nextResult.start.isOnlyTime();
+-        const isTimeThenDate = currentResult.start.isOnlyTime() && nextResult.start.isOnlyDate();
+-
+-        if (isTimeThenDate && textBetween.trim() === ":") {
+-            return false;
+-        }
+-
+-        return (isDateThenTime || isTimeThenDate) && textBetween.match(this.patternBetween()) != null;
++        return (
++            ((currentResult.start.isOnlyDate() && nextResult.start.isOnlyTime()) ||
++                (nextResult.start.isOnlyDate() && currentResult.start.isOnlyTime())) &&
++            textBetween.match(this.patternBetween()) != null
++        );
+     }
+ 
+     mergeResults(textBetween: string, currentResult: ParsingResult, nextResult: ParsingResult): ParsingResult {

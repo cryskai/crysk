@@ -1,0 +1,29 @@
+diff --git a/docs/changelog.rst b/docs/changelog.rst
+index af5e5ca..d816e2b 100644
+--- a/docs/changelog.rst
++++ b/docs/changelog.rst
+@@ -322,7 +322,6 @@ Bug fixes
+   select mode. :bug:`4880`
+ - :ref:`move-cmd`: Fix moving albums in interactive select/timid mode.
+   :bug:`2802`
+-- :doc:`plugins/bpd`: Fix ``search`` command when ``any`` field is used.
+ - :doc:`plugins/aura`: Prevent multi-valued field filters from crashing with an
+   ``sqlite3.InterfaceError``.
+ - :doc:`plugins/aura`: When sorting by ``field``, do not exclude resources that
+diff --git a/test/plugins/test_bpd.py b/test/plugins/test_bpd.py
+index 6df5105..0f41643 100644
+--- a/test/plugins/test_bpd.py
++++ b/test/plugins/test_bpd.py
+@@ -1027,12 +1027,6 @@ class BPDDatabaseTest(BPDTestHelper):
+         self._assert_ok(response)
+         assert self.item1.title == response.data["Title"]
+ 
+-    def test_cmd_search_any(self):
+-        with self.run_bpd() as client:
+-            response = client.send_command("search", "any", "1")
+-        self._assert_ok(response)
+-        assert self.item1.title == response.data["Title"]
+-
+     def test_cmd_list(self):
+         with self.run_bpd() as client:
+             responses = client.send_commands(

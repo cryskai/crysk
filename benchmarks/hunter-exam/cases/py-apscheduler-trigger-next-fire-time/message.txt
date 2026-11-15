@@ -1,0 +1,1 @@
+refactor(scheduler): drop a redundant initialisation in the schedule processing loop

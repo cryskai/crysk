@@ -1,0 +1,26 @@
+{
+  "id": "py-beets-move-timid-album",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "album-destination-in-timid-preview",
+      "area": "contract",
+      "severity": "blocking",
+      "class": "contract-mismatch",
+      "depth": 2,
+      "what": "The timid-mode confirmation callback calls o.destination(basedir=dest) on every object, but when moving albums (`move -a -t`) the object is an Album, which has no destination method, so interactive album moves crash with AttributeError instead of previewing and moving.",
+      "sites": [
+        {
+          "path": "beets/ui/commands/move.py",
+          "start_line": 117,
+          "end_line": 123
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

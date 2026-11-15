@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "test/en/en_time_exp.test.ts :: Test - A bare number followed by a colon should not merge backwards over the date that follows",
+    "test/it/it_merging_relative_dates.test.ts :: Test - A bare number followed by a colon should not merge backwards over the date that follows"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/chrono/tree && ./node_modules/.bin/jest --coverage=false test/en/en_time_exp.test.ts test/it/it_merging_relative_dates.test.ts",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Expected: \"July 23, 2026 at 3:30 PM\" Received: \"at 3:30 PM\" (Italian: Expected \"23 luglio 2026 alle 15:30\", Received \"alle 15:30\")"
+}

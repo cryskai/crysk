@@ -1,0 +1,26 @@
+{
+  "id": "ts-liquidjs-week-number-before-start",
+  "language": "typescript",
+  "project": "liquidjs",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "week-number-before-first-start-day",
+      "area": "logic",
+      "severity": "blocking",
+      "class": "wrong-arithmetic",
+      "depth": 1,
+      "what": "getWeekOfYear counts weeks from the first start day of the year with an off-by-one for days that come before it (and for dates in the start day's own week), so %U and %W return 01 instead of 00 early in January and are wrong when January 1st is the start day.",
+      "sites": [
+        {
+          "path": "src/util/strftime.ts",
+          "start_line": 25,
+          "end_line": 32
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

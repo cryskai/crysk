@@ -1,0 +1,26 @@
+{
+  "id": "py-apscheduler-memory-next-run-time",
+  "language": "python",
+  "project": "apscheduler",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "memory-next-run-time",
+      "area": "state",
+      "severity": "blocking",
+      "class": "missing-guard",
+      "depth": 1,
+      "what": "get_next_schedule_run_time returns the first schedule's next_fire_time without skipping paused or already acquired schedules, so the scheduler computes a wakeup deadline in the past for a schedule it cannot process and spins through acquire_schedules instead of sleeping",
+      "sites": [
+        {
+          "path": "src/apscheduler/datastores/memory.py",
+          "start_line": 198,
+          "end_line": 199
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

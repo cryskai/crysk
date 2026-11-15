@@ -1,0 +1,18 @@
+diff --git a/test/plugins/test_scrub.py b/test/plugins/test_scrub.py
+index 03d7d5b..40e0ff6 100644
+--- a/test/plugins/test_scrub.py
++++ b/test/plugins/test_scrub.py
+@@ -24,13 +24,3 @@ class TestScrubbedImport(AsIsImporterMixin, PluginMixin, ImportHelper):
+             imported_file = MediaFile(item.filepath)
+             assert imported_file.artist == "Tag Artist"
+             assert imported_file.album == "Tag Album"
+-
+-    def test_tags_not_scrubbed_when_nowrite(self):
+-        """When --nowrite is passed, scrubbing should be skipped entirely."""
+-        with self.configure_plugin({"auto": True}):
+-            self.run_asis_importer(write=False)
+-
+-        for item in self.lib.items():
+-            imported_file = MediaFile(item.filepath)
+-            assert imported_file.artist == "Tag Artist"
+-            assert imported_file.album == "Tag Album"

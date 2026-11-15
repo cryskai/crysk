@@ -1,0 +1,1 @@
+refactor(scheduler): tidy the Scheduler constructor defaults

@@ -1,0 +1,12 @@
+diff --git a/beets/library/models.py b/beets/library/models.py
+index 626a1d3..a5f0cbe 100644
+--- a/beets/library/models.py
++++ b/beets/library/models.py
+@@ -1285,7 +1285,6 @@ class Item(LibModel):
+                 "the filename.",
+                 subpath,
+             )
+-        lib_path_str = lib_path_str.lstrip(os.sep + (os.altsep or ""))
+         lib_path_bytes = util.bytestring_path(lib_path_str)
+ 
+         if relative_to_libdir:

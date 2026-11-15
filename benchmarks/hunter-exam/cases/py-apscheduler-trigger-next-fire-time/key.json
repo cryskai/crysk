@@ -1,0 +1,31 @@
+{
+  "id": "py-apscheduler-trigger-next-fire-time",
+  "language": "python",
+  "project": "apscheduler",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": true,
+  "must_find": [
+    {
+      "id": "trigger-next-fire-time",
+      "area": "state",
+      "severity": "blocking",
+      "class": "stale-state",
+      "depth": 1,
+      "what": "next_fire_time is no longer reset for each schedule; when schedule.trigger.next() raises, the loop breaks without assigning it, so the failing schedule is released with the previous schedule's next fire time (or raises UnboundLocalError if it is the first schedule processed)",
+      "sites": [
+        {
+          "path": "src/apscheduler/_schedulers/async_.py",
+          "start_line": 969,
+          "end_line": 988
+        },
+        {
+          "path": "src/apscheduler/_schedulers/async_.py",
+          "start_line": 1050,
+          "end_line": 1058
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

@@ -1,0 +1,9 @@
+{
+  "tests": [
+    "test/calculation_duration.test.ts :: Test - Adding Duration w/ fractions"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/chrono/tree && ./node_modules/.bin/jest --coverage=false test/calculation_duration.test.ts",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Test - Adding Duration w/ fractions: Expected: 2022-10-11T03:52:11.000Z Received: 2022-08-27T03:52:11.000Z ({quarter: 0.5} added to Aug 27 2022)"
+}

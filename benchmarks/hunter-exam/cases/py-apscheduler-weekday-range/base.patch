@@ -1,0 +1,31 @@
+diff --git a/docs/versionhistory.rst b/docs/versionhistory.rst
+index af868a1..0bca7d1 100644
+--- a/docs/versionhistory.rst
++++ b/docs/versionhistory.rst
+@@ -31,9 +31,6 @@ APScheduler, see the :doc:`migration section <migration>`.
+   (`#1131 <https://github.com/agronholm/apscheduler/issues/1131>`_; PR by @afonsojanu)
+ - Fixed ``CalendarIntervalTrigger`` skipping valid dates or shifting subsequent run dates
+   when a nonexistent local time normalizes past midnight during a forward DST shift
+-- Fixed ``CronTrigger`` raising an unhelpful ``IndexError`` instead of a descriptive
+-  ``ValueError`` when given a numeric ``day_of_week`` value outside the 0–7 range
+-  (`#1130 <https://github.com/agronholm/apscheduler/pull/1130>`_; PR by @nikolauspschuetz)
+ - Fixed ``AsyncpgEventBroker`` raising ``NoEventLoopError`` with AnyIO ≥ 4.14 on
+   incoming notifications
+   (`#1141 <https://github.com/agronholm/apscheduler/issues/1141>`_)
+diff --git a/tests/triggers/test_cron.py b/tests/triggers/test_cron.py
+index 3038ba2..c7de6e8 100644
+--- a/tests/triggers/test_cron.py
++++ b/tests/triggers/test_cron.py
+@@ -35,12 +35,6 @@ def test_invalid_weekday_name(expr):
+     exc.match("Invalid weekday name 'web'")
+ 
+ 
+-@pytest.mark.parametrize("expr", ["8", "0-8"], ids=["start", "end"])
+-def test_invalid_weekday_number(expr):
+-    exc = pytest.raises(ValueError, CronTrigger, day_of_week=expr)
+-    exc.match("Invalid weekday number '8'")
+-
+-
+ def test_invalid_weekday_position_name():
+     exc = pytest.raises(ValueError, CronTrigger, day="1st web")
+     exc.match("Invalid weekday name 'web'")

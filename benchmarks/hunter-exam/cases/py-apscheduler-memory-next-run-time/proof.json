@@ -1,0 +1,9 @@
+{
+  "tests": [
+    "tests/test_datastores.py::test_next_schedule_run_time_skips_inactive_schedules[memory]"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/apscheduler/tree && ../venv/bin/python -m pytest -p no:cacheprovider -q \"tests/test_datastores.py::test_next_schedule_run_time_skips_inactive_schedules[memory]\"",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "assert datetime.datetime(2020, 9, 13, 0, 0, tzinfo=datetime.timezone.utc) is None"
+}

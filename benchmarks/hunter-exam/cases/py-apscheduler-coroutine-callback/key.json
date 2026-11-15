@@ -1,0 +1,31 @@
+{
+  "id": "py-apscheduler-coroutine-callback",
+  "language": "python",
+  "project": "apscheduler",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": true,
+  "must_find": [
+    {
+      "id": "coroutine-callback",
+      "area": "concurrency",
+      "severity": "blocking",
+      "class": "contract-mismatch",
+      "depth": 1,
+      "what": "subscribe() no longer forces is_async=True for coroutine functions and callable objects with an async __call__, so with is_async=False (which the synchronous Scheduler always passes) _deliver_event runs the callback in a worker thread, creating a coroutine that is never awaited and the subscriber never runs",
+      "sites": [
+        {
+          "path": "src/apscheduler/eventbrokers/base.py",
+          "start_line": 49,
+          "end_line": 63
+        },
+        {
+          "path": "src/apscheduler/eventbrokers/base.py",
+          "start_line": 83,
+          "end_line": 98
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

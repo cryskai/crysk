@@ -1,0 +1,1 @@
+refactor(en): simplify the little-endian date pattern

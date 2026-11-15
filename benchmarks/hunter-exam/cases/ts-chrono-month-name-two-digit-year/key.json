@@ -1,0 +1,26 @@
+{
+  "id": "ts-chrono-month-name-two-digit-year",
+  "language": "typescript",
+  "project": "chrono",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "two-digit-year-from-day",
+      "area": "logic",
+      "severity": "advisory",
+      "class": "missing-guard",
+      "depth": 2,
+      "what": "The month-name-only parser reads the out-of-range day in \"May 32, 2021\" as a two-digit year 2032 and returns it as a date, dropping the explicit four-digit year that follows, because the guard that rejects a two-digit year followed by a comma and a four-digit year is gone.",
+      "sites": [
+        {
+          "path": "src/locales/en/parsers/ENMonthNameParser.ts",
+          "start_line": 53,
+          "end_line": 59
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

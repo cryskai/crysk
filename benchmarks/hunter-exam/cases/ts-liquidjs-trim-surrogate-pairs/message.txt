@@ -1,0 +1,1 @@
+refactor(filters): inline the custom-character trimming in lstrip, rstrip and strip

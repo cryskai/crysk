@@ -1,0 +1,26 @@
+{
+  "id": "ts-liquidjs-sentence-string-coerce",
+  "language": "typescript",
+  "project": "liquidjs",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": true,
+  "must_find": [
+    {
+      "id": "sentence-string-no-coercion",
+      "area": "failure",
+      "severity": "blocking",
+      "class": "missing-guard",
+      "depth": 2,
+      "what": "array_to_sentence_string no longer coerces its input with toArray, so a nil or non-array value from a template makes the filter throw a TypeError (reading 'length', or slice(...).join is not a function) instead of rendering an empty string or the single item.",
+      "sites": [
+        {
+          "path": "src/filters/string.ts",
+          "start_line": 226,
+          "end_line": 241
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

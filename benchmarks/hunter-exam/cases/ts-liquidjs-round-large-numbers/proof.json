@@ -1,0 +1,12 @@
+{
+  "tests": [
+    "filters/math round should not change integers beyond 2^50",
+    "should not change integers beyond 2^53",
+    "should keep negative large integers",
+    "(and the other round tests the fix added)"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/liquidjs/tree && npx jest test/integration/filters/math.spec.ts",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Expected: \"1700000000000000,4503599627370496,9007199254740991\"  Received: \"1700000000000001,4503599627370497,9007199254740992\""
+}

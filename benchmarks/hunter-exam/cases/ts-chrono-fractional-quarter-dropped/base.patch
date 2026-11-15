@@ -1,0 +1,29 @@
+diff --git a/test/calculation_duration.test.ts b/test/calculation_duration.test.ts
+index c674fdd..337a6e0 100644
+--- a/test/calculation_duration.test.ts
++++ b/test/calculation_duration.test.ts
+@@ -6,11 +6,6 @@ test("Test - Adding Duration w/ single timeunit", () => {
+         const output = addDuration(reference, { "year": 1 });
+         expect(output).toStrictEqual(new Date("Sun, Aug 27 2023 12:52:11"));
+     }
+-    {
+-        const reference = new Date("Sat, Aug 27 2022 12:52:11");
+-        const output = addDuration(reference, { "quarter": 1 });
+-        expect(output).toStrictEqual(new Date("Sun, Nov 27 2022 12:52:11"));
+-    }
+     {
+         const reference = new Date("Sat, Aug 27 2022 12:52:11");
+         const output = addDuration(reference, { "month": 1 });
+@@ -111,12 +106,6 @@ test("Test - Adding Duration w/ fractions", () => {
+         const output = addDuration(reference, { "year": 0.5 });
+         expect(output).toStrictEqual(new Date("Mon, Feb 27 2023 12:52:11"));
+     }
+-    {
+-        // 0.5 quarter (aka. half quarter) => 1.5 months => 1 month + 2 weeks
+-        const reference = new Date("Sat, Aug 27 2022 12:52:11");
+-        const output = addDuration(reference, { "quarter": 0.5 });
+-        expect(output).toStrictEqual(new Date("Tue, Oct 11 2022 12:52:11"));
+-    }
+     {
+         // 0.5 month => 2 weeks
+         const reference = new Date("Sat, Aug 27 2022 12:52:11");

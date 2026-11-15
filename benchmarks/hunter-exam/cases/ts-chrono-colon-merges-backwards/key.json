@@ -1,0 +1,26 @@
+{
+  "id": "ts-chrono-colon-merges-backwards",
+  "language": "typescript",
+  "project": "chrono",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "bare-colon-merges-time-over-date",
+      "area": "logic",
+      "severity": "advisory",
+      "class": "missing-guard",
+      "depth": 2,
+      "what": "A bare \":\" between a time-only result and a following date-only result is accepted as a connector, so a lone number such as \"24\" followed by \":\" merges backwards over the date, yields an invalid 24 o'clock result that is dropped, and takes the real date with it (\"24: July 23, 2026 at 3:30 PM\" parses as only \"at 3:30 PM\").",
+      "sites": [
+        {
+          "path": "src/common/refiners/AbstractMergeDateTimeRefiner.ts",
+          "start_line": 12,
+          "end_line": 18
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

@@ -1,0 +1,13 @@
+diff --git a/src/apscheduler/triggers/calendarinterval.py b/src/apscheduler/triggers/calendarinterval.py
+index 357e6a0..980e805 100644
+--- a/src/apscheduler/triggers/calendarinterval.py
++++ b/src/apscheduler/triggers/calendarinterval.py
+@@ -119,7 +119,7 @@ class CalendarIntervalTrigger(Trigger):
+ 
+             # Check if the time is off due to normalization and a forward DST shift
+             if next_time.timetz() != self._time:
+-                previous_date = next_date
++                previous_date = next_time.date()
+             else:
+                 self._last_fire_date = next_date
+                 return next_time

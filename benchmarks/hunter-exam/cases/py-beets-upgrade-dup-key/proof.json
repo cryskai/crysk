@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "test/test_importer.py::ResolveUpgradeTest::test_duplicate_keys_all_old_superseded_when_new_is_best",
+    "test/test_importer.py::ResolveUpgradeTest::test_duplicate_keys_rejected_when_new_is_not_best"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/beets/tree && ../venv/bin/python -m pytest -p no:cov -p no:randomly -q test/test_importer.py -k \"test_duplicate_keys_all_old_superseded_when_new_is_best or test_duplicate_keys_rejected_when_new_is_not_best\"",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "assert sorted(superseded, key=lambda i: i.bitrate) == [old_b, old_a]  ->  Right contains one more item"
+}

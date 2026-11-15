@@ -1,0 +1,1 @@
+refactor(filters): take the array directly in array_to_sentence_string

@@ -1,0 +1,7 @@
+{
+  "tests": ["test/en/en_weekday.test.ts :: Test - Casual 'weekday' mentioning"],
+  "command": "cd ~/.crysk/casebank/deps/chrono/tree && ./node_modules/.bin/jest --coverage=false test/en/en_weekday.test.ts",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Expected date to be: Fri Oct 18 2024 12:00:00 Received: Sun Oct 20 2024 12:00:00 (\"last weekday\", reference Monday 2024-10-21)"
+}

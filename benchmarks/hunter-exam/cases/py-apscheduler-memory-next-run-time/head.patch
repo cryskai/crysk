@@ -1,0 +1,21 @@
+diff --git a/src/apscheduler/datastores/memory.py b/src/apscheduler/datastores/memory.py
+index 2fe0e85..6ec481e 100644
+--- a/src/apscheduler/datastores/memory.py
++++ b/src/apscheduler/datastores/memory.py
+@@ -196,15 +196,7 @@ class MemoryDataStore(BaseDataStore):
+             await self._event_broker.publish(event)
+ 
+     async def get_next_schedule_run_time(self) -> datetime | None:
+-        for schedule in self._schedules:
+-            if schedule.next_fire_time is None:
+-                break
+-            elif schedule.paused or schedule.acquired_by is not None:
+-                continue
+-
+-            return schedule.next_fire_time
+-
+-        return None
++        return self._schedules[0].next_fire_time if self._schedules else None
+ 
+     async def add_job(self, job: Job) -> None:
+         self._jobs_by_id[job.id] = job

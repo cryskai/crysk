@@ -1,0 +1,1 @@
+refactor(scheduler): simplify the Task branch of configure_task

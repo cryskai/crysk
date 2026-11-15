@@ -1,0 +1,31 @@
+{
+  "id": "ts-liquidjs-cycle-output-escape",
+  "language": "typescript",
+  "project": "liquidjs",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": true,
+  "must_find": [
+    {
+      "id": "cycle-skips-output-escape",
+      "area": "security",
+      "severity": "blocking",
+      "class": "missing-escape",
+      "depth": 0,
+      "what": "{% cycle %} renders the chosen candidate with evalToken, so the outputEscape option is never applied (and a candidate can no longer carry filters such as raw): with outputEscape set, untrusted values printed through cycle come out unescaped.",
+      "sites": [
+        {
+          "path": "src/tags/cycle.ts",
+          "start_line": 27,
+          "end_line": 41
+        },
+        {
+          "path": "src/tags/cycle.ts",
+          "start_line": 7,
+          "end_line": 25
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

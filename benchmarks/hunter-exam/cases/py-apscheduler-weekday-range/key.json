@@ -1,0 +1,26 @@
+{
+  "id": "py-apscheduler-weekday-range",
+  "language": "python",
+  "project": "apscheduler",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "weekday-range",
+      "area": "failure",
+      "severity": "advisory",
+      "class": "missing-guard",
+      "depth": 1,
+      "what": "numeric day_of_week values are mapped straight into WEEKDAYS without a bounds check, so a value outside the documented 0-7 range such as '8' or the range end in '0-8' raises a bare IndexError instead of a descriptive ValueError",
+      "sites": [
+        {
+          "path": "src/apscheduler/triggers/cron/fields.py",
+          "start_line": 136,
+          "end_line": 149
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

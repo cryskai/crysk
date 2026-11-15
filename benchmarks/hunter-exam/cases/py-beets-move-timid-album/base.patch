@@ -1,0 +1,46 @@
+diff --git a/docs/changelog.rst b/docs/changelog.rst
+index af5e5ca..c1bbdc4 100644
+--- a/docs/changelog.rst
++++ b/docs/changelog.rst
+@@ -320,8 +320,6 @@ Bug fixes
+   back to the synced lyrics instead of discarding them.
+ - :ref:`modify-cmd`: Fix applying changes when choosing objects in interactive
+   select mode. :bug:`4880`
+-- :ref:`move-cmd`: Fix moving albums in interactive select/timid mode.
+-  :bug:`2802`
+ - :doc:`plugins/bpd`: Fix ``search`` command when ``any`` field is used.
+ - :doc:`plugins/aura`: Prevent multi-valued field filters from crashing with an
+   ``sqlite3.InterfaceError``.
+diff --git a/test/ui/commands/test_move.py b/test/ui/commands/test_move.py
+index db0f623..faff89e 100644
+--- a/test/ui/commands/test_move.py
++++ b/test/ui/commands/test_move.py
+@@ -1,10 +1,10 @@
+ import shutil
+ 
+ from beets import library
+-from beets.test.helper import BeetsTestCase, IOMixin
++from beets.test.helper import BeetsTestCase
+ 
+ 
+-class MoveTest(IOMixin, BeetsTestCase):
++class MoveTest(BeetsTestCase):
+     def setUp(self):
+         super().setUp()
+ 
+@@ -63,15 +63,6 @@ class MoveTest(IOMixin, BeetsTestCase):
+         assert self.i.filepath.exists()
+         assert not self.initial_item_path.exists()
+ 
+-    def test_move_album_custom_dir_timid(self):
+-        self.io.addinput("s")  # select
+-        self.io.addinput("y")  # yes
+-        self.run_command("move", "-a", "--dest", str(self.otherdir), "-t")
+-        self.i.load()
+-        assert b"testotherdir" in self.i.path
+-        assert self.i.filepath.exists()
+-        assert not self.initial_item_path.exists()
+-
+     def test_pretend_move_item(self):
+         self.run_command("move", "--dest", str(self.otherdir), "-p")
+         self.i.load()

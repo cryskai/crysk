@@ -1,0 +1,25 @@
+diff --git a/src/apscheduler/eventbrokers/base.py b/src/apscheduler/eventbrokers/base.py
+index 7696758..1596a06 100644
+--- a/src/apscheduler/eventbrokers/base.py
++++ b/src/apscheduler/eventbrokers/base.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ from base64 import b64decode, b64encode
+ from collections.abc import Callable, Iterable
+ from contextlib import AsyncExitStack
+-from inspect import iscoroutine, iscoroutinefunction
++from inspect import iscoroutine
+ from logging import Logger
+ from typing import Any
+ 
+@@ -54,11 +54,6 @@ class BaseEventBroker(EventBroker):
+         is_async: bool = True,
+         one_shot: bool = False,
+     ) -> Subscription:
+-        is_async = (
+-            is_async
+-            or iscoroutinefunction(callback)
+-            or iscoroutinefunction(type(callback).__call__)
+-        )
+         types = set(event_types) if event_types else None
+         token = object()
+         subscription = LocalSubscription(

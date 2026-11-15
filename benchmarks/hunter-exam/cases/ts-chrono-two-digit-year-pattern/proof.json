@@ -1,0 +1,9 @@
+{
+  "tests": [
+    "test/en/en_month_name_little_endian.test.ts :: Test - Single expression with separators"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/chrono/tree && ./node_modules/.bin/jest --coverage=false test/en/en_month_name_little_endian.test.ts",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Test - Single expression with separators: Expected date to be: Thu Apr 21 2016 12:00:00, Received: Fri Apr 21 2017 16:00:00 (result text \"21-APR-16\" parsed by ENTimeExpressionParser)"
+}

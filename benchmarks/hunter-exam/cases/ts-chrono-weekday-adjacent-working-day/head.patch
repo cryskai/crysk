@@ -1,0 +1,16 @@
+diff --git a/src/locales/en/parsers/ENWeekdayParser.ts b/src/locales/en/parsers/ENWeekdayParser.ts
+index 4718bd0..e00dc14 100644
+--- a/src/locales/en/parsers/ENWeekdayParser.ts
++++ b/src/locales/en/parsers/ENWeekdayParser.ts
+@@ -61,10 +61,7 @@ export default class ENWeekdayParser extends AbstractParserWithWordBoundaryCheck
+             } else {
+                 weekday = refWeekday - 1;
+                 weekday = modifier == "last" ? weekday - 1 : weekday + 1;
+-                weekday = ((weekday + 5) % 5) + 1;
+-            }
+-            if (modifier == "next") {
+-                modifier = "this";
++                weekday = (weekday % 5) + 1;
+             }
+         } else {
+             return null;

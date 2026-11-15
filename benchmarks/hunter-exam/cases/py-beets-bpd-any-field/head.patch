@@ -1,0 +1,13 @@
+diff --git a/beetsplug/bpd/__init__.py b/beetsplug/bpd/__init__.py
+index 2be77a7..8d2feda 100644
+--- a/beetsplug/bpd/__init__.py
++++ b/beetsplug/bpd/__init__.py
+@@ -1511,7 +1511,7 @@ class Server(BaseServer):
+                     if allow_any_query:
+                         queries.append(
+                             Item.any_writable_media_field_query(
+-                                value, query_type
++                                query_type, value
+                             )
+                         )
+                     else:

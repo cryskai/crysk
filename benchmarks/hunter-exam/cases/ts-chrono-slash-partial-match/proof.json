@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "test/en/en_slash.test.ts :: Test - Skip month/year suffix of an invalid date",
+    "test/en/en_slash.test.ts :: Test - Preserve complete slash dates and month/year"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/chrono/tree && ./node_modules/.bin/jest --coverage=false test/en/en_slash.test.ts",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Test - Skip month/year suffix of an invalid date: Expected length: 0, Received length: 1 (text \"6/2018\", index 3, month 6 year 2018, from \"50/6/2018\")"
+}

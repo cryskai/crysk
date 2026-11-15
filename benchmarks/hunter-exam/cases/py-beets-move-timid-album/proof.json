@@ -1,0 +1,9 @@
+{
+  "tests": [
+    "test/ui/commands/test_move.py::MoveTest::test_move_album_custom_dir_timid"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/beets/tree && ../venv/bin/python -m pytest -p no:cov -p no:randomly -q test/ui/commands/test_move.py::MoveTest::test_move_album_custom_dir_timid",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "AttributeError: no such field 'destination'. Did you mean: 'art_destination'?"
+}

@@ -1,0 +1,35 @@
+diff --git a/src/locales/en/parsers/ENMonthNameParser.ts b/src/locales/en/parsers/ENMonthNameParser.ts
+index 2359743..7e27aef 100644
+--- a/src/locales/en/parsers/ENMonthNameParser.ts
++++ b/src/locales/en/parsers/ENMonthNameParser.ts
+@@ -51,8 +51,6 @@ export default class ENMonthNameParser extends AbstractParserWithWordBoundaryChe
+         result.start.assign("month", month);
+ 
+         if (match[YEAR_GROUP]) {
+-            // Skip the case where the two-digit "year" is an out-of-range day followed by
+-            // the real year (ex: May 32, 2021)
+             const nextText = context.text.substring(match.index + match[0].length);
+             if (/^\d{2}$/.test(match[YEAR_GROUP]) && /^\s*,\s*\d{4}(?!\d)/.test(nextText)) {
+                 return null;
+diff --git a/test/en/en_month_name_middle_endian.test.ts b/test/en/en_month_name_middle_endian.test.ts
+index 22fb392..877da38 100644
+--- a/test/en/en_month_name_middle_endian.test.ts
++++ b/test/en/en_month_name_middle_endian.test.ts
+@@ -384,17 +384,3 @@ test("Test - Impossible Dates (Strict Mode)", () => {
+ 
+     testUnexpectedResult(chrono.strict, "February 151998", new Date(2014, 7, 10));
+ });
+-
+-test("Test - Impossible Dates (Casual Mode)", () => {
+-    testUnexpectedResult(chrono, "January 32, 2021", new Date(2020, 0, 1));
+-
+-    testUnexpectedResult(chrono, "May 32, 2021", new Date(2020, 0, 1));
+-
+-    testUnexpectedResult(chrono, "May 99, 2021", new Date(2020, 0, 1));
+-
+-    testUnexpectedResult(chrono, "May 33,2021", new Date(2020, 0, 1));
+-
+-    testSingleCase(chrono, "The event is on May 32, 2021 now", new Date(2020, 0, 1), (result) => {
+-        expect(result.text).toBe("now");
+-    });
+-});

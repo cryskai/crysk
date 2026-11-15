@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "tests/test_schedulers.py::TestSyncScheduler::test_constructor_parity",
+    "tests/test_schedulers.py::TestSyncScheduler::test_implicit_cleanup"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/apscheduler/tree && ../venv/bin/python -m pytest -p no:cacheprovider -q \"tests/test_schedulers.py::TestSyncScheduler::test_constructor_parity\" \"tests/test_schedulers.py::TestSyncScheduler::test_implicit_cleanup\"",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "AssertionError: Default value mismatch for the 'cleanup_interval' argument of Scheduler(): None != datetime.timedelta(seconds=900)"
+}

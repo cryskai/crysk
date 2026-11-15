@@ -1,0 +1,9 @@
+{
+  "tests": [
+    "tests/test_schedulers.py::TestAsyncScheduler::test_configure_task_from_task_object"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/apscheduler/tree && ../venv/bin/python -m pytest -p no:cacheprovider -q \"tests/test_schedulers.py::TestAsyncScheduler::test_configure_task_from_task_object\"",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "AssertionError: assert None == 'test_schedulers:dummy_async_job'"
+}

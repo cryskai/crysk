@@ -1,0 +1,1 @@
+bpd: simplify any-field query construction in _metadata_query

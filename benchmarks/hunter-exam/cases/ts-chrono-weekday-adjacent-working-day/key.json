@@ -1,0 +1,26 @@
+{
+  "id": "ts-chrono-weekday-adjacent-working-day",
+  "language": "typescript",
+  "project": "chrono",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "adjacent-weekday-arithmetic",
+      "area": "logic",
+      "severity": "blocking",
+      "class": "wrong-arithmetic",
+      "depth": 2,
+      "what": "\"last weekday\" and \"next weekday\" on a working day do not resolve to the adjacent working day: the modulo on a possibly negative index and the \"next\" modifier being passed on (which skips to the following week) produce a weekend date, e.g. \"last weekday\" on a Monday gives Sunday.",
+      "sites": [
+        {
+          "path": "src/locales/en/parsers/ENWeekdayParser.ts",
+          "start_line": 58,
+          "end_line": 65
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

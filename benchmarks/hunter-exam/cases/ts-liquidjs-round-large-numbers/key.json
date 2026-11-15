@@ -1,0 +1,26 @@
+{
+  "id": "ts-liquidjs-round-large-numbers",
+  "language": "typescript",
+  "project": "liquidjs",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "round-corrupts-large-numbers",
+      "area": "logic",
+      "severity": "advisory",
+      "class": "wrong-arithmetic",
+      "depth": 0,
+      "what": "round scales by Math.pow(10, arg) and multiplies by (1 + Number.EPSILON), which alters integers beyond 2^50 and high-precision decimals (and turns 1e21 into 1.0000000000000003e+21) instead of leaving numbers it cannot round exactly untouched.",
+      "sites": [
+        {
+          "path": "src/filters/math.ts",
+          "start_line": 14,
+          "end_line": 20
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

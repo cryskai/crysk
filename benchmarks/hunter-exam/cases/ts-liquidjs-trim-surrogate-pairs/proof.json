@@ -1,0 +1,9 @@
+{
+  "tests": [
+    "filters/string lstrip with Unicode characters (and rstrip, strip) should trim <input> using <chars>"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/liquidjs/tree && npx jest test/integration/filters/string.spec.ts -t Unicode",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Expected: \"text𠮷\"  Received: \"𠮷𠮷text𠮷\" (lstrip of '𠮷𠮷text𠮷' with '𠮷')"
+}

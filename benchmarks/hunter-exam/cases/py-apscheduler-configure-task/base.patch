@@ -1,0 +1,51 @@
+diff --git a/docs/versionhistory.rst b/docs/versionhistory.rst
+index af868a1..9dfef8d 100644
+--- a/docs/versionhistory.rst
++++ b/docs/versionhistory.rst
+@@ -43,9 +43,6 @@ APScheduler, see the :doc:`migration section <migration>`.
+ - Fixed coroutine function callbacks (including callable objects with an asynchronous
+   ``__call__()`` method) never being awaited when subscribed with ``is_async=False``,
+   which the synchronous ``Scheduler`` always uses
+-- Fixed ``configure_task()`` dropping the callable reference when passed a ``Task``
+-  object, causing the configured task to be stored with ``func=None``
+-  (`#1001 <https://github.com/agronholm/apscheduler/issues/1001>`_)
+ - Fixed ``MemoryDataStore`` and ``MongoDBDataStore`` returning the fire time of a paused
+   or already acquired schedule from ``get_next_schedule_run_time()``, which made the
+   scheduler wake up past a deadline that had already passed and process schedules in a
+diff --git a/tests/test_schedulers.py b/tests/test_schedulers.py
+index eec8682..929bb6b 100644
+--- a/tests/test_schedulers.py
++++ b/tests/test_schedulers.py
+@@ -49,7 +49,6 @@ from apscheduler import (
+     SchedulerStarted,
+     SchedulerStopped,
+     ScheduleUpdated,
+-    Task,
+     TaskAdded,
+     TaskDefaults,
+     TaskUpdated,
+@@ -220,24 +219,6 @@ class TestAsyncScheduler:
+                 assert isinstance(event, TaskUpdated)
+                 assert event.task_id == "mytask"
+ 
+-    async def test_configure_task_from_task_object(self) -> None:
+-        # Passing a Task object must preserve its callable reference; otherwise
+-        # the task is stored with func=None and jobs fail to look up the
+-        # callable when they run (#1001).
+-        async with AsyncScheduler() as scheduler:
+-            await scheduler.configure_task(
+-                Task(
+-                    id="mytask",
+-                    func=f"{__name__}:dummy_async_job",
+-                    job_executor="async",
+-                )
+-            )
+-            tasks = await scheduler.get_tasks()
+-            assert len(tasks) == 1
+-            assert tasks[0].id == "mytask"
+-            assert tasks[0].func == f"{__name__}:dummy_async_job"
+-            assert tasks[0].job_executor == "async"
+-
+     async def test_configure_task_with_decorator(self) -> None:
+         async with AsyncScheduler() as scheduler:
+             await scheduler.configure_task("taskfunc", func=decorated_job)

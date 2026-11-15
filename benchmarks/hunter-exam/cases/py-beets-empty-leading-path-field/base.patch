@@ -1,0 +1,54 @@
+diff --git a/beets/library/models.py b/beets/library/models.py
+index b07c488..626a1d3 100644
+--- a/beets/library/models.py
++++ b/beets/library/models.py
+@@ -1285,10 +1285,6 @@ class Item(LibModel):
+                 "the filename.",
+                 subpath,
+             )
+-        # The fragment is always relative to the base directory. Strip
+-        # leading separators (left by empty leading template fields when
+-        # the replacements do not remove them) which would otherwise make
+-        # `os.path.join` discard `basedir`.
+         lib_path_str = lib_path_str.lstrip(os.sep + (os.altsep or ""))
+         lib_path_bytes = util.bytestring_path(lib_path_str)
+ 
+diff --git a/docs/changelog.rst b/docs/changelog.rst
+index af5e5ca..825769b 100644
+--- a/docs/changelog.rst
++++ b/docs/changelog.rst
+@@ -211,10 +211,6 @@ Bug fixes
+ - :doc:`plugins/discogs`: Read the release month and day from the API's
+   ``released`` field instead of only the year. Fix Discogs match overwriting
+   month and day tags on import.
+-- Empty leading path-format fields (e.g. from missing metadata) combined with a
+-  custom ``replace`` configuration no longer produce an absolute destination
+-  path that escapes the library or :doc:`plugins/convert` destination directory;
+-  leading path separators are now stripped from the rendered path. :bug:`4889`
+ - Add a configurable ``tempfile_prefix`` for temporary files created during
+   cross-filesystem moves, avoiding hidden-file behavior on Windows and Samba
+   shares caused by a hard-coded leading dot ('.'). :bug:`7033`
+diff --git a/test/test_library.py b/test/test_library.py
+index 6ab1f05..71ad9b1 100644
+--- a/test/test_library.py
++++ b/test/test_library.py
+@@ -503,19 +503,6 @@ class TestDestination(PytestItemHelper):
+         item_in_db.album = "bar"
+         assert item_in_db.destination() == np("base/ber/foo")
+ 
+-    def test_destination_stays_in_basedir_with_empty_leading_field(
+-        self, item_in_db
+-    ):
+-        # Regression test for #4889: an empty leading template field
+-        # combined with custom replacements that lack the default
+-        # separator rule must not produce an absolute path that escapes
+-        # the base directory.
+-        self.lib.directory = Path("base")
+-        self.lib.replacements = [(re.compile(r"a"), "e")]
+-        self.lib.path_formats = [("default", "$album/$title")]
+-        item_in_db.album = ""
+-        item_in_db.title = "three"
+-        assert item_in_db.destination() == np("base/three")
+ 
+     def test_destination_with_empty_leading_component(self, item_in_db):
+         self.config["empty_component_replace"] = "_"

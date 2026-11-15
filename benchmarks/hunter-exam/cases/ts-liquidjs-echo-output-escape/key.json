@@ -1,0 +1,26 @@
+{
+  "id": "ts-liquidjs-echo-output-escape",
+  "language": "typescript",
+  "project": "liquidjs",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "echo-skips-output-escape",
+      "area": "security",
+      "severity": "blocking",
+      "class": "missing-escape",
+      "depth": 0,
+      "what": "{% echo %} writes the evaluated value without applying the outputEscape option, so with outputEscape set, untrusted values printed through echo (and {% liquid echo %}) come out unescaped while {{ }} output is escaped.",
+      "sites": [
+        {
+          "path": "src/tags/echo.ts",
+          "start_line": 15,
+          "end_line": 19
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

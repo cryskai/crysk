@@ -1,0 +1,26 @@
+{
+  "id": "py-beets-scrub-nowrite",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "scrub-under-nowrite",
+      "area": "data",
+      "severity": "blocking",
+      "class": "missing-guard",
+      "depth": 1,
+      "what": "import_task_files no longer returns early when writing is disabled (`import --nowrite`), so auto-scrub still strips every tag from the imported files and, because restore is tied to should_write(), does not write them back: the files lose their tags although the user asked for no file writes.",
+      "sites": [
+        {
+          "path": "beetsplug/scrub.py",
+          "start_line": 146,
+          "end_line": 152
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

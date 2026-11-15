@@ -1,0 +1,68 @@
+diff --git a/docs/versionhistory.rst b/docs/versionhistory.rst
+index af868a1..09b6e80 100644
+--- a/docs/versionhistory.rst
++++ b/docs/versionhistory.rst
+@@ -37,9 +37,6 @@ APScheduler, see the :doc:`migration section <migration>`.
+ - Fixed ``AsyncpgEventBroker`` raising ``NoEventLoopError`` with AnyIO ≥ 4.14 on
+   incoming notifications
+   (`#1141 <https://github.com/agronholm/apscheduler/issues/1141>`_)
+-- Fixed trigger errors crashing the scheduler or causing a schedule to reuse another
+-  schedule's next fire time
+-  (`#1154 <https://github.com/agronholm/apscheduler/issues/1154>`_; PR by @MokiMeow)
+ - Fixed coroutine function callbacks (including callable objects with an asynchronous
+   ``__call__()`` method) never being awaited when subscribed with ``is_async=False``,
+   which the synchronous ``Scheduler`` always uses
+diff --git a/tests/test_schedulers.py b/tests/test_schedulers.py
+index eec8682..e008576 100644
+--- a/tests/test_schedulers.py
++++ b/tests/test_schedulers.py
+@@ -64,7 +64,6 @@ from apscheduler.eventbrokers.local import LocalEventBroker
+ from apscheduler.executors.async_ import AsyncJobExecutor
+ from apscheduler.executors.subprocess import ProcessPoolJobExecutor
+ from apscheduler.executors.thread import ThreadPoolJobExecutor
+-from apscheduler.triggers.combining import AndTrigger
+ from apscheduler.triggers.cron import CronTrigger
+ from apscheduler.triggers.date import DateTrigger
+ from apscheduler.triggers.interval import IntervalTrigger
+@@ -638,41 +637,6 @@ class TestAsyncScheduler:
+             with pytest.raises(WouldBlock):
+                 receive.receive_nowait()
+ 
+-    async def test_trigger_error(self) -> None:
+-        start_time = datetime.now(UTC) - timedelta(seconds=5)
+-        # Yields one fire time, then raises MaxIterationsReached on the next call
+-        failing_trigger = AndTrigger(
+-            [
+-                IntervalTrigger(minutes=2, start_time=start_time),
+-                IntervalTrigger(minutes=3, start_time=start_time),
+-            ],
+-            max_iterations=1,
+-        )
+-        send, receive = create_memory_object_stream[ScheduleUpdated](2)
+-        with send, receive:
+-            async with AsyncScheduler(role=SchedulerRole.scheduler) as scheduler:
+-                await scheduler.add_schedule(
+-                    dummy_async_job,
+-                    IntervalTrigger(minutes=1, start_time=start_time),
+-                    id="ok",
+-                )
+-                await scheduler.add_schedule(
+-                    dummy_async_job, failing_trigger, id="failing"
+-                )
+-                scheduler.subscribe(send.send, ScheduleUpdated)
+-                await scheduler.start_in_background()
+-                with fail_after(3):
+-                    events = {}
+-                    for _ in range(2):
+-                        event = await receive.receive()
+-                        events[event.schedule_id] = event
+-
+-                assert events["ok"].next_fire_time is not None
+-                assert events["failing"].next_fire_time is None
+-                # The already-due run of the failing schedule must still be queued
+-                jobs = await scheduler.get_jobs()
+-                assert {job.schedule_id for job in jobs} == {"ok", "failing"}
+-
+     @pytest.mark.parametrize(
+         "max_jitter, expected_upper_bound",
+         [pytest.param(2, 2, id="within"), pytest.param(4, 2.999999, id="exceed")],

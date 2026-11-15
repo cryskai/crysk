@@ -1,0 +1,9 @@
+{
+  "tests": [
+    "test/plugins/test_scrub.py::TestScrubbedImport::test_tags_not_scrubbed_when_nowrite"
+  ],
+  "command": "cd ~/.crysk/casebank/deps/beets/tree && ../venv/bin/python -m pytest -p no:cov -p no:randomly -q test/plugins/test_scrub.py",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "assert imported_file.artist == \"Tag Artist\"  ->  AssertionError: assert None == 'Tag Artist'"
+}

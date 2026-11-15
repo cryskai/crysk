@@ -1,0 +1,91 @@
+diff --git a/docs/versionhistory.rst b/docs/versionhistory.rst
+index af868a1..ff03692 100644
+--- a/docs/versionhistory.rst
++++ b/docs/versionhistory.rst
+@@ -40,9 +40,6 @@ APScheduler, see the :doc:`migration section <migration>`.
+ - Fixed trigger errors crashing the scheduler or causing a schedule to reuse another
+   schedule's next fire time
+   (`#1154 <https://github.com/agronholm/apscheduler/issues/1154>`_; PR by @MokiMeow)
+-- Fixed coroutine function callbacks (including callable objects with an asynchronous
+-  ``__call__()`` method) never being awaited when subscribed with ``is_async=False``,
+-  which the synchronous ``Scheduler`` always uses
+ - Fixed ``configure_task()`` dropping the callable reference when passed a ``Task``
+   object, causing the configured task to be stored with ``func=None``
+   (`#1001 <https://github.com/agronholm/apscheduler/issues/1001>`_)
+diff --git a/tests/test_eventbrokers.py b/tests/test_eventbrokers.py
+index 7c0e30b..38cf499 100644
+--- a/tests/test_eventbrokers.py
++++ b/tests/test_eventbrokers.py
+@@ -38,31 +38,6 @@ async def test_publish_subscribe(event_broker: EventBroker) -> None:
+     assert event1.next_fire_time == datetime(2021, 9, 11, 12, 31, 56, 254867, UTC)
+ 
+ 
+-@pytest.mark.parametrize("callback_type", ["function", "callable_object"])
+-async def test_subscribe_coroutine_function(
+-    event_broker: EventBroker, callback_type: str
+-) -> None:
+-    send, receive = create_memory_object_stream[Event](1)
+-
+-    async def callback(event: Event) -> None:
+-        await send.send(event)
+-
+-    class AsyncCallable:
+-        async def __call__(self, event: Event) -> None:
+-            await send.send(event)
+-
+-    with send, receive:
+-        if callback_type == "callable_object":
+-            event_broker.subscribe(AsyncCallable(), is_async=False)
+-        else:
+-            event_broker.subscribe(callback, is_async=False)
+-        event = Event()
+-        await event_broker.publish(event)
+-
+-        with fail_after(10):
+-            assert await receive.receive() == event
+-
+-
+ async def test_subscribe_one_shot(event_broker: EventBroker) -> None:
+     send, receive = create_memory_object_stream[Event](2)
+     with send, receive:
+diff --git a/tests/test_schedulers.py b/tests/test_schedulers.py
+index eec8682..52908ef 100644
+--- a/tests/test_schedulers.py
++++ b/tests/test_schedulers.py
+@@ -159,18 +159,6 @@ class TestAsyncScheduler:
+             assert scheduler.task_defaults.job_executor == "async"
+             assert scheduler.state is RunState.stopped
+ 
+-    async def test_subscribe_coroutine_function(self) -> None:
+-        received = anyio.Event()
+-
+-        async def callback(event: Event) -> None:
+-            received.set()
+-
+-        async with AsyncScheduler() as scheduler:
+-            scheduler.subscribe(callback, SchedulerStarted, is_async=False)
+-            await scheduler.start_in_background()
+-            with fail_after(10):
+-                await received.wait()
+-
+     @pytest.mark.parametrize("as_default", [False, True])
+     async def test_async_executor(self, as_default: bool) -> None:
+         async with AsyncScheduler() as scheduler:
+@@ -1418,17 +1406,6 @@ class TestSyncScheduler:
+         fake_atexit_register.assert_called_once_with(scheduler._exit_stack.close)
+         scheduler._exit_stack.close()
+ 
+-    def test_subscribe_coroutine_function(self) -> None:
+-        received = threading.Event()
+-
+-        async def callback(event: Event) -> None:
+-            received.set()
+-
+-        with Scheduler() as scheduler:
+-            scheduler.subscribe(callback, SchedulerStarted)
+-            scheduler.start_in_background()
+-            assert received.wait(10)
+-
+     def test_configure_task(self) -> None:
+         queue: Queue[Event] = Queue()
+         with Scheduler() as scheduler:

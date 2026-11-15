@@ -1,0 +1,17 @@
+diff --git a/src/locales/en/parsers/ENSlashMonthFormatParser.ts b/src/locales/en/parsers/ENSlashMonthFormatParser.ts
+index 56e486f..e36937c 100644
+--- a/src/locales/en/parsers/ENSlashMonthFormatParser.ts
++++ b/src/locales/en/parsers/ENSlashMonthFormatParser.ts
+@@ -17,11 +17,7 @@ export default class ENSlashMonthFormatParser extends AbstractParserWithWordBoun
+         return PATTERN;
+     }
+ 
+-    innerExtract(context: ParsingContext, match: RegExpMatchArray): ParsingComponents | null {
+-        if (/\d\/?$/.test(context.text.substring(0, match.index))) {
+-            return null;
+-        }
+-
++    innerExtract(context: ParsingContext, match: RegExpMatchArray): ParsingComponents {
+         const year = parseInt(match[YEAR_GROUP]);
+         const month = parseInt(match[MONTH_GROUP]);
+ 

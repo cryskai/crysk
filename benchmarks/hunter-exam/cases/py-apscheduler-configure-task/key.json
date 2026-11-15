@@ -1,0 +1,31 @@
+{
+  "id": "py-apscheduler-configure-task",
+  "language": "python",
+  "project": "apscheduler",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "configure-task",
+      "area": "state",
+      "severity": "blocking",
+      "class": "lost-state",
+      "depth": 1,
+      "what": "when configure_task() receives a Task object, func_ref is never taken from task.func, so the Task created or updated in the data store gets func=None and the configured task can no longer be resolved to a callable when its jobs run",
+      "sites": [
+        {
+          "path": "src/apscheduler/_schedulers/async_.py",
+          "start_line": 354,
+          "end_line": 361
+        },
+        {
+          "path": "src/apscheduler/_schedulers/async_.py",
+          "start_line": 417,
+          "end_line": 424
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

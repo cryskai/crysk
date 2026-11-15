@@ -1,0 +1,26 @@
+{
+  "id": "py-beets-bpd-any-field",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-fix",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "swapped-any-field-args",
+      "area": "contract",
+      "severity": "blocking",
+      "class": "contract-mismatch",
+      "depth": 2,
+      "what": "Item.any_writable_media_field_query is called with (query_type, value) while its signature is (pattern, query_cls), so a bpd search on the `any` tag builds field queries from the wrong arguments and the command fails with a server error instead of returning matches.",
+      "sites": [
+        {
+          "path": "beetsplug/bpd/__init__.py",
+          "start_line": 1512,
+          "end_line": 1516
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

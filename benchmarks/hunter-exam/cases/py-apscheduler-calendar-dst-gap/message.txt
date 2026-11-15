@@ -1,0 +1,1 @@
+refactor(triggers): simplify date handling in CalendarIntervalTrigger.next

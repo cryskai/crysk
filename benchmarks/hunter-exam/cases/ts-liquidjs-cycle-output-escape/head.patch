@@ -1,0 +1,85 @@
+diff --git a/src/parser/tokenizer.ts b/src/parser/tokenizer.ts
+index cb1940b..3a605af 100644
+--- a/src/parser/tokenizer.ts
++++ b/src/parser/tokenizer.ts
+@@ -83,7 +83,7 @@ export class Tokenizer {
+   readFilter (): FilterToken | null {
+     this.skipBlank()
+     if (this.end()) return null
+-    if (this.peek() === ')' || this.peek() === ',') return null
++    if (this.peek() === ')') return null
+     this.assert(this.read() === '|', `expected "|" before filter`)
+     const name = this.readIdentifier()
+     if (!name.size()) {
+@@ -100,7 +100,7 @@ export class Tokenizer {
+         this.skipBlank()
+         this.assert(this.end() || this.peek() === ',' || this.peek() === '|' || this.peek() === ')', () => `unexpected character ${this.snapshot()}`)
+       } while (this.peek() === ',')
+-    } else if (this.peek() === '|' || this.peek() === ')' || this.peek() === ',' || this.end()) {
++    } else if (this.peek() === '|' || this.peek() === ')' || this.end()) {
+       // do nothing
+     } else {
+       throw this.error('expected ":" after filter name')
+diff --git a/src/tags/cycle.ts b/src/tags/cycle.ts
+index e075a4e..063c01b 100644
+--- a/src/tags/cycle.ts
++++ b/src/tags/cycle.ts
+@@ -1,13 +1,11 @@
+-import { TopLevelToken, Liquid, ValueToken, FilteredValueToken, evalToken, Emitter, TagToken, Context, Tag, Value } from '..'
++import { TopLevelToken, Liquid, ValueToken, evalToken, Emitter, TagToken, Context, Tag } from '..'
+ import { Arguments } from '../template'
+-import { toValue } from '../util'
+ 
+ export default class extends Tag {
+-  private candidates: FilteredValueToken[] = []
++  private candidates: ValueToken[] = []
+   private group?: ValueToken
+   constructor (token: TagToken, remainTokens: TopLevelToken[], liquid: Liquid) {
+     super(token, remainTokens, liquid)
+-    const begin = this.tokenizer.p
+     const group = this.tokenizer.readValue()
+     this.tokenizer.skipBlank()
+ 
+@@ -15,12 +13,12 @@ export default class extends Tag {
+       if (this.tokenizer.peek() === ':') {
+         this.group = group
+         this.tokenizer.advance()
+-      } else this.tokenizer.p = begin
++      } else this.candidates.push(group)
+     }
+ 
+     while (!this.tokenizer.end()) {
+-      const value = this.tokenizer.readFilteredValue()
+-      this.candidates.push(value)
++      const value = this.tokenizer.readValue()
++      if (value) this.candidates.push(value)
+       this.tokenizer.readTo(',')
+     }
+     this.tokenizer.assert(this.candidates.length, () => `empty candidates: "${token.getText()}"`)
+@@ -28,7 +26,7 @@ export default class extends Tag {
+ 
+   * render (ctx: Context, emitter: Emitter): Generator<unknown, unknown, unknown> {
+     const group = (yield evalToken(this.group, ctx)) as ValueToken
+-    const fingerprint = `cycle:${group}:` + this.candidates.map(c => c.getText()).join(',')
++    const fingerprint = `cycle:${group}:` + this.candidates.join(',')
+     const groups = ctx.getRegister('cycle', {} as Record<string, number>)
+     let idx = groups[fingerprint]
+ 
+@@ -36,15 +34,10 @@ export default class extends Tag {
+       idx = groups[fingerprint] = 0
+     }
+ 
+-    const candidate = new Value(this.candidates[idx], this.liquid)
++    const candidate = this.candidates[idx]
+     idx = (idx + 1) % this.candidates.length
+     groups[fingerprint] = idx
+-    let val = yield toValue(yield candidate.value(ctx, false))
+-    const outputEscape = this.liquid.options.outputEscape
+-    if (outputEscape && !candidate.filters[candidate.filters.length - 1]?.raw) {
+-      val = yield outputEscape.call({ context: ctx, token: this.token, liquid: this.liquid }, val)
+-    }
+-    return val
++    return yield evalToken(candidate, ctx)
+   }
+ 
+   public * arguments (): Arguments {

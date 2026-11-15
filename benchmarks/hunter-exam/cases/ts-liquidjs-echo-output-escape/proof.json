@@ -1,0 +1,10 @@
+{
+  "tests": [
+    "LiquidOptions#*outputEscape* should escape {% echo %} when outputEscape=\"escape\"",
+    "should escape {% liquid echo %} when outputEscape=\"escape\""
+  ],
+  "command": "cd ~/.crysk/casebank/deps/liquidjs/tree && npx jest test/integration/liquid/output-escape.spec.ts",
+  "at_pin": "pass",
+  "with_head_patch": "fail",
+  "failure": "Expected: \"&lt;img&gt;\"  Received: \"<img>\""
+}

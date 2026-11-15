@@ -1,0 +1,19 @@
+diff --git a/src/util/strftime.ts b/src/util/strftime.ts
+index e9b521e..f6e28f0 100644
+--- a/src/util/strftime.ts
++++ b/src/util/strftime.ts
+@@ -23,8 +23,12 @@ function getDayOfYear (d: LiquidDate) {
+   return num + d.getDate()
+ }
+ function getWeekOfYear (d: LiquidDate, startDay: number) {
+-  const daysSinceStartDay = (d.getDay() - startDay + 7) % 7
+-  return String(Math.floor((getDayOfYear(d) - 1 - daysSinceStartDay + 7) / 7))
++  // Skip to startDay of this week
++  const now = getDayOfYear(d) + (startDay - d.getDay())
++  // Find the first startDay of the year
++  const jan1 = new Date(d.getFullYear(), 0, 1)
++  const then = (7 - jan1.getDay() + startDay)
++  return String(Math.floor((now - then) / 7) + 1)
+ }
+ function isLeapYear (d: LiquidDate) {
+   const year = d.getFullYear()

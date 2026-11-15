@@ -1,0 +1,1 @@
+dbcore: simplify the dirty-field check in Model.store

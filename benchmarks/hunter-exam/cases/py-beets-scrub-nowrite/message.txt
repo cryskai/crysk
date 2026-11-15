@@ -1,0 +1,1 @@
+scrub: drop the early return in auto-scrub and pass the write flag through
