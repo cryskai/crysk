@@ -528,13 +528,23 @@ listed for `judge` adds nothing.
   the run has no such secret.
 - **The CLI.** The `Install Antigravity CLI` step runs only when the models in effect name an `agy:` model
   (the setup step's `antigravity-models` output: any role or fallback of the platform's models or the
-  `models` input, the judge aside) or the `model` input starts with `agy:`. It reads the auto-updater's
-  manifest for the runner (`linux_amd64`, `linux_arm64`, `darwin_arm64` or `darwin_amd64`), downloads the
-  release it names, and checks its `sha512` against the manifest **before** extracting anything. The
-  archive must hold exactly one regular file, `antigravity`: a second entry, a link, a directory or a path
-  refuses it. That file is installed as `agy`, `0755`, under the runner's temp directory, which is added to
-  `GITHUB_PATH`, and the step runs `agy --version`. A run with no `agy:` model fetches nothing. Any other
-  runner OS or CPU fails the step, naming it.
+  `models` input, the judge aside) or the `model` input starts with `agy:`. The version is **pinned** in
+  the action's source (`src/ci/agy-install.ts`), currently **1.5.9**, with the archive URL and `sha512` of
+  each runner's build (`linux_amd64`, `linux_arm64`, `darwin_arm64` or `darwin_amd64`). The step downloads
+  only that archive (it asks Google's auto-updater nothing) and checks its `sha512` against the pinned one
+  **before** extracting anything. The archive must hold exactly one regular file, `antigravity`: a second
+  entry, a link, a directory or a path refuses it. That file is installed as `agy`, `0755`, under the
+  runner's temp directory, and the step runs `agy --version`: unless it reports the pinned version, the
+  binary is removed and the step fails, so nothing reaches `PATH`. Otherwise the directory is added to
+  `GITHUB_PATH`. agy's own auto-update stays off in every agy step (`AGY_CLI_DISABLE_AUTO_UPDATE=true`),
+  so the pinned build is the one that runs. A run with no `agy:` model fetches nothing. Any other runner OS
+  or CPU fails the step, naming it.
+- **Bumping the version** (maintainers). `bun run scripts/pin-agy.ts` reads the auto-updater's manifest for
+  each of the four platforms, checks that they name one version, and prints the `AGY_PINNED_RELEASE` table
+  to paste into `src/ci/agy-install.ts`; it edits nothing and downloads no archive. Update the pinned table
+  in `test/ci/agy-install.test.ts` with it. Older release URLs were still served when this was pinned
+  (1.5.7's answered on 2026-11-15), so a pinned version keeps installing after Google publishes a newer one;
+  if Google removes the archive, the step fails with the HTTP status and installs nothing.
 - **What an agy step can do.** It reads files with agy's `read_file` and searches the repository through
   Crysk's read-only search MCP (`grep`, `glob`, `list`; see [mcp-search.md](mcp-search.md)). No shell, no
   web, no writes, and the repository's `AGENTS.md`, `GEMINI.md` and `.agents/` do not reach it.

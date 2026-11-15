@@ -1,7 +1,7 @@
-// odd/tasks/antigravity-oauth.md T5 (S7): the Install Antigravity CLI step.
-// Offline: the manifest server and the download are an injected fetch, and the
-// archives are tar headers written here byte by byte, so the refused shapes
-// (traversal, two entries, a link) are exact and need no host tar.
+// odd/tasks/antigravity-oauth.md T5 (S7, L22): the Install Antigravity CLI step.
+// Offline: the download is an injected fetch and the pinned release an injected
+// table, and the archives are tar headers written here byte by byte, so the
+// refused shapes (traversal, two entries, a link) are exact and need no host tar.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -9,14 +9,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import * as agy from "#ci/agy-install";
 import {
-  AGY_MANIFEST_BASE_URL,
-  agyManifestUrl,
   agyPlatformKey,
   installAgy,
   runAgyInstall,
   sha512Hex,
 } from "#ci/agy-install";
+
+type Release = NonNullable<Parameters<typeof installAgy>[0]["release"]>;
 
 const BINARY = new TextEncoder().encode(
   "#!/bin/sh\necho 'agy 9.9.9-fixture'\n",
@@ -72,8 +73,28 @@ function tarGz(...entries: Uint8Array[]): Uint8Array {
 
 const GOOD = tarGz(tarEntry("antigravity", BINARY));
 
+// A pinned release for the tests: every platform names the same build.
+function releaseFor(
+  archive: Uint8Array,
+  build: { url?: string; sha512?: string } = {},
+  version = "9.9.9",
+): Release {
+  const entry = {
+    url: build.url ?? DOWNLOAD_URL,
+    sha512: build.sha512 ?? sha512Hex(archive),
+  };
+  return {
+    version,
+    builds: {
+      linux_amd64: entry,
+      linux_arm64: entry,
+      darwin_arm64: entry,
+      darwin_amd64: entry,
+    },
+  };
+}
+
 interface Served {
-  readonly manifest?: { status?: number; body?: string };
   readonly download?: { status?: number; body?: Uint8Array };
 }
 
@@ -81,11 +102,6 @@ function fakeFetch(served: Served) {
   const calls: string[] = [];
   const fetchFn = async (url: string) => {
     calls.push(url);
-    if (url.startsWith(AGY_MANIFEST_BASE_URL)) {
-      return new Response(served.manifest?.body ?? "", {
-        status: served.manifest?.status ?? 200,
-      });
-    }
     if (url === DOWNLOAD_URL) {
       const body = served.download?.body ?? GOOD;
       return new Response(body.slice().buffer as ArrayBuffer, {
@@ -96,17 +112,6 @@ function fakeFetch(served: Served) {
   };
   return { fetchFn, calls };
 }
-
-const manifestFor = (
-  archive: Uint8Array,
-  extra: Record<string, unknown> = {},
-) =>
-  JSON.stringify({
-    version: "9.9.9",
-    url: DOWNLOAD_URL,
-    sha512: sha512Hex(archive),
-    ...extra,
-  });
 
 const dirs: string[] = [];
 async function scratch(): Promise<string> {
@@ -119,7 +124,9 @@ afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
 });
 
-async function install(served: Served) {
+async function install(
+  served: Served & { release?: Release; reported?: string },
+) {
   const root = await scratch();
   const installDir = path.join(root, "bin");
   const { fetchFn, calls } = fakeFetch(served);
@@ -131,9 +138,10 @@ async function install(served: Served) {
       fetch: fetchFn,
       installDir,
       platformKey: "linux_amd64",
+      release: served.release ?? releaseFor(GOOD),
       runVersion: async (binary) => {
         versions.push(binary);
-        return "agy 9.9.9\n";
+        return served.reported ?? "agy 9.9.9\n";
       },
     });
   } catch (caught) {
@@ -143,15 +151,82 @@ async function install(served: Served) {
   return { root, installDir, calls, versions, error, result, files };
 }
 
+// L22: the version measured and pinned, and its four builds, as fetched from the
+// auto-updater's manifests on 2026-11-15. Bumping the pin changes this test on
+// purpose (scripts/pin-agy.ts prints the new table).
+const PINNED_VERSION = "1.5.9";
+const PINNED_BASE =
+  "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472";
+const PINNED_BUILDS = {
+  linux_amd64: {
+    url: `${PINNED_BASE}/linux-x64/cli_linux_x64.tar.gz`,
+    sha512:
+      "d01eb13ba7750eed18907f1ae8860864371e0ad9064415e8d033d22b4bd7b9b4e4c7f962058520b452d67db1c33163d9a889d55a7dffa159596ec6cd91a87b79",
+  },
+  linux_arm64: {
+    url: `${PINNED_BASE}/linux-arm/cli_linux_arm64.tar.gz`,
+    sha512:
+      "16c632a09b81f598f7652bc11180861f9d2ee4408ffa161dadc83b2010de7a9cd055e97b4b46cd01903e35c0e8bf21d8262462ba7c5f168cc6dada9ac3d522c0",
+  },
+  darwin_arm64: {
+    url: `${PINNED_BASE}/darwin-arm/cli_mac_arm64.tar.gz`,
+    sha512:
+      "690cd6a5a5fdb23564fb1b14f7f6ae368fa3636b7630f56c574a6dfc0e2791a0e5b93d6515be1650c8a268cfb28440e1b9cbaa1c5b85aa762ab25b51c1fccda5",
+  },
+  darwin_amd64: {
+    url: `${PINNED_BASE}/darwin-x64/cli_mac_x64.tar.gz`,
+    sha512:
+      "5f3fd16127de1229bd978509649b0d77b602796292f465ab0e001edd141e902b4b9759991f744cde3264b892f7299eafca6fbae619eca8db24b985d7db40f25e",
+  },
+};
+
+describe("the pinned Antigravity CLI release", () => {
+  test("is the version measured in the Log (1.5.9), one build per platform", () => {
+    expect(agy.AGY_PINNED_RELEASE).toEqual({
+      version: PINNED_VERSION,
+      builds: PINNED_BUILDS,
+    });
+  });
+
+  test("the installer source names no manifest host: nothing is asked at run time", () => {
+    const source = readFileSync(
+      path.join(import.meta.dir, "../../src/ci/agy-install.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain("auto-updater");
+    expect(source).not.toContain("run.app");
+    expect(source).not.toContain("manifests/");
+  });
+
+  for (const [key, build] of Object.entries(PINNED_BUILDS)) {
+    test(`${key} downloads only its pinned url and checks its pinned sha512`, async () => {
+      const root = await scratch();
+      const calls: string[] = [];
+      const error = await installAgy({
+        fetch: async (url) => {
+          calls.push(url);
+          return new Response(GOOD.slice().buffer as ArrayBuffer);
+        },
+        installDir: path.join(root, "bin"),
+        platformKey: key as keyof typeof PINNED_BUILDS,
+        runVersion: async () => "",
+      }).catch((caught: unknown) => caught);
+      expect(calls).toEqual([build.url]);
+      // The fixture archive is not the release: the pinned sha512 refuses it.
+      expect(String(error)).toContain(
+        `does not match the pinned sha512 (expected ${build.sha512}`,
+      );
+      expect(existsSync(path.join(root, "bin", "agy"))).toBe(false);
+    });
+  }
+});
+
 describe("agyPlatformKey", () => {
-  test("maps the four builds the auto-updater publishes", () => {
+  test("maps the four builds the release publishes", () => {
     expect(agyPlatformKey("linux", "x64")).toBe("linux_amd64");
     expect(agyPlatformKey("linux", "arm64")).toBe("linux_arm64");
     expect(agyPlatformKey("darwin", "arm64")).toBe("darwin_arm64");
     expect(agyPlatformKey("darwin", "x64")).toBe("darwin_amd64");
-    expect(agyManifestUrl("linux_amd64")).toBe(
-      `${AGY_MANIFEST_BASE_URL}/linux_amd64.json`,
-    );
   });
 
   test("refuses any other runner by name", () => {
@@ -164,12 +239,10 @@ describe("agyPlatformKey", () => {
 
 describe("installAgy", () => {
   test("a good archive installs agy 0755, then runs its --version by absolute path", async () => {
-    const run = await install({ manifest: { body: manifestFor(GOOD) } });
+    const run = await install({});
     expect(run.error).toBeUndefined();
-    expect(run.calls).toEqual([
-      `${AGY_MANIFEST_BASE_URL}/linux_amd64.json`,
-      DOWNLOAD_URL,
-    ]);
+    // One request, the pinned url: no manifest.
+    expect(run.calls).toEqual([DOWNLOAD_URL]);
     const binary = path.join(run.installDir, "agy");
     expect(run.files).toEqual(["agy"]);
     expect(readFileSync(binary)).toEqual(Buffer.from(BINARY));
@@ -182,33 +255,68 @@ describe("installAgy", () => {
     });
   });
 
-  test("an uppercase sha512 in the manifest is the same hex string", async () => {
+  test("an uppercase pinned sha512 is the same hex string", async () => {
     const run = await install({
-      manifest: {
-        body: manifestFor(GOOD, { sha512: sha512Hex(GOOD).toUpperCase() }),
-      },
+      release: releaseFor(GOOD, { sha512: sha512Hex(GOOD).toUpperCase() }),
     });
     expect(run.error).toBeUndefined();
   });
 
   test("a sha512 mismatch installs nothing and executes nothing", async () => {
     const run = await install({
-      manifest: { body: manifestFor(GOOD, { sha512: "a".repeat(128) }) },
+      release: releaseFor(GOOD, { sha512: "a".repeat(128) }),
     });
-    expect(String(run.error)).toContain("does not match the manifest's sha512");
+    expect(String(run.error)).toContain("does not match the pinned sha512");
     expect(run.files).toEqual([]);
     expect(run.versions).toEqual([]);
   });
 
-  test("a tampered download (the manifest's sha512 of another archive) is refused", async () => {
+  test("a tampered download (the pinned sha512 of another archive) is refused", async () => {
     const other = tarGz(tarEntry("antigravity", new Uint8Array([1, 2, 3])));
-    const run = await install({
-      manifest: { body: manifestFor(GOOD) },
-      download: { body: other },
-    });
+    const run = await install({ download: { body: other } });
     expect(String(run.error)).toContain("does not match");
     expect(run.files).toEqual([]);
     expect(run.versions).toEqual([]);
+  });
+
+  test("a binary whose --version does not report the pinned version is removed", async () => {
+    const run = await install({ reported: "agy 1.6.0\n" });
+    expect(String(run.error)).toContain(
+      'agy --version reported "agy 1.6.0", not the pinned 9.9.9',
+    );
+    expect(run.versions).toHaveLength(1);
+    expect(run.files).toEqual([]);
+  });
+
+  test("a version that only starts with the pinned one is not it", async () => {
+    const run = await install({ reported: "agy 9.9.90\n" });
+    expect(String(run.error)).toContain("not the pinned 9.9.9");
+    expect(run.files).toEqual([]);
+  });
+
+  test("the pinned version with a build suffix is accepted", async () => {
+    const run = await install({
+      reported: "antigravity 9.9.9-4515810895593472\n",
+    });
+    expect(run.error).toBeUndefined();
+    expect(run.files).toEqual(["agy"]);
+  });
+
+  test("a failing --version leaves no binary behind", async () => {
+    const root = await scratch();
+    const installDir = path.join(root, "bin");
+    const { fetchFn } = fakeFetch({});
+    const error = await installAgy({
+      fetch: fetchFn,
+      installDir,
+      platformKey: "linux_amd64",
+      release: releaseFor(GOOD),
+      runVersion: async () => {
+        throw new Error("agy --version exited 1");
+      },
+    }).catch((caught: unknown) => caught);
+    expect(String(error)).toContain("exited 1");
+    expect(readdirSync(installDir)).toEqual([]);
   });
 
   const refused: [string, Uint8Array, RegExp][] = [
@@ -309,7 +417,7 @@ describe("installAgy", () => {
   for (const [label, archive, message] of refused) {
     test(`${label} is refused, with nothing written or executed`, async () => {
       const run = await install({
-        manifest: { body: manifestFor(archive) },
+        release: releaseFor(archive),
         download: { body: archive },
       });
       expect(String(run.error)).toMatch(message);
@@ -318,60 +426,30 @@ describe("installAgy", () => {
     });
   }
 
-  const badManifests: [string, string, RegExp][] = [
-    [
-      "no version",
-      JSON.stringify({ url: DOWNLOAD_URL, sha512: "a".repeat(128) }),
-      /has no version/,
-    ],
-    [
-      "no url",
-      JSON.stringify({ version: "1", sha512: "a".repeat(128) }),
-      /has no url/,
-    ],
-    [
-      "no sha512",
-      JSON.stringify({ version: "1", url: DOWNLOAD_URL }),
-      /has no sha512/,
-    ],
-    [
-      "a short sha512",
-      JSON.stringify({ version: "1", url: DOWNLOAD_URL, sha512: "abc" }),
-      /has no sha512/,
-    ],
+  const badPins: [string, Release, RegExp][] = [
     [
       "an http url",
-      JSON.stringify({
-        version: "1",
-        url: "http://downloads.example.test/a.tgz",
-        sha512: "a".repeat(128),
-      }),
+      releaseFor(GOOD, { url: "http://downloads.example.test/a.tgz" }),
       /not https/,
     ],
-    ["not JSON", "<html>", /not JSON/],
-    ["a JSON array", "[]", /not a JSON object/],
+    ["a url that is not a URL", releaseFor(GOOD, { url: "nope" }), /not a URL/],
+    [
+      "a short sha512",
+      releaseFor(GOOD, { sha512: "abc" }),
+      /no sha512 \(128 hex characters\)/,
+    ],
   ];
-  for (const [label, body, message] of badManifests) {
-    test(`a manifest with ${label} is refused before any download`, async () => {
-      const run = await install({ manifest: { body } });
+  for (const [label, release, message] of badPins) {
+    test(`a pinned build with ${label} is refused before any download`, async () => {
+      const run = await install({ release });
       expect(String(run.error)).toMatch(message);
-      expect(run.calls).toEqual([`${AGY_MANIFEST_BASE_URL}/linux_amd64.json`]);
+      expect(run.calls).toEqual([]);
       expect(run.files).toEqual([]);
     });
   }
 
-  test("an HTTP error on the manifest stops before any download", async () => {
-    const run = await install({ manifest: { status: 503, body: "busy" } });
-    expect(String(run.error)).toContain("answered HTTP 503");
-    expect(run.calls).toHaveLength(1);
-    expect(run.files).toEqual([]);
-  });
-
   test("an HTTP error on the download installs nothing", async () => {
-    const run = await install({
-      manifest: { body: manifestFor(GOOD) },
-      download: { status: 404 },
-    });
+    const run = await install({ download: { status: 404 } });
     expect(String(run.error)).toContain("download answered HTTP 404");
     expect(run.files).toEqual([]);
   });
@@ -384,9 +462,10 @@ describe("installAgy", () => {
       },
       installDir: path.join(root, "bin"),
       platformKey: "linux_amd64",
+      release: releaseFor(GOOD),
       runVersion: async () => "",
     }).catch((caught: unknown) => caught);
-    expect(String(error)).toContain("manifest could not be fetched");
+    expect(String(error)).toContain("9.9.9 could not be downloaded");
     expect(String(error)).toContain("ECONNRESET");
   });
 });
@@ -394,26 +473,28 @@ describe("installAgy", () => {
 describe("runAgyInstall (the step's entry)", () => {
   async function runStep(
     env: Record<string, string>,
-    platform: NodeJS.Platform = "linux",
+    options: { platform?: NodeJS.Platform; reported?: string } = {},
   ) {
     const root = await scratch();
     const githubPath = path.join(root, "github-path");
     await writeFile(githubPath, "");
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const { fetchFn } = fakeFetch({ manifest: { body: manifestFor(GOOD) } });
+    const { fetchFn, calls } = fakeFetch({});
     const exitCode = await runAgyInstall({
       env: { GITHUB_PATH: githubPath, ...env },
       fetch: fetchFn,
-      platform,
+      platform: options.platform ?? "linux",
       arch: "x64",
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
-      runVersion: async () => "agy 9.9.9\n",
+      release: releaseFor(GOOD),
+      runVersion: async () => options.reported ?? "agy 9.9.9\n",
     });
     return {
       root,
       exitCode,
+      calls,
       stdout: stdout.join(""),
       stderr: stderr.join(""),
       githubPath: readFileSync(githubPath, "utf8"),
@@ -425,11 +506,26 @@ describe("runAgyInstall (the step's entry)", () => {
     const dir = path.join(root, "agy-bin");
     const run = await runStep({ AGY_INSTALL_DIR: dir });
     expect(run.exitCode).toBe(0);
+    expect(run.calls).toEqual([DOWNLOAD_URL]);
     expect(run.githubPath).toBe(`${dir}\n`);
     expect(run.stdout).toContain(
-      "installed the Antigravity CLI 9.9.9 (sha512 verified)",
+      "installed the Antigravity CLI 9.9.9 (pinned, sha512 verified)",
     );
     expect(statSync(path.join(dir, "agy")).mode & 0o777).toBe(0o755);
+  });
+
+  test("a version mismatch fails the step and leaves nothing on PATH", async () => {
+    const root = await scratch();
+    const dir = path.join(root, "agy-bin");
+    const run = await runStep(
+      { AGY_INSTALL_DIR: dir },
+      { reported: "agy 1.6.0\n" },
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toContain("::error::");
+    expect(run.stderr).toContain("not the pinned 9.9.9");
+    expect(run.githubPath).toBe("");
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   test("a relative or missing AGY_INSTALL_DIR fails the step", async () => {
@@ -445,25 +541,25 @@ describe("runAgyInstall (the step's entry)", () => {
     const root = await scratch();
     const run = await runStep(
       { AGY_INSTALL_DIR: path.join(root, "b") },
-      "win32",
+      { platform: "win32" },
     );
     expect(run.exitCode).toBe(1);
     expect(run.stderr).toContain("no build for this runner (win32/x64)");
     expect(run.githubPath).toBe("");
+    expect(run.calls).toEqual([]);
   });
 });
 
-// The real entry point: runs the installed binary, so a fixture script stands in
-// for agy. The manifest URL is a constant, so the script itself is not run here
-// against a fake server; installAgy above covers its whole path.
+// The real --version runner: a fixture script stands in for agy.
 describe("installAgy runs the installed binary's --version", () => {
   test("the default runner executes <dir>/agy --version", async () => {
     const root = await scratch();
-    const { fetchFn } = fakeFetch({ manifest: { body: manifestFor(GOOD) } });
+    const { fetchFn } = fakeFetch({});
     const result = await installAgy({
       fetch: fetchFn,
       installDir: path.join(root, "bin"),
       platformKey: "linux_amd64",
+      release: releaseFor(GOOD),
     });
     expect(result.reported).toBe("agy 9.9.9-fixture");
   });

@@ -26,10 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CRYSK_ANTIGRAVITY_OAUTH` and says to connect Antigravity again in the Crysk dashboard.
 - **The action installs `agy` when the models name an `agy:` model.** A new `Install Antigravity CLI` step runs
   only when the models in effect (the platform's or the `models` input's, any role or fallback, the judge
-  aside) or the `model` input name an `agy:` model. It reads the Antigravity auto-updater's manifest for the
-  runner (Linux or macOS, x64 or arm64), checks the download's `sha512` against it before extracting, refuses
-  an archive with anything but its single `antigravity` file (a second entry, a link, a directory or a
-  path), and installs it as `agy` under the runner's temp directory on `PATH`. The setup step writes the
+  aside) or the `model` input name an `agy:` model. It installs the version pinned in the action's source,
+  **1.5.9**: it downloads that release's archive for the runner (Linux or macOS, x64 or arm64) and nothing
+  else, checks it against the pinned `sha512` before extracting, refuses an archive with anything but its
+  single `antigravity` file (a second entry, a link, a directory or a path), and installs it as `agy` under
+  the runner's temp directory on `PATH` only when `agy --version` reports the pinned version. agy's own
+  auto-update stays off (`AGY_CLI_DISABLE_AUTO_UPDATE=true`). Maintainers bump the pin with
+  `bun run scripts/pin-agy.ts`, which reads Google's auto-updater manifests and prints the table to paste. The setup step writes the
   `CRYSK_ANTIGRAVITY_OAUTH` record (`0600`, in a `0700` directory) where agy steps read it in CI, removes
   one an earlier run left when the secret is absent, and sets the `antigravity-models` output. A run with
   no `agy:` model fetches nothing and its setup outputs are unchanged. `crysk doctor` checks `agy` and its

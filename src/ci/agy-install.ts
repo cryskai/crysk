@@ -1,24 +1,32 @@
 // The action's Install Antigravity CLI step (odd/tasks/antigravity-oauth.md T5,
-// S7): installs Google's `agy` CLI when the run's models name an `agy:` model.
+// S7, L22): installs Google's `agy` CLI when the run's models name an `agy:` model.
+//
+// The release is PINNED here: one version, and per runner platform the archive
+// URL and its sha512, copied from Google's update manifests by a maintainer
+// (`bun run scripts/pin-agy.ts` prints the table to paste). At run time the
+// only request is the pinned archive itself, so a run installs exactly the build
+// this source names, never whatever is published that day.
 //
 // The order is the guarantee, and nothing runs out of it:
-//   1. GET the auto-updater's manifest for this runner's platform, and check its
-//      fields: `version`, an https `url`, and `sha512` as 128 hex characters.
+//   1. Pick the pinned build for this runner's platform, and check it: an https
+//      `url` and `sha512` as 128 hex characters.
 //   2. Download `url` into memory, with a size cap.
-//   3. sha512 over the downloaded bytes, compared with the manifest's. A
+//   3. sha512 over the downloaded bytes, compared with the pinned one. A
 //      mismatch stops here: nothing is extracted, written or executed.
 //   4. gunzip and read the tar in process. It must hold exactly ONE entry, a
 //      regular file named `antigravity`. Any other entry (a second file, a
 //      directory, a link, a path, a pax or GNU long-name header) refuses the
 //      archive. The entry name is never used as a path: the destination is
 //      always `<install dir>/agy`, so no entry can write anywhere else.
-//   5. Write it 0755 through a temp file and a rename, add the install dir to
-//      GITHUB_PATH, and run `<install dir>/agy --version` by its absolute path.
+//   5. Write it 0755 through a temp file and a rename, run
+//      `<install dir>/agy --version` by its absolute path, and keep it only when
+//      it reports the pinned version; otherwise the binary is removed. The
+//      caller adds the install dir to GITHUB_PATH only after that.
 //
-// WHY the manifest URL is a constant and not an input or env value: whoever
-// controls the manifest chooses the binary and its checksum, and the binary then
-// receives the Antigravity login. The same rule as the platform URL
-// (src/ci/platform.ts). Tests inject `fetch` at function level only.
+// WHY the release is a constant and not an input or env value: whoever chooses
+// the build chooses the binary that receives the Antigravity login. The same
+// rule as the platform URL (src/ci/platform.ts). Tests inject the release and
+// `fetch` at function level only.
 //
 // Builtins only, like the other scripts the action runs before its steps need
 // the engine's dependencies.
@@ -29,9 +37,6 @@ import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 
-export const AGY_MANIFEST_BASE_URL =
-  "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests";
-
 // The single file every release tarball holds (L3, L5; measured on 1.5.9).
 export const AGY_ARCHIVE_ENTRY = "antigravity";
 export const AGY_EXECUTABLE = "agy";
@@ -39,10 +44,9 @@ export const AGY_EXECUTABLE = "agy";
 // The release tarball is about 100 MB and its binary about 265 MB (1.5.9).
 const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024;
-const MANIFEST_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 
-const SHA512_HEX_RE = /^[0-9a-f]{128}$/i;
+export const SHA512_HEX_RE = /^[0-9a-f]{128}$/i;
 
 export class AgyInstallError extends Error {
   constructor(message: string) {
@@ -51,18 +55,58 @@ export class AgyInstallError extends Error {
   }
 }
 
-export interface AgyManifest {
-  readonly version: string;
+// The builds Google publishes, one per runner platform.
+export const AGY_PLATFORM_KEYS = [
+  "linux_amd64",
+  "linux_arm64",
+  "darwin_arm64",
+  "darwin_amd64",
+] as const;
+export type AgyPlatformKey = (typeof AGY_PLATFORM_KEYS)[number];
+
+export interface AgyBuild {
   readonly url: string;
   readonly sha512: string;
 }
 
-// The manifest names the auto-updater publishes (all four answered 200 on
-// 2026-11-15). Any other runner is refused before a request is made.
+export interface AgyRelease {
+  readonly version: string;
+  readonly builds: Readonly<Record<AgyPlatformKey, AgyBuild>>;
+}
+
+// L22: pinned to the version measured on 2026-11-15. To bump it, run
+// `bun run scripts/pin-agy.ts` and paste the table it prints over this one.
+export const AGY_PINNED_RELEASE: AgyRelease = {
+  version: "1.5.9",
+  builds: {
+    linux_amd64: {
+      url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/linux-x64/cli_linux_x64.tar.gz",
+      sha512:
+        "d01eb13ba7750eed18907f1ae8860864371e0ad9064415e8d033d22b4bd7b9b4e4c7f962058520b452d67db1c33163d9a889d55a7dffa159596ec6cd91a87b79",
+    },
+    linux_arm64: {
+      url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/linux-arm/cli_linux_arm64.tar.gz",
+      sha512:
+        "16c632a09b81f598f7652bc11180861f9d2ee4408ffa161dadc83b2010de7a9cd055e97b4b46cd01903e35c0e8bf21d8262462ba7c5f168cc6dada9ac3d522c0",
+    },
+    darwin_arm64: {
+      url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/darwin-arm/cli_mac_arm64.tar.gz",
+      sha512:
+        "690cd6a5a5fdb23564fb1b14f7f6ae368fa3636b7630f56c574a6dfc0e2791a0e5b93d6515be1650c8a268cfb28440e1b9cbaa1c5b85aa762ab25b51c1fccda5",
+    },
+    darwin_amd64: {
+      url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/darwin-x64/cli_mac_x64.tar.gz",
+      sha512:
+        "5f3fd16127de1229bd978509649b0d77b602796292f465ab0e001edd141e902b4b9759991f744cde3264b892f7299eafca6fbae619eca8db24b985d7db40f25e",
+    },
+  },
+};
+
+// Any runner without a pinned build is refused before a request is made.
 export function agyPlatformKey(
   platform: NodeJS.Platform,
   arch: string,
-): string {
+): AgyPlatformKey {
   const os =
     platform === "linux" ? "linux" : platform === "darwin" ? "darwin" : "";
   const cpu = arch === "x64" ? "amd64" : arch === "arm64" ? "arm64" : "";
@@ -71,52 +115,35 @@ export function agyPlatformKey(
       `the Antigravity CLI has no build for this runner (${platform}/${arch}); agy: models run on Linux or macOS runners, x64 or arm64`,
     );
   }
-  return `${os}_${cpu}`;
+  return `${os}_${cpu}` as AgyPlatformKey;
 }
 
-export function agyManifestUrl(platformKey: string): string {
-  return `${AGY_MANIFEST_BASE_URL}/${platformKey}.json`;
-}
-
-export function parseAgyManifest(text: string): AgyManifest {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new AgyInstallError("the Antigravity CLI manifest is not JSON");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new AgyInstallError(
-      "the Antigravity CLI manifest is not a JSON object",
-    );
-  }
-  const record = parsed as Record<string, unknown>;
-  const { version, url, sha512 } = record;
-  if (typeof version !== "string" || version.trim() === "") {
-    throw new AgyInstallError("the Antigravity CLI manifest has no version");
-  }
-  if (typeof url !== "string") {
-    throw new AgyInstallError("the Antigravity CLI manifest has no url");
-  }
+// An https url and a 128-hex sha512, lowercased. `what` names the source in the
+// message ("pinned build", or the manifest in scripts/pin-agy.ts).
+export function checkAgyBuild(build: AgyBuild, what: string): AgyBuild {
   let parsedUrl: URL;
   try {
-    parsedUrl = new URL(url);
+    parsedUrl = new URL(build.url);
   } catch {
-    throw new AgyInstallError(
-      "the Antigravity CLI manifest's url is not a URL",
-    );
+    throw new AgyInstallError(`the Antigravity CLI ${what}'s url is not a URL`);
   }
   if (parsedUrl.protocol !== "https:") {
+    throw new AgyInstallError(`the Antigravity CLI ${what}'s url is not https`);
+  }
+  if (typeof build.sha512 !== "string" || !SHA512_HEX_RE.test(build.sha512)) {
     throw new AgyInstallError(
-      "the Antigravity CLI manifest's url is not https",
+      `the Antigravity CLI ${what} has no sha512 (128 hex characters)`,
     );
   }
-  if (typeof sha512 !== "string" || !SHA512_HEX_RE.test(sha512)) {
-    throw new AgyInstallError(
-      "the Antigravity CLI manifest has no sha512 (128 hex characters)",
-    );
-  }
-  return { version, url, sha512: sha512.toLowerCase() };
+  return { url: build.url, sha512: build.sha512.toLowerCase() };
+}
+
+// Whether `agy --version`'s output names `version`: the pinned version as a
+// whole number, so 1.5.9 matches "1.5.9" and "1.5.9-4515810895593472" but not
+// "1.5.90" or "11.5.9".
+export function reportsVersion(reported: string, version: string): boolean {
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![0-9.])${escaped}(?![0-9])`).test(reported);
 }
 
 export function sha512Hex(bytes: Uint8Array): string {
@@ -244,7 +271,9 @@ export interface InstallAgyDeps {
   readonly fetch: FetchLike;
   // The directory `agy` is written to; created when missing.
   readonly installDir: string;
-  readonly platformKey: string;
+  readonly platformKey: AgyPlatformKey;
+  // Tests only: the release to install. The step itself never passes one.
+  readonly release?: AgyRelease;
   // Runs the installed binary's `--version`. Injectable so tests need no agy.
   readonly runVersion?: (binary: string) => Promise<string>;
 }
@@ -312,44 +341,30 @@ async function defaultRunVersion(binary: string): Promise<string> {
 }
 
 export async function installAgy(deps: InstallAgyDeps): Promise<InstalledAgy> {
-  const manifestUrl = agyManifestUrl(deps.platformKey);
-  let manifestResponse: Response;
-  try {
-    manifestResponse = await deps.fetch(manifestUrl, {
-      signal: AbortSignal.timeout(MANIFEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    throw new AgyInstallError(
-      `the Antigravity CLI manifest could not be fetched (${manifestUrl}): ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  if (!manifestResponse.ok) {
-    throw new AgyInstallError(
-      `the Antigravity CLI manifest answered HTTP ${manifestResponse.status} (${manifestUrl})`,
-    );
-  }
-  const manifest = parseAgyManifest(await manifestResponse.text());
+  const release = deps.release ?? AGY_PINNED_RELEASE;
+  const { version } = release;
+  const build = checkAgyBuild(release.builds[deps.platformKey], "pinned build");
 
   let download: Response;
   try {
-    download = await deps.fetch(manifest.url, {
+    download = await deps.fetch(build.url, {
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     });
   } catch (error) {
     throw new AgyInstallError(
-      `the Antigravity CLI ${manifest.version} could not be downloaded: ${error instanceof Error ? error.message : String(error)}`,
+      `the Antigravity CLI ${version} could not be downloaded: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (!download.ok) {
     throw new AgyInstallError(
-      `the Antigravity CLI ${manifest.version} download answered HTTP ${download.status}`,
+      `the Antigravity CLI ${version} download answered HTTP ${download.status}`,
     );
   }
   const archive = await readCapped(download, MAX_DOWNLOAD_BYTES);
   const actual = sha512Hex(archive);
-  if (actual !== manifest.sha512) {
+  if (actual !== build.sha512) {
     throw new AgyInstallError(
-      `the Antigravity CLI ${manifest.version} download does not match the manifest's sha512 (expected ${manifest.sha512}, got ${actual}); nothing was installed`,
+      `the Antigravity CLI ${version} download does not match the pinned sha512 (expected ${build.sha512}, got ${actual}); nothing was installed`,
     );
   }
 
@@ -379,10 +394,21 @@ export async function installAgy(deps: InstallAgyDeps): Promise<InstalledAgy> {
     await rm(temp, { force: true }).catch(() => undefined);
     throw error;
   }
-  const reported = (
-    await (deps.runVersion ?? defaultRunVersion)(binary)
-  ).trim();
-  return { binary, version: manifest.version, reported };
+  // From here the binary is in place: any refusal removes it, so a failed step
+  // leaves nothing to find on PATH.
+  let reported: string;
+  try {
+    reported = (await (deps.runVersion ?? defaultRunVersion)(binary)).trim();
+    if (!reportsVersion(reported, version)) {
+      throw new AgyInstallError(
+        `agy --version reported ${JSON.stringify(reported.slice(0, 200))}, not the pinned ${version}; nothing was installed`,
+      );
+    }
+  } catch (error) {
+    await rm(binary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return { binary, version, reported };
 }
 
 // The install directory the step passes in AGY_INSTALL_DIR: under the runner's
@@ -397,6 +423,8 @@ export async function runAgyInstall(deps: {
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
   readonly runVersion?: (binary: string) => Promise<string>;
+  // Tests only, like installAgy's.
+  readonly release?: AgyRelease;
 }): Promise<number> {
   try {
     const installDir = deps.env[INSTALL_DIR_ENV] ?? "";
@@ -414,10 +442,11 @@ export async function runAgyInstall(deps: {
       installDir,
       platformKey: agyPlatformKey(deps.platform, deps.arch),
       ...(deps.runVersion === undefined ? {} : { runVersion: deps.runVersion }),
+      ...(deps.release === undefined ? {} : { release: deps.release }),
     });
     appendFileSync(githubPath, `${installDir}\n`);
     deps.stdout(
-      `crysk: installed the Antigravity CLI ${installed.version} (sha512 verified) as ${installed.binary}: ${installed.reported}\n`,
+      `crysk: installed the Antigravity CLI ${installed.version} (pinned, sha512 verified) as ${installed.binary}: ${installed.reported}\n`,
     );
     return 0;
   } catch (error) {
