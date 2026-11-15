@@ -6,6 +6,8 @@
 // 2026-08-10 with
 //   gh pr view <n> --json number,title,state,headRefOid,baseRefName,\
 //     baseRefOid,mergeCommit,additions,deletions,changedFiles
+// (`body` was requested later, S10; these records predate it, which is the
+// shape of a PR with no description for the parser: the field is absent).
 // against musive PRs 1682 and 1660, inlined verbatim — the shape this parser
 // handles is the shape gh actually emits, not the shape a spec described.
 
@@ -810,7 +812,46 @@ describe("resolvePrTarget", () => {
       baseRefName: "dev",
       baseSource: "merge-commit-parent",
       ghDiffStat: { files: 7, insertions: 21, deletions: 8 },
+      body: "",
     });
+  });
+
+  // S10: the hunters read the description as the author's stated intent. A
+  // PR without one is the common case and must review exactly like any other.
+  test("the description is read from `body`, in both the merged and the unmerged shape", () => {
+    const merged = JSON.parse(PR_1682_MERGED) as Record<string, unknown>;
+    merged.body = "Resets the loading flag.\r\n\r\n- [x] tests";
+    expect(resolvePrTarget(JSON.stringify(merged)).body).toBe(
+      "Resets the loading flag.\r\n\r\n- [x] tests",
+    );
+    const open = JSON.parse(PR_OPEN_SYNTHETIC) as Record<string, unknown>;
+    open.body = "Pins the ranges.";
+    expect(resolvePrTarget(JSON.stringify(open)).body).toBe("Pins the ranges.");
+  });
+
+  test("a PR with no description does not fail: an empty, null or absent `body` is the empty string", () => {
+    for (const raw of [PR_1682_MERGED, PR_1660_CLOSED, PR_OPEN_SYNTHETIC]) {
+      const withBody = (body: unknown) => {
+        const record = JSON.parse(raw) as Record<string, unknown>;
+        record.body = body;
+        return JSON.stringify(record);
+      };
+      expect(resolvePrTarget(raw).body).toBe("");
+      expect(resolvePrTarget(withBody("")).body).toBe("");
+      expect(resolvePrTarget(withBody(null)).body).toBe("");
+    }
+  });
+
+  test("a `body` that is neither a string nor null fails loud, naming the field", () => {
+    const record = JSON.parse(PR_1682_MERGED) as Record<string, unknown>;
+    record.body = 42;
+    try {
+      resolvePrTarget(JSON.stringify(record));
+      throw new Error("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliUsageError);
+      expect((error as Error).message).toContain("body");
+    }
   });
 
   test("CLOSED-unmerged uses the recorded base tip, stacked bases included", () => {

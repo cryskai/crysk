@@ -902,6 +902,7 @@ export async function reviewPr(
                 ? {}
                 : pipelineMaterialityInput(config, { profile })),
               prTitle: target.title,
+              prDescription: target.body,
               ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
               // NOT gated on skipDiscovery: an empty-delta re-review still
               // classifies and verifies against this config, and a run whose
