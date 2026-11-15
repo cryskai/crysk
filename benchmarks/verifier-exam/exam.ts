@@ -90,7 +90,10 @@ export function caseProblems(raw: unknown, dir: string): string[] {
   if (c.expect !== "present" && c.expect !== "gone") {
     problems.push('expect must be "present" or "gone"');
   }
-  const f = c.finding;
+  // JSON spells a missing object as null as readily as it omits the key, and
+  // a string or number here has none of the fields either: all read as absent.
+  const f =
+    typeof c.finding === "object" && c.finding !== null ? c.finding : undefined;
   if (f === undefined || typeof f.claim !== "string" || f.claim === "") {
     problems.push("finding.claim must be a non-empty string");
   }

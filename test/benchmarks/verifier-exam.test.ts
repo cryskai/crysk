@@ -76,4 +76,21 @@ describe("caseProblems", () => {
       rmSync(path.dirname(dir), { recursive: true, force: true });
     }
   });
+
+  // JSON can spell a missing object as null. A null or non-object `finding`
+  // must be named as a problem; throwing would abort the check of every case
+  // after it.
+  test("a null or non-object finding is a named problem, not a crash", () => {
+    const dir = caseDir();
+    try {
+      for (const finding of [null, "text", 7]) {
+        const problems = caseProblems({ ...good, finding }, dir);
+        expect(problems.join("\n")).toContain("finding.claim");
+        expect(problems.join("\n")).toContain("finding.locs");
+        expect(problems.join("\n")).toContain("finding.triage_tag");
+      }
+    } finally {
+      rmSync(path.dirname(dir), { recursive: true, force: true });
+    }
+  });
 });
