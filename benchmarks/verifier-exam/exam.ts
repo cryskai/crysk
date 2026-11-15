@@ -311,10 +311,15 @@ async function main(argv: string[]): Promise<number> {
   }
   const only = (flag(argv, "--case") ?? "").split(",").filter(Boolean);
   const cases = await loadCases(path.resolve(bank), only);
+  // A mistyped --case must not read as a clean run.
+  if (cases.length === 0) {
+    console.error("no case matched");
+    return 1;
+  }
   if (command === "check") {
     for (const c of cases) console.log(`ok  ${c.id}`);
     console.log(`${cases.length} case(s)`);
-    return cases.length === 0 ? 1 : 0;
+    return 0;
   }
   const arm = (flag(argv, "--arm") ?? "own") as Arm;
   if (arm !== "own" && arm !== "refuter") {
