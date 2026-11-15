@@ -1715,6 +1715,7 @@ export async function prepareProductionAdmissionContext(input: {
     mode: "conformance",
     binaryPath: authorityOptions.binaryPath,
     openCodeBinaryPath: authorityOptions.openCodeBinaryPath,
+    antigravityBinaryPath: authorityOptions.antigravityBinaryPath,
     env: authorityOptions.env,
     ...registryCredential,
     ...(input.loadSdk !== undefined ? { loadSdk: input.loadSdk } : {}),
@@ -1788,6 +1789,7 @@ export async function prepareProductionAdmissionContext(input: {
     evidence,
     binaryPath: authorityOptions.binaryPath,
     openCodeBinaryPath: authorityOptions.openCodeBinaryPath,
+    antigravityBinaryPath: authorityOptions.antigravityBinaryPath,
     env: authorityOptions.env,
     ...registryCredential,
     ...(input.loadSdk !== undefined ? { loadSdk: input.loadSdk } : {}),
@@ -2276,6 +2278,7 @@ export async function createProductionRuntime(
       mode: effectiveOptions.mode,
       evidence: effectiveOptions.evidence,
       binaryPath: effectiveOptions.binaryPath,
+      antigravityBinaryPath: effectiveOptions.antigravityBinaryPath,
       env: effectiveOptions.env,
       credentialBrokers: effectiveOptions.credentialBrokers,
       openCodeSecretNames: effectiveOptions.openCodeSecretNames,
@@ -2395,6 +2398,8 @@ export function productionFallbackRegistry(options: {
   readonly evidence?: Map<RunnerBackend, D1_11ReadinessEvidence>;
   readonly binaryPath?: string;
   readonly openCodeBinaryPath?: string;
+  // odd/tasks/antigravity-oauth.md T4 (L13 A3): the authority's agy path.
+  readonly antigravityBinaryPath?: string;
   // #161: matches `RunnerAuthorityOptions.env`'s widened shape — this
   // function is fed `options`/`authorityOptions` (both that type) directly.
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -2451,6 +2456,7 @@ export function productionFallbackRegistry(options: {
     evidence: options.evidence,
     binaryPath: options.binaryPath,
     openCodeBinaryPath: options.openCodeBinaryPath,
+    antigravityBinaryPath: options.antigravityBinaryPath,
     env: options.env,
     // Forwarded only when the caller actually supplied one. Substituting a
     // fresh broker here would erase the difference between "no preference"

@@ -143,7 +143,7 @@ A model name says which backend runs it:
 | `claude:sonnet-latest`, `claude:opus-latest`, `claude:haiku-latest`, `claude:fable-latest` | the Claude Code CLI, on the newest version of that model (the CLI's `sonnet`, `opus`, `haiku`, `fable` aliases, which move to each new release) |
 | `claude:claude-sonnet-5-5`, or any full `claude-*` model id | the Claude Code CLI, pinned to that version |
 | `opencode:<provider>/<model>` | OpenCode, on that provider's model id, as `opencode models <provider>` lists it. The model may hold more slashes (`opencode:openrouter/anthropic/claude-sonnet-4.5`): the provider runs to the first one |
-| `agy:<model-id>` | Google Antigravity (the `agy` CLI) on your Google subscription, on the model id as `agy models` lists it (`agy:gemini-4-argon-high`, `agy:claude-sonnet-5-5-high`). The id is lowercase letters, digits, `.`, `_` and `-`, and carries the effort itself. **Not runnable yet**: the name is accepted, but a review whose plan names an `agy:` model, fallbacks included, stops before anything spends with `the antigravity backend (agy: models) is not available yet` |
+| `agy:<model-id>` | Google Antigravity (the `agy` CLI) on your Google subscription, on the model id as `agy models` lists it (`agy:gemini-4-argon-high`, `agy:claude-sonnet-5-5-high`). The id is lowercase letters, digits, `.`, `_` and `-`, and carries the effort itself. It runs when `agy` is on `PATH` and an Antigravity login exists (locally your `agy` login; in CI the `CRYSK_ANTIGRAVITY_OAUTH` secret). Steps read files only: no shell, no web |
 
 A bare `claude:sonnet` is refused rather than guessed, so nobody reads it as a pin:
 

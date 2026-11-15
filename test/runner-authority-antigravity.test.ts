@@ -120,7 +120,9 @@ describe("an agy plan fails closed until its transport exists (S4)", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
-  test("a runtime for a plan naming agy, first or as a fallback, is refused", async () => {
+  // T4 registers the transport, so the route reaches its executable check: a
+  // runtime with no verified agy still refuses the plan before anything runs.
+  test("a runtime for a plan naming agy, first or as a fallback, with no verified agy is refused", async () => {
     for (const models of [
       ["agy:gemini-4-argon-high", "claude:sonnet-latest"],
       ["claude:sonnet-latest", "agy:gemini-4-argon-high"],
@@ -151,7 +153,10 @@ describe("an agy plan fails closed until its transport exists (S4)", () => {
       }
       expect(error, models.join(",")).toBeInstanceOf(Error);
       expect((error as Error).message, models.join(",")).toContain(
-        "the antigravity backend (agy: models) is not available yet",
+        "executable allowlist required for antigravity binding authority",
+      );
+      expect((error as Error).message, models.join(",")).not.toContain(
+        "not available yet",
       );
     }
   });

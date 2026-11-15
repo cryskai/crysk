@@ -3,7 +3,14 @@
 // is not a refusal: agy renews it at startup from the non-rotating refresh
 // token, so REVIEW_EXPIRY_MARGIN_MS applies only to rotating providers.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -179,21 +186,23 @@ describe("admission refuses an agy plan with no login (S5)", () => {
   });
 
   test("a dry run checks no credential", async () => {
-    // Past the credential check, the binding refuses: no agy transport is
-    // registered until T4.
-    await expect(
-      prepareProductionAdmissionContext({
-        workspaceRoot: dir,
-        plan: planOf(["agy:gemini-4-argon-high"]),
-        checkCredentials: false,
-        env: {
-          PATH: dir,
-          GITHUB_ACTIONS: "true",
-          XDG_DATA_HOME: path.join(dir, "xdg"),
-        },
-      }),
-    ).rejects.toThrow(
-      "the antigravity backend (agy: models) is not available yet",
+    // T4: past the credential check, the agy route binds on its registered
+    // transport and the discovered agy.
+    const result = await prepareProductionAdmissionContext({
+      workspaceRoot: dir,
+      plan: planOf(["agy:gemini-4-argon-high"]),
+      checkCredentials: false,
+      env: {
+        PATH: dir,
+        GITHUB_ACTIONS: "true",
+        XDG_DATA_HOME: path.join(dir, "xdg"),
+      },
+    });
+    expect("error" in result).toBe(false);
+    if ("error" in result) return;
+    expect(result.registry.has("antigravity")).toBe(true);
+    expect(result.authorityOptions.antigravityBinaryPath).toBe(
+      await realpath(path.join(dir, "agy")),
     );
   });
 
@@ -204,18 +213,17 @@ describe("admission refuses an agy plan with no login (S5)", () => {
       VALID,
       { mode: 0o600 },
     );
-    await expect(
-      prepareProductionAdmissionContext({
-        workspaceRoot: dir,
-        plan: planOf(["agy:gemini-4-argon-high"]),
-        env: {
-          PATH: dir,
-          GITHUB_ACTIONS: "true",
-          XDG_DATA_HOME: path.join(dir, "xdg"),
-        },
-      }),
-    ).rejects.toThrow(
-      "the antigravity backend (agy: models) is not available yet",
-    );
+    const result = await prepareProductionAdmissionContext({
+      workspaceRoot: dir,
+      plan: planOf(["agy:gemini-4-argon-high"]),
+      env: {
+        PATH: dir,
+        GITHUB_ACTIONS: "true",
+        XDG_DATA_HOME: path.join(dir, "xdg"),
+      },
+    });
+    expect("error" in result).toBe(false);
+    if ("error" in result) return;
+    expect(result.registry.has("antigravity")).toBe(true);
   });
 });

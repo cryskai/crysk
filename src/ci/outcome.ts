@@ -1255,6 +1255,30 @@ const ANTIGRAVITY_LOGIN_FIXES = [
   LEGACY_REVIEW_NOTE,
 ];
 const ANTIGRAVITY_LOGIN_ANNOTATION = `connect Antigravity again in the Crysk dashboard, or set \`${ANTIGRAVITY_OAUTH_SECRET}\` (\`gh secret set ${ANTIGRAVITY_OAUTH_SECRET}\`) and pass it in the crysk-secrets input`;
+// odd/tasks/antigravity-oauth.md T4 (L13 A2): an unusable, expiring or rejected
+// login on an agy route is fixed the same way, by the dashboard reconnect. The
+// platform renews the access token and Google never rotates the refresh token,
+// so a review never needs a new record of its own.
+function antigravityOr(
+  other: CatalogVariant["fixes"],
+): (params: ErrorParams) => readonly string[] {
+  return (params) =>
+    isAntigravityRoute(params)
+      ? ANTIGRAVITY_LOGIN_FIXES
+      : typeof other === "function"
+        ? other(params)
+        : other;
+}
+function antigravityAnnotationOr(
+  other: CatalogVariant["annotationFix"],
+): (params: ErrorParams) => string {
+  return (params) =>
+    isAntigravityRoute(params)
+      ? ANTIGRAVITY_LOGIN_ANNOTATION
+      : typeof other === "function"
+        ? other(params)
+        : other;
+}
 // A refused `crysk-secrets` input (src/ci/crysk-secrets.ts, U1) records
 // malformed_payload with a detail that names a CRYSK_* secret or a line of the
 // input, never a value. Its fix is that secret, not the OpenCode auth store.
@@ -1520,13 +1544,14 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       subscription_expiring: {
         what: "The {provider} subscription login for {step} expires before the review would finish",
         why: "A review never renews a subscription login whose provider rotates its refresh token: renewing it inside the run would spend the stored login and lose the new one with the run's copy",
-        fixes: [
+        fixes: antigravityOr([
           "On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.",
           "On a workflow you manage yourself, run `opencode auth login` again and set the `CRYSK_OPENCODE_<PROVIDER>_OAUTH` secret from its new record: the secret is a snapshot, and nothing renews it for you.",
           "Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.",
-        ],
-        annotationFix:
+        ]),
+        annotationFix: antigravityAnnotationOr(
           "reconnect {provider} in the Crysk dashboard, or on a self-managed workflow run `opencode auth login` and set its `_OAUTH` secret again",
+        ),
       },
       malformed_payload: {
         // WHY no route in the sentence: this class is raised for the OpenCode auth
@@ -1534,20 +1559,30 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         what: "The credential store is not usable: {detail}",
         why: CRED_STORE_WHY,
         fixes: (params) =>
-          isCryskSecretsDetail(params)
-            ? cryskSecretsFixes(params)
-            : [
-                "Check that the store is a JSON object:",
-                "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
-                "In CI the action builds this file from the CRYSK_OPENCODE_* secrets: re-set the one for this provider.",
-                OPENCODE_API_KEY_SECRET,
-              ],
+          isAntigravityRoute(params)
+            ? ANTIGRAVITY_LOGIN_FIXES
+            : isCryskSecretsDetail(params)
+              ? cryskSecretsFixes(params)
+              : [
+                  "Check that the store is a JSON object:",
+                  "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
+                  "In CI the action builds this file from the CRYSK_OPENCODE_* secrets: re-set the one for this provider.",
+                  OPENCODE_API_KEY_SECRET,
+                ],
         annotationFix: (params) =>
-          isCryskSecretsDetail(params)
-            ? cryskSecretsAnnotationFix(params)
-            : "make the OpenCode auth store a JSON object (in CI, re-set the provider's CRYSK_OPENCODE_* secret)",
+          isAntigravityRoute(params)
+            ? ANTIGRAVITY_LOGIN_ANNOTATION
+            : isCryskSecretsDetail(params)
+              ? cryskSecretsAnnotationFix(params)
+              : "make the OpenCode auth store a JSON object (in CI, re-set the provider's CRYSK_OPENCODE_* secret)",
       },
-      source_read_failed: CREDENTIAL_UNUSABLE_ENV,
+      source_read_failed: {
+        ...CREDENTIAL_UNUSABLE_ENV,
+        fixes: antigravityOr(CREDENTIAL_UNUSABLE_ENV.fixes),
+        annotationFix: antigravityAnnotationOr(
+          CREDENTIAL_UNUSABLE_ENV.annotationFix,
+        ),
+      },
       "env-absent": CREDENTIAL_UNUSABLE_ENV,
       default: CREDENTIAL_UNUSABLE_ENV,
     },
@@ -1599,6 +1634,11 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         ],
         annotationFix:
           "create a new key with the provider and run `gh secret set {secret}`",
+      },
+      antigravity_oauth: {
+        why: "Google refused the Antigravity login in that secret: it was revoked, or the Google account no longer allows it",
+        fixes: ANTIGRAVITY_LOGIN_FIXES,
+        annotationFix: ANTIGRAVITY_LOGIN_ANNOTATION,
       },
       opencode_oauth: {
         why: "the ChatGPT login recorded in that secret is expired or revoked",
@@ -1949,6 +1989,18 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         annotationFix:
           "re-run after the limit resets, or set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} to bill per token",
       },
+      // T4 (L13 A2): the Google subscription behind an agy route's one secret.
+      antigravity_oauth: {
+        what: "the Antigravity subscription behind {secret} reached its quota",
+        why: "the Google subscription refuses requests until its quota resets, so an immediate retry would fail the same way",
+        fixes: [
+          "Re-run after the quota resets:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+          `Or choose a claude: or opencode: model for these roles until it does. If the Google account behind the login changed, connect Antigravity again in the Crysk dashboard, which stores the login as \`${ANTIGRAVITY_OAUTH_SECRET}\`.`,
+        ],
+        annotationFix: `re-run after the Antigravity quota resets, or connect Antigravity again in the Crysk dashboard (it stores \`${ANTIGRAVITY_OAUTH_SECRET}\`)`,
+      },
     },
   },
   "CRYSK-PROVIDER-UNAVAILABLE": {
@@ -2105,6 +2157,17 @@ export function renderHunterCause(
     // An OpenCode secret names its own fix with or without the provider's words: the
     // OpenCode transport reports no detail today, and the Claude variants below would
     // send the user to the Anthropic account.
+    if (
+      shared.credential !== undefined &&
+      isAntigravityCredential(shared.credential)
+    ) {
+      return renderCode(
+        "CRYSK-PROVIDER-LIMITED",
+        { ...params, secret: secretNameOf(shared.credential, ctx) },
+        ctx,
+        "antigravity_oauth",
+      );
+    }
     const openCode = openCodeCredentialVariant(shared.credential);
     if (openCode !== undefined && shared.credential !== undefined) {
       return renderCode(
@@ -2249,6 +2312,7 @@ function paramVariant(
     }
     const openCode = openCodeCredentialVariant(params.secret);
     if (openCode !== undefined) return openCode;
+    if (params.secret === ANTIGRAVITY_OAUTH_SECRET) return "antigravity_oauth";
   }
   // A caller that names a variant keeps it, so the default wording stays
   // reachable with a detail present.

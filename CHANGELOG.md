@@ -13,20 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names its own secret (`CRYSK_OPENCODE_OPENAI_OAUTH` is unchanged). The `crysk-secrets` input accepts the new
   name, checks and masks its record like an `_OAUTH` record, and counts it as a credential; with
   `operation: refresh-credential` and `refresh-provider: antigravity`, the refresh step renews it at Google's
-  token endpoint and keeps the stored refresh token, which Google does not rotate. Reviews do not run on it yet.
+  token endpoint and keeps the stored refresh token, which Google does not rotate.
 - **`agy:<model-id>` model names for Google Antigravity.** `models`, `--model` and the CI `model` input accept
   `agy:` and the id as `agy models` lists it (`agy:gemini-4-argon-high`). The effort is part of the id, so an
-  `agy:` entry that sets an `effort` is refused with the reason. Reviews do not run on agy yet: a plan that
-  names an `agy:` model, fallbacks included, stops before anything spends with `the antigravity backend (agy:
-  models) is not available yet`.
-- **The Antigravity credential projection and admission check.** Each agy step will run in its own 0700 home
+  `agy:` entry that sets an `effort` is refused with the reason.
+- **Reviews run on `agy:` models.** When `agy` is on PATH and an Antigravity login exists (the CI record of
+  `CRYSK_ANTIGRAVITY_OAUTH`, or locally your own agy login), each step runs `agy` with the prompt on stdin and
+  `--output-format stream-json`, as a `crysk-step` agent that inherits none of the repository's `AGENTS.md`,
+  `GEMINI.md` or `.agents/` and reads files with `read_file` only; its settings deny file writes, shell
+  commands and URL fetches. The tool count comes from agy's finished tool steps, usage from its result, and
+  the cost is the subscription's ($0 cash). A rejected login, a spent quota or an unusable record names
+  `CRYSK_ANTIGRAVITY_OAUTH` and says to connect Antigravity again in the Crysk dashboard. The action does not
+  install `agy` yet; that arrives in a later release. Grep and Glob for agy steps arrive with Crysk's
+  read-only search tools.
+- **The Antigravity credential projection and admission check.** Each agy step runs in its own 0700 home
   holding only agy's token file, built from the CI record of `CRYSK_ANTIGRAVITY_OAUTH` or, locally, the
   developer's own agy login, plus an empty MCP config; it is deleted after the step. An agy plan with no
   usable login (missing, malformed, or with no refresh token) is refused before anything spends and names
   `CRYSK_ANTIGRAVITY_OAUTH`; an expired access token is not refused, since agy renews it. A failed
-  Antigravity projection always fails the step and never falls back to the operator's environment. Reviews
-  still do not run on agy until its transport ships: before the `not available yet` refusal, an agy plan now
-  also stops when `agy` is not on PATH or no usable login exists.
+  Antigravity projection always fails the step and never falls back to the operator's environment, and an
+  agy step with no projection at all is refused before it spawns. An agy plan stops before anything spends
+  when `agy` is not on PATH or no usable login exists.
 
 ### Changed
 

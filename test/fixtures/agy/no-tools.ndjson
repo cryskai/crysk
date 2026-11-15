@@ -1,0 +1,2 @@
+{"event":"init","session_id":"s-2","model":"gemini-4-argon-high","tools":["read_file"]}
+{"event":"result","result":{"conversation_id":"c-2","status":"SUCCESS","response":"{\"findings\":[]}","duration_seconds":1,"num_turns":1,"usage":{"input_tokens":900,"output_tokens":10,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":910}}}

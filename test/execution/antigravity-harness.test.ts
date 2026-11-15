@@ -28,6 +28,24 @@ class ThrowingBroker implements CredentialBroker {
   }
 }
 
+// A projection the agy transport could run in: its own home, nothing on disk.
+class HomeBroker implements CredentialBroker {
+  projectCalls = 0;
+  async project(): Promise<CredentialProjection> {
+    this.projectCalls++;
+    return {
+      projectionId: "cred-agy-test",
+      kind: "antigravity_subscription_oauth",
+      syntheticHome: "/tmp/crysk-agy-test-home",
+      syntheticConfigHome: "/tmp/crysk-agy-test-home/.gemini/config",
+      syntheticTmp: "/tmp/crysk-agy-test-home/tmp",
+      env: { HOME: "/tmp/crysk-agy-test-home" },
+      files: [],
+      destroy: async () => {},
+    };
+  }
+}
+
 function okOutcome(): TransportOutcome {
   return {
     completion: "success",
@@ -49,9 +67,11 @@ function transportFor(
   backend: ProviderTransport["backend"],
   requests: TransportRequest[],
   declared: boolean,
+  credentialProjection?: ProviderTransport["credentialProjection"],
 ): ProviderTransport {
   return {
     backend,
+    ...(credentialProjection === undefined ? {} : { credentialProjection }),
     ...(declared
       ? {
           admissionIdentity: { executable: "agy", provider: "google" },
@@ -226,7 +246,7 @@ describe("the harness labels an antigravity route google (S5)", () => {
     const result = await runStep(
       harnessWith(
         transportFor("antigravity", requests, false),
-        undefined,
+        new HomeBroker(),
         { count: 0 },
         { count: 0 },
       ),
@@ -241,7 +261,7 @@ describe("the harness labels an antigravity route google (S5)", () => {
     const result = await runStep(
       harnessWith(
         transportFor("antigravity", requests, false),
-        undefined,
+        new HomeBroker(),
         { count: 0 },
         { count: 0 },
       ),
@@ -271,5 +291,93 @@ describe("the harness labels an antigravity route google (S5)", () => {
       modelFamily: "claude",
       modelSnapshot: "gemini-4-argon-high",
     });
+  });
+});
+
+// L13 A1: an agy step runs only inside its own per-step projection, so a
+// harness with no broker, or a transport that claims to own its credentials for
+// a server's lifetime, is refused before anything is admitted or spawned.
+describe("an antigravity step needs a per-step projection (S5)", () => {
+  test("no credential broker: refused, nothing admitted or spawned", async () => {
+    const requests: TransportRequest[] = [];
+    const spawned = { count: 0 };
+    const admitted = { count: 0 };
+    const result = await runStep(
+      harnessWith(
+        transportFor("antigravity", requests, true),
+        undefined,
+        spawned,
+        admitted,
+      ),
+      { route: AGY_ROUTE, credentialKind: "antigravity_subscription_oauth" },
+    );
+    expect(result.status).toBe("failed");
+    expect(result.attempts).toBe(0);
+    expect(result.stderrTail).toBe(
+      "antigravity step refused: it runs only inside a per-step credential projection, and none is configured; step failed before any spawn",
+    );
+    expect(requests.length).toBe(0);
+    expect(admitted.count).toBe(0);
+    expect(spawned.count).toBe(0);
+  });
+
+  test("a server-lifetime antigravity transport: refused without projecting", async () => {
+    const requests: TransportRequest[] = [];
+    const spawned = { count: 0 };
+    const admitted = { count: 0 };
+    const broker = new HomeBroker();
+    const result = await runStep(
+      harnessWith(
+        transportFor("antigravity", requests, true, "server-lifetime"),
+        broker,
+        spawned,
+        admitted,
+      ),
+      { route: AGY_ROUTE, credentialKind: "antigravity_subscription_oauth" },
+    );
+    expect(result.status).toBe("failed");
+    expect(result.stderrTail).toBe(
+      "antigravity step refused: it runs only inside a per-step credential projection, and its transport declares server-lifetime; step failed before any spawn",
+    );
+    expect(broker.projectCalls).toBe(0);
+    expect(requests.length).toBe(0);
+    expect(admitted.count).toBe(0);
+    expect(spawned.count).toBe(0);
+  });
+
+  test("with a broker it runs inside the projected home", async () => {
+    const requests: TransportRequest[] = [];
+    const broker = new HomeBroker();
+    const result = await runStep(
+      harnessWith(
+        transportFor("antigravity", requests, true),
+        broker,
+        { count: 0 },
+        { count: 0 },
+      ),
+      { route: AGY_ROUTE, credentialKind: "antigravity_subscription_oauth" },
+    );
+    expect(result.status).toBe("ok");
+    expect(broker.projectCalls).toBe(1);
+    expect(requests[0]?.isolation.syntheticHome).toBe(
+      "/tmp/crysk-agy-test-home",
+    );
+    expect(requests[0]?.isolation.env.HOME).toBe("/tmp/crysk-agy-test-home");
+  });
+
+  test("a Claude step with no broker still runs on the operator environment", async () => {
+    const requests: TransportRequest[] = [];
+    const result = await runStep(
+      harnessWith(
+        transportFor("claude-code", requests, false),
+        undefined,
+        { count: 0 },
+        { count: 0 },
+      ),
+    );
+    expect(result.status).toBe("ok");
+    expect(requests[0]?.isolation.credentialProjectionId).toBe(
+      "operator-env-fallback",
+    );
   });
 });

@@ -299,7 +299,9 @@ type CatalogFixes = CatalogEntry["variants"][string]["fixes"];
 // function fix picks the steps by backend (missing_subscription_record).
 function fixListsOf(fixes: CatalogFixes): (readonly string[])[] {
   return typeof fixes === "function"
-    ? ["claude-code", "opencode"].map((backend) => fixes({ backend }))
+    ? ["claude-code", "opencode", "antigravity"].map((backend) =>
+        fixes({ backend }),
+      )
     : [fixes];
 }
 

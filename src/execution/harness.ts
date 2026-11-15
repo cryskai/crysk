@@ -994,6 +994,29 @@ export class StepExecutionHarness implements StepRunner {
     const consumesPerStepProjection =
       transport.credentialProjection !== "server-lifetime";
 
+    // odd/tasks/antigravity-oauth.md S5 (L13 A1): an agy step runs only inside
+    // its own per-step projection. With no broker, or a transport that claims
+    // server-lifetime protection, nothing would project its home and the child
+    // would read the operator's Google login, MCP servers and agy settings.
+    if (NEVER_DEGRADED_BACKENDS.has(transport.backend)) {
+      const missing =
+        this.credentialBroker === undefined
+          ? "none is configured"
+          : !consumesPerStepProjection
+            ? "its transport declares server-lifetime"
+            : undefined;
+      if (missing !== undefined) {
+        return {
+          name: step.name,
+          status: "failed",
+          usage: zeroUsage(),
+          attempts: 0,
+          stderrTail: `${transport.backend} step refused: it runs only inside a per-step credential projection, and ${missing}; step failed before any spawn`,
+          resultText: "",
+        };
+      }
+    }
+
     // §6.1 D1-05: project credentials ONCE per run, BEFORE admission or
     // spawn — a projection failure must never reach a provider or leak into
     // an attempt count.

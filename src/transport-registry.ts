@@ -30,6 +30,7 @@ import {
   OpenCodeAuthBroker,
 } from "./security/credential-broker";
 import { redactDiagnostic } from "./security/redact";
+import { AgyCliTransport } from "./transports/agy-cli";
 import { ClaudeCodeCliTransport } from "./transports/claude-code-cli";
 import {
   type OpenCodeObservedIdentity,
@@ -485,6 +486,10 @@ export interface TransportFactoryOptions {
   readonly readMcpConfig?: (path: string) => Promise<string>;
   readonly binaryPath?: string;
   readonly openCodeBinaryPath?: string;
+  // odd/tasks/antigravity-oauth.md T4: the `agy` the binding authority resolved
+  // (withAgyDiscoveryAllowlist), carried like openCodeBinaryPath. The child is
+  // always spawned from the harness-verified path, never from this one.
+  readonly antigravityBinaryPath?: string;
   // #141: absolute, and resolved HERE rather than inside the client. The
   // client is the wrong place for a PATH lookup — the same rule
   // opencode-server.ts states for the opencode binary itself — and the
@@ -601,6 +606,20 @@ export class DefaultTransportRegistry implements TransportRegistry {
       const merged = { ...this.defaultOptions, ...opts };
       return new ClaudeCodeCliTransport({
         spawnFn: merged.spawnFn,
+      });
+    });
+
+    // odd/tasks/antigravity-oauth.md T4: agy: models. The transport runs only
+    // inside a per-step credential projection (the harness refuses it without
+    // a broker), and its capability report is static, so registering it costs
+    // a plan that never names an agy model nothing.
+    this.register("antigravity", (opts) => {
+      const merged = { ...this.defaultOptions, ...opts };
+      return new AgyCliTransport({
+        ...(merged.spawnFn === undefined ? {} : { spawnFn: merged.spawnFn }),
+        ...(merged.antigravityBinaryPath === undefined
+          ? {}
+          : { configuredBinaryPath: merged.antigravityBinaryPath }),
       });
     });
 

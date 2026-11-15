@@ -79,16 +79,69 @@ describe("antigravity remediation (S5)", () => {
     );
   });
 
-  // The CRYSK-CRED-REJECTED / CRYSK-PROVIDER-LIMITED variants with Antigravity's
-  // own fix wait for docs/github-actions.md (docs parity); until then a rejected
-  // login still names its secret as it is.
-  test("a rejected login names CRYSK_ANTIGRAVITY_OAUTH as its secret", () => {
+  // T4 (L13 A2): a rejected or limited login names its secret and Antigravity's
+  // own fix, the dashboard reconnect, never a Claude or ChatGPT login.
+  test("a rejected login names CRYSK_ANTIGRAVITY_OAUTH and the dashboard", () => {
     const rendered = renderHunterCause("auth_invalid", AGY, "action", {
       credential: SECRET,
     });
     expect(rendered?.code).toBe("CRYSK-CRED-REJECTED");
-    expect(rendered?.annotation).toContain(SECRET);
+    if (rendered === undefined) return;
+    expectAntigravityFix(rendered);
+    expect(text(rendered)).toContain("Crysk dashboard");
+    expect(rendered.annotation).toContain(
+      "Provider google rejected the credential in CRYSK_ANTIGRAVITY_OAUTH",
+    );
   });
+
+  test("CRYSK-CRED-REJECTED picks the antigravity variant from the secret", () => {
+    const rendered = renderCode(
+      "CRYSK-CRED-REJECTED",
+      { ...AGY, secret: SECRET },
+      "action",
+    );
+    expectAntigravityFix(rendered);
+    expect(text(rendered)).toContain("Crysk dashboard");
+  });
+
+  test("a spent quota names the Antigravity subscription and the dashboard", () => {
+    for (const detail of [
+      undefined,
+      "Quota exceeded for the Antigravity plan",
+    ]) {
+      const rendered = renderHunterCause("quota_exhausted", AGY, "action", {
+        credential: SECRET,
+        ...(detail === undefined ? {} : { detail }),
+      });
+      expect(rendered?.code).toBe("CRYSK-PROVIDER-LIMITED");
+      if (rendered === undefined) return;
+      expectAntigravityFix(rendered);
+      expect(rendered.annotation).toContain(
+        "The Antigravity subscription behind CRYSK_ANTIGRAVITY_OAUTH reached its quota",
+      );
+      expect(text(rendered)).toContain("Crysk dashboard");
+      expect(text(rendered)).not.toContain("Anthropic");
+    }
+  });
+
+  for (const failureClass of [
+    "malformed_payload",
+    "source_read_failed",
+    "subscription_expiring",
+  ] as const) {
+    test(`${failureClass} on an agy route names the antigravity secret and the dashboard`, () => {
+      const rendered = renderError(
+        { kind: "credential", failureClass },
+        { ...AGY, secret: SECRET, detail: "the Antigravity login record" },
+        "action",
+      );
+      expect(rendered.code).toBe("CRYSK-CRED-UNUSABLE");
+      expectAntigravityFix(rendered);
+      expect(text(rendered)).toContain("Crysk dashboard");
+      expect(text(rendered)).not.toContain("opencode auth");
+      expect(text(rendered)).not.toContain("auth.json");
+    });
+  }
 
   test("no credential at all on an agy route names the antigravity secret", () => {
     expectAntigravityFix(renderCode("CRYSK-CRED-MISSING", AGY, "action"));
