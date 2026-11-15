@@ -20,6 +20,7 @@
 // bank.json, beside the cases, and the repository is rebuilt in a temp dir.
 
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
   cp,
   mkdir,
@@ -111,8 +112,37 @@ export interface MaterializedCase {
   diffPath: string;
 }
 
+// Where cases are looked for, in order:
+//   1. this repository's `cases/`: one self-contained sample, enough for the
+//      tests and for trying the exam out;
+//   2. `<the exam's folder>/bank`, when it exists: a directory or a link to
+//      wherever the real bank is kept;
+//   3. CRYSK_CASEBANK_CASES (several paths, `:`-separated) or `--bank`.
+// The bank itself is kept out of this repository on purpose. It is public,
+// and a bank published with its answer keys ends up in training data; the
+// cases worth having come from the pipeline's own misses, some of them on
+// private repositories.
+export function caseRoots(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  const linked = path.join(examHome(env), "bank");
+  return [
+    path.join(EXAM_DIR, "cases"),
+    ...(existsSync(linked) ? [linked] : []),
+    ...(env.CRYSK_CASEBANK_CASES ?? "")
+      .split(":")
+      .filter((root) => root !== "")
+      .map((root) => path.resolve(root)),
+  ];
+}
+
+// The directory of a case: where it is, or, for a case that does not exist
+// yet, where a new one belongs: the last root, so a new case goes to the
+// bank that was pointed at and not into this repository.
 export function caseDir(id: string): string {
-  return path.join(EXAM_DIR, "cases", id);
+  const roots = caseRoots();
+  const found = roots.find((root) => existsSync(path.join(root, id)));
+  return path.join(found ?? (roots.at(-1) as string), id);
 }
 
 // The bank is the threshold in bank.json plus one key.json per case
@@ -124,18 +154,25 @@ export async function loadBank(): Promise<ExamBank> {
     await readFile(path.join(EXAM_DIR, "bank.json"), "utf8"),
   ) as { threshold: unknown };
   const cases = [];
-  for (const id of (await readdir(path.join(EXAM_DIR, "cases"))).sort()) {
-    const raw = await readFile(
-      path.join(caseDir(id), "key.json"),
-      "utf8",
-    ).catch(() => undefined);
-    // A directory without a key is a case still being written.
-    if (raw === undefined) continue;
-    const key = JSON.parse(raw) as { id?: unknown };
-    if (key.id !== id) {
-      throw new Error(`cases/${id}/key.json names the case "${key.id}"`);
+  const seen = new Map<string, string>();
+  for (const root of caseRoots()) {
+    for (const id of (await readdir(root)).sort()) {
+      const raw = await readFile(path.join(root, id, "key.json"), "utf8").catch(
+        () => undefined,
+      );
+      // A directory without a key is a case still being written.
+      if (raw === undefined) continue;
+      const key = JSON.parse(raw) as { id?: unknown };
+      if (key.id !== id) {
+        throw new Error(`${root}/${id}/key.json names the case "${key.id}"`);
+      }
+      const earlier = seen.get(id);
+      if (earlier !== undefined) {
+        throw new Error(`case ${id} is in both ${earlier} and ${root}`);
+      }
+      seen.set(id, root);
+      cases.push(key);
     }
-    cases.push(key);
   }
   return parseExamBank(JSON.stringify({ threshold, cases }));
 }
@@ -191,7 +228,11 @@ export async function sweepWork(
   let removed = 0;
   for (const name of await readdir(workDir).catch(() => [] as string[])) {
     const entry = path.join(workDir, name);
-    const age = now - (await stat(entry)).mtimeMs;
+    // Another invocation may remove its checkout between the listing and
+    // this look: a vanished entry is simply not a leftover.
+    const info = await stat(entry).catch(() => undefined);
+    if (info === undefined) continue;
+    const age = now - info.mtimeMs;
     if (age > STALE_CHECKOUT_MS) {
       await removeTree(entry);
       removed += 1;
@@ -373,6 +414,14 @@ function isCommentLine(file: string, line: string): boolean {
   return /^(\/\/|\/\*|\*\/|\*(\s|$))/.test(text);
 }
 
+// Lines of a file as an editor numbers them: a final newline ends the last
+// line, it does not start another.
+function lineCount(text: string): number {
+  if (text === "") return 0;
+  const parts = text.split("\n").length;
+  return text.endsWith("\n") ? parts - 1 : parts;
+}
+
 // The comment lines a diff removes, as `file` and the line's number in the
 // old side. A comment that explains a defect, removed by the change under
 // review, hands the answer to whoever reads the diff.
@@ -382,16 +431,34 @@ export function removedCommentLines(
   const found: Array<{ file: string; line: number }> = [];
   let file = "";
   let old = 0;
+  // Lines still owed by the current hunk, from its header. Inside a hunk a
+  // line is told apart by its first character alone: a removed `--count;`
+  // reads `---count;` and a removed `-- a/x` reads `--- a/x`, and neither is
+  // a file header.
+  let oldLeft = 0;
+  let newLeft = 0;
   for (const line of diff.split("\n")) {
+    if (oldLeft > 0 || newLeft > 0) {
+      if (line.startsWith("-")) {
+        if (isCommentLine(file, line.slice(1))) found.push({ file, line: old });
+        old += 1;
+        oldLeft -= 1;
+      } else if (line.startsWith("+")) {
+        newLeft -= 1;
+      } else if (line.startsWith(" ") || line === "") {
+        old += 1;
+        oldLeft -= 1;
+        newLeft -= 1;
+      }
+      // "\ No newline at end of file" belongs to neither side.
+      continue;
+    }
     if (line.startsWith("--- a/")) file = line.slice(6);
-    const hunk = line.match(/^@@ -(\d+)/);
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@/);
     if (hunk) {
       old = Number(hunk[1]);
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      if (isCommentLine(file, line.slice(1))) found.push({ file, line: old });
-      old += 1;
-    } else if (line.startsWith(" ")) {
-      old += 1;
+      oldLeft = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      newLeft = hunk[3] === undefined ? 1 : Number(hunk[3]);
     }
   }
   return found;
@@ -471,7 +538,7 @@ export async function checkCase(examCase: ExamCase): Promise<string[]> {
         ).catch(() => undefined);
         if (text === undefined) {
           problems.push(`${entry.id}: ${site.path} is not in the head tree`);
-        } else if (site.end_line > text.split("\n").length) {
+        } else if (site.end_line > lineCount(text)) {
           problems.push(
             `${entry.id}: ${site.path}:${site.end_line} is past the end of the file`,
           );

@@ -23,7 +23,9 @@ import type { StepResult, StepRunner, StepSpec } from "#review/step-runner";
 import {
   BUNDLED_AGENTS_DIR,
   caseDir,
+  caseRoots,
   checkCase,
+  EXAM_DIR,
   examDirs,
   examHome,
   gradeRecord,
@@ -307,11 +309,57 @@ describe("a case backed by a pinned repository commit", () => {
   });
 });
 
+// The bank lives outside the repository; the repository keeps one sample.
+describe("where cases are read from", () => {
+  test("the sample in the repository, then a linked bank, then the named ones", () => {
+    const home = path.join(HOME, "nowhere");
+    expect(caseRoots({ CRYSK_CASEBANK_HOME: home })).toEqual([
+      path.join(EXAM_DIR, "cases"),
+    ]);
+    expect(
+      caseRoots({ CRYSK_CASEBANK_HOME: home, CRYSK_CASEBANK_CASES: "/a:/b" }),
+    ).toEqual([path.join(EXAM_DIR, "cases"), "/a", "/b"]);
+  });
+
+  test("a bank outside the repository adds its cases, and a new case goes there", async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), "casebank-outside-"));
+    try {
+      await cp(pilotDir, path.join(outside, "py-outside"), { recursive: true });
+      const keyPath = path.join(outside, "py-outside", "key.json");
+      const key = JSON.parse(await readFile(keyPath, "utf8"));
+      await writeFile(keyPath, JSON.stringify({ ...key, id: "py-outside" }));
+      process.env.CRYSK_CASEBANK_CASES = outside;
+      const ids = (await loadBank()).cases.map((c) => c.id);
+      expect(ids).toEqual(["py-invoice-reassign", "py-outside"]);
+      expect(caseDir("py-outside")).toBe(path.join(outside, "py-outside"));
+      expect(caseDir("py-invoice-reassign")).toBe(pilotDir);
+      expect(caseDir("py-not-written-yet")).toBe(
+        path.join(outside, "py-not-written-yet"),
+      );
+    } finally {
+      delete process.env.CRYSK_CASEBANK_CASES;
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("the same case in two places is refused", async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), "casebank-outside-"));
+    try {
+      await cp(pilotDir, path.join(outside, pilot.id), { recursive: true });
+      process.env.CRYSK_CASEBANK_CASES = outside;
+      await expect(loadBank()).rejects.toThrow(/is in both/);
+    } finally {
+      delete process.env.CRYSK_CASEBANK_CASES;
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("removedCommentLines", () => {
   const diff = [
     "--- a/src/a.ts",
     "+++ b/src/a.ts",
-    "@@ -10,6 +10,3 @@ function f() {",
+    "@@ -10,5 +10,2 @@ function f() {",
     " const a = 1;",
     "-  // 32 is not a day",
     "-  if (day > 31) return null;",
@@ -319,7 +367,7 @@ describe("removedCommentLines", () => {
     " return a;",
     "--- a/lib/b.py",
     "+++ b/lib/b.py",
-    "@@ -4,4 +4,2 @@",
+    "@@ -4,3 +4,1 @@",
     "-    # paused schedules are skipped",
     "-    *rest,",
     " x = 1",
@@ -333,7 +381,114 @@ describe("removedCommentLines", () => {
   });
 });
 
+describe("removedCommentLines inside a hunk", () => {
+  // A removed line whose content starts with `--` looks like a file header.
+  test("a removed `--count;` is a removed line, and later numbers hold", () => {
+    const diff = [
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -5,4 +5,1 @@",
+      " keep();",
+      "---count;",
+      "--- a/not-a-header.ts",
+      "-  // the comment",
+    ].join("\n");
+    expect(removedCommentLines(diff)).toEqual([{ file: "src/a.ts", line: 8 }]);
+  });
+
+  test("a second file's header is read once the hunk is over", () => {
+    const diff = [
+      "--- a/one.ts",
+      "+++ b/one.ts",
+      "@@ -1,1 +1,0 @@",
+      "-// gone",
+      "--- a/two.py",
+      "+++ b/two.py",
+      "@@ -3,1 +3,0 @@",
+      "-# gone too",
+    ].join("\n");
+    expect(removedCommentLines(diff)).toEqual([
+      { file: "one.ts", line: 1 },
+      { file: "two.py", line: 3 },
+    ]);
+  });
+});
+
+// Run as a command, with nothing to buy: every one of these has to stop
+// before a model is called.
+describe("exam.ts refuses instead of guessing", () => {
+  async function exam(args: string[]) {
+    const proc = Bun.spawn(
+      ["bun", "run", path.join(EXAM_DIR, "exam.ts"), ...args],
+      { env: { ...process.env }, stdout: "pipe", stderr: "pipe" },
+    );
+    const [stderr, code] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stderr, code };
+  }
+
+  // `--max-usd --fresh` read "--fresh" as the amount; NaN never trips a cap.
+  test.each([
+    [
+      ["run", "--hunter", "logic", "--max-usd", "--fresh"],
+      /--max-usd must be a number/,
+    ],
+    [["run", "--hunter", "logic", "--max-usd"], /--max-usd must be a number/],
+    [
+      ["run", "--hunter", "logic", "--max-usd", "abc"],
+      /--max-usd must be a number/,
+    ],
+    [
+      ["run", "--hunter", "logic", "--concurrency", "0"],
+      /--concurrency must be a whole number/,
+    ],
+    [
+      ["score", "--hunter", "logic", "--min-depth", "deep"],
+      /--min-depth must be a whole number/,
+    ],
+  ])("a numeric option that does not parse: %j", async (args, message) => {
+    const { stderr, code } = await exam(args);
+    expect(code).toBe(64);
+    expect(stderr).toMatch(message);
+  });
+
+  // An empty selection used to exit 0 with pass: true.
+  test.each([
+    [["score", "--hunter", "logic", "--project", "no-such-project"]],
+    [["check", "--area", "concurrency", "--origin", "synthetic"]],
+  ])("a selection that matches no case: %j", async (args) => {
+    const { stderr, code } = await exam(args);
+    expect(code).toBe(64);
+    expect(stderr).toMatch(/no case matches this selection/);
+  });
+});
+
 describe("checkCase", () => {
+  test("a site ending one line past the end of its file is caught", async () => {
+    const built = await materializeCase(pilotDir);
+    let last = 0;
+    try {
+      const text = await readFile(
+        path.join(built.repoDir, "billing/store.py"),
+        "utf8",
+      );
+      expect(text.endsWith("\n")).toBe(true);
+      last = text.trimEnd().split("\n").length;
+    } finally {
+      await removeTree(built.tmp);
+    }
+    const atEnd = structuredClone(pilot);
+    const site = atEnd.must_find[0]?.sites[1];
+    if (site) site.end_line = last;
+    expect(await checkCase(atEnd)).toEqual([]);
+    if (site) site.end_line = last + 1;
+    expect(await checkCase(atEnd)).toEqual([
+      `reassign-stale-listing: billing/store.py:${last + 1} is past the end of the file`,
+    ]);
+  });
+
   test("the self-contained case is fit to run", async () => {
     expect(await checkCase(pilot)).toEqual([]);
   });

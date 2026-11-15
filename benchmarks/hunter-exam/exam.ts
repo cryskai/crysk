@@ -35,6 +35,11 @@
 //                             such cases stay undecided, by design.
 //   --concurrency <n>         cases in flight (default 2).
 //   --max-usd <x>             stop buying runs once this much was spent.
+//   --bank <dir>              a directory of cases to use besides the sample
+//                             in this repository. The bank is kept outside
+//                             the repository: link it once as
+//                             <the exam's folder>/bank and it is found
+//                             without this option.
 //   --home <dir>              the one folder everything goes to (default
 //                             ~/.crysk/casebank, or CRYSK_CASEBANK_HOME).
 //   --out <dir>               this invocation's report folder, when it has to
@@ -89,6 +94,7 @@ import type { AgentSpec } from "#review/spec";
 import {
   BUNDLED_AGENTS_DIR,
   caseDir,
+  caseRoots,
   checkCase,
   examDirs,
   examHome,
@@ -126,7 +132,19 @@ function usage(message: string): never {
   process.exit(64);
 }
 
-const home = path.resolve(value("--home") ?? examHome());
+// Before anything resolves a case: both are read through the environment.
+if (value("--home") !== undefined) {
+  process.env.CRYSK_CASEBANK_HOME = path.resolve(value("--home") as string);
+}
+if (value("--bank") !== undefined) {
+  process.env.CRYSK_CASEBANK_CASES = [
+    process.env.CRYSK_CASEBANK_CASES,
+    path.resolve(value("--bank") as string),
+  ]
+    .filter((root) => root !== undefined && root !== "")
+    .join(":");
+}
+const home = examHome();
 const dirs = examDirs(home);
 await sweepWork(dirs.work);
 
@@ -149,6 +167,7 @@ if (command === "where" || command === "clean") {
     }
   }
   console.log(home);
+  console.log(`cases are read from: ${caseRoots().join(", ")}`);
   const holds: Record<keyof typeof dirs, string> = {
     runs: "stored runs, paid for",
     reports: "report.json and run artifacts, one folder per invocation",
@@ -184,8 +203,8 @@ const narrowing: CaseSelection = {
   ...(list("--project") !== undefined ? { projects: list("--project") } : {}),
   ...(origin !== undefined ? { origin: origin as ExamOrigin } : {}),
   ...(areas !== undefined ? { areas: areas as ExamArea[] } : {}),
-  ...(value("--min-depth") !== undefined
-    ? { minDepth: Number(value("--min-depth")) }
+  ...(argv.includes("--min-depth")
+    ? { minDepth: numberOption("--min-depth", 0, { min: 0, integer: true }) }
     : {}),
   ...(argv.includes("--quick") ? { quick: true } : {}),
   ...(split !== undefined ? { split: split as ExamSplit } : {}),
@@ -233,6 +252,7 @@ if (command === "list" || command === "check") {
     console.log(`\n${listed.length} case(s)`);
     process.exit(0);
   }
+  if (listed.length === 0) usage("no case matches this selection");
   let problems = 0;
   for (const c of listed) {
     const found = await checkCase(c);
@@ -263,8 +283,32 @@ const runsArg = Number(value("--runs") ?? Number.NaN);
 if (argv.includes("--runs") && !(Number.isInteger(runsArg) && runsArg >= 1)) {
   usage("--runs must be a positive integer");
 }
-const concurrency = Math.max(1, Number(value("--concurrency") ?? 2));
-const maxUsd = Number(value("--max-usd") ?? Number.POSITIVE_INFINITY);
+// A numeric option that is present must parse. `--max-usd --fresh` used to
+// read "--fresh" as the amount: NaN, and `spent >= NaN` is never true, so the
+// cap silently never tripped on a command that buys live model calls.
+function numberOption(
+  name: string,
+  fallback: number,
+  rule: { min: number; integer: boolean },
+): number {
+  if (!argv.includes(name)) return fallback;
+  const parsed = Number(value(name) ?? Number.NaN);
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < rule.min ||
+    (rule.integer && !Number.isInteger(parsed))
+  ) {
+    usage(
+      `${name} must be ${rule.integer ? "a whole number" : "a number"}, ${rule.min} or more`,
+    );
+  }
+  return parsed;
+}
+const concurrency = numberOption("--concurrency", 2, { min: 1, integer: true });
+const maxUsd = numberOption("--max-usd", Number.POSITIVE_INFINITY, {
+  min: 0,
+  integer: false,
+});
 
 let ids = list("--case");
 const failedFrom = value("--failed-from");
@@ -283,6 +327,9 @@ const cases = selectCases(bank.cases, {
   ...narrowing,
   ...(ids !== undefined ? { ids } : {}),
 });
+// Nothing selected is not "everything passed": an agent that reads exit code
+// 0 would accept a prompt that was never examined.
+if (cases.length === 0) usage("no case matches this selection");
 
 interface StoredRun extends RunRecord {
   hunter: string;
@@ -324,10 +371,13 @@ async function meanCost(
     for (const file of await readdir(path.join(cacheDir, key)).catch(
       () => [] as string[],
     )) {
-      const run = JSON.parse(
-        await readFile(path.join(cacheDir, key, file), "utf8"),
-      ) as StoredRun;
-      if (run.hunter !== hunter) continue;
+      // Only finished records: a file being written by a run in flight, or
+      // anything else that does not parse, is not a price.
+      if (!/^r\d+\.json$/.test(file)) continue;
+      const run = await readFile(path.join(cacheDir, key, file), "utf8")
+        .then((raw) => JSON.parse(raw) as StoredRun)
+        .catch(() => undefined);
+      if (run === undefined || run.hunter !== hunter) continue;
       costs.push(run.cost_usd);
       if (
         run.changed_lines !== undefined &&
@@ -412,11 +462,13 @@ async function examine(
           effort: request.effort,
           changed_lines: request.changed_lines,
         };
+        // Whole or not at all: a run killed mid-write must not leave half a
+        // record where a paid-for run should be.
         await mkdir(path.join(cacheDir, request.key), { recursive: true });
-        await writeFile(
-          path.join(cacheDir, request.key, `r${replicate}.json`),
-          `${JSON.stringify(slot, null, 2)}\n`,
-        );
+        const slotPath = path.join(cacheDir, request.key, `r${replicate}.json`);
+        const partial = `${slotPath}.${process.pid}.tmp`;
+        await writeFile(partial, `${JSON.stringify(slot, null, 2)}\n`);
+        await rename(partial, slotPath);
       }
     } else {
       reused += 1;

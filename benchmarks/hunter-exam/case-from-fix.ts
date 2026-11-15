@@ -44,6 +44,14 @@ import {
 } from "./run-case";
 
 const argv = Bun.argv.slice(2);
+// --bank <dir>: where the case is written (and looked for). Without it a new
+// case goes to the bank linked in the exam's folder, or into this repository
+// when there is none.
+if (argv.includes("--bank")) {
+  process.env.CRYSK_CASEBANK_CASES = path.resolve(
+    argv[argv.indexOf("--bank") + 1] ?? "",
+  );
+}
 function value(name: string): string {
   const index = argv.indexOf(name);
   const found = index === -1 ? undefined : argv[index + 1];

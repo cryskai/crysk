@@ -74,7 +74,15 @@ tells it that it is being examined.
 
 ## Cases
 
-`bank.json` holds the N-of-M threshold. Each `cases/<id>/` holds what the repository is built from and
+**The bank is not in this repository.** This repository keeps one self-contained sample under `cases/`,
+enough for the tests and for trying the exam out. The real bank lives wherever its owner keeps it, outside:
+this repository is public, and a bank published with its answer keys ends up in training data; the cases
+worth having come from the pipeline's own misses, some of them on private repositories. The exam reads cases
+from this repository's `cases/`, then from `~/.crysk/casebank/bank` when that exists (a directory, or a link
+to the bank), then from `--bank <dir>` or `CRYSK_CASEBANK_CASES`. `exam.ts where` prints the list. A new case
+written by `case-from-fix.ts` goes to the last of those, so to the bank and not into this repository.
+
+`bank.json` holds the N-of-M threshold. Each `<cases>/<id>/` holds what the repository is built from and
 `key.json`, the case's answer: its classification, each planted defect (`must_find`: area, class, depth, what
 is wrong, the lines a finding must point at) and each correct look-alike (`must_not`). The key never enters
 the repository a hunter reads.
@@ -107,4 +115,5 @@ Rules for a case:
 4. Nothing in names, comments or the commit message points at the defect.
 5. Read the claims of a new case's first run before trusting its key: a hunter may find a real defect nobody
    planted.
-6. Holdout cases are kept out of this repository: a public key ends up in training data.
+6. Cases built from other projects' code keep the project's licence in mind: record the repository and
+   commit in `source.json`, and do not publish a bank without the notices its sources ask for.
