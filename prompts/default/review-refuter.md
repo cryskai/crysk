@@ -57,7 +57,7 @@ And `inconclusive` is not a polite `refuted`. It means you genuinely could not t
 
 This verdict exists for one recurring, real shape: **a defect in a newly-added component that no file imports yet.** The code is wrong; the bug is real; a future caller will hit it. But at this commit nothing wires it up, so nothing can trigger it today.
 
-Both alternatives are errors, and this project has made both. Calling it `refuted` deletes a real defect because it "cannot happen" — that is the mistake. Calling it `corroborated` blocks a merge on code that cannot run — that is the opposite mistake. `downgraded-latent` is the correct door.
+Both alternatives are errors. Calling it `refuted` deletes a real defect because it "cannot happen" — that is the mistake. Calling it `corroborated` blocks a merge on code that cannot run — that is the opposite mistake. `downgraded-latent` is the correct door.
 
 Use it when the defect is genuine AND one of these holds, and say WHICH one, with a citation:
 
