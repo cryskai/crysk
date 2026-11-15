@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the above keeps working and now logs the warning: remove the key, the role or the file to silence it;
   (2) a tool that reads `parity_hunter_fired` still finds it, always `false`.
 
+### Security
+
+- The action's engine steps no longer read the checked-out repository's `bunfig.toml` or `.env`. Bun loads both from the working directory even for a script given by absolute path, and a `bunfig.toml` `preload` runs code, inside steps that receive the `crysk-secrets` input. Every `bun` call on an engine script now passes `--no-env-file --config=/dev/null`. This mattered wherever the checked-out code is not trusted, such as a `pull_request_target` workflow that checks out the pull request's head.
+
 ## [0.7.0] - 2026-11-16
 
 ### Added

@@ -1924,7 +1924,7 @@ describe("action.yml hands crysk-secrets only to the steps that read it", () => 
     expect(JSON.stringify(setup.with ?? {})).not.toContain("crysk-secrets");
     // The shell pipes the value on stdin and runs bun with the variable empty.
     expect(setup.run).toBe(
-      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin`,
+      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin`,
     );
   });
 });

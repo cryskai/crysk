@@ -856,7 +856,7 @@ once and then fails the run red, asking for the comment again: it never reviews 
 refuses silently.
 No `pull_request_target` is involved. If you wire `pull_request_target` yourself, the action reviews
 fork heads there too: that event runs in the base repository's context, with its secrets, so choosing
-it is choosing base-context reviews of forks. Crysk reads the head as text and never runs its code.
+it is choosing base-context reviews of forks. Crysk reads the head as text and never runs its code: its own steps run Bun with `--no-env-file --config=/dev/null`, so the checkout's `bunfig.toml` and `.env` are never loaded.
 
 The job `if` never reads `secrets` (GitHub does not allow it there). Credential presence is checked
 inside the action instead: a same-repo pull request with no `CRYSK_*` credential in `crysk-secrets` fails

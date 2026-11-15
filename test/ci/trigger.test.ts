@@ -3002,7 +3002,7 @@ describe("action.yml hands crysk-secrets to the trigger on stdin", () => {
       `\${{ inputs.crysk-secrets }}`,
     );
     expect(triggerStep?.run).toBe(
-      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin`,
+      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin`,
     );
   });
 

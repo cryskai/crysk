@@ -159,7 +159,7 @@ runs:
         # under the runner's temp directory, never the workspace. Bound here
         # ONLY: the refresh steps below leave it unset, so they never touch it.
         CRYSK_PLATFORM_CONFIG_DIR: ${{ runner.temp }}/crysk-platform
-      run: bun "${{ github.action_path }}/src/ci/platform.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform.ts"
 
     # The trigger decides whether this run reviews at all, and it runs FIRST,
     # before `bun install`, so an ignored comment or a fork PR costs seconds
@@ -247,7 +247,7 @@ runs:
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         # Piped to trigger.ts on stdin, never left in its environment (above).
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
-      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin
 
     - name: Install dependencies
       if: steps.trigger.outputs.run == 'true' || (inputs.operation != 'review' && inputs.operation != '')
@@ -295,7 +295,7 @@ runs:
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
         # Piped on stdin, never left in bun's environment (see Resolve trigger).
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
-      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/credential-refresh.ts" --crysk-secrets-stdin
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/credential-refresh.ts" --crysk-secrets-stdin
 
     # Installed unless the run is KNOWN to send no step to the Claude CLI
     # (model-profiles S6): the connect step's routing-claude is exactly `false`
@@ -364,7 +364,7 @@ runs:
         # claude-credentials, opencode-providers, opencode-auth-file), never a
         # value and never to GITHUB_ENV.
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
-      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin
 
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only
     # (install ≠ Run Crysk). Never unpinned. Digest verify of the official
@@ -502,7 +502,7 @@ runs:
         # reads the crysk-secrets input on stdin to EOF, then runs the same CLI
         # bin/pr-hero.js runs, with these arguments; under pipefail the step's
         # exit is still the CLI's (printf cannot fail on a drained pipe).
-        printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/run.ts" "$@"
+        printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/run.ts" "$@"
 
     # Refresh the Crysk token (platform mode only). The installation token from
     # `Connect to Crysk` was minted before the trigger and lives about an hour,
@@ -524,7 +524,7 @@ runs:
         CRYSK_CLAUDE_OAUTH_TOKEN: ''
         CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
-      run: bun "${{ github.action_path }}/src/ci/platform.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform.ts"
 
     # Speaks for every outcome of a run (T2b, S3, T2c): no credential, a pull
     # request that cannot be resolved, a commenter permission that could not be
@@ -576,7 +576,7 @@ runs:
         # Bound like the run id: a record of another attempt of this run is
         # refused, since gh run rerun keeps the run id.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-      run: bun "${{ github.action_path }}/src/ci/publish.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/publish.ts"
 
     # Platform mode only: tell the Crysk platform how this run ended, so every
     # run is recorded with its cost. The report posts metadata only (counts,
@@ -622,7 +622,7 @@ runs:
         CRYSK_RUN_DIR: ${{ steps.run-crysk.outputs.run_dir }}
         TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
         TRIGGER_HEAD_SHA: ${{ steps.trigger.outputs.head_sha }}
-      run: bun "${{ github.action_path }}/src/ci/platform-report.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform-report.ts"
 
     # The same exchange again, for a run that was cancelled (see "Refresh the
     # Crysk token" above): the settle's post must not ride a token minted at the
@@ -640,7 +640,7 @@ runs:
         CRYSK_CLAUDE_OAUTH_TOKEN: ''
         CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
-      run: bun "${{ github.action_path }}/src/ci/platform.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform.ts"
 
     # WHY a separate step: the publish step is !cancelled() on purpose (a
     # superseded run must not report a failure it never had), and a cancelled
@@ -666,7 +666,7 @@ runs:
         # because the trigger clears the outcome directory at job start.
         GITHUB_RUN_ID: ${{ github.run_id }}
         CRYSK_PUBLISH_MODE: cancelled
-      run: bun "${{ github.action_path }}/src/ci/publish.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/publish.ts"
 
     # Platform mode only: send the Crysk platform this run's full trace (every
     # step, attempt, model call and tool call, with timings, tokens and cost),
@@ -718,7 +718,7 @@ runs:
         CRYSK_ACTION_PATH: ${{ github.action_path }}
         TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
         TRIGGER_HEAD_SHA: ${{ steps.trigger.outputs.head_sha }}
-      run: bun "${{ github.action_path }}/src/ci/platform-trace.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform-trace.ts"
 
     # Without this step the triage half of the review loop has no input.
     # `crysk triage reply --pr <n> --from <run-dir> --finding F00N` is the

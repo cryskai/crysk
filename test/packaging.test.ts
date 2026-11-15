@@ -864,7 +864,10 @@ describe("Packaging & distribution configuration", () => {
           `\${{ github.action_path }}`,
           "/action",
         );
-        const fakeBun = `bun() { shift; printf '%s\\n' "$@"; return ${cliExit}; }`;
+        // The real call is `bun --no-env-file --config=/dev/null <script> ...`:
+        // the fake refuses a call without both flags, then drops them and the
+        // script path.
+        const fakeBun = `bun() { [ "$1" = --no-env-file ] && [ "$2" = --config=/dev/null ] || return 97; shift 3; printf '%s\\n' "$@"; return ${cliExit}; }`;
         const result = Bun.spawnSync(
           [
             "bash",
@@ -1393,7 +1396,7 @@ describe("Packaging & distribution configuration", () => {
       expect(step?.name).toBe("Report to Crysk");
       expect(step?.shell).toBe("bash");
       expect(step?.run).toBe(
-        `bun "\${{ github.action_path }}/src/ci/platform-report.ts"`,
+        `bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/platform-report.ts"`,
       );
       const condition = String(step?.if ?? "");
       expect(condition).toContain("!cancelled()");
@@ -1508,7 +1511,7 @@ describe("Packaging & distribution configuration", () => {
         .filter((line) => line !== "" && !line.startsWith("#"))
         .at(-1);
       expect(lastCommand).toBe(
-        `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/run.ts" "$@"`,
+        `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/run.ts" "$@"`,
       );
     });
 
