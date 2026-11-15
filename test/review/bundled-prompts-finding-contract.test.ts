@@ -38,8 +38,17 @@ describe("the bundled hunters' finding contract", () => {
 
   test("defines every value the engine's tier rule reads", async () => {
     const contract = await contractOf(HUNTERS[0] as string);
-    for (const severity of ["BLOCKER", "CRITICAL", "WARNING", "SUGGESTION"]) {
-      expect(contract).toContain(`\`${severity}\``);
+    // Each severity where the rule assigns it, not merely mentioned: the
+    // closing sentence names three of them too, so a bare mention would stay
+    // green with the two steps deleted.
+    for (const assigned of [
+      "it is `BLOCKER` whatever the",
+      "- `CRITICAL` — ordinary operation reaches it",
+      "- `WARNING` — it needs a condition the claim names",
+      "`SUGGESTION` is for a finding with no wrong behaviour",
+      "that corrupts data is `BLOCKER`, not `WARNING`",
+    ]) {
+      expect(contract).toContain(assigned);
     }
     for (const value of [
       "deterministic",

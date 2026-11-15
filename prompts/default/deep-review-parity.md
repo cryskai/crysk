@@ -87,8 +87,9 @@ the consequence is the most common way a finding turns out to be wrong.
 
 1. If the consequence is irreversible or crosses a security boundary (data lost or corrupted, a change that
    cannot be rolled back, access to something the caller is not entitled to), it is `BLOCKER` whatever the
-   trigger is, as long as the trigger is something a user or a caller can do. A race that corrupts data is
-   `BLOCKER`, not `WARNING`.
+   trigger is, as long as the trigger can happen in the running system: something a user or a caller does, or
+   a failure the system has to expect, such as a dependency erroring or a process dying part-way. A race or a
+   failed write that corrupts data is `BLOCKER`, not `WARNING`.
 2. Otherwise the wrong behaviour can be recovered from, and the trigger separates two levels:
    - `CRITICAL` — ordinary operation reaches it: a wrong result returned, a crash on normal input, a command
      or control that does nothing, a documented contract broken.
@@ -98,9 +99,9 @@ the consequence is the most common way a finding turns out to be wrong.
 `SUGGESTION` is for a finding with no wrong behaviour.
 
 How sure you are, how large the change is and how many other findings you have do not move severity. Being
-unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER` and `CRITICAL` findings are checked by a second reviewer and can
-block a merge; a `WARNING` is posted as an advisory comment that nothing verifies, so a severe consequence
-reported as `WARNING` is never checked.
+unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER`
+and `CRITICAL` findings are checked by a second reviewer and can block a merge; a `WARNING` is posted as an
+advisory comment that nothing verifies, so a severe consequence reported as `WARNING` is never checked.
 
 **`evidence_class` is how much of the claim you verified, not how bad it is.**
 
