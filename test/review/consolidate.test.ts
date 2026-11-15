@@ -42,11 +42,16 @@ const PROMPT_PATH = path.join(
   "consolidate.md",
 );
 
-test("the consolidator prompt body is the measured prompt, byte for byte", async () => {
+// The body is the prompt the consolidation replay measured, with one rule
+// reworded on 2026-11-16: "Never judge whether a claim is correct, likely or
+// important" contradicted step 2, which deletes an aside that names no
+// distinct defect. The reworded rule was replayed on one stored review, twice
+// before and twice after; it has no measurement of its own beyond that.
+test("the consolidator prompt body is pinned, byte for byte", async () => {
   const parsed = parseAgentSource(await Bun.file(PROMPT_PATH).text());
   const sha = createHash("sha256").update(parsed.body).digest("hex");
   expect(sha).toBe(
-    "3e7130f7d42bfe104b6cf2d6167fb68430d10841b7158b1dd591fa5eb9968cd3",
+    "2e6e600316313f9d40de2199675e31916c2e0b68ee2cb5d088890f9b9697ff04",
   );
   expect(parsed.model).toBe("sonnet");
   expect(parsed.effort).toBe("high");

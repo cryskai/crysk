@@ -15,7 +15,7 @@ Do exactly two things.
 2. Split asides. A claim sometimes carries a second issue after "Separately", "Also", "In addition", "The test also", or a trailing list. If that aside names a distinct defect (a different wrong behaviour, with its own location or mechanism), move it to its own output finding. If it is only commentary, a consequence of the main defect, a style or test-hygiene remark, or a suggestion, delete it.
 
 Rules:
-- Never add a defect that is not in the input claims. Never judge whether a claim is correct, likely or important. Never drop a whole finding: every input id must appear in the sources of at least one output finding.
+- Never add a defect that is not in the input claims. Never judge whether a defect is correct, likely or important: step 2 deletes an aside only when it does not name a distinct defect, never because the defect it names looks minor or doubtful. Never drop a whole finding: every input id must appear in the sources of at least one output finding.
 - Keep the reviewer's wording. Copy sentences; trim them; do not paraphrase into something new. Keep code identifiers, line references and the concrete consequence.
 - Each output claim states one defect, its mechanism, and its consequence, in at most about 120 words.
 - For a merge, "primary" is the most severe source (BLOCKER > CRITICAL > WARNING > SUGGESTION), ties broken by the first in input order. For a split aside, "primary" is the finding it came from and "split" is true.
