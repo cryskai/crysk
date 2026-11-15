@@ -217,7 +217,13 @@ if (command === "build") {
     usage("build needs --case and --to");
   const built = await materializeCase(caseDir(id));
   try {
-    await rename(built.repoDir, path.resolve(to));
+    await rename(built.repoDir, path.resolve(to)).catch(async (error) => {
+      // rename cannot cross filesystems: copy instead, the checkout itself
+      // is removed below.
+      if ((error as { code?: string }).code !== "EXDEV") throw error;
+      const copy = Bun.spawn(["cp", "-R", built.repoDir, path.resolve(to)]);
+      if ((await copy.exited) !== 0) throw error;
+    });
   } finally {
     await removeTree(built.tmp);
   }

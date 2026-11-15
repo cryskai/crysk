@@ -271,29 +271,12 @@ try {
     return patch;
   };
 
-  const out = caseDir(id);
-  await mkdir(out, { recursive: true });
-  await writeFile(
-    path.join(out, "source.json"),
-    `${JSON.stringify(
-      {
-        ...source,
-        fix,
-        ...(intro !== undefined
-          ? { intro }
-          : carrier !== undefined
-            ? { carrier }
-            : {}),
-        ...(omit.length > 0 ? { drop: omit } : {}),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  if (drop.length > 0) {
-    await writeFile(path.join(out, "base.patch"), await revert(drop));
-  }
+  // Nothing is written until every step has worked: a revert that fails
+  // half-way must not leave a new source.json beside the patches of the case
+  // it was meant to replace.
+  const basePatch = drop.length > 0 ? await revert(drop) : undefined;
   const baseSha = (await git(tree, ["rev-parse", "HEAD"])).trim();
+  let message: string | undefined;
   if (carrier !== undefined) {
     const whole = path.join(tmp, "carrier.patch");
     await writeFile(
@@ -328,15 +311,43 @@ try {
     const subject = (await git(mirror, ["show", "-s", "--format=%s", carrier]))
       .trim()
       .replace(/\s*\(#\d+\)$/, "");
-    await writeFile(path.join(out, "message.txt"), `${subject}\n`);
+    message = `${subject}\n`;
   }
   // The fix's own revert, as it lands in the head tree: where the key's
   // sites go. With a carrier, head.patch holds much more than this.
   const reverted = intro === undefined ? await revert(src) : "";
+  const headPatch = await git(tree, ["diff", "--binary", baseSha, "HEAD"]);
+
+  const out = caseDir(id);
+  await mkdir(out, { recursive: true });
   await writeFile(
-    path.join(out, "head.patch"),
-    await git(tree, ["diff", "--binary", baseSha, "HEAD"]),
+    path.join(out, "source.json"),
+    `${JSON.stringify(
+      {
+        ...source,
+        fix,
+        ...(intro !== undefined
+          ? { intro }
+          : carrier !== undefined
+            ? { carrier }
+            : {}),
+        ...(omit.length > 0 ? { drop: omit } : {}),
+      },
+      null,
+      2,
+    )}\n`,
   );
+  // A case written again without --drop has no base.patch: the old one goes,
+  // or the case would build from a mix of two generations of files.
+  if (basePatch !== undefined) {
+    await writeFile(path.join(out, "base.patch"), basePatch);
+  } else {
+    await rm(path.join(out, "base.patch"), { force: true });
+  }
+  if (message !== undefined) {
+    await writeFile(path.join(out, "message.txt"), message);
+  }
+  await writeFile(path.join(out, "head.patch"), headPatch);
   console.log(`wrote ${out}`);
   console.log("the reverted fix, as line ranges in the head tree:");
   let file = "";
