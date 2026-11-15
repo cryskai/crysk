@@ -1,0 +1,651 @@
+diff --git a/beets/importer/actions.py b/beets/importer/actions.py
+index a1fafe2..c184e93 100644
+--- a/beets/importer/actions.py
++++ b/beets/importer/actions.py
+@@ -34,7 +34,10 @@ class DuplicateAction(str, Enum):
+ 
+     @classmethod
+     def strict_options(cls) -> list[str]:
+-        return [d.text for d in set(cls) - {DuplicateAction.ASK}]
++        return [
++            d.text
++            for d in set(cls) - {DuplicateAction.ASK, DuplicateAction.UPGRADE}
++        ]
+ 
+     @classmethod
+     def choices(cls) -> dict[str, str]:
+@@ -45,3 +48,7 @@ class DuplicateAction(str, Enum):
+     REMOVE = "r", "Remove old"
+     KEEP = "k", "Keep all"
+     ASK = "a", "Ask"
++    # Config-only: not offered in the interactive `ask` prompt (see
++    # `strict_options`). Resolved to SKIP or applied per-track by
++    # `beets.importer.stages._resolve_duplicates`.
++    UPGRADE = "u", "Upgrade"
+diff --git a/beets/importer/stages.py b/beets/importer/stages.py
+index c66a54c..716fcb8 100644
+--- a/beets/importer/stages.py
++++ b/beets/importer/stages.py
+@@ -14,6 +14,9 @@ from .tasks import (
+     ImportTaskFactory,
+     SentinelImportTask,
+     SingletonImportTask,
++    _dup_album_ids,
++    _dup_items,
++    resolve_upgrade,
+ )
+ 
+ if TYPE_CHECKING:
+@@ -272,7 +275,10 @@ def manipulate_files(session: ImportSession, task: ImportTask) -> None:
+     finalizes each task.
+     """
+     if not task.skip:
+-        if task.duplicate_action is DuplicateAction.REMOVE:
++        if task.duplicate_action in (
++            DuplicateAction.REMOVE,
++            DuplicateAction.UPGRADE,
++        ):
+             task.remove_duplicates(session.lib)
+ 
+         if session.config["move"]:
+@@ -340,6 +346,27 @@ def _resolve_duplicates(session: ImportSession, task: ImportTask) -> None:
+                 task, found_duplicates
+             )
+ 
++            if task.duplicate_action is DuplicateAction.UPGRADE:
++                if task.apply:
++                    # Apply metadata early so items carry their final
++                    # (post-tag) identity before we match them against
++                    # old library items, which store post-tag metadata
++                    # too. `_apply_choice` re-applies it later, which is
++                    # harmless (metadata application is idempotent).
++                    task.apply_metadata()
++                old_items = [i for d in found_duplicates for i in _dup_items(d)]
++                keys = config["import"]["duplicate_keys"]["item"].as_str_seq()
++                kept, superseded = resolve_upgrade(
++                    task.imported_items(), old_items, keys
++                )
++                if not kept:
++                    log.debug("upgrade: no track was an improvement, declining")
++                    task.duplicate_action = DuplicateAction.SKIP
++                else:
++                    task.apply_upgrade(
++                        kept, superseded, _dup_album_ids(found_duplicates)
++                    )
++
+             session.log_choice(task, True)
+ 
+ 
+diff --git a/beets/importer/tasks.py b/beets/importer/tasks.py
+index bf4de53..267eed0 100644
+--- a/beets/importer/tasks.py
++++ b/beets/importer/tasks.py
+@@ -67,6 +67,74 @@ class ImportAbortError(Exception):
+     """Raised when the user aborts the tagging operation."""
+ 
+ 
++def _item_dup_key(item: library.Item, keys: list[str]) -> tuple[Any, ...]:
++    """Identity key for matching a track across old/new copies.
++
++    Uses the same `duplicate_keys.item` fields that duplicate
++    *detection* already relies on (`ImportTask.find_duplicates` /
++    `SingletonImportTask.find_duplicates`), so per-track matching can't
++    disagree with what got flagged as a duplicate in the first place.
++    `mb_trackid` is deliberately not preferred here: a re-ripped
++    duplicate commonly gets matched to a different MusicBrainz track
++    ID than the old copy, which would otherwise cause false negatives.
++    """
++    return tuple(item.get(k) for k in keys)
++
++
++def _dup_items(obj: library.Album | library.Item) -> list[library.Item]:
++    """Flatten a found-duplicate (`Album` or `Item`) into its items."""
++    if isinstance(obj, library.Album):
++        return list(obj.items())
++    return [obj]
++
++
++def _dup_album_ids(
++    found_duplicates: Iterable[library.Album | library.Item],
++) -> list[int]:
++    """IDs of the existing albums implicated by a set of found duplicates.
++
++    For album-level duplicates, that's the album itself; for
++    singleton-level duplicates, it's the album the matched item
++    belongs to (if any). Used so an upgrade keeps folding kept items
++    into the album that was actually detected as a duplicate, even
++    when none of its individual tracks end up superseded (e.g. the
++    new import only adds tracks that had no old counterpart).
++    """
++    ids = []
++    for d in found_duplicates:
++        album_id = d.id if isinstance(d, library.Album) else d.album_id
++        if album_id:
++            ids.append(album_id)
++    return list(dict.fromkeys(ids))
++
++
++def resolve_upgrade(
++    new_items: list[library.Item],
++    old_items: list[library.Item],
++    keys: list[str],
++) -> tuple[list[library.Item], list[library.Item]]:
++    """Decide, per track, which new items to keep and which old items
++    they supersede.
++
++    Returns `(kept_new_items, superseded_old_items)`. New items with no
++    matching old item are always kept (they aren't duplicates of
++    anything). New items matching an old item are kept only if their
++    bitrate is higher than the old item's; otherwise they're dropped
++    and the old item is left untouched.
++    """
++    by_key = {_item_dup_key(i, keys): i for i in old_items}
++    kept = []
++    superseded = []
++    for new in new_items:
++        old = by_key.get(_item_dup_key(new, keys))
++        if old is None:
++            kept.append(new)
++        elif new.bitrate > old.bitrate:
++            kept.append(new)
++            superseded.append(old)
++    return kept, superseded
++
++
+ class BaseImportTask:
+     """An abstract base class for importer tasks.
+ 
+@@ -139,6 +207,9 @@ class ImportTask(BaseImportTask):
+     choice_flag: Action | None = None
+     match: AlbumMatch | TrackMatch | None = None
+ 
++    # Set by `add()`; only valid afterwards (see class docstring).
++    album: library.Album
++
+     # Keep track of the current task item
+     cur_album: str | None = None
+     cur_artist: str | None = None
+@@ -146,6 +217,12 @@ class ImportTask(BaseImportTask):
+     rec: Recommendation | None = None
+     duplicate_action: DuplicateAction | None = None
+ 
++    # Set by `apply_upgrade` when `duplicate_action` is UPGRADE; consumed
++    # by `remove_duplicates` to know which old items to remove and which
++    # old albums to graft the kept new items onto.
++    _upgrade_superseded: list[library.Item] | None = None
++    _upgrade_old_albums: list[int] | None = None
++
+     def __init__(
+         self,
+         toppath: util.PathBytes | None,
+@@ -232,6 +309,34 @@ class ImportTask(BaseImportTask):
+             return self.match.items
+         return []
+ 
++    def apply_upgrade(
++        self,
++        kept: list[library.Item],
++        superseded: list[library.Item],
++        old_album_ids: list[int],
++    ) -> None:
++        """Narrow this task's items down to `kept`, so `add()` only
++        commits tracks that improve on (or have no) existing duplicate.
++
++        Called by `_resolve_duplicates`, before `add()` runs, when
++        `duplicate_action` is UPGRADE. Stashes `superseded` and
++        `old_album_ids` for `remove_duplicates` to consume later, once
++        `self.album` exists.
++        """
++        kept_ids = {id(i) for i in kept}
++        if self.choice_flag in (Action.ASIS, Action.RETAG):
++            self.items = kept
++        elif self.choice_flag == Action.APPLY and isinstance(
++            self.match, AlbumMatch
++        ):
++            self.match.mapping = {
++                item: track
++                for item, track in self.match.mapping.items()
++                if id(item) in kept_ids
++            }
++        self._upgrade_superseded = superseded
++        self._upgrade_old_albums = old_album_ids
++
+     def apply_metadata(self) -> None:
+         """Copy metadata from match info to the items."""
+         if self.match:  # TODO: redesign to remove the conditional
+@@ -244,6 +349,10 @@ class ImportTask(BaseImportTask):
+         return duplicate_items
+ 
+     def remove_duplicates(self, lib: library.Library) -> None:
++        if self._upgrade_superseded is not None:
++            self._remove_upgrade_duplicates(lib)
++            return
++
+         duplicate_albums = self.find_duplicates(lib)
+         log.debug("removing {} old duplicate albums", len(duplicate_albums))
+ 
+@@ -272,6 +381,61 @@ class ImportTask(BaseImportTask):
+                     clutter=config["clutter"].as_str_seq(),
+                 )
+ 
++    def _remove_upgrade_duplicates(self, lib: library.Library) -> None:
++        """Remove only the old items superseded by an upgrade.
++
++        Unlike plain `remove`, this never deletes tracks that weren't
++        actually replaced: if any of an old duplicate album's items
++        survive, the newly-kept items are folded into that album (so
++        the album stays as one row) instead of being left in the
++        fresh album `add()` created for them. Only when an old album
++        is left with no surviving items is it deleted outright.
++        """
++        superseded = self._upgrade_superseded or []
++        log.debug("upgrade: removing {} superseded item(s)", len(superseded))
++        for item in superseded:
++            item.remove(with_album=False)
++            if lib.directory in util.ancestry(item.path):
++                log.debug("deleting superseded {.filepath}", item)
++                util.remove(item.path)
++                util.prune_dirs(
++                    os.path.dirname(item.path),
++                    lib.directory,
++                    clutter=config["clutter"].as_str_seq(),
++                )
++
++        grafted = False
++        for album_id in self._upgrade_old_albums or []:
++            old_album = lib.get_album(album_id)
++            if old_album is None:
++                continue
++
++            surviving = list(old_album.items())
++            if not surviving:
++                artpath = old_album.artpath
++                old_album.remove(with_items=False)
++                if artpath and lib.directory in util.ancestry(artpath):
++                    log.debug("deleting duplicate album art {}", artpath)
++                    util.remove(artpath)
++                    util.prune_dirs(
++                        os.path.dirname(artpath),
++                        lib.directory,
++                        clutter=config["clutter"].as_str_seq(),
++                    )
++            elif not grafted:
++                # Partial overlap: keep the album together by moving the
++                # kept new items onto the surviving old album, rather than
++                # leaving them split across two Album rows.
++                for item in self.imported_items():
++                    item.album_id = old_album.id
++                    item.store()
++                self.album.remove(with_items=False)
++                self.album = old_album
++                grafted = True
++            # else: a second old album also has survivors; an item can
++            # only belong to one album, so leave it untouched rather than
++            # arbitrarily choosing between two candidates.
++
+     def set_fields(self, lib: library.Library) -> None:
+         """Sets the fields given at CLI or configuration to the specified
+         values, for both the album and all its items.
+@@ -685,6 +849,24 @@ class SingletonImportTask(ImportTask):
+     def imported_items(self) -> list[library.Item]:
+         return [self.item]
+ 
++    def apply_upgrade(
++        self,
++        kept: list[library.Item],
++        superseded: list[library.Item],
++        old_album_ids: list[int],
++    ) -> None:
++        """Stash the superseded old item for `remove_duplicates`.
++
++        `kept` is always `[self.item]` here: a singleton task has
++        exactly one item, and the caller only invokes this method when
++        that item was kept (otherwise the task is routed to SKIP).
++        `old_album_ids` is unused: `Item.duplicates_query` restricts
++        singleton duplicate detection to other singletons (items with
++        no album), so a matched duplicate never has an old album to
++        preserve.
++        """
++        self._upgrade_superseded = superseded
++
+     def _emit_imported(self, lib: library.Library) -> None:
+         for item in self.imported_items():
+             plugins.send("item_imported", lib=lib, item=item)
+@@ -716,6 +898,10 @@ class SingletonImportTask(ImportTask):
+     duplicate_items = find_duplicates
+ 
+     def remove_duplicates(self, lib: library.Library) -> None:
++        if self._upgrade_superseded is not None:
++            self._remove_upgrade_duplicates(lib)
++            return
++
+         duplicate_items = self.find_duplicates(lib)
+         log.debug("removing {} old duplicated items", len(duplicate_items))
+         for item in duplicate_items:
+@@ -729,6 +915,26 @@ class SingletonImportTask(ImportTask):
+                     clutter=config["clutter"].as_str_seq(),
+                 )
+ 
++    def _remove_upgrade_duplicates(self, lib: library.Library) -> None:
++        """Remove the superseded old item(s).
++
++        Singleton duplicate detection only ever matches other
++        singletons (see `find_duplicates`), so there's never an old
++        album to preserve here, unlike the `ImportTask` version.
++        """
++        superseded = self._upgrade_superseded or []
++        log.debug("upgrade: removing {} superseded item(s)", len(superseded))
++        for item in superseded:
++            item.remove()
++            if lib.directory in util.ancestry(item.path):
++                log.debug("deleting superseded {.filepath}", item)
++                util.remove(item.path)
++                util.prune_dirs(
++                    os.path.dirname(item.path),
++                    lib.directory,
++                    clutter=config["clutter"].as_str_seq(),
++                )
++
+     def add(self, lib: library.Library) -> None:
+         with lib.transaction():
+             self.record_replaced(lib)
+diff --git a/docs/reference/config.rst b/docs/reference/config.rst
+index f434ba8..17c618f 100644
+--- a/docs/reference/config.rst
++++ b/docs/reference/config.rst
+@@ -822,11 +822,18 @@ Default:
+ duplicate_action
+ ~~~~~~~~~~~~~~~~
+ 
+-Either ``skip``, ``keep``, ``remove``, ``merge`` or ``ask``. Controls how
+-duplicates are treated in import task. "skip" means that new item(album or
+-track) will be skipped; "keep" means keep both old and new items; "remove" means
+-remove old item; "merge" means merge into one album; "ask" means the user should
+-be prompted for the action each time. The default is ``ask``.
++Either ``skip``, ``keep``, ``remove``, ``merge``, ``upgrade`` or ``ask``.
++Controls how duplicates are treated in import task. "skip" means that new
++item(album or track) will be skipped; "keep" means keep both old and new items;
++"remove" means remove old item; "merge" means merge into one album; "ask" means
++the user should be prompted for the action each time. The default is ``ask``.
++
++"upgrade" compares each newly-imported track against any existing duplicate with
++the same :ref:`duplicate_keys`: a track only replaces its old counterpart if it
++has a higher bitrate, and tracks with no old counterpart are always added. The
++rest of the existing album is left untouched, and the kept tracks are added to
++that same album rather than a new one. Unlike the other options, "upgrade" is
++config-only and is not offered when ``duplicate_action`` is ``ask``.
+ 
+ .. _duplicate_verbose_prompt:
+ 
+diff --git a/test/plugins/test_art.py b/test/plugins/test_art.py
+index 08955b4..14f2a8c 100644
+--- a/test/plugins/test_art.py
++++ b/test/plugins/test_art.py
+@@ -845,7 +845,6 @@ class TestFanartTV(UseThePlugin, FetchImageHelper):
+ class TestArtImporter(UseThePlugin):
+     @pytest.fixture(autouse=True)
+     def _setup(self, setup_plugin):
+-
+         # Mock the album art fetcher to always return our test file.
+         self.art_file = self.temp_path / "tmpcover.jpg"
+         self.art_file.touch()
+diff --git a/test/test_importer.py b/test/test_importer.py
+index c626202..beabd4b 100644
+--- a/test/test_importer.py
++++ b/test/test_importer.py
+@@ -9,6 +9,7 @@ import stat
+ import sys
+ import unicodedata
+ import unittest
++from contextlib import contextmanager
+ from functools import cached_property
+ from io import StringIO
+ from pathlib import Path
+@@ -23,7 +24,12 @@ from mediafile import MediaFile
+ 
+ from beets import config, importer, logging, util
+ from beets.autotag import AlbumInfo, AlbumMatch, Distance, TrackInfo
+-from beets.importer.tasks import albums_in_dir
++from beets.importer.tasks import (
++    ImportTaskFactory,
++    albums_in_dir,
++    resolve_upgrade,
++)
++from beets.library import Item
+ from beets.test import _common
+ from beets.test.helper import (
+     NEEDS_FFPROBE,
+@@ -1288,6 +1294,233 @@ class TestImportDuplicateSingleton(ImportHelper):
+         return item
+ 
+ 
++@contextmanager
++def bitrate_overrides(bitrates_by_title):
++    """Force specific per-title bitrates on newly-read import items.
++
++    The test mp3 fixtures all share one real bitrate, so this patches
++    `ImportTaskFactory.read_item` to simulate different-quality
++    encodes without needing distinct binary fixtures.
++    """
++    original = ImportTaskFactory.read_item
++
++    def patched(self, path):
++        item = original(self, path)
++        if item is not None and item.title in bitrates_by_title:
++            item.bitrate = bitrates_by_title[item.title]
++        return item
++
++    with patch.object(ImportTaskFactory, "read_item", patched):
++        yield
++
++
++DUP_KEYS = ["artist", "title"]
++
++
++class ResolveUpgradeTest(unittest.TestCase):
++    """Unit tests for `resolve_upgrade`, the per-track decision
++    algorithm behind `duplicate_action: upgrade`.
++    """
++
++    def _item(self, artist="artist", title="title", bitrate=128000):
++        return Item(artist=artist, title=title, bitrate=bitrate)
++
++    def test_matched_better_bitrate_replaces_old(self):
++        old = self._item(bitrate=128000)
++        new = self._item(bitrate=320000)
++        kept, superseded = resolve_upgrade([new], [old], DUP_KEYS)
++        assert kept == [new]
++        assert superseded == [old]
++
++    def test_matched_worse_bitrate_keeps_old(self):
++        old = self._item(bitrate=320000)
++        new = self._item(bitrate=128000)
++        kept, superseded = resolve_upgrade([new], [old], DUP_KEYS)
++        assert kept == []
++        assert superseded == []
++
++    def test_matched_equal_bitrate_keeps_old(self):
++        old = self._item(bitrate=128000)
++        new = self._item(bitrate=128000)
++        kept, superseded = resolve_upgrade([new], [old], DUP_KEYS)
++        assert kept == []
++        assert superseded == []
++
++    def test_unmatched_new_item_always_kept(self):
++        old = self._item(title="old title", bitrate=320000)
++        new = self._item(title="new title", bitrate=64000)
++        kept, superseded = resolve_upgrade([new], [old], DUP_KEYS)
++        assert kept == [new]
++        assert superseded == []
++
++    def test_mixed_batch(self):
++        old_a = self._item(title="A", bitrate=128000)
++        old_d = self._item(title="D", bitrate=128000)
++        new_a = self._item(title="A", bitrate=320000)  # upgrade, wins
++        new_b = self._item(title="B", bitrate=64000)  # no old counterpart
++        kept, superseded = resolve_upgrade(
++            [new_a, new_b], [old_a, old_d], DUP_KEYS
++        )
++        assert kept == [new_a, new_b]
++        assert superseded == [old_a]
++
++
++@patch(
++    "beets.metadata_plugins.candidates", Mock(side_effect=album_candidates_mock)
++)
++class TestImportDuplicateAlbumUpgrade(PluginMixin, ImportHelper):
++    """Album-level `duplicate_action: upgrade`, full track-for-track
++    overlap (the whole album is either replaced or left alone).
++    """
++
++    plugin = "musicbrainz"
++
++    def setup_beets(self):
++        super().setup_beets()
++        # Existing album with one track, matching what the incoming
++        # import will be tagged as (see `album_candidates_mock`).
++        self.old_item = self.add_item_fixture(
++            artist="artist",
++            albumartist="artist",
++            album="album",
++            title="new title",
++            mb_trackid="old trackid",
++            bitrate=128000,
++        )
++        self.old_album = self.lib.add_album([self.old_item])
++
++        self.prepare_album_for_import(1)
++        self.importer = self.setup_importer(
++            duplicate_keys={"album": "albumartist album"}
++        )
++        self.config["import"]["duplicate_action"] = "upgrade"
++
++    def test_upgrade_replaces_lower_quality_duplicate(self):
++        with bitrate_overrides({"Tag Track 1": 320000}):
++            self.importer.run()
++
++        assert len(self.lib.albums()) == 1
++        assert len(self.lib.items()) == 1
++        item = self.lib.items().get()
++        assert item.title == "new title"
++        assert item.bitrate == 320000
++        assert self.lib.get_item(self.old_item.id) is None
++
++    def test_upgrade_skips_lower_quality_new_copy(self):
++        with bitrate_overrides({"Tag Track 1": 64000}):
++            self.importer.run()
++
++        assert len(self.lib.albums()) == 1
++        assert len(self.lib.items()) == 1
++        item = self.lib.items().get()
++        assert item.id == self.old_item.id
++        assert item.bitrate == 128000
++        assert self.old_item.filepath.exists()
++
++
++class TestImportDuplicateAlbumUpgradeMixed(ImportHelper):
++    """Album-level `duplicate_action: upgrade` where the new import
++    mixes a genuine quality upgrade of one existing track with tracks
++    that have no old counterpart at all (e.g. filling in a
++    previously-incomplete album). The surviving old tracks and the
++    kept new tracks must end up in the same album.
++    """
++
++    def setup_beets(self):
++        super().setup_beets()
++        self.old_track1 = self.add_item_fixture(
++            artist="Tag Artist",
++            albumartist="Tag Artist",
++            album="Tag Album",
++            title="Tag Track 1",
++            bitrate=64000,
++        )
++        self.old_track4 = self.add_item_fixture(
++            artist="Tag Artist",
++            albumartist="Tag Artist",
++            album="Tag Album",
++            title="Tag Track 4",
++            bitrate=64000,
++        )
++        self.old_album = self.lib.add_album([self.old_track1, self.old_track4])
++
++        self.prepare_album_for_import(3)  # Tag Track 1, 2, 3
++        self.importer = self.setup_importer(autotag=False)
++        self.config["import"]["duplicate_action"] = "upgrade"
++
++    def test_upgrade_and_new_tracks_join_existing_album(self):
++        with bitrate_overrides({"Tag Track 1": 320000}):
++            self.importer.run()
++
++        assert len(self.lib.albums()) == 1
++        items = list(self.lib.items())
++        assert len(items) == 4
++        by_title = {i.title: i for i in items}
++        assert by_title["Tag Track 1"].bitrate == 320000
++        assert by_title["Tag Track 4"].bitrate == 64000
++        assert "Tag Track 2" in by_title
++        assert "Tag Track 3" in by_title
++        assert all(i.album_id == self.old_album.id for i in items)
++        assert self.lib.get_item(self.old_track1.id) is None
++        # Untouched old track keeps its original row and file.
++        assert by_title["Tag Track 4"].id == self.old_track4.id
++        assert self.old_track4.filepath.exists()
++
++    def test_rejected_upgrade_still_adds_new_tracks(self):
++        with bitrate_overrides({"Tag Track 1": 40000}):
++            self.importer.run()
++
++        assert len(self.lib.albums()) == 1
++        items = list(self.lib.items())
++        assert len(items) == 4
++        by_title = {i.title: i for i in items}
++        assert by_title["Tag Track 1"].id == self.old_track1.id
++        assert by_title["Tag Track 1"].bitrate == 64000
++        assert "Tag Track 2" in by_title
++        assert "Tag Track 3" in by_title
++        assert all(i.album_id == self.old_album.id for i in items)
++        assert self.old_track1.filepath.exists()
++
++
++@patch(
++    "beets.metadata_plugins.item_candidates",
++    Mock(side_effect=item_candidates_mock),
++)
++class TestImportDuplicateSingletonUpgrade(ImportHelper):
++    def setup_beets(self):
++        super().setup_beets()
++        self.old_item = self.add_item_fixture(
++            artist="artist",
++            title="title",
++            mb_trackid="old trackid",
++            bitrate=128000,
++        )
++
++        self.prepare_album_for_import(1)
++        self.importer = self.setup_singleton_importer()
++        self.config["import"]["duplicate_action"] = "upgrade"
++
++    def test_upgrade_replaces_lower_quality_duplicate(self):
++        with bitrate_overrides({"Tag Track 1": 320000}):
++            self.importer.run()
++
++        assert len(self.lib.items()) == 1
++        item = self.lib.items().get()
++        assert item.mb_trackid == "new trackid"
++        assert item.bitrate == 320000
++        assert self.lib.get_item(self.old_item.id) is None
++
++    def test_upgrade_skips_lower_quality_new_copy(self):
++        with bitrate_overrides({"Tag Track 1": 64000}):
++            self.importer.run()
++
++        assert len(self.lib.items()) == 1
++        item = self.lib.items().get()
++        assert item.id == self.old_item.id
++        assert item.mb_trackid == "old trackid"
++        assert self.old_item.filepath.exists()
++
++
+ class TagLogTest(unittest.TestCase):
+     def test_tag_log_line(self):
+         sio = StringIO()

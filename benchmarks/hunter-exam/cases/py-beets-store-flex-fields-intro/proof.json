@@ -1,0 +1,8 @@
+{
+  "kind": "blame",
+  "intro": "acd2b0ef77ccde44d518a998a78a6dfc3d52b43a",
+  "fix": "2fe5dc7a0e627860d96e54ae37ec73af915534e3",
+  "evidence": "beets/dbcore/db.py at the introducing commit, Model.store: the loop `for key in self._fields` is rewritten to `for key in fields_to_store` (default self._fields), still adding every dirty key to the UPDATE assignments; beets/ui/commands.py update_items defaults `fields` to library.Item._media_fields and passes it to item.store(fields_to_store=fields). The fix later added `key in self._fields` to the condition of that same loop.",
+  "manifest_at_intro": "yes",
+  "why": "At that commit BeetsPlugin.add_media_field (beets/plugins.py) adds the plugin's field to Item._media_fields, whose docstring says a media field may be flexible, and Item.read sets item[key] for each of them; so `update` hands a flexible key to store(), which puts it in the main-table UPDATE. Established by reading the code at that commit; not run."
+}

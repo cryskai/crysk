@@ -1,0 +1,140 @@
+diff --git a/beets/library.py b/beets/library.py
+index dd0d83b..ac890f5 100644
+--- a/beets/library.py
++++ b/beets/library.py
+@@ -225,8 +225,11 @@ class Item(object):
+ 
+     def move(self, dest, copy=False):
+         """Moves or copies the item's file, updating the path value if
+-        the move succeeds.
++        the move succeeds. If a file exists at ``dest``, then it is
++        slightly modified to be unique.
+         """
++        if not util.samefile(self.path, dest):
++            dest = util.unique_path(dest)
+         if copy:
+             util.copy(self.path, dest)
+         else:
+@@ -1264,6 +1267,7 @@ class Album(BaseAlbum):
+         # Normal operation.
+         if oldart == artdest:
+             util.soft_remove(oldart)
++        artdest = util.unique_path(artdest)
+         util.copy(path, artdest)
+         self.artpath = artdest
+ 
+diff --git a/beets/util/__init__.py b/beets/util/__init__.py
+index a70148c..263ff56 100644
+--- a/beets/util/__init__.py
++++ b/beets/util/__init__.py
+@@ -245,6 +245,27 @@ def move(path, dest, replace=False, pathmod=None):
+     _assert_not_exists(dest, pathmod)
+     return shutil.move(path, dest)
+ 
++def unique_path(path):
++    """Returns a version of ``path`` that does not exist on the
++    filesystem. Specifically, if ``path` itself already exists, then
++    something unique is appended to the path.
++    """
++    if not os.path.exists(syspath(path)):
++        return path
++
++    base, ext = os.path.splitext(path)
++    match = re.search(r'\.(\d)+$', base)
++    if match:
++        num = int(match.group(1))
++        base = base[:match.start()]
++    else:
++        num = 0
++    while True:
++        num += 1
++        new_path = '%s.%i%s' % (base, num, ext)
++        if not os.path.exists(new_path):
++            return new_path
++
+ # Note: POSIX actually supports \ and : -- I just think they're
+ # a pain. And ? has caused problems for some.
+ CHAR_REPLACE = [
+diff --git a/test/test_files.py b/test/test_files.py
+index bf61ea0..188d9be 100644
+--- a/test/test_files.py
++++ b/test/test_files.py
+@@ -113,6 +113,17 @@ class MoveTest(unittest.TestCase, _common.ExtraAsserts):
+             # Make everything writable so it can be cleaned up.
+             os.chmod(self.path, 0777)
+             os.chmod(self.i.path, 0777)
++
++    def test_move_avoids_collision_with_existing_file(self):
++        # Make a conflicting file at the destination.
++        dest = self.lib.destination(self.i)
++        os.makedirs(os.path.dirname(dest))
++        touch(dest)
++
++        self.lib.move(self.i)
++        self.assertNotEqual(self.i.path, dest)
++        self.assertEqual(os.path.dirname(self.i.path),
++                         os.path.dirname(dest))
+     
+ class HelperTest(unittest.TestCase):
+     def test_ancestry_works_on_file(self):
+@@ -296,6 +307,25 @@ class ArtFileTest(unittest.TestCase, _common.ExtraAsserts):
+         ai.set_art(artdest)
+         self.assertTrue(os.path.exists(ai.artpath))
+ 
++    def test_setart_to_conflicting_file_gets_new_path(self):
++        newart = os.path.join(self.libdir, 'newart.jpg')
++        touch(newart)
++        i2 = item()
++        i2.path = self.i.path
++        i2.artist = 'someArtist'
++        ai = self.lib.add_album((i2,))
++        self.lib.move(i2, True)
++
++        # Make a file at the destination.
++        artdest = ai.art_destination(newart)
++        touch(artdest)
++
++        # Set the art.
++        ai.set_art(newart)
++        self.assertNotEqual(artdest, ai.artpath)
++        self.assertEqual(os.path.dirname(artdest),
++                         os.path.dirname(ai.artpath))
++
+     def test_setart_sets_permissions(self):
+         os.remove(self.art)
+ 
+@@ -533,6 +563,34 @@ class WalkTest(unittest.TestCase):
+         self.assertEqual(res[0],
+                          (self.base, [], []))
+ 
++class UniquePathTest(unittest.TestCase):
++    def setUp(self):
++        self.base = os.path.join(_common.RSRC, 'testdir')
++        os.mkdir(self.base)
++        touch(os.path.join(self.base, 'x.mp3'))
++        touch(os.path.join(self.base, 'x.1.mp3'))
++        touch(os.path.join(self.base, 'x.2.mp3'))
++        touch(os.path.join(self.base, 'y.mp3'))
++    def tearDown(self):
++        if os.path.exists(self.base):
++            shutil.rmtree(self.base)
++
++    def test_new_file_unchanged(self):
++        path = util.unique_path(os.path.join(self.base, 'z.mp3'))
++        self.assertEqual(path, os.path.join(self.base, 'z.mp3'))
++
++    def test_conflicting_file_appends_1(self):
++        path = util.unique_path(os.path.join(self.base, 'y.mp3'))
++        self.assertEqual(path, os.path.join(self.base, 'y.1.mp3'))
++
++    def test_conflicting_file_appends_higher_number(self):
++        path = util.unique_path(os.path.join(self.base, 'x.mp3'))
++        self.assertEqual(path, os.path.join(self.base, 'x.3.mp3'))
++
++    def test_conflicting_file_with_number_increases_number(self):
++        path = util.unique_path(os.path.join(self.base, 'x.1.mp3'))
++        self.assertEqual(path, os.path.join(self.base, 'x.3.mp3'))
++
+ def suite():
+     return unittest.TestLoader().loadTestsFromName(__name__)
+ 

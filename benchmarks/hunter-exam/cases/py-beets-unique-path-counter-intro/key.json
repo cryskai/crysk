@@ -1,0 +1,26 @@
+{
+  "id": "py-beets-unique-path-counter-intro",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-intro",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "counter-capture-last-digit",
+      "area": "logic",
+      "severity": "advisory",
+      "class": "wrong-capture-group",
+      "depth": 0,
+      "what": "unique_path finds an existing numeric suffix with a pattern that repeats the capture group, so for a name ending in two or more digits the captured counter is only the last digit; the next candidate is numbered from that digit instead of the full number and the file gets an unexpected name.",
+      "sites": [
+        {
+          "path": "beets/util/__init__.py",
+          "start_line": 248,
+          "end_line": 267
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

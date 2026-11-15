@@ -1,0 +1,8 @@
+{
+  "kind": "blame",
+  "intro": "e3ec80849176a1ea0b62ac05415fa9b15be9f601",
+  "fix": "3909bf2b4edda5dfd82ac344b4bcb95a83bb7040",
+  "evidence": "beets/library/models.py at the introducing commit: LibModel._setitem and __getitem__ now read context.get_music_dir() instead of self.db.directory; beets/context.py defines the ContextVar with default b\"\"; beets/library/library.py sets it once in Library.__init__. beetsplug/web/__init__.py (unchanged by this commit) serves files from request handlers, run with threaded=True. The fix added `context.set_music_dir(g.lib.directory)` to the web plugin's before_request.",
+  "manifest_at_intro": "yes",
+  "why": "A new thread starts with an empty context, so the value set in Library.__init__ is not visible to the web plugin's per-request threads at that commit; item.path then joins the stored relative path to an empty directory. The same commit makes par_map copy the caller's context into its workers, which shows the thread boundary was a known concern. Established by reading; not run."
+}

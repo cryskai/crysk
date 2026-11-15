@@ -1,0 +1,152 @@
+diff --git a/beets/context.py b/beets/context.py
+new file mode 100644
+index 0000000..4555011
+--- /dev/null
++++ b/beets/context.py
+@@ -0,0 +1,14 @@
++from contextvars import ContextVar
++
++# Holds the music dir context
++_music_dir_var: ContextVar[bytes] = ContextVar("music_dir", default=b"")
++
++
++def get_music_dir() -> bytes:
++    """Get the current music directory context."""
++    return _music_dir_var.get()
++
++
++def set_music_dir(value: bytes) -> None:
++    """Set the current music directory context."""
++    _music_dir_var.set(value)
+diff --git a/beets/library/library.py b/beets/library/library.py
+index ab42b45..3984795 100644
+--- a/beets/library/library.py
++++ b/beets/library/library.py
+@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
+ import platformdirs
+ 
+ import beets
+-from beets import dbcore
++from beets import context, dbcore
+ from beets.util import normpath
+ 
+ from . import migrations
+@@ -40,6 +40,7 @@ class Library(dbcore.Database):
+         super().__init__(path, timeout=timeout)
+ 
+         self.directory = normpath(directory or platformdirs.user_music_path())
++        context.set_music_dir(self.directory)
+ 
+         self.path_formats = path_formats
+         self.replacements = replacements
+diff --git a/beets/library/models.py b/beets/library/models.py
+index 7ca0941..2c7c8a8 100644
+--- a/beets/library/models.py
++++ b/beets/library/models.py
+@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
+ from mediafile import MediaFile, UnreadableFileError
+ 
+ import beets
+-from beets import dbcore, logging, plugins, util
++from beets import context, dbcore, logging, plugins, util
+ from beets.dbcore import types
+ from beets.util import (
+     MoveOperation,
+@@ -94,9 +94,8 @@ class LibModel(dbcore.Model["Library"]):
+             # Store paths relative to the music directory
+             # Check for absolute path because item may be initialised with
+             # a relative path already
+-            if os.path.isabs(value):
+-                with suppress(ValueError, AttributeError):
+-                    value = os.path.relpath(value, self.db.directory)
++            if os.path.isabs(value) and (music_dir := context.get_music_dir()):
++                value = os.path.relpath(value, music_dir)
+ 
+         return super()._setitem(key, value)
+ 
+@@ -104,8 +103,7 @@ class LibModel(dbcore.Model["Library"]):
+         value = super().__getitem__(key)
+         if key == "path" and value:
+             # Return absolute paths.
+-            with suppress(ValueError, AttributeError):
+-                value = os.path.join(self.db.directory, value)
++            value = normpath(os.path.join(context.get_music_dir(), value))
+ 
+         return value
+ 
+diff --git a/beets/util/__init__.py b/beets/util/__init__.py
+index 27bbb90..d4ce8ab 100644
+--- a/beets/util/__init__.py
++++ b/beets/util/__init__.py
+@@ -16,6 +16,7 @@
+ 
+ from __future__ import annotations
+ 
++import contextvars
+ import errno
+ import fnmatch
+ import os
+@@ -1047,17 +1048,21 @@ def asciify_path(path: str, sep_replace: str) -> str:
+ 
+ 
+ def par_map(transform: Callable[[T], Any], items: Sequence[T]) -> None:
+-    """Apply the function `transform` to all the elements in the
+-    iterable `items`, like `map(transform, items)` but with no return
+-    value.
++    """Apply a transformation to each item concurrently using a thread pool.
+ 
+-    The parallelism uses threads (not processes), so this is only useful
+-    for IO-bound `transform`s.
++    Propagates the calling thread's context variables into each worker,
++    ensuring that context-dependent state is available during parallel
++    execution.
+     """
+-    pool = ThreadPool()
+-    pool.map(transform, items)
+-    pool.close()
+-    pool.join()
++    ctx = contextvars.copy_context()  # snapshot parent context at call time
++
++    def _worker(item: T) -> Any:
++        # ThreadPool workers may run concurrently, so each task needs its own
++        # child context rather than sharing one Context instance.
++        return ctx.copy().run(transform, item)
++
++    with ThreadPool() as pool:
++        pool.map(_worker, items)
+ 
+ 
+ class cached_classproperty(Generic[T]):
+diff --git a/test/plugins/test_ipfs.py b/test/plugins/test_ipfs.py
+index b94bd55..5481b85 100644
+--- a/test/plugins/test_ipfs.py
++++ b/test/plugins/test_ipfs.py
+@@ -37,7 +37,9 @@ class IPFSPluginTest(PluginTestCase):
+             try:
+                 if check_item.get("ipfs", with_album=False):
+                     ipfs_item = os.fsdecode(os.path.basename(want_item.path))
+-                    want_path = f"/ipfs/{test_album.ipfs}/{ipfs_item}"
++                    want_path = os.path.normpath(
++                        f"/ipfs/{test_album.ipfs}/{ipfs_item}"
++                    )
+                     want_path = bytestring_path(want_path)
+                     assert check_item.path == want_path
+                     assert (
+diff --git a/test/test_query.py b/test/test_query.py
+index 79d9add..aa9453c 100644
+--- a/test/test_query.py
++++ b/test/test_query.py
+@@ -337,6 +337,13 @@ class TestPathQuery:
+ 
+         assert {i.title for i in lib.items(q)} == set(expected_titles)
+ 
++    def test_absolute(self, lib, helper):
++        q = f"path::{helper.lib_path / '/aaa/bb/c.mp3'}"
++
++        assert {i.title for i in lib.items(q)} == {"path item"}
++        item = lib.items(q)[0]
++        assert item._values_fixed["path"] == str(helper.lib_path / "/aaa/bb/c.mp3").encode()
++
+     @pytest.mark.skipif(sys.platform == "win32", reason=WIN32_NO_IMPLICIT_PATHS)
+     @pytest.mark.parametrize(
+         "q, expected_titles",

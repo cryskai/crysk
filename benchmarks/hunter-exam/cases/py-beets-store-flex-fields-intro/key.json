@@ -1,0 +1,26 @@
+{
+  "id": "py-beets-store-flex-fields-intro",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-intro",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "flex-key-in-column-update",
+      "area": "data",
+      "severity": "blocking",
+      "class": "contract-mismatch",
+      "depth": 2,
+      "what": "Model.store now loops over the caller-supplied fields_to_store instead of the model's real columns, and update passes it every media field (default Item._media_fields); a media field registered by a plugin is a flexible attribute, so it is added to the SET clause of the main-table UPDATE and the statement fails with no such column.",
+      "sites": [
+        {
+          "path": "beets/dbcore/db.py",
+          "start_line": 353,
+          "end_line": 360
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

@@ -1,0 +1,183 @@
+diff --git a/beets/dbcore/db.py b/beets/dbcore/db.py
+index daa636d..37ec1a3 100644
+--- a/beets/dbcore/db.py
++++ b/beets/dbcore/db.py
+@@ -342,7 +342,7 @@ class Model(object):
+ 
+     # Database interaction (CRUD methods).
+ 
+-    def store(self):
++    def store(self, fields_to_store=None):
+         """Save the object's metadata into the library database.
+         """
+         self._check_db()
+@@ -350,7 +350,9 @@ class Model(object):
+         # Build assignments for query.
+         assignments = []
+         subvars = []
+-        for key in self._fields:
++        if fields_to_store is None:
++            fields_to_store = self._fields
++        for key in fields_to_store:
+             if key != 'id' and key in self._dirty:
+                 self._dirty.remove(key)
+                 assignments.append(key + '=?')
+diff --git a/beets/library.py b/beets/library.py
+index 59784e8..ef079b6 100644
+--- a/beets/library.py
++++ b/beets/library.py
+@@ -323,8 +323,8 @@ class LibModel(dbcore.Model):
+         funcs.update(plugins.template_funcs())
+         return funcs
+ 
+-    def store(self):
+-        super(LibModel, self).store()
++    def store(self, fields_to_store=None):
++        super(LibModel, self).store(fields_to_store)
+         plugins.send('database_change', lib=self._db, model=self)
+ 
+     def remove(self):
+@@ -729,7 +729,8 @@ class Item(LibModel):
+ 
+         self._db._memotable = {}
+ 
+-    def move(self, copy=False, link=False, basedir=None, with_album=True):
++    def move(self, copy=False, link=False, basedir=None, with_album=True,
++             fields_to_store=None):
+         """Move the item to its designated location within the library
+         directory (provided by destination()). Subdirectories are
+         created as needed. If the operation succeeds, the item's path
+@@ -759,7 +760,7 @@ class Item(LibModel):
+         # Perform the move and store the change.
+         old_path = self.path
+         self.move_file(dest, copy, link)
+-        self.store()
++        self.store(fields_to_store)
+ 
+         # If this item is in an album, move its art.
+         if with_album:
+@@ -1000,7 +1001,7 @@ class Album(LibModel):
+             util.prune_dirs(os.path.dirname(old_art),
+                             self._db.directory)
+ 
+-    def move(self, copy=False, link=False, basedir=None):
++    def move(self, copy=False, link=False, basedir=None, fields_to_store=None):
+         """Moves (or copies) all items to their destination. Any album
+         art moves along with them. basedir overrides the library base
+         directory for the destination. The album is stored to the
+@@ -1010,7 +1011,7 @@ class Album(LibModel):
+ 
+         # Ensure new metadata is available to items for destination
+         # computation.
+-        self.store()
++        self.store(fields_to_store)
+ 
+         # Move items.
+         items = list(self.items())
+@@ -1019,7 +1020,7 @@ class Album(LibModel):
+ 
+         # Move art.
+         self.move_art(copy, link)
+-        self.store()
++        self.store(fields_to_store)
+ 
+     def item_dir(self):
+         """Returns the directory containing the album's first item,
+@@ -1108,7 +1109,7 @@ class Album(LibModel):
+ 
+         plugins.send('art_set', album=self)
+ 
+-    def store(self):
++    def store(self, fields_to_store=None):
+         """Update the database with the album information. The album's
+         tracks are also updated.
+         """
+@@ -1119,7 +1120,7 @@ class Album(LibModel):
+                 track_updates[key] = self[key]
+ 
+         with self._db.transaction():
+-            super(Album, self).store()
++            super(Album, self).store(fields_to_store)
+             if track_updates:
+                 for item in self.items():
+                     for key, value in track_updates.items():
+diff --git a/beets/ui/commands.py b/beets/ui/commands.py
+index 2f323b6..88b5de7 100644
+--- a/beets/ui/commands.py
++++ b/beets/ui/commands.py
+@@ -1081,11 +1081,14 @@ default_commands.append(list_cmd)
+ 
+ # update: Update library contents according to on-disk tags.
+ 
+-def update_items(lib, query, album, move, pretend):
++def update_items(lib, query, album, move, pretend, fields):
+     """For all the items matched by the query, update the library to
+     reflect the item's embedded tags.
+     """
+     with lib.transaction():
++        if fields is None:
++            fields = library.Item._media_fields
++
+         items, _ = _do_query(lib, query, album)
+ 
+         # Walk through the items and pick up their changes.
+@@ -1125,23 +1128,23 @@ def update_items(lib, query, album, move, pretend):
+ 
+             # Check for and display changes.
+             changed = ui.show_model_changes(item,
+-                                            fields=library.Item._media_fields)
++                                            fields=fields)
+ 
+             # Save changes.
+             if not pretend:
+                 if changed:
+                     # Move the item if it's in the library.
+                     if move and lib.directory in ancestry(item.path):
+-                        item.move()
++                        item.move(fields_to_store=fields)
+ 
+-                    item.store()
++                    item.store(fields_to_store=fields)
+                     affected_albums.add(item.album_id)
+                 else:
+                     # The file's mtime was different, but there were no
+                     # changes to the metadata. Store the new mtime,
+                     # which is set in the call to read(), so we don't
+                     # check this again in the future.
+-                    item.store()
++                    item.store(fields_to_store=fields)
+ 
+         # Skip album changes while pretending.
+         if pretend:
+@@ -1160,17 +1163,17 @@ def update_items(lib, query, album, move, pretend):
+             # Update album structure to reflect an item in it.
+             for key in library.Album.item_keys:
+                 album[key] = first_item[key]
+-            album.store()
++            album.store(fields_to_store=fields)
+ 
+             # Move album art (and any inconsistent items).
+             if move and lib.directory in ancestry(first_item.path):
+                 log.debug(u'moving album {0}', album_id)
+-                album.move()
++                album.move(fields_to_store=fields)
+ 
+ 
+ def update_func(lib, opts, args):
+     update_items(lib, decargs(args), opts.album, ui.should_move(opts.move),
+-                 opts.pretend)
++                 opts.pretend, opts.fields)
+ 
+ 
+ update_cmd = ui.Subcommand(
+@@ -1190,6 +1193,10 @@ update_cmd.parser.add_option(
+     u'-p', u'--pretend', action='store_true',
+     help=u"show all changes but do nothing"
+ )
++update_cmd.parser.add_option(
++    u'-F', u'--field', default=None, action='append', dest='fields',
++    help=u'list of fields to update'
++)
+ update_cmd.func = update_func
+ default_commands.append(update_cmd)
+ 

@@ -1,0 +1,22 @@
+diff --git a/beets/library/models.py b/beets/library/models.py
+index 89f04ae..7ca0941 100644
+--- a/beets/library/models.py
++++ b/beets/library/models.py
+@@ -95,8 +95,6 @@ class LibModel(dbcore.Model["Library"]):
+             # Check for absolute path because item may be initialised with
+             # a relative path already
+             if os.path.isabs(value):
+-                # Suppress these errors since tests may initialise an Item
+-                # without the db attribute
+                 with suppress(ValueError, AttributeError):
+                     value = os.path.relpath(value, self.db.directory)
+ 
+@@ -106,8 +104,6 @@ class LibModel(dbcore.Model["Library"]):
+         value = super().__getitem__(key)
+         if key == "path" and value:
+             # Return absolute paths.
+-            # Suppress these errors since tests may initialise an Item
+-            # without the db attribute
+             with suppress(ValueError, AttributeError):
+                 value = os.path.join(self.db.directory, value)
+ 

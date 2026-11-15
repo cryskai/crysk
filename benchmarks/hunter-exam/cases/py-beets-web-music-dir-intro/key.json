@@ -1,0 +1,36 @@
+{
+  "id": "py-beets-web-music-dir-intro",
+  "language": "python",
+  "project": "beets",
+  "origin": "real-intro",
+  "split": "dev",
+  "quick": false,
+  "must_find": [
+    {
+      "id": "music-dir-context-per-thread",
+      "area": "concurrency",
+      "severity": "blocking",
+      "class": "context-not-propagated",
+      "depth": 3,
+      "what": "Item and album paths are now made relative to and absolute from a context variable that Library.__init__ sets only in the thread that built the library (default empty), so code running in any other thread, such as the web plugin's threaded request handlers, resolves stored relative paths against an empty directory and gets wrong paths back silently.",
+      "sites": [
+        {
+          "path": "beets/library/models.py",
+          "start_line": 86,
+          "end_line": 108
+        },
+        {
+          "path": "beets/context.py",
+          "start_line": 1,
+          "end_line": 14
+        },
+        {
+          "path": "beets/library/library.py",
+          "start_line": 43,
+          "end_line": 43
+        }
+      ]
+    }
+  ],
+  "must_not": []
+}

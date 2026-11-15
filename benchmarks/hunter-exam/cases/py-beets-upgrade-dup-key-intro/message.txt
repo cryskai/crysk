@@ -1,0 +1,1 @@
+Add bitrate-based upgrade duplicate_action

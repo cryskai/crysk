@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/beetbox/beets",
+  "commit": "a2cb1600644c9e2b6e02f74dba99b525e6f6bec6",
+  "fix": "3909bf2b4edda5dfd82ac344b4bcb95a83bb7040",
+  "intro": "e3ec80849176a1ea0b62ac05415fa9b15be9f601",
+  "drop": ["docs/changelog.rst"]
+}

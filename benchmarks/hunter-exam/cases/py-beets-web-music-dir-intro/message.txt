@@ -1,0 +1,1 @@
+Use context to share music_dir
