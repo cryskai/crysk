@@ -218,7 +218,8 @@ export function modelNameFromAlias(value: string): ModelName {
 
 // The roles a model can be assigned to (S1). `refuter` covers the verifier and
 // the adjudicator too: the three judge one finding against the code, and the
-// verifier and adjudicator run the refuter's prompt family. `judge` is the
+// verifier and adjudicator run as the refuter's agent (the verifier under its
+// own engine-owned instructions, prompts/verifier.md). `judge` is the
 // materiality judge. Hunters are open: `hunter.<key>` for any hunter key the
 // review spec declares, checked against the spec when the plan is built.
 export const FIXED_MODEL_ROLES = [

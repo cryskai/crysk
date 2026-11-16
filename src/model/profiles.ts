@@ -21,7 +21,7 @@ import { OPENAI_PROFILE } from "./profiles/openai";
 
 // The roles a profile assigns. `hunter` covers every `hunter.<key>` the
 // profile does not name in `hunters`. `refuter` covers the verifier and the
-// adjudicator too: they run the refuter's prompt family under its step key.
+// adjudicator too: they run as the refuter's agent, under its step key.
 export const PROFILE_ROLES = [
   "hunter",
   "refuter",

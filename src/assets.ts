@@ -13,6 +13,7 @@ import {
   SCOUT_PROMPT_PATH,
   SUMMARIZER_PROMPT_PATH,
   TRIAGE_SKILL_FILES,
+  VERIFIER_PROMPT_PATH,
 } from "./asset-manifest";
 
 export type AssetMode = "dev" | "npm" | "compiled";
@@ -25,6 +26,7 @@ export interface EngineAssets {
   materialityPromptPath: string;
   scoutPromptPath: string;
   summarizerPromptPath: string;
+  verifierPromptPath: string;
   triageSkillFiles: Record<string, string>; // logical filename → path, from the manifest
   ciSetupSkillFiles: Record<string, string>; // logical filename → path, from the manifest
   prSkillFiles: Record<string, string>; // logical filename → path, from the manifest
@@ -74,7 +76,7 @@ function resolveVersion(): string {
     // Ignore read errors
   }
 
-  return "0.6.1";
+  return "0.7.0";
 }
 
 // Bun file imports can emit "./name-hash.ext" in bundled npm builds.
@@ -120,6 +122,7 @@ export function resolveEngineAssets(): EngineAssets {
     materialityPromptPath: resolveBundledFilePath(MATERIALITY_PROMPT_PATH),
     scoutPromptPath: resolveBundledFilePath(SCOUT_PROMPT_PATH),
     summarizerPromptPath: resolveBundledFilePath(SUMMARIZER_PROMPT_PATH),
+    verifierPromptPath: resolveBundledFilePath(VERIFIER_PROMPT_PATH),
     triageSkillFiles: resolveBundledFileMap(TRIAGE_SKILL_FILES),
     ciSetupSkillFiles: resolveBundledFileMap(CI_SETUP_SKILL_FILES),
     prSkillFiles: resolveBundledFileMap(PR_SKILL_FILES),

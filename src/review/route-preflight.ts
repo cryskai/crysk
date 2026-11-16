@@ -95,6 +95,8 @@ export function enginePromptPath(
       return assets.summarizerPromptPath;
     case "materiality.md":
       return assets.materialityPromptPath;
+    case "verifier.md":
+      return assets.verifierPromptPath;
   }
 }
 
@@ -159,6 +161,20 @@ export function pipelineConsolidateInput(prompts: RunPromptOptions): {
       bundled: true,
     },
   };
+}
+
+// The re-review verifier's body is ENGINE-owned like the consolidation
+// prompt. The verifier asks whether an earlier finding's defect is still
+// present at the current head, which is not the refuter's question, so it does
+// not run under the refuter's body. Only the body is its own: model, effort,
+// tools and route stay the refuter agent's (`runVerify`), so a custom
+// `review-refuter.md` still sets those and no longer shapes what the
+// verifier is told. Outside the agents dir on purpose: a `review-verifier.md`
+// there would fall under the two-way rule and break every custom directory.
+export function pipelineVerifierInput(prompts: RunPromptOptions): {
+  verifier: { promptPath: string };
+} {
+  return { verifier: { promptPath: enginePromptPath("verifier.md", prompts) } };
 }
 
 // The materiality gate (odd/tasks/materiality-gate.md) is ENGINE-owned like

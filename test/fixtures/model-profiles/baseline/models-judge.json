@@ -12,7 +12,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": [],
-      "systemPromptSha256": "9fc226dace19631d5587ecb5ccbea27278f30e4d511da2bce647cec006b0d2f7",
+      "systemPromptSha256": "a51e3b718bff5625db54b8eae43d913618d21c38e3c163be2dae4f33e22136a8",
       "promptSha256": "0231a5d9fc6810a4c8b69eebd5d53404e6432825c28db77cafd107dce2902c0d",
       "cliModel": "sonnet",
       "argv": [
@@ -271,7 +271,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "17694a98710c672032d6edda4f5a98722993b1b5a01e1f4a6664c86fb626b229",
+      "systemPromptSha256": "c3185e34557d426675aef38940fc61ac0c318552c5856ea3e5572e09a0ec9601",
       "promptSha256": "82a74d242804c5b876f6441d3c560d8fa368b459357bb60f735c3ca550ddb8cf",
       "cliModel": "opus",
       "argv": [

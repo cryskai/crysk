@@ -22,6 +22,27 @@ function promptFiles(dir: string): string[] {
   });
 }
 
+// The CI adjudicator's system prompt ships with the triage skill, outside
+// prompts/. The pipeline renders it for a request that carries a finding, the
+// author's reply and a JSON contract; the skill renders the same file for a
+// sub-agent the author's agent spawns. Neither request carries the skill's
+// own document, so the body can name neither it nor a caller.
+const ADJUDICATOR_PROMPT = path.join(
+  import.meta.dir,
+  "..",
+  "..",
+  "skills",
+  "crysk-loop",
+  "adjudicator.md",
+);
+// "this project has made both", "this very design found": the engine's own
+// history, told to a model that reviews somebody else's repository.
+const OWN_HISTORY = /\bthis (?:very )?(?:project|design)\b/gi;
+
+function modelReadFiles(): string[] {
+  return [...promptFiles(PROMPTS_DIR), ADJUDICATOR_PROMPT];
+}
+
 describe("bundled prompts are self-contained", () => {
   test("no prompt cites a gotcha by id", () => {
     const files = promptFiles(PROMPTS_DIR);
@@ -32,5 +53,35 @@ describe("bundled prompts are self-contained", () => {
       ),
     );
     expect(offenders).toEqual([]);
+  });
+
+  test("no prompt offers the engine's own history as a reason", () => {
+    const offenders = modelReadFiles().flatMap((file) =>
+      (readFileSync(file, "utf8").match(OWN_HISTORY) ?? []).map(
+        (hit) => `${path.basename(file)}: ${hit}`,
+      ),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  test("the adjudicator's prompt names no caller and no other document", () => {
+    const body = readFileSync(ADJUDICATOR_PROMPT, "utf8");
+    expect(body).not.toContain("crysk-loop");
+    expect(body).not.toContain("SKILL.md");
+  });
+
+  test("the adjudicator's prompt leaves the answer's format to the request", () => {
+    // The CI request ends with "exactly one JSON object and nothing else"; a
+    // body that also demands prose puts two output contracts in one request.
+    const body = readFileSync(ADJUDICATOR_PROMPT, "utf8");
+    expect(body).toContain("in the format the request asks for");
+  });
+
+  test("the consolidator's ban on judging says what it decides about an aside", () => {
+    // It is told to delete an aside that names no distinct defect, so a flat
+    // "never judge whether a claim is important" contradicts its own step 2.
+    const body = readFileSync(path.join(PROMPTS_DIR, "consolidate.md"), "utf8");
+    expect(body).not.toContain("Never judge whether a claim is");
+    expect(body).toContain("only when it does not name a distinct defect");
   });
 });
