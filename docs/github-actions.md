@@ -707,7 +707,7 @@ still in Development, so the engine pins that version and records it as `crysk.g
 
 - a root span `invoke_workflow crysk.review` with the outcome, `run_status`, the `CRYSK-*` code (the one the
   publish step renders), the CLI's error class, the PR number, the head sha and the engine version, plus every
-  field of `pipeline.json` (scout, consolidation and the rest of its stage records), `findings.json` (each
+  field of `pipeline.json` (consolidation and the rest of its stage records), `findings.json` (each
   finding's tier and refuter verdict, the dedupe merges, the root causes) and `cli.json` as `crysk.pipeline.*`,
   `crysk.findings.*` and `crysk.cli.*` attributes;
 - an `invoke_agent <step>` span per pipeline step, carrying every field of that step's `pipeline.json` row as
@@ -909,7 +909,7 @@ credential, the first one in `credentials.claude` that is set (default `["subscr
 and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
 A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode provider whose
 `CRYSK_OPENCODE_*` secret is an API key, on any route the run resolves: any role or fallback of `models`,
-`--model`, `--scout-model`, a spec agent, a prompt's frontmatter or an engine default) gets a `12.00` default, because that is the
+`--model`, a spec agent, a prompt's frontmatter or an engine default) gets a `12.00` default, because that is the
 case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
 subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
@@ -1500,7 +1500,7 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `mode` | `gate` | The commit status the review sets: `gate` turns it `failure` on blocking findings and on a size or budget skip, `advisory` keeps it `success` for a finished review. See [Gate mode](#gate-mode-the-status-is-the-check). |
 | `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). A `/crysk review --full` comment sets it on its own; a legacy `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
 | `model` | empty | One model for every step but the materiality judge's (`claude:opus-latest`, `opencode:<provider>/<model>`; a bare `sonnet`, `opus`, `haiku` or `fable` means its `-latest` model), outranking `models`. No effort and no fallbacks. It builds no OpenCode auth file: name an OpenCode model in `models`. |
-| `scout` | `false` | Experimental diff-only pre-hunt stage; off by default. |
+| `scout` | empty | Removed: the scout stage no longer exists. The input is still declared and is ignored, with a warning (`scout is ignored: the scout stage was removed`). |
 | `post` | `true` | Set `false` to run the review and write outputs/summary without posting to the PR. |
 | `step-summary` | `true` | Set `false` to skip the `$GITHUB_STEP_SUMMARY` write. |
 | `anthropic-api-key`, `claude-token`, `opencode-auth`, `routing` | empty | Removed. A value in any of them stops the run with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed): pass the `CRYSK_*` secrets in `crysk-secrets`, and the models per role in `models`. |

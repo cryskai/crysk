@@ -13,7 +13,7 @@ metadata:
 
 Load when scoring, running, or comparing a pr-hero methodology on Martian’s Code Review Bench — Cal.com evals, n-vs-n vs Greptile/CodeRabbit/Bugbot, Surface A/B, or “how did we do” on that corpus.
 
-Do not load for M6 scout A/B on musive alone, or a product review of our own PRs.
+Do not load for the M6 floor cases on the musive control set alone, or a product review of our own PRs.
 
 ## Hard Rules
 
@@ -33,7 +33,7 @@ Do not load for M6 scout A/B on musive alone, or a product review of our own PRs
 |---|---|
 | How did we do / read scores | Corpus + `martian-judge.json`. **$0.** No re-run |
 | Run / remaining / `--all` Cal.com | `plan` → `check` → `run` → judge → ledger |
-| New methodology (scout, prompt, model) | **New** run-dir suffix, one variable, same 10, vs `hunters` baseline |
+| New methodology (prompt set, model, hunter) | **New** run-dir suffix, one variable, same 10, vs `hunters` baseline |
 | Surface B | Location-only vs stored reviews; label if a semantic pass is added |
 | 50 PRs / other four repos | `--corpus <name>` (flow.md); a new 50-PR arm needs explicit authorisation |
 | Fork 50 + GitHub App | Refuse |
@@ -51,7 +51,7 @@ Do not load for M6 scout A/B on musive alone, or a product review of our own PRs
 
 ## Output Contract
 
-Return: arm id + prompt-set sha + scout on/off + judge gateway/model; cost and wall; per-PR tp/fp/fn and High+Critical recall; Surface B ran or not; delta vs Cal.com 10 `hunters` if this is a new arm; which corpus evals were consulted.
+Return: arm id + prompt-set sha + judge gateway/model; cost and wall; per-PR tp/fp/fn and High+Critical recall; Surface B ran or not; delta vs Cal.com 10 `hunters` if this is a new arm; which corpus evals were consulted.
 
 ## References
 

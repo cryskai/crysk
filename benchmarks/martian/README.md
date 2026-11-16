@@ -20,7 +20,7 @@ Status: **CAL.COM 10 SCORED 2026-08-19 (Surface A).** Harness: `benchmarks/marti
 | How we run | **Local worktree** on the original PR SHA. Isolation flags stay. Hunters must never see GitHub review comments |
 | Official “add a tool” path | Fork 50 PRs into an org with a GitHub App. **We refuse that** for v0. CLI + adapter (CodeSheriff’s pattern) |
 | Product bar | Unchanged. THE PIVOT still holds: do not optimise a golden number as if it were production quality |
-| One variable | Rule 7. One methodology (pipeline / scout / prompt set / model mix) per Martian arm |
+| One variable | Rule 7. One methodology (pipeline / prompt set / model mix) per Martian arm |
 | First spend | Cal.com 10 **done 2026-08-19**: reviews **$42.43** + judge **$0.89** = **$43.32**. Surface A only. Not the 50 |
 | Skill | `skills/martian-bench/SKILL.md` (eval, not product). Flow + corpus in `references/` |
 
@@ -32,11 +32,11 @@ Until now we could do three things:
 
 1. Score against the lab’s sealed goldens — retired at THE PIVOT (contaminated, time-bound, not a vendor field).
 2. Bucket against Greptile on musive — retired with the head-to-head code; it was cheap, **one** oracle, and could not see what both missed.
-3. A/B scout vs not on the frozen musive control set (M6) — one variable; the Greptile head-to-head it leaned on is retired.
+3. A/B scout vs not on the frozen musive control set (M6) — one variable; the Greptile head-to-head it leaned on is retired, and so is the scout stage it measured (removed 2026-11-16).
 
 None of those answers “did this pipeline catch what CodeRabbit caught on Grafana PR N, and did it catch the golden concurrency bug on Cal.com PR M?” Martian does, because **every tool already ran on the same 50 diffs** and the reviews are on disk.
 
-That is the brutal part: a named pipeline (`hunters` vs `scout-led` vs a future security hunter) becomes a row in the same table as Greptile. Methodology changes stop being internal stories.
+That is the brutal part: a named pipeline (`hunters` vs `hunters-v2` vs a future security hunter) becomes a row in the same table as Greptile. Methodology changes stop being internal stories.
 
 ---
 
@@ -131,7 +131,7 @@ Two scoring surfaces. Do not collapse them. They answer different questions.
 
 ### Surface A — goldens (vendor-comparable)
 
-Martian’s judge, their profiles, their F-beta slider. This is how we say “pipeline `scout-led` got Core recall 0.X on the 50, Greptile got 0.Y on the same gold.”
+Martian’s judge, their profiles, their F-beta slider. This is how we say “pipeline `hunters-v2` got Core recall 0.X on the 50, Greptile got 0.Y on the same gold.”
 
 Read it with Martian’s own caveat, which matches THE PIVOT and DashBench: **the gold is incomplete and biased toward issues Greptile/Augment noticed.** Real finds missing from the gold score as false positives; the denominator of recall is too small. Rankings can move when the gold grows. Report the judge model. Never quote a single F1 as the product bar.
 
@@ -147,8 +147,7 @@ Surface B cannot see C10’s both-missed cell. Surface A can. That is why both e
 
 | Change | Martian arm | Must not mix in the same arm |
 |---|---|---|
-| Scout on vs off | `hunters` vs `scout-led` on the same PR list | prompt-set edit |
-| New hunter / prompt set | new `--agents`, same pipeline shape | scout flag |
+| New hunter / prompt set | new `--agents`, same pipeline shape | model mix |
 | Model mix | same steps, different per-step `model` | prompt-set edit |
 | Refuter on vs off | own list the resolver still accepts | anything else |
 | Named pipeline (after `docs/review-strategies.md`) | one pipeline id per arm | two pipelines in one run |
@@ -176,7 +175,7 @@ If a run’s `pipeline.json` shows Bash or GitHub MCP in the hunter tool list, t
 |---|---|---|---|---|
 | Lab `dataset/test.jsonl` | sealed goldens | yes (in theory) | no | **Stays sealed.** THE PIVOT. Not this bench |
 | Musive Greptile H2H | Greptile on *our* PRs | no (C10) | no (one vendor, one repo) | **Retired** from the code. Martian is the comparison field |
-| M6 scout A/B | same H2H, frozen musive set | no | no | **DoorDash track.** Not replaced. Paused 2026-08-19 |
+| M6 scout A/B | same H2H, frozen musive set | no | no | **Retired 2026-11-16** with the scout stage; only the floor cases and their scoring remain. Paused 2026-08-19 |
 | Fixture eval | planted bug | n/a | no | Cheap gate before any Martian spend |
 | Refuter-probe | planted verdicts | n/a | no | First gate for refuter prompt edits |
 | **Martian offline** | public gold + N stored reviews | **yes** | **yes** | **n-vs-n field for methodology** |
@@ -197,7 +196,7 @@ DashBench (`docs/doordash-dashbench-trust.md`) is the philosophy: triangulate, t
 | Quote online F1 (Greptile 60.8% etc.) as our target | Different distribution, different ground truth, we are not on that board |
 | Run hunters on Python/Java/Ruby and treat a low F1 as a product fail | Our hunters are lifecycle/reliability/parity on RN. Cal.com is the fair first slice; the other 40 are a *coverage* experiment, not a shame number |
 | One 50-PR run, one F1, ship it | Variance is HIGH. Replicates or do not quote recall (C10 §3) |
-| Mix scout + prompt-set + model in one Martian weekend | Rule 7 |
+| Mix prompt-set + model + hunter changes in one Martian weekend | Rule 7 |
 | Let this unblock or replace M6 | M6 has a same-build invariant on musive runs already paid for. Different corpus, different question |
 | Markdown-bus the adapter | Findings stay `findings.json`. The adapter *projects* claims into Martian candidates. The engine contract does not change |
 

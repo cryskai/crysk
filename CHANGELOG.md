@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The scout stage** (#PR). The diff-only pre-hunter stage never earned its place and was off by default,
+  so no review changes unless it asked for it. `--scout`, `--no-scout`, `--scout-model <model>`, the `scout`
+  config key, the `models.scout` role and the action's `scout` input are still accepted and have no
+  effect; each prints one warning that contains `is ignored: the scout stage was removed`.
+  `crysk config set scout ...` is refused with `scout was removed: the scout stage no longer exists`.
+  `pipeline.json` no longer has a `scout` key, and `scripts/m6.ts` and `scripts/scout-probe.ts` are gone.
+  **What to check:** (1) a workflow, a script or a config file that still sets any of the options above
+  keeps working and now logs the warning: remove the option to silence it; (2) a tool that reads
+  `pipeline.json` and expects its `scout` key must stop reading it.
+
 ## [0.7.0] - 2026-11-16
 
 ### Added

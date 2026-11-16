@@ -20,7 +20,7 @@ covers the two things that section does not: `models` and credentials.
 | Repo | `<repo>/.crysk/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors` |
 | Repo, review instructions | `<repo>/REVIEW.md`, else `<repo>/.crysk/gotchas.md` (optional) | facts the hunters and the refuter read; with `materiality_gate` on, the judge also reads it as owner policy for style, test, generated-code and dev-script findings only; see the README's `REVIEW.md` and `gotchas.md` section |
 
-`max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate, scout and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and Crysk can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
+`max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and Crysk can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
 
 **A custom `agents_dir` mirrors the default set.** The directory has to hold exactly the prompt files the
 review runs, no more and no fewer, so a hunter is never dropped or left unused in silence. When a hunter joins
@@ -81,10 +81,10 @@ A **profile** is a ready-made set of models for every role. Pick one in your per
 { "profile": "openai" }
 ```
 
-| Profile | Hunters | Refuter | Consolidate | Scout | Summary | Judge |
-| --- | --- | --- | --- | --- | --- | --- |
-| `claude` (the default) | `claude:sonnet-latest`, `xhigh` | `claude:opus-latest`, `high` | `claude:sonnet-latest`, `high` | `claude:sonnet-latest` | `claude:haiku-latest` | `claude:sonnet-latest` |
-| `openai` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.1-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6.1-terra` | `opencode:openai/gpt-6-luna` | `opencode:openai/gpt-6.1-terra` |
+| Profile | Hunters | Refuter | Consolidate | Summary | Judge |
+| --- | --- | --- | --- | --- | --- |
+| `claude` (the default) | `claude:sonnet-latest`, `xhigh` | `claude:opus-latest`, `high` | `claude:sonnet-latest`, `high` | `claude:haiku-latest` | `claude:sonnet-latest` |
+| `openai` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.1-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6-luna` | `opencode:openai/gpt-6.1-terra` |
 
 - `profile` is person-only, like `models`: it chooses the model and the bill, so a repo file cannot set it. An
   unknown value is refused and the message names the known profiles.
@@ -127,13 +127,14 @@ it runs on, in the order to try them:
 | `hunter.<key>` | one hunter: `hunter.logic`, `hunter.parity`, `hunter.reliability`, `hunter.resilience`, `hunter.security`, or the key of a hunter in your own prompt set | `default` |
 | `refuter` | the refuter, and the re-review verifier and the CI adjudicator, which run as its agent | `default` |
 | `consolidate` | the consolidation pass after the refuter | `default` |
-| `scout` | the experimental diff-only scout | `default` |
 | `summary` | the summarizer | `default` |
 | `judge` | the materiality judge (`materiality_gate`) | the profile's judge (`claude:sonnet-latest` on `claude`), never `default` |
 | `default` | every role above that is not listed, the judge excepted | the model the step's prompt declares |
 
+`models.scout` is still accepted and ignored, with a warning (`models.scout is ignored: the scout stage was removed`): the scout stage no longer exists, so no step runs under that role.
+
 With no `models` at all, each step runs its [profile](#profiles)'s model. Under `claude`, the default, that is the model its prompt declares, as `claude:<alias>-latest`: the
-bundled hunters, the consolidation pass and the scout declare `sonnet`, the refuter `opus`, the summarizer
+bundled hunters and the consolidation pass declare `sonnet`, the refuter `opus`, the summarizer
 `haiku`. A `hunter.<key>` that no hunter of the review declares fails when the plan is built, so a typo never
 goes unnoticed; `hunter.parity` is accepted on the runs where the parity hunter does not fire.
 
@@ -309,7 +310,7 @@ prompt set still runs at an explicit level:
 | --- | --- | --- |
 | Hunter | `xhigh` | Measured on a real 280-line PR (Sonnet 5.5, 4 hunters x 2 replicates): `medium` found something in 0 of 8 runs, `high` in 6 of 8, `xhigh` in 8 of 8 and all 4 known bugs, `max` in 7 of 8 at about four times the wall time. |
 | Refuter | `high` | `medium` refuted a pre-labeled known blocker in 3 of 4 verdicts on real findings, which deletes it; `high` kept it as latent in 3 of 4. |
-| Summarizer, scout, rereview verifier | `high` | Unmeasured, so they keep what every model ran at before the 5.5 family. |
+| Summarizer, rereview verifier | `high` | Unmeasured, so they keep what every model ran at before the 5.5 family. |
 
 The bundled prompts declare `effort: xhigh` on the hunters and `effort: high` on the refuter. The rereview
 verifier runs as the refuter's agent, so it follows the refuter's frontmatter for model, effort and tools.
