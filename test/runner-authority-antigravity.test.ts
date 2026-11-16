@@ -11,7 +11,7 @@ import {
   expect,
   test,
 } from "bun:test";
-import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -120,44 +120,72 @@ describe("an agy plan fails closed until its transport exists (S4)", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
-  // T4 registers the transport, so the route reaches its executable check: a
-  // runtime with no verified agy still refuses the plan before anything runs.
-  test("a runtime for a plan naming agy, first or as a fallback, with no verified agy is refused", async () => {
-    for (const models of [
-      ["agy:gemini-4-argon-high", "claude:sonnet-latest"],
-      ["claude:sonnet-latest", "agy:gemini-4-argon-high"],
-    ]) {
-      const step = resolveStepRoute({
-        stepKey: "hunter-logic",
-        role: "hunter",
-        modelRole: "hunter.logic",
-        models: { "hunter.logic": models },
-      });
-      const plan = createResolvedRoutePlan([step]);
-      let error: unknown;
-      try {
-        const runtime = await createProductionRuntime({
-          workspaceRoot: workspace,
-          plan,
-          mode: "production",
-          binaryPath: claude.canonicalPath,
-          executableAllowlists: {
-            "claude-code": [
-              { absolutePath: claude.canonicalPath, sha256: claude.sha256 },
-            ],
-          },
+  // The refusal a plan naming agy, first or as a fallback, meets with only
+  // `dirs` on PATH (the runner's own PATH never decides the outcome).
+  async function agyRefusals(dirs: string[]): Promise<string[]> {
+    const messages: string[] = [];
+    const previous = process.env.PATH;
+    process.env.PATH = dirs.join(path.delimiter);
+    try {
+      for (const models of [
+        ["agy:gemini-4-argon-high", "claude:sonnet-latest"],
+        ["claude:sonnet-latest", "agy:gemini-4-argon-high"],
+      ]) {
+        const step = resolveStepRoute({
+          stepKey: "hunter-logic",
+          role: "hunter",
+          modelRole: "hunter.logic",
+          models: { "hunter.logic": models },
         });
-        await runtime.dispose();
-      } catch (caught) {
-        error = caught;
+        const plan = createResolvedRoutePlan([step]);
+        let error: unknown;
+        try {
+          const runtime = await createProductionRuntime({
+            workspaceRoot: workspace,
+            plan,
+            mode: "production",
+            binaryPath: claude.canonicalPath,
+            executableAllowlists: {
+              "claude-code": [
+                { absolutePath: claude.canonicalPath, sha256: claude.sha256 },
+              ],
+            },
+          });
+          await runtime.dispose();
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error, models.join(",")).toBeInstanceOf(Error);
+        messages.push((error as Error).message);
       }
-      expect(error, models.join(",")).toBeInstanceOf(Error);
-      expect((error as Error).message, models.join(",")).toContain(
+    } finally {
+      process.env.PATH = previous;
+    }
+    return messages;
+  }
+
+  // T4 registers the transport, so the route reaches its executable check: a
+  // runtime with an agy on PATH but no allowlist for it refuses the plan
+  // before anything runs.
+  test("a runtime for a plan naming agy, first or as a fallback, with no verified agy is refused", async () => {
+    const bin = path.join(workspace, "bin");
+    await mkdir(bin);
+    await writeFile(path.join(bin, "agy"), "#!/bin/sh\nexit 0\n");
+    await chmod(path.join(bin, "agy"), 0o755);
+    for (const message of await agyRefusals([bin])) {
+      expect(message).toContain(
         "executable allowlist required for antigravity binding authority",
       );
-      expect((error as Error).message, models.join(",")).not.toContain(
-        "not available yet",
-      );
+      expect(message).not.toContain("not available yet");
+    }
+  });
+
+  test("with no agy on PATH at all, the plan is refused naming the missing binary", async () => {
+    const empty = path.join(workspace, "empty");
+    await mkdir(empty);
+    for (const message of await agyRefusals([empty])) {
+      expect(message).toContain("agy binary not found on PATH");
+      expect(message).not.toContain("not available yet");
     }
   });
 });
