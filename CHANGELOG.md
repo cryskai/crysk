@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-16
+
+### Added
+
+- **A security hunter runs on every review** (#538). The default set gains a hunter for trust boundaries:
+  outside input reaching something that interprets it, an operation on something that belongs to someone
+  else, a control removed or stepped around, and a secret outside its place. It has no trigger, so every
+  review now runs four hunters plus the conditional parity hunter, and costs and takes more. Its model
+  role is `hunter.security`. **What to check:** (1) a workflow that sets `budget-usd: 10`, which is what
+  `setup --ci --billing api` wrote when nobody chose another value, now skips every review, because the
+  estimate's upper bound is above `$10` even for a small pull request: set it to `12` or more, or remove
+  the line; (2) a custom `agents_dir` copied from an older default stops with
+  `the spec references "deep-review-security.md" but the dir does not have it`: copy that file from
+  `prompts/default/` of the installed package into the directory.
+- **The hunters read the pull request's title and description** (#537). They arrive as data next to the
+  patch, with a note that an author's text is often incomplete, out of date or wrong, so a hunter treats
+  it as the stated intent and never as evidence. A pull request without a description sends an empty
+  one. Local mode sends the head commit's subject as the title and no description.
+
+### Changed
+
+- **The default spend ceiling of a metered CI review is `$12`, up from `$10`** (#538). It applies when a
+  review bills per token and the workflow sets no `budget-usd`. `12` admits what `10` admitted before the
+  security hunter joined. A subscription review still has no ceiling.
+- **One finding contract for the bundled hunters** (#536). The hunters define `severity`,
+  `evidence_class` and `causal_disposition` in the same words. The consequence sets the severity: an
+  irreversible consequence or a security boundary crossed is `BLOCKER` even when the trigger is
+  uncommon, as long as a user or a caller can cause it; `WARNING` is for wrong behaviour that can be
+  recovered from and needs a condition the claim names. Expect some findings to change severity, and
+  with it whether they block.
+- **The re-review verifier has its own instructions** (#539). It asks whether an earlier finding's defect
+  is still present at the current head, and it used to run under the refuter's prompt, which describes
+  another question. It still runs as the refuter's agent: a custom `review-refuter.md` sets its model,
+  effort and tools, and no longer changes what it is told.
+
+### Fixed
+
+- **The bundled prompts no longer name one repository's files, tools or history** (#532, #540). The
+  hunters, the refuter and the CI adjudicator carried references to the repository the set was tuned on,
+  which told the model to check files and facts that no other repository has.
+- **Statements in the bundled prompts that the engine contradicts** (#535, #540). Among them: a hunter
+  count that was wrong, a category range of 1-14 where the contract says 1-15, "emit the finding anyway"
+  against the rule that an unread proof is not admissible, and review instructions described as facts
+  that outrank the prompt. The consolidation prompt's ban on judging a claim now agrees with its own
+  step that deletes an aside naming no distinct defect.
+
 ## [0.6.1] - 2026-11-13
 
 ### Added
@@ -1009,7 +1055,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/cryskai/crysk/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/cryskai/crysk/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/cryskai/crysk/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/cryskai/crysk/compare/v0.5.0...v0.5.1
