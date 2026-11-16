@@ -364,13 +364,15 @@ Usage:
                              and posts nothing (the only way to preview a
                              plan, since --pr --dry-run returns before any
                              findings exist)
-  crysk triage reply --pr <n> --from <run-dir> --finding <id> --tag <tag>
+  crysk triage reply --pr <n> [--from <run-dir>] --finding <id> --tag <tag>
                    --body-file <path> [--verdict <v>] [--issue <n>] [--dry-run]
                              Post one triage reply. The driver resolves the
                              parent from the posted <!-- crysk-finding
                              marker (never path/line), renders the marker +
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.
+                             Without --from, the finding is read off the PR
+                             by its R### id (crysk status --pr <n> --json).
                              --dry-run prints the parent and posts nothing
   crysk status --pr <n> [--wait] [--json]
                              Read the PR's crysk gate, posted findings and
@@ -1191,7 +1193,8 @@ export function parseArgs(argv: string[]): ParsedCli {
     if (options.pr === undefined) {
       throw new CliUsageError(`${command} requires --pr <n>`);
     }
-    if (options.from === undefined) {
+    // triage-without-skill S2: triage reply reads the finding off the PR when no run directory is given.
+    if (command === "post" && options.from === undefined) {
       throw new CliUsageError(`${command} requires --from <run-dir>`);
     }
   } else if (options.from !== undefined) {

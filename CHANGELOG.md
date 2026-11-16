@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `crysk triage reply`, because they carry the adjudicator's verdict. The gate's comment says so.
   **What to check:** a reply that starts with `applied` from someone with write access now answers its finding;
   write anything else first (for example `not applied yet`) when the fix has not landed.
+- **`crysk triage reply` works with only the PR number and the finding id.** `--from <run-dir>` is now
+  optional. Without it, `--finding` takes the finding's stable `R###` id (the `id` that
+  `crysk status --pr <n> --json` lists) and the driver reads the finding and its head off the pull
+  request, so an agent in the cloud no longer downloads the review's run artifact first. With `--from`,
+  `--finding` still takes the run's `F###` id, as before. An id the PR does not carry is refused with
+  `PR #<n> has no posted finding <id>`. `crysk post` still requires `--from`.
+  **What to check:** nothing for an existing call; a call without `--from` must pass an `R###` id.
 - **The shipped skills pin the crysk version.** Every `npx -y crysk` call in the crysk, crysk-loop, crysk-pr
   and crysk-ci-setup skills now names the release it ships with (`npx -y crysk@0.7.0`), and each release
   bumps it. A skills scanner flagged the unpinned call as a critical risk, because npx runs whatever version

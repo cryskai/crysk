@@ -262,6 +262,10 @@ current head:
      --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
    ```
 
+   With no run directory on the machine (a CI review, a cloud agent), drop
+   `--from` and pass the `R###` id `crysk status --pr <n> --json` lists:
+   `triage reply --pr <n> --finding R00N ...`.
+
    The driver resolves the parent from the posted `<!-- crysk-finding`
    marker (never a comment id, never the nearest line), prepends the triage
    marker and the visible badge, posts the reply, records the triage event
@@ -443,38 +447,21 @@ under Greptile on Musive #1724. Do not do that. Do not reply on
 `<!-- crysk-report -->` either: that is the summary, including Outside Diff.
 
 `--from` is the Crysk run directory that produced these findings (`findings.json`). `--finding`
-is the finding id (`F001`, …) from that file — never a comment id.
+is the finding id (`F001`, …) from that file — never a comment id. Without `--from`, `--finding`
+is the PR's stable `R###` id instead (below).
 
-**When the review ran in CI, that directory is not on your machine.** A GitHub Actions review
-writes it to `~/.crysk/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` on an ephemeral runner
-that is destroyed when the job ends. The workflow uploads it as an artifact; download it before
-you triage:
+**When the review ran in CI, that directory is not on your machine: leave `--from` out.** The
+driver then reads the finding off the pull request itself, and `--finding` is the finding's stable
+`R###` id: the `id` of the row in `npx -y crysk@0.7.0 status --pr <n> --json` (`findings[]`), which
+the summary comment shows too. Nothing has to be downloaded:
 
 ```bash
-# The artifact is crysk-run-<pr>-<head-sha>; a run of an action release from before the rename
-# uploaded pr-hero-run-<pr>-<head-sha>. Try the new name first, then the old one.
-# Each line printed is "<run-id> <artifact-name>": download with the name on the same line.
-for NAME in crysk-run-<pr>-<head-sha> pr-hero-run-<pr>-<head-sha>; do
-  gh api "repos/{owner}/{repo}/actions/artifacts?name=$NAME" \
-    --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[] | "\(.workflow_run.id) \(.name)"'
-done
-gh run download <run-id> -n <artifact-name> -D "crysk-run-<run-id>"
+npx -y crysk@0.7.0 triage reply --pr <n> --finding R00N \
+  --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
 ```
 
-Look the run up by artifact name, not with `gh run list --branch`: a `/crysk review` or
-`/crysk recheck` run is an `issue_comment` event, which GitHub files under the default branch, so
-a branch listing never shows it, and that run usually holds the findings. Several runs can upload
-the same name for one head (the automatic review, then a forced review or recheck; `overwrite: true`
-in `action.yml` only dedupes within one run). Try the candidates newest first and keep the first one
-`npx -y crysk@0.7.0 triage reply ... --dry-run` binds (its success line starts with `plan: reply to`; do not match on "marker match", which the "no posted … marker matches" error also contains). Download each candidate
-into its own fresh directory, as above: reusing one directory mixes `findings.json` from one run
-with the patches of another, and the bind then judges files no single run wrote.
-
-Then pass `--from crysk-run-<run-id>` for the candidate that bound. `gh run download` unpacks the run directory's *contents*, so the
-`--from` target is the directory you downloaded into — not a `pr-<n>-<sha>-1` path inside it. If
-the artifact is missing (a size- or budget-gated review writes no run directory, and so does a
-run where every hunter died), you have no `--from` input: say so and stop rather than inventing
-one. Full detail: `docs/github-actions.md` → "Triaging a CI review".
+If the driver says the PR has no posted finding with that id, the finding lives only in the summary
+(or was never posted): stop. Full detail: `docs/github-actions.md` → "Triaging a CI review".
 
 The posted body looks like this (driver-owned; shown so you know what a human will see):
 

@@ -1363,7 +1363,19 @@ failure.
 
 ## Triaging a CI review
 
-Answering a posted finding goes through the driver:
+Answering a posted finding goes through the driver. With no run directory on your machine (the
+usual case for a CI review, and for an agent running in the cloud), name the finding by its stable
+`R###` id, the `id` that `crysk status --pr <n> --json` lists and the summary comment shows. The
+driver reads the finding off the pull request:
+
+```bash
+crysk triage reply --pr <n> --finding R001 --tag applied --body-file reasoning.md
+```
+
+A plain reply in the finding's thread that starts with `applied`, from someone with write access,
+also counts as `applied` for the gate. `dismissed`, `deferred` and `misclassified` need the driver.
+
+With the run directory at hand, `--from` names it and `--finding` takes the run's own `F###` id:
 
 ```bash
 crysk triage reply --pr <n> --from <run-dir> --finding F001 \

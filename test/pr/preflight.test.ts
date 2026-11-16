@@ -311,6 +311,24 @@ describe("parseArgs post command", () => {
     }
   });
 
+  // triage-without-skill S2: an agent with no run directory answers from the PR alone.
+  test("triage reply needs no --from; post still does", () => {
+    const { options } = parseArgs([
+      "triage",
+      "reply",
+      "--pr",
+      "5",
+      "--finding",
+      "F001",
+      "--tag",
+      "applied",
+      "--body-file",
+      "/tmp/body.md",
+    ]);
+    expect(options.from).toBeUndefined();
+    expect(options.finding).toBe("F001");
+  });
+
   test("--from is read, and rejected on every other command", () => {
     const { options } = parseArgs(["post", "--pr", "5", "--from", "/runs/x"]);
     expect(options.from).toBe("/runs/x");
