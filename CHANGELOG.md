@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `crysk triage reply`, because they carry the adjudicator's verdict. The gate's comment says so.
   **What to check:** a reply that starts with `applied` from someone with write access now answers its finding;
   write anything else first (for example `not applied yet`) when the fix has not landed.
+- **The shipped skills pin the crysk version.** Every `npx -y crysk` call in the crysk, crysk-loop, crysk-pr
+  and crysk-ci-setup skills now names the release it ships with (`npx -y crysk@0.7.0`), and each release
+  bumps it. A skills scanner flagged the unpinned call as a critical risk, because npx runs whatever version
+  is published next. **What to check:** reinstall the skills (`npx -y crysk skills install`) to get the
+  pinned calls; a copy you edited keeps your version.
 
 ### Removed
 

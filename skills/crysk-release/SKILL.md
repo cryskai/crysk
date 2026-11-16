@@ -65,7 +65,7 @@ says what the user must do.
   [$V]: https://github.com/cryskai/crysk/compare/v$PREV...v$V
   ```
 
-### 4. Bump the version in all five places
+### 4. Bump the version in all six places
 
 ```bash
 sed -i '' "s/\"version\": \"$PREV\"/\"version\": \"$V\"/" package.json
@@ -73,6 +73,10 @@ sed -i '' "s/ENGINE_VERSION = \"$PREV\"/ENGINE_VERSION = \"$V\"/" src/index.ts
 sed -i '' "s/  return \"$PREV\";/  return \"$V\";/" src/assets.ts
 sed -i '' "s/options.version ?? \"$PREV\"/options.version ?? \"$V\"/" src/updater.ts
 sed -i '' "s/VERSION=\"$PREV\"/VERSION=\"$V\"/" install.sh
+# The shipped skills pin the version they run through npx (test/skills-pin.test.ts): a skills
+# scanner flags an unpinned `npx -y crysk` as critical.
+grep -rl "crysk@$PREV" skills/crysk skills/crysk-loop skills/crysk-pr skills/crysk-ci-setup | xargs sed -i '' "s/crysk@$PREV/crysk@$V/g"
+grep -rn "crysk@$PREV" skills/   # must print nothing
 grep -n "$PREV" package.json src/index.ts src/assets.ts src/updater.ts install.sh   # must print nothing
 grep -n "$V" package.json src/index.ts src/assets.ts src/updater.ts install.sh      # must print 5 lines
 ```
