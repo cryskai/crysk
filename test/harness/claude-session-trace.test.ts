@@ -468,6 +468,75 @@ describe("Claude session trace", () => {
   });
 });
 
+// platform-owned-cost T6: the harness writes what each attempt measured per model request next to
+// its transcript, for the platform report.
+describe("Claude attempt usage facts", () => {
+  const usagePath = (tracePath: string) =>
+    tracePath.replace(/trace\.(.+)\.jsonl$/, "usage.$1.json");
+  const message = JSON.stringify({
+    type: "assistant",
+    message: {
+      id: "msg_1",
+      model: "claude-sonnet-5-5",
+      usage: {
+        input_tokens: 2,
+        cache_creation_input_tokens: 5484,
+        cache_read_input_tokens: 5674,
+        output_tokens: 156,
+        output_tokens_details: { thinking_tokens: 15 },
+        cache_creation: {
+          ephemeral_5m_input_tokens: 0,
+          ephemeral_1h_input_tokens: 5484,
+        },
+      },
+    },
+  });
+
+  test("a finished attempt records each request of its transcript, on the credential it ran", async () => {
+    const { tracePath } = await reviewWithSession({
+      sessionFile: "written",
+      credential: "projected",
+      transcript: `${message}\n${message}\n`,
+    });
+    expect(await Bun.file(usagePath(tracePath)).json()).toEqual({
+      attempt: 1,
+      credential: "subscription",
+      requests: [["anthropic", "claude-sonnet-5-5", 2, 5674, 0, 5484, 141, 15]],
+      // The fake CLI's result carries no modelUsage.
+      gaps: ["no_summary"],
+    });
+  });
+
+  test("a timed-out attempt with no session file says what it could not read", async () => {
+    const { tracePath } = await reviewWithSession({
+      sessionFile: "missing",
+      credential: "projected",
+      cli: "dies-on-signal",
+      timeoutMs: 200,
+    });
+    expect(await Bun.file(usagePath(tracePath)).json()).toEqual({
+      attempt: 1,
+      credential: "subscription",
+      requests: [],
+      gaps: ["no_session", "no_summary"],
+    });
+  });
+
+  test("an attempt cancelled mid-run still records the requests its transcript holds", async () => {
+    const { tracePath } = await reviewWithSession({
+      sessionFile: "written",
+      credential: "projected",
+      cli: "dies-on-signal",
+      cancelAfterSpawn: true,
+      transcript: `${message}\n`,
+    });
+    const facts = await Bun.file(usagePath(tracePath)).json();
+    expect(facts.requests).toEqual([
+      ["anthropic", "claude-sonnet-5-5", 2, 5674, 0, 5484, 141, 15],
+    ]);
+  });
+});
+
 // Audit R1 and S1 (odd/tasks/review-traces.md L25). Fake credentials are
 // assembled at run time, never written out whole.
 const PRIVATE_KEY = [
@@ -753,6 +822,14 @@ class TraceRunner implements StepRunner {
           `${spec.name} attempt ${attempt}\n`,
         );
       }
+      // Attempt 1 wrote no facts file.
+      await Bun.write(
+        path.join(
+          path.dirname(spec.outPath),
+          `usage.${spec.name}.attempt2.json`,
+        ),
+        JSON.stringify({ attempt: 2, credential: "api", requests: [] }),
+      );
     }
     return {
       name: spec.name,
@@ -864,5 +941,12 @@ describe("pipeline.json session traces", () => {
       "steps/trace.hunter-reliability.attempt2.jsonl",
     ]);
     expect(resilience?.tracePaths).toBeUndefined();
+    // Only the attempts whose facts file exists, in attempt order.
+    expect(
+      (reliability as { usage_facts?: unknown } | undefined)?.usage_facts,
+    ).toEqual([{ attempt: 2, credential: "api", requests: [] }]);
+    expect(
+      (resilience as { usage_facts?: unknown } | undefined)?.usage_facts,
+    ).toBeUndefined();
   });
 });

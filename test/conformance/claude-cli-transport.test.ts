@@ -542,6 +542,72 @@ describe("ClaudeCodeCliTransport usage normalization (D1-08 PR2)", () => {
     ]);
   });
 
+  // platform-owned-cost T6: the per-model token counts, split the platform's way, for what the
+  // session transcript cannot show (a side model, a line the copy dropped). Field names as the CLI
+  // 2.1.x prints them; the lifetime keys are absent on older CLIs.
+  test("modelUsage counts become per-model usage, thinking and the one-hour write split out", async () => {
+    const fake = makeFakeProc({
+      stdoutBody: JSON.stringify({
+        result: "reviewed",
+        modelUsage: {
+          "claude-haiku-5-5": {
+            inputTokens: 18,
+            outputTokens: 32771,
+            cacheReadInputTokens: 456546,
+            cacheCreationInputTokens: 94121,
+            cacheCreationEphemeral1hInputTokens: 90000,
+            cacheCreationEphemeral5mInputTokens: 4121,
+            thinkingTokens: 26243,
+            costUSD: 0.03977696,
+          },
+          // An older CLI's entry: one write figure, no thinking count.
+          "claude-sonnet-5-5": { inputTokens: 5, outputTokens: 9 },
+          "": { inputTokens: 1 },
+          broken: null,
+        },
+      }),
+      exitCode: 0,
+    });
+    const transport = new ClaudeCodeCliTransport({
+      ...okPromptFns,
+      spawnFn: (() => fake.proc) as unknown as typeof Bun.spawn,
+      getPgid: (pid) => pid,
+      killFn: () => {},
+    });
+
+    const outcome = await transport.execute(makeRequest(), {
+      signal: new AbortController().signal,
+    });
+
+    expect(outcome.modelUsage).toEqual([
+      {
+        model: "claude-haiku-5-5",
+        counts: [18, 456546, 4121, 90000, 6528, 26243],
+      },
+      { model: "claude-sonnet-5-5", counts: [5, 0, 0, 0, 9, 0] },
+    ]);
+  });
+
+  test("no modelUsage block leaves modelUsage absent, never an empty list", async () => {
+    for (const stdoutBody of [
+      JSON.stringify({ result: "reviewed" }),
+      JSON.stringify({ result: "reviewed", modelUsage: {} }),
+      "not json",
+    ]) {
+      const fake = makeFakeProc({ stdoutBody, exitCode: 0 });
+      const transport = new ClaudeCodeCliTransport({
+        ...okPromptFns,
+        spawnFn: (() => fake.proc) as unknown as typeof Bun.spawn,
+        getPgid: (pid) => pid,
+        killFn: () => {},
+      });
+      const outcome = await transport.execute(makeRequest(), {
+        signal: new AbortController().signal,
+      });
+      expect(outcome.modelUsage).toBeUndefined();
+    }
+  });
+
   test("a modelUsage entry with no canonicalModel records the snapshot alone", async () => {
     const fake = makeFakeProc({
       stdoutBody: JSON.stringify({
