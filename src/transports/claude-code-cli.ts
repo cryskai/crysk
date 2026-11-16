@@ -24,6 +24,10 @@ import {
   ACTIVE_CHILD_PROCS,
   type SpawnedProcess,
 } from "../execution/spawned-process";
+import {
+  claudeUsageCounts,
+  type ModelUsageCounts,
+} from "../execution/usage-facts";
 import type { NormalizedUsage } from "../execution/usage-normalized";
 import {
   envBillsMetered,
@@ -170,13 +174,13 @@ interface RawClaudeCliResult {
     readonly cache_read_input_tokens?: number;
   };
   // #175 half 2. The CLI reports, per model it actually ran, an entry keyed
-  // on the exact snapshot. Only the two identity fields are declared:
-  // `canonicalModel` (the family) and the key itself.
+  // on the exact snapshot. Read here: the two identity fields
+  // (`canonicalModel` and the key itself, `observedModelsFromCliResult`) and,
+  // since platform-owned-cost T6, the token counts (`modelUsageFromCliResult`).
   //
-  // The real block also carries `costUSD`, `costBasis` and token counts. They
-  // are deliberately NOT read here. Cost already has ONE parse site
-  // (`normalizeClaudeCliUsage`, from `total_cost_usd`) and one filing
-  // decision; a second reader of a second cost field is exactly how two
+  // `costUSD` and `costBasis` are deliberately NOT read here. Cost already has
+  // ONE parse site (`normalizeClaudeCliUsage`, from `total_cost_usd`) and one
+  // filing decision; a second reader of a second cost field is exactly how two
   // numbers for one attempt start disagreeing.
   //
   // #173 closed the `costBasis: "list"` problem this comment used to defer,
@@ -185,12 +189,25 @@ interface RawClaudeCliResult {
   // the response's label: `normalizeClaudeCliUsage` files `total_cost_usd` as
   // notional on the strength of the route being a subscription, which is true
   // whatever any per-model entry says. Parsing `costBasis` per model would add
-  // the second cost reader this paragraph exists to refuse. What is still unread and still
-  // wanted is the per-model SPLIT (#173 records it): one `--model sonnet`
-  // invocation ran two models, so a single route-level cost is an incomplete
-  // provenance claim in the same way a single `modelSnapshot` is.
+  // the second cost reader this paragraph exists to refuse. The per-model
+  // token SPLIT #173 recorded as wanted is what the counts below give: one
+  // `--model sonnet` invocation can run two models.
   readonly modelUsage?: Readonly<
-    Record<string, { readonly canonicalModel?: unknown } | null | undefined>
+    Record<
+      string,
+      | {
+          readonly canonicalModel?: unknown;
+          readonly inputTokens?: unknown;
+          readonly outputTokens?: unknown;
+          readonly cacheReadInputTokens?: unknown;
+          readonly cacheCreationInputTokens?: unknown;
+          readonly cacheCreationEphemeral1hInputTokens?: unknown;
+          readonly cacheCreationEphemeral5mInputTokens?: unknown;
+          readonly thinkingTokens?: unknown;
+        }
+      | null
+      | undefined
+    >
   >;
 }
 
@@ -240,6 +257,66 @@ function observedModelsFromCliResult(
     });
   }
   return observed.length === 0 ? undefined : observed;
+}
+
+// platform-owned-cost T6: the token counts of the same `modelUsage` block, per
+// model, split into the platform's disjoint leaves (thinking out of output, the
+// one-hour write out of the total write). The same absence rule as above: no
+// parse, no block, or no usable entry answers `undefined`.
+//
+// The model is the provider's id, as the session transcript's `message.model`
+// spells it, so the two can be joined: the CLI marks a context-window variant on
+// its own model names with a bracketed suffix (`requestedModel:
+// "claude-opus-5[1m]"` beside `message.model: "claude-opus-5"` in a real
+// session), which names no provider model. A key carrying one is filed under the
+// id without it, and entries that meet there are summed, so a summary key can
+// never miss its transcript requests and count them twice as a remainder.
+const CLI_MODEL_VARIANT = /\[[^\]]*\]$/;
+
+function modelUsageFromCliResult(
+  rawStdout: string,
+): readonly ModelUsageCounts[] | undefined {
+  let parsed: RawClaudeCliResult;
+  try {
+    parsed = JSON.parse(rawStdout);
+  } catch {
+    return undefined;
+  }
+  const raw = parsed?.modelUsage;
+  if (raw === undefined || raw === null || typeof raw !== "object") {
+    return undefined;
+  }
+  const models = new Map<string, number[]>();
+  for (const [key, entry] of Object.entries(raw)) {
+    const model = key.replace(CLI_MODEL_VARIANT, "");
+    if (
+      model.trim().length === 0 ||
+      entry === null ||
+      typeof entry !== "object"
+    ) {
+      continue;
+    }
+    const counts = claudeUsageCounts({
+      uncached: entry.inputTokens,
+      cacheRead: entry.cacheReadInputTokens,
+      cacheWriteTotal: entry.cacheCreationInputTokens,
+      cacheWrite1h: entry.cacheCreationEphemeral1hInputTokens,
+      cacheWrite5m: entry.cacheCreationEphemeral5mInputTokens,
+      output: entry.outputTokens,
+      thinking: entry.thinkingTokens,
+    });
+    const sum = models.get(model) ?? [0, 0, 0, 0, 0, 0];
+    counts.forEach((n, i) => {
+      sum[i] = (sum[i] ?? 0) + n;
+    });
+    models.set(model, sum);
+  }
+  return models.size === 0
+    ? undefined
+    : [...models].map(([model, counts]) => ({
+        model,
+        counts: counts as unknown as ModelUsageCounts["counts"],
+      }));
 }
 
 // #299 (2026-10-01): how many tool calls the model made, as far as the CLI's
@@ -960,6 +1037,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
         request.isolation.env,
       );
       const observedModels = observedModelsFromCliResult(stdout);
+      const modelUsage = modelUsageFromCliResult(stdout);
       const toolInvocations = toolInvocationsFromCliResult(stdout);
 
       let stderrTail = stderr.slice(-4096);
@@ -1035,6 +1113,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
         usage,
         stderrTail,
         ...(observedModels === undefined ? {} : { observedModels }),
+        ...(modelUsage === undefined ? {} : { modelUsage }),
         ...(toolInvocations === undefined ? {} : { toolInvocations }),
         ...(exitCode !== undefined ? { exitCode } : {}),
       };

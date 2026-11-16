@@ -52,11 +52,20 @@ export const PLATFORM_API_URL = "https://api.crysk.dev";
 // profile only to a run that names this capability.
 export const PLATFORM_PROFILE_CAPABILITY = "profile";
 
+// platform-owned-cost T6: this engine can report what each model request
+// measured, with no dollar (odd/tasks/platform-owned-cost-contract.md,
+// section 4). The platform echoes it in the token response's `capabilities`
+// when it will price the run; only then does the report step send
+// `usage_facts` and drop its dollar fields. An old platform sends no echo and
+// gets today's report.
+export const PLATFORM_USAGE_FACTS_CAPABILITY = "usage-facts";
+
 // What this engine reads from the `/runs/token` response, as the platform's
 // comma-separated `X-Crysk-Capabilities` list.
 export const PLATFORM_CAPABILITIES = [
   PLATFORM_ESTIMATE_CAPABILITY,
   PLATFORM_PROFILE_CAPABILITY,
+  PLATFORM_USAGE_FACTS_CAPABILITY,
 ].join(",");
 
 // The audience the platform verifies. An OIDC token minted for any other
@@ -185,6 +194,9 @@ export type PlatformTokenResult =
       traceContent?: true;
       config?: PlatformConfig;
       estimate?: PlatformEstimate;
+      // Present, and true, only when the first connect step's exchange echoed
+      // the `usage-facts` capability.
+      usageFacts?: true;
       command?: PlatformCommandAnswer;
     }
   // `message` names the HTTP status and the API's own `message` when there was
@@ -331,6 +343,7 @@ export async function exchangePlatformToken(
       trace_content?: unknown;
       config?: unknown;
       estimate?: unknown;
+      capabilities?: unknown;
       command?: unknown;
     };
     const {
@@ -388,6 +401,13 @@ export async function exchangePlatformToken(
       ...(body.trace_content === true ? { traceContent: true as const } : {}),
       ...(config.config === undefined ? {} : { config: config.config }),
       ...(estimate === undefined ? {} : { estimate }),
+      // Only the first connect step declared the capability, so only its
+      // answer can accept it.
+      ...(deps.ignoreConfig !== true &&
+      Array.isArray(body.capabilities) &&
+      body.capabilities.includes(PLATFORM_USAGE_FACTS_CAPABILITY)
+        ? { usageFacts: true as const }
+        : {}),
       ...(command === undefined ? {} : { command }),
     };
   } catch (error) {
@@ -510,6 +530,11 @@ export async function runPlatformConnect(
       deps.appendOutput(
         `estimate=${serializePlatformEstimate(result.estimate)}\n`,
       );
+    }
+    // Not a secret: whether the platform prices this run from its usage facts.
+    // The report step reads it as CRYSK_PLATFORM_USAGE_FACTS (action.yml).
+    if (result.usageFacts === true) {
+      deps.appendOutput("usage-facts=true\n");
     }
     // Present only when there is configuration to apply: the setup step and the
     // run step are gated on it, so a standalone run (no platform step, no

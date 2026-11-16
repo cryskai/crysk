@@ -4,7 +4,7 @@
 // assembly) deterministic and testable here, and spends model tokens only on
 // the hunts and the refutation themselves.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -172,6 +172,10 @@ import {
   attemptLogPath,
   settlementReceiptPath,
 } from "../execution/step-artifacts";
+import {
+  type AttemptUsageFacts,
+  usageFactsPath,
+} from "../execution/usage-facts";
 import type { NormalizedUsage } from "../execution/usage-normalized";
 import { sumNormalizedUsage } from "../execution/usage-normalized";
 import { redactEvidenceText } from "../security/evidence-redaction";
@@ -1308,6 +1312,10 @@ interface StepMeta {
   // relative to the run dir. Absent when none were copied, so a failed
   // capture names no file and a pipeline.json from before traces still parses.
   tracePaths?: string[];
+  // platform-owned-cost T6: what each attempt measured per model request, as the
+  // harness wrote it (execution/usage-facts.ts), in attempt order. The platform
+  // report copies it into its `usage_facts`. Absent when no attempt wrote one.
+  usage_facts?: AttemptUsageFacts[];
   // D1-08 PR2 (§8): the step's normalized usage, attached by recordSettlement
   // — the single existing usage join site (D1-10c's own comment: a second
   // pass over `state.steps` "would be a parallel mechanism able to disagree
@@ -4562,6 +4570,17 @@ function recordSettlement(
     }
   }
   if (tracePaths.length > 0) meta.tracePaths = tracePaths;
+  const usageFacts: AttemptUsageFacts[] = [];
+  for (let attempt = 1; attempt <= result.attempts; attempt++) {
+    const file = usageFactsPath(meta.outPath, meta.name, attempt);
+    if (!existsSync(file)) continue;
+    try {
+      usageFacts.push(JSON.parse(readFileSync(file, "utf8")));
+    } catch {
+      // The harness writes it atomically; an unreadable one names no requests.
+    }
+  }
+  if (usageFacts.length > 0) meta.usage_facts = usageFacts;
 }
 
 // A step that reached a terminal verdict WITHOUT a StepResult: the spec never

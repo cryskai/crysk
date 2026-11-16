@@ -41,7 +41,7 @@ import {
   redactSessionDocument,
   redactSessionText,
 } from "../execution/claude-session-trace";
-import { metadataOnlyFinding } from "./platform-report";
+import { metadataOnlyFinding, stepRole } from "./platform-report";
 import {
   type ChatMessage,
   type Conversation,
@@ -521,19 +521,6 @@ function writeUsage(attrs: Attributes, usage: Record<string, unknown>): void {
   attrs.flatten("crysk.usage", usage);
 }
 
-function stepRole(pipeline: unknown, name: string): string {
-  const plan =
-    isRecord(pipeline) && isRecord(pipeline.route_plan)
-      ? pipeline.route_plan
-      : undefined;
-  const planned = Array.isArray(plan?.steps)
-    ? plan.steps.filter(isRecord).find((step) => step.stepKey === name)
-    : undefined;
-  const role = str(planned?.role);
-  if (role !== undefined) return role;
-  return name.split(/[-.]/)[0] ?? name;
-}
-
 function pipelineSteps(pipeline: unknown): Record<string, unknown>[] {
   return isRecord(pipeline) && Array.isArray(pipeline.steps)
     ? pipeline.steps.filter(isRecord)
@@ -922,7 +909,12 @@ function build(
     attrs.text("gen_ai.operation.name", "invoke_agent");
     attrs.text("gen_ai.agent.name", step.name);
     attrs.text("crysk.step.role", stepRole(run.pipeline, step.name));
-    if (meta !== undefined) attrs.flatten("crysk.step", meta);
+    if (meta !== undefined) {
+      // `usage_facts` (one tuple per model request) travels in the run report to the
+      // platform; flattened here it would be hundreds of attributes per attempt.
+      const { usage_facts: _usageFacts, ...stepAttrs } = meta;
+      attrs.flatten("crysk.step", stepAttrs);
+    }
     attrs.text("crysk.step.name", step.name);
     attrs.text("crysk.model.effort", str(meta?.effort));
     const status = str(meta?.status);

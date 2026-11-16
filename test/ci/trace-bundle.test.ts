@@ -933,6 +933,30 @@ describe("buildTraceBundle: a hunters-failed run", () => {
   });
 });
 
+// The per-request usage facts go to the platform in the run report; flattened into the step span
+// they would be hundreds of attributes per attempt duplicating it.
+test("buildTraceBundle: a step's usage_facts never become span attributes", () => {
+  const run = huntersFailedRun();
+  const [step] = (run.pipeline as { steps: Record<string, unknown>[] }).steps;
+  if (step) {
+    step.usage_facts = [
+      {
+        attempt: 1,
+        credential: "api",
+        requests: [["anthropic", "claude-sonnet-5-5", 1, 2, 3, 4, 5, 6]],
+      },
+    ];
+  }
+  const span = named(
+    buildTraceBundle(run, true),
+    "invoke_agent hunter-reliability",
+  );
+  expect(
+    span.attributes.map((a) => a.key).filter((k) => k.includes("usage_facts")),
+  ).toEqual([]);
+  expect(attr(span, "crysk.step.status")).toBe("failed");
+});
+
 describe("buildTraceBundle: an admission refusal with no run directory", () => {
   const bundle = buildTraceBundle(admissionRefusal(), false);
   const [root, ...rest] = spans(bundle);

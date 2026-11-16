@@ -965,6 +965,206 @@ describe("buildRunReport: the cache split and the list-price cost", () => {
   });
 });
 
+// platform-owned-cost T6: once the platform echoes the `usage-facts` capability, the report carries
+// what the run measured per model request (the steps' `usage_facts` in pipeline.json, as the harness
+// wrote them) and no dollar figure anywhere.
+describe("buildRunReport: usage facts", () => {
+  const sonnet = "claude-sonnet-5-5";
+  const haiku = "claude-haiku-5-5";
+  // cachedRun's steps, each with the facts its attempts wrote.
+  function factsRun() {
+    const run = cachedRun("metered");
+    const facts: Record<string, unknown[]> = {
+      "warmup-1": [
+        {
+          attempt: 1,
+          credential: "api",
+          requests: [["anthropic", haiku, 1, 0, 400, 0, 1, 0]],
+        },
+      ],
+      "hunter-reliability": [
+        {
+          attempt: 1,
+          credential: "api",
+          requests: [
+            ["anthropic", sonnet, 2, 1000, 100, 0, 80, 20],
+            ["anthropic", sonnet, 3, 2000, 100, 50, 90, 10],
+          ],
+          remainders: [["anthropic", haiku, 900, 0, 0, 0, 5, 0]],
+          gaps: ["line_omitted"],
+        },
+        {
+          attempt: 2,
+          credential: "api",
+          requests: [],
+          remainders: [["anthropic", haiku, 100, 0, 0, 0, 1, 0]],
+          gaps: ["no_session"],
+        },
+      ],
+      "refuter-F001": [
+        {
+          attempt: 1,
+          credential: "subscription",
+          requests: [["anthropic", sonnet, 2, 1000, 50, 0, 50, 0]],
+        },
+      ],
+      "refuter-F002": [
+        {
+          attempt: 1,
+          credential: "api",
+          requests: [["anthropic", sonnet, 1, 900, 40, 0, 40, 0]],
+        },
+      ],
+    };
+    return {
+      findings: run.findings,
+      pipeline: {
+        ...run.pipeline,
+        route_plan: {
+          steps: [
+            { stepKey: "hunter-reliability", role: "hunter.reliability" },
+          ],
+        },
+        steps: run.pipeline.steps.map((step) =>
+          facts[step.name] === undefined
+            ? step
+            : { ...step, usage_facts: facts[step.name] },
+        ),
+      },
+    };
+  }
+  const report = (run: RunDirFacts, usageFacts = true) =>
+    buildRunReport({
+      outcome: "reviewed",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run,
+      usageFacts,
+    });
+
+  test("sends each request under its step and route, with the step's owner and role", () => {
+    expect(report(factsRun())?.usage_facts).toEqual({
+      v: 1,
+      steps: [
+        // No agent row owns the warmup.
+        { key: "warmup-1", role: "warmup" },
+        {
+          key: "hunter-reliability",
+          role: "hunter.reliability",
+          agent: "reliability",
+        },
+        { key: "refuter-F001", role: "refuter", agent: "refuter" },
+        { key: "refuter-F002", role: "refuter", agent: "refuter" },
+      ],
+      routes: [
+        { provider: "anthropic", model: haiku, credential: "api" },
+        { provider: "anthropic", model: sonnet, credential: "api" },
+        { provider: "anthropic", model: sonnet, credential: "subscription" },
+      ],
+      requests: [
+        [0, 1, 0, 1, 0, 400, 0, 1, 0],
+        [1, 1, 1, 2, 1000, 100, 0, 80, 20],
+        [1, 1, 1, 3, 2000, 100, 50, 90, 10],
+        [2, 1, 2, 2, 1000, 50, 0, 50, 0],
+        [3, 1, 1, 1, 900, 40, 0, 40, 0],
+      ],
+      // The platform keys a remainder by step and route: the hunter's two attempts are summed.
+      remainders: [[1, 0, 1000, 0, 0, 0, 6, 0]],
+      gaps: [
+        [1, 1, "line_omitted"],
+        [1, 2, "no_session"],
+      ],
+    });
+  });
+
+  test("carries no dollar figure anywhere, and keeps every other fact", () => {
+    const body = report(factsRun());
+    const text = JSON.stringify(body);
+    for (const key of [
+      "cost_usd",
+      "list_cost_usd",
+      "cost_is_floor",
+      "billing",
+    ]) {
+      expect(text).not.toContain(`"${key}"`);
+    }
+    const legacy = report(factsRun(), false);
+    expect(body?.usage.tokens).toEqual(legacy?.usage.tokens);
+    expect(body?.agents.map((a) => a.tokens)).toEqual(
+      legacy?.agents.map((a) => a.tokens),
+    );
+    expect(body?.usage.tokens_in).toBe(legacy?.usage.tokens_in);
+    expect(legacy?.usage_facts).toBeUndefined();
+    expect(legacy?.usage.cost_usd).toBe(0.75);
+  });
+
+  test("a run that wrote no findings still sends the facts its steps wrote, and no dollars", () => {
+    const body = report({ pipeline: factsRun().pipeline });
+    expect(body?.usage).toEqual({ tokens_in: 0, tokens_out: 0 });
+    expect(body?.usage_facts?.requests).toHaveLength(5);
+    // No agent rows, so no step names an owner.
+    expect(body?.usage_facts?.steps.some((s) => s.agent !== undefined)).toBe(
+      false,
+    );
+  });
+
+  test("a run with no facts still sends the empty facts, never a body with neither facts nor dollars", () => {
+    for (const run of [{}, { findings: FINDINGS, pipeline: PIPELINE }]) {
+      expect(report(run)?.usage_facts).toEqual({
+        v: 1,
+        steps: [],
+        routes: [],
+        requests: [],
+      });
+    }
+  });
+
+  test("an entry that does not check is left out on its own", () => {
+    const run = factsRun();
+    const steps = run.pipeline.steps.map((step) =>
+      step.name === "refuter-F002"
+        ? {
+            ...step,
+            usage_facts: [
+              {
+                attempt: 0,
+                credential: "api",
+                requests: [["anthropic", sonnet, 1, 1, 1, 1, 1, 1]],
+              },
+              {
+                attempt: 1,
+                credential: "cash",
+                requests: [["anthropic", sonnet, 1, 1, 1, 1, 1, 1]],
+              },
+              {
+                attempt: 1,
+                credential: "api",
+                requests: [
+                  ["anthropic", sonnet, 1, 1, 1, 1, 1],
+                  ["anthropic", sonnet, 1, 1, 1, 1, 1, -1],
+                  ["anthropic", sonnet, 1, 1, 1, 1, 1, 1.5],
+                  ["", sonnet, 1, 1, 1, 1, 1, 1],
+                  ["anthropic", sonnet, 7, 0, 0, 0, 7, 0],
+                ],
+                gaps: ["made_up", 3, "truncated"],
+              },
+            ],
+          }
+        : step,
+    );
+    const facts = report({
+      ...run,
+      pipeline: { ...run.pipeline, steps },
+    })?.usage_facts;
+    expect(facts?.requests.filter((r) => r[0] === 3)).toEqual([
+      [3, 1, 1, 7, 0, 0, 0, 7, 0],
+    ]);
+    expect(facts?.gaps?.filter((g) => g[0] === 3)).toEqual([
+      [3, 1, "truncated"],
+    ]);
+  });
+});
+
 interface Call {
   url: string;
   init: RequestInit;
@@ -1308,6 +1508,21 @@ describe("runReportStep", () => {
       }),
     };
   }
+
+  test("the connect step's usage-facts echo makes the report send facts and no dollars", async () => {
+    for (const [echo, facts] of [
+      ["true", true],
+      ["", false],
+    ] as const) {
+      const r = run({ ...ENV, CRYSK_PLATFORM_USAGE_FACTS: echo }, () =>
+        json(200, { run_id: "r1", recorded: true }),
+      );
+      expect(await r.code).toBe(0);
+      const sent = JSON.parse(String(r.calls[0]?.init.body));
+      expect(sent.usage_facts !== undefined).toBe(facts);
+      expect(sent.usage.cost_usd !== undefined).toBe(!facts);
+    }
+  });
 
   test("posts the report first and prints nothing on success", async () => {
     const r = run(ENV, () => json(200, { run_id: "r1", recorded: true }));

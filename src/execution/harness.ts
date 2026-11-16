@@ -1,5 +1,7 @@
+import { createReadStream, existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { releaseExecutionSnapshot } from "#model/exec-snapshots";
 import {
   type ExecutableAllowlistEntry,
@@ -53,6 +55,7 @@ import {
   type AuthEvent,
   isTransportFailureCause,
   type ProviderTransport,
+  type ResolvedModelRoute,
   type StepAdmissionGate,
   type TransportFailureCause,
   type TransportOutcome,
@@ -93,11 +96,19 @@ import {
   settlementReceiptPath,
 } from "./step-artifacts";
 import {
+  type AttemptUsageFacts,
+  claudeAttemptUsageFacts,
+  credentialOfBillingMode,
+  openCodeAttemptUsageFacts,
+  usageFactsPath,
+} from "./usage-facts";
+import {
   envBillsMetered,
   type NormalizedUsage,
   normalizeUnavailableUsage,
   projectLegacyUsage,
   sumNormalizedUsage,
+  type UsageBillingMode,
 } from "./usage-normalized";
 
 // §7 line 416: injected sleep for the `rate_limit` capped-exponential
@@ -438,18 +449,94 @@ function copyClaudeSessionTrace(
   ).catch((): ClaudeTraceMiss => "session trace write failed");
 }
 
-async function withClaudeSessionTrace(
-  step: StepSpec,
-  request: TransportRequest,
-  attempt: number,
+function withTraceMissAnnotation(
   outcome: TransportOutcome,
-): Promise<TransportOutcome> {
-  const reason = await copyClaudeSessionTrace(step, request, attempt);
-  if (reason === undefined) return outcome;
+  miss: ClaudeTraceMiss | undefined,
+): TransportOutcome {
+  if (miss === undefined) return outcome;
   return {
     ...outcome,
-    stderrTail: `${outcome.stderrTail}\n${claudeTraceCaptureAnnotation(reason)}`,
+    stderrTail: `${outcome.stderrTail}\n${claudeTraceCaptureAnnotation(miss)}`,
   };
+}
+
+// platform-owned-cost T6: what one attempt measured per model request, for the
+// platform's `usage_facts` (usage-facts.ts). Read here because the session copy
+// and the CLI's per-model summary are only certain to exist now. Like the trace
+// copy it is never the attempt's failure: a facts file that could not be built
+// or written is absent, and the run's report names no requests for the attempt.
+async function writeAttemptUsageFacts(input: {
+  step: StepSpec;
+  // The route the attempt was sent, for a provider and model the source does not name.
+  route: ResolvedModelRoute;
+  attempt: number;
+  transport: ProviderTransport;
+  // The trace copy's answer for this attempt (copyClaudeSessionTrace).
+  miss: ClaudeTraceMiss | undefined;
+  // Absent on a cancelled attempt, which has no outcome.
+  outcome: TransportOutcome | undefined;
+  billingMode: UsageBillingMode;
+}): Promise<void> {
+  const { step, route, attempt, outcome } = input;
+  try {
+    const credential = credentialOfBillingMode(input.billingMode);
+    if (credential === undefined) return;
+    let facts: AttemptUsageFacts | undefined;
+    if (input.transport.backend === "claude-code") {
+      const trace = claudeSessionTracePath(step.outPath, step.name, attempt);
+      const copied = input.miss === undefined && existsSync(trace);
+      // No copy and no miss is an attempt that spawned no CLI: nothing ran.
+      if (
+        !copied &&
+        input.miss === undefined &&
+        outcome?.modelUsage === undefined
+      ) {
+        return;
+      }
+      const claude = (session: AsyncIterable<string> | undefined) =>
+        claudeAttemptUsageFacts({
+          attempt,
+          credential,
+          provider: route.provider,
+          session,
+          summary: outcome?.modelUsage,
+        });
+      try {
+        // A line at a time: the copy can be 64 MiB (see claude-session-trace.ts).
+        facts = await claude(
+          copied
+            ? createInterface({
+                input: createReadStream(trace, "utf8"),
+                crlfDelay: Number.POSITIVE_INFINITY,
+              })
+            : undefined,
+        );
+      } catch {
+        // The copy could not be read: report it as missing (a `no_session` gap), so
+        // the CLI's per-model summary still stands in for its requests.
+        facts = await claude(undefined);
+      }
+    } else if (
+      input.transport.backend === "opencode" &&
+      outcome !== undefined
+    ) {
+      facts = openCodeAttemptUsageFacts({
+        attempt,
+        credential,
+        route: { provider: route.provider, model: route.modelSnapshot },
+        capture: outcome.diagnosticEvidence,
+        totals: outcome.usage.tokens,
+      });
+    }
+    if (facts === undefined) return;
+    await writeJsonAtomically(
+      usageFactsPath(step.outPath, step.name, attempt),
+      facts,
+      { compact: true },
+    );
+  } catch {
+    // See above: the facts are absent, the attempt is unchanged.
+  }
 }
 
 export function isHarnessStderrAnnotation(line: string): boolean {
@@ -1430,14 +1517,7 @@ export class StepExecutionHarness implements StepRunner {
             finalText: "",
             usage: normalizeUnavailableUsage({
               wallMs: harnessWatchdogMs ?? 0,
-              // A Claude child bills on the credential its env holds, which the run chose; the transport's own
-              // answer reads the engine's startup env and could name a credential the run stripped.
-              billingMode:
-                transport.backend === "claude-code"
-                  ? envBillsMetered(this.projectedEnv)
-                    ? "metered"
-                    : "subscription"
-                  : transport.billingMode,
+              billingMode: this.attemptBillingMode(transport),
             }),
             stderrTail: `Step timed out after ${harnessWatchdogMs}ms`,
             timedOut: true,
@@ -1969,6 +2049,17 @@ export class StepExecutionHarness implements StepRunner {
       stderrTail: lastOutcome?.stderrTail ?? "",
       resultText: lastOutcome?.finalText.slice(-8192) ?? "",
     };
+  }
+
+  // The billing mode of an attempt that has no usage record of its own (a watchdog
+  // timeout, a cancellation). A Claude child bills on the credential its env holds,
+  // which the run chose; the transport's own answer reads the engine's startup env
+  // and could name a credential the run stripped.
+  private attemptBillingMode(transport: ProviderTransport): UsageBillingMode {
+    if (transport.backend !== "claude-code") {
+      return transport.billingMode ?? "unknown";
+    }
+    return envBillsMetered(this.projectedEnv) ? "metered" : "subscription";
   }
 
   // D1-08 PR0: the ONE place a single attempt (transient OR format-retry —
@@ -2541,7 +2632,16 @@ export class StepExecutionHarness implements StepRunner {
     if (execution.cancelled) {
       // A cancelled attempt has no outcome to carry a warning, but what it did
       // before the stop is still worth keeping.
-      await copyClaudeSessionTrace(step, request, attempt);
+      const miss = await copyClaudeSessionTrace(step, request, attempt);
+      await writeAttemptUsageFacts({
+        step,
+        route: request.route,
+        attempt,
+        transport,
+        miss,
+        outcome: undefined,
+        billingMode: this.attemptBillingMode(transport),
+      });
       return { kind: "cancelled" };
     }
 
@@ -2549,12 +2649,18 @@ export class StepExecutionHarness implements StepRunner {
     // `execution.cancelled` is the only path executeSession takes without
     // ever invoking `onData`, and `onData` is what both delivery variants
     // above come from.
-    const outcome = await withClaudeSessionTrace(
+    const settled = execution.outcome as TransportOutcome;
+    const miss = await copyClaudeSessionTrace(step, request, attempt);
+    await writeAttemptUsageFacts({
       step,
-      request,
+      route: request.route,
       attempt,
-      execution.outcome as TransportOutcome,
-    );
+      transport,
+      miss,
+      outcome: settled,
+      billingMode: settled.usage.billingMode,
+    });
+    const outcome = withTraceMissAnnotation(settled, miss);
 
     if (execution.delivery?.delivered) {
       return { kind: "delivered", outcome, parsed: execution.delivery.parsed };
