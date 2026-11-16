@@ -115,7 +115,6 @@ describe("5.5 Review Submenu", () => {
       styles: false,
       width: 80,
       effectiveConfig: {
-        parity_trigger_paths: [],
         suspicion_priors: [],
         default_base: "develop",
         post: true,
@@ -140,7 +139,6 @@ describe("5.5 Review Submenu", () => {
       styles: false,
       width: 80,
       effectiveConfig: {
-        parity_trigger_paths: [],
         suspicion_priors: [],
         default_base: "develop",
         post: true,

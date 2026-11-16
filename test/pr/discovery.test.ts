@@ -33,7 +33,6 @@ describe("discoveryHunters", () => {
       discoveryHunters({
         skipDiscovery: true,
         agents: [HUNTER_A, HUNTER_B],
-        parityFires: true,
       }),
     ).toEqual([]);
   });
@@ -42,7 +41,6 @@ describe("discoveryHunters", () => {
     const result = discoveryHunters({
       skipDiscovery: false,
       agents: [HUNTER_A, HUNTER_B],
-      parityFires: false,
     });
     expect(result.map((a) => a.key)).toEqual(["hunter-a"]);
   });
@@ -116,7 +114,7 @@ describe("resolvePrDiscovery — rereview-coverage fix (invariants 2 & 3)", () =
       headLabel: "PR #1 head",
       isCi: false,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: [], found: false },
       issueComments: [markerComment(false)],
       postedFindings: [POSTED_FINDING],
@@ -138,7 +136,7 @@ describe("resolvePrDiscovery — rereview-coverage fix (invariants 2 & 3)", () =
       headLabel: "PR #1 head",
       isCi: false,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: [], found: false },
       issueComments: [markerComment(true)],
       postedFindings: [POSTED_FINDING],
@@ -187,7 +185,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       headLabel: "PR #1 head",
       isCi: false,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: [], found: false },
       issueComments: [markerCommentForHead(H, true)],
       postedFindings: [
@@ -238,7 +236,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       headLabel: "PR #1 head",
       isCi: false,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: [], found: false },
       issueComments: [markerCommentForHead(H, true)],
       postedFindings: [
@@ -327,7 +325,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       headLabel: "PR #1 head",
       isCi: false,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: parseIgnoreFile("dist/**\n", "user"), found: true },
       issueComments: [markerCommentForHead(L, true)],
       postedFindings: [],
@@ -363,7 +361,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       headLabel: "PR #1 head",
       isCi: false,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: [], found: false },
       issueComments: [markerCommentForHead(H, true)],
       postedFindings: [
@@ -457,7 +455,7 @@ describe("resolvePrDiscovery — #206 body recovery keys by comment kind", () =>
       headLabel: "PR #1 head",
       isCi: false,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: [], found: false },
       issueComments: [
         markerComment(false),
@@ -527,7 +525,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       headLabel: "PR #1 head",
       isCi: true,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: [], found: false },
       issueComments: [markerCommentForHead(L, true)],
       postedFindings: [POSTED_FINDING],
@@ -648,7 +646,7 @@ function discoveryFor(
     headLabel: "PR #1 head",
     isCi: false,
     sizeGateOverrides: {},
-    config: { parity_trigger_paths: [], suspicion_priors: [] },
+    config: { suspicion_priors: [] },
     prIgnore: { rules: [], found: false },
     issueComments: [markerCommentForHead(L, true)],
     postedFindings: [],
@@ -781,7 +779,7 @@ describe("resolvePrDiscovery — a first review with every file excluded (#317)"
       headLabel: "PR #1 head",
       isCi: true,
       sizeGateOverrides: {},
-      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      config: { suspicion_priors: [] },
       prIgnore: { rules: parseIgnoreFile("dist/**\n", "user"), found: true },
       issueComments: [],
       postedFindings: [],

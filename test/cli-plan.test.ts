@@ -82,13 +82,7 @@ const options = (over: Partial<CliOptions> = {}): CliOptions => ({
 const spec: ReviewSpec = {
   agents: [
     { key: "reliability", file: "a.md", role: "hunter", model: "sonnet" },
-    {
-      key: "parity",
-      file: "b.md",
-      role: "hunter",
-      model: "sonnet",
-      trigger: ["packages/**"],
-    },
+    { key: "security", file: "b.md", role: "hunter", model: "sonnet" },
     { key: "refuter", file: "c.md", role: "refuter", model: "opus" },
   ],
 };
@@ -129,9 +123,8 @@ const planContext = (over: Partial<PlanContext> = {}): PlanContext => ({
   agentFiles,
   spec,
   runDir: "/tmp/pr-hero-fake-repo/.prhero/runs/local-abcdef",
-  config: { parity_trigger_paths: ["packages/**"], suspicion_priors: [] },
+  config: { suspicion_priors: [] },
   summary: { enabled: true, model: "haiku" },
-  parityFires: true,
   codegraphAvailable: true,
   estimate: estimateCost(diffStat, 2, true),
   hunterCount: 2,
@@ -166,7 +159,7 @@ const prPlanContext = (over: Partial<PrPlanContext> = {}): PrPlanContext => ({
   agentsDir: "/tmp/agents",
   agentFiles,
   spec,
-  config: { parity_trigger_paths: [], suspicion_priors: [] },
+  config: { suspicion_priors: [] },
   summary: { enabled: true, model: "haiku" },
   estimate: estimateCost(diffStat, 2, true),
   hunterCount: 2,
@@ -208,9 +201,11 @@ describe("renderPlan", () => {
     expect(moneyAt).toBe(lines.length - 1);
   });
 
-  test("a non-firing conditional hunter says so", () => {
-    const text = joined(renderPlan(planContext({ parityFires: false }), false));
-    expect(text).toContain("✗ will not fire");
+  test('every hunter reads "always" and the card has no parity row or line', () => {
+    const text = joined(renderPlan(planContext(), false));
+    expect(text).not.toContain("will not fire");
+    expect(text).not.toMatch(/parity/i);
+    expect(text).toContain("always");
   });
 
   test("a disabled summarizer is visible and not billed", () => {
@@ -322,7 +317,6 @@ describe("renderPrPlan", () => {
           baseSha: "1111111111111111111111111111111111111111",
           diffFromSha: "2222222222222222222222222222222222222222",
           diffPath: "/tmp/run/diff.patch",
-          parityFires: false,
         },
       }),
       false,
@@ -349,7 +343,8 @@ describe("renderPrPlan", () => {
       "merge base of main → 3333333333  (exact sha after fetch)",
     );
     expect(text).not.toContain("?");
-    expect(text).toContain("decided by the diff after fetch");
+    expect(text).not.toContain("decided by the diff after fetch");
+    expect(text).not.toMatch(/parity/i);
     expect(text).toContain("summarizer");
     expect(text).toContain("haiku");
   });
@@ -428,7 +423,6 @@ describe("prPlanDetails", () => {
             baseSha: "1111111111111111111111111111111111111111",
             diffFromSha: "2222222222222222222222222222222222222222",
             diffPath: "/tmp/run/diff.patch",
-            parityFires: true,
           },
         }),
         false,
@@ -634,7 +628,6 @@ const provenance = (
   sources: {
     agents_dir: "repo",
     default_base: "repo",
-    parity_trigger_paths: "repo",
     suspicion_priors: "repo",
     summary: { enabled: "repo" },
     models: "default",
@@ -717,7 +710,6 @@ describe("plan card config provenance (C5 O-7)", () => {
             {
               agents_dir: "default",
               default_base: "default",
-              parity_trigger_paths: "default",
               suspicion_priors: "default",
               summary: { enabled: "default" },
               max_verification_steps: "default",
@@ -994,7 +986,7 @@ describe("plan card and details route dimensions display", () => {
     cliModel: "sonnet",
   });
   const hunter2 = resolveStepRoute({
-    stepKey: "hunter-parity",
+    stepKey: "hunter-security",
     role: "hunter",
     cliModel: "sonnet",
   });

@@ -43,7 +43,6 @@ const MUSIVE_CONFIG = JSON.stringify(
   {
     agents_dir: "/Users/juanma/Desktop/deep-review/agents/slice3b-clean",
     default_base: "dev",
-    parity_trigger_paths: [],
     suspicion_priors: [],
     summary: { enabled: false },
   },

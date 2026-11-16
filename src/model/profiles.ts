@@ -44,7 +44,7 @@ export interface ModelProfile {
   readonly id: string;
   // A role the profile leaves out falls back to the fallback profile's.
   readonly roles: Readonly<Partial<Record<ProfileRole, ProfileRoute>>>;
-  // Per-hunter overrides, keyed by specialty (`logic`, `parity`, ...).
+  // Per-hunter overrides, keyed by specialty (`logic`, `security`, ...).
   readonly hunters?: Readonly<Record<string, ProfileRoute>>;
   // The profile's prompt set (S4): the name of a set under
   // `prompts/profiles/<name>/` that holds only the files that differ from the

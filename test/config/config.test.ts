@@ -288,16 +288,19 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
       expect(loaded.effective).toEqual({
         agents_dir: "/Users/juanma/Desktop/deep-review/agents/slice3b-clean",
         default_base: "dev",
-        parity_trigger_paths: [],
         suspicion_priors: [],
         summary: { enabled: false },
       });
+      // The fixture still carries the removed `parity_trigger_paths`, as old
+      // checkouts do: it resolves to nothing and says so once.
+      expect(loaded.warnings).toEqual([
+        ".crysk/config.json: parity_trigger_paths is ignored: the parity hunter was removed",
+      ]);
       // Table-driven over all keys: with no global layer every one of
       // them is the repo's or a default, and NOTHING says `global`/`capped`.
       expect(loaded.sources).toEqual({
         agents_dir: "repo",
         default_base: "repo",
-        parity_trigger_paths: "repo",
         suspicion_priors: "repo",
         summary: { enabled: "repo" },
         models: "default",
@@ -355,7 +358,6 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
       expect(loaded.sources).toEqual({
         agents_dir: "default",
         default_base: "default",
-        parity_trigger_paths: "default",
         suspicion_priors: "default",
         summary: { enabled: "default" },
         models: "default",
@@ -384,9 +386,9 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
   });
 
   // The other §0.7 branch. An explicitly named file that is not there stays
-  // an ERROR: silently falling back to "no parity triggers" would disable a
-  // hunter the caller just asked for, and a hunter that never fires looks
-  // exactly like a hunter that found nothing.
+  // an ERROR: silently falling back to "no config" would drop settings the
+  // caller just asked for, and a review that ignores them looks exactly like
+  // one that had nothing to apply.
   test("--config pointing at a missing file throws CliError", async () => {
     const home = await tmpHome();
     const repo = await tmpRoot(MUSIVE_CONFIG);
@@ -500,14 +502,12 @@ describe("loadEffectiveConfig — the global layer", () => {
   // message has to name the file it is actually in, or the operator edits the
   // repo's config looking for a typo that is not there.
   test("a malformed global file names the global file", async () => {
-    const home = await tmpHome('{"parity_trigger_paths": []}');
+    const home = await tmpHome('{"default_base": "main"}');
     const repo = await tmpRoot(MUSIVE_CONFIG);
     try {
       await expect(
         loadEffectiveConfig({ root: repo.root, home: home.home }),
-      ).rejects.toThrow(
-        "~/.crysk/config.json: parity_trigger_paths is a per-repo key",
-      );
+      ).rejects.toThrow("~/.crysk/config.json: default_base is a per-repo key");
     } finally {
       await home.cleanup();
       await repo.cleanup();
@@ -640,7 +640,6 @@ describe("pipelineConfigInput — O-6", () => {
       sources: {
         agents_dir: "global" as const,
         default_base: "default" as const,
-        parity_trigger_paths: "default" as const,
         suspicion_priors: "default" as const,
         summary: { enabled: "default" as const },
         models: "default" as const,

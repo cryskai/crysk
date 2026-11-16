@@ -68,17 +68,14 @@ import type { IgnoreFileReadResult } from "../ignore-read";
 // hunters run for a re-review is `skipDiscovery` — never a hardcoded
 // `case === "B"` special-case, which would defeat the fix by silently
 // skipping discovery for every case-B re-review regardless of whether this
-// particular one actually has nothing to discover. `agents`/`parityFires`
-// flow through unchanged to `selectActiveHunters` (#review/run), shared with
-// review()'s own copy.
+// particular one actually has nothing to discover. `agents` flows through
+// unchanged to `selectActiveHunters` (#review/run), shared with review()'s own
+// copy.
 export function discoveryHunters(params: {
   skipDiscovery: boolean;
   agents: readonly AgentSpec[];
-  parityFires: boolean;
 }): AgentSpec[] {
-  return params.skipDiscovery
-    ? []
-    : selectActiveHunters(params.agents, params.parityFires);
+  return params.skipDiscovery ? [] : selectActiveHunters(params.agents);
 }
 
 export interface PrDiscoveryGit {

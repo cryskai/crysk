@@ -18,9 +18,7 @@ import {
   CODEGRAPH_ONLY_MCP_CONFIG,
   computeDiffStatAndSizeGate,
   EMPTY_MCP_CONFIG,
-  fullReviewHunterCount,
   prepareRunnerForRoute,
-  resolveParityFires,
   resolvePromptSet,
   resolveReviewInstructions,
   selectActiveHunters,
@@ -131,48 +129,15 @@ describe("selectActiveHunters", () => {
   };
 
   test("unconditional hunters always run, refuters never do", () => {
-    const active = selectActiveHunters([hunterA, refuter], false);
+    const active = selectActiveHunters([hunterA, refuter]);
     expect(active).toEqual([hunterA]);
   });
 
-  test("a triggered hunter is excluded when parity does not fire", () => {
-    const active = selectActiveHunters([hunterA, hunterConditional], false);
+  // No product review supplies trigger paths, so a triggered hunter of a spec
+  // never runs and is not counted.
+  test("a triggered hunter is never selected", () => {
+    const active = selectActiveHunters([hunterA, hunterConditional]);
     expect(active).toEqual([hunterA]);
-  });
-
-  test("a triggered hunter is included when parity fires", () => {
-    const active = selectActiveHunters([hunterA, hunterConditional], true);
-    expect(active).toEqual([hunterA, hunterConditional]);
-  });
-});
-
-// cryskai/platform#12: a narrowed run's share of a full review divides by the
-// hunters a full review of the whole PR would run, never by this run's own.
-describe("fullReviewHunterCount", () => {
-  const hunter = { key: "a", file: "a.md", role: "hunter" as const };
-  const parity = {
-    key: "p",
-    file: "p.md",
-    role: "hunter" as const,
-    trigger: "input" as const,
-  };
-  const patch = (file: string) =>
-    `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-a\n+b\n`;
-
-  test("counts the parity hunter when the whole PR touches a trigger path", () => {
-    expect(
-      fullReviewHunterCount([hunter, parity], patch("src/auth/guard.ts"), [
-        "src/auth/**",
-      ]),
-    ).toBe(2);
-  });
-
-  test("leaves it out when the whole PR does not", () => {
-    expect(
-      fullReviewHunterCount([hunter, parity], patch("src/ui/x.ts"), [
-        "src/auth/**",
-      ]),
-    ).toBe(1);
   });
 });
 
@@ -371,30 +336,6 @@ describe("prepareRunnerForRoute (P2.2)", () => {
     expect(prepared.deps.onProgress).toBe(onProgress);
     expect(prepared.deps.transportRegistry).toBeUndefined();
     expect(prepared.deps.admissionEvidence).toBeUndefined();
-  });
-});
-
-describe("resolveParityFires (dedup slice)", () => {
-  test("fires when a changed path matches a trigger pattern", () => {
-    const patch = [
-      "diff --git a/src/foo.ts b/src/foo.ts",
-      "+++ b/src/foo.ts",
-      "@@ -1 +1 @@",
-    ].join("\n");
-    expect(resolveParityFires(patch, ["src/**"])).toBe(true);
-  });
-
-  test("does not fire when no changed path matches any trigger", () => {
-    const patch = [
-      "diff --git a/docs/readme.md b/docs/readme.md",
-      "+++ b/docs/readme.md",
-    ].join("\n");
-    expect(resolveParityFires(patch, ["src/**"])).toBe(false);
-  });
-
-  test("no trigger patterns configured: never fires", () => {
-    const patch = "+++ b/src/foo.ts";
-    expect(resolveParityFires(patch, [])).toBe(false);
   });
 });
 

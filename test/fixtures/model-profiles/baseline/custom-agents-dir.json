@@ -76,43 +76,6 @@
       ]
     },
     {
-      "name": "hunter-parity",
-      "backend": "claude-code",
-      "provider": "anthropic",
-      "model": "opus",
-      "modelSnapshot": "opus",
-      "modelVariant": null,
-      "effort": "low",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "70fbc4e084532d0d8d8f2e1d0b5e192551e5cb2a05381c5063351731916a8ee6",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": "opus",
-      "argv": [
-        "claude",
-        "-p",
-        "--append-system-prompt-file",
-        "<RUN>/steps/hunter-parity.system.md",
-        "--output-format",
-        "json",
-        "--mcp-config",
-        "<RUN>/mcp.json",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "Read,Grep,Glob,mcp__codegraph__codegraph_explore",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        "opus",
-        "--effort",
-        "low",
-        "--exclude-dynamic-system-prompt-sections"
-      ]
-    },
-    {
       "name": "hunter-reliability",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -336,7 +299,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "113b36359f439c12a275b6c49d1667718daf0bfe3110fde14ae2ec68f53823fd",
+    "routeFingerprint": "c1cee7a99ddf06782261b9240d47f41ab73d3c24c998bf9d70f9b0e0e069e742",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -391,20 +354,6 @@
           "provider": "anthropic",
           "modelFamily": "sonnet",
           "modelSnapshot": "sonnet"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "hunter-parity",
-        "role": "hunter",
-        "logicalIdentity": "claude:opus-latest",
-        "routeFingerprint": "0e4a03866558e58a15f46141062da8eed9751443f745918bc3f90bf30f6c28f8",
-        "effort": null,
-        "route": {
-          "backend": "claude-code",
-          "provider": "anthropic",
-          "modelFamily": "opus",
-          "modelSnapshot": "opus"
         },
         "fallbacks": null
       },
@@ -478,13 +427,6 @@
       "name": "hunter-logic",
       "model": "haiku",
       "effort": "medium",
-      "effort_applied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "hunter-parity",
-      "model": "opus",
-      "effort": "low",
       "effort_applied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
     },

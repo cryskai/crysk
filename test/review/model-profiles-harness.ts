@@ -70,7 +70,6 @@ export const BASELINE_CASES: readonly BaselineCase[] = [
     name: "custom-agents-dir",
     customFrontmatter: {
       "deep-review-logic.md": { model: "haiku", effort: "medium" },
-      "deep-review-parity.md": { model: "opus", effort: "low" },
       "deep-review-reliability.md": { model: "haiku" },
       "deep-review-resilience.md": { model: "sonnet", effort: "max" },
       "review-refuter.md": { model: "sonnet", effort: "medium" },
@@ -348,8 +347,8 @@ export async function captureBaseline(
       outPath: path.join(runDir, "findings.json"),
       mcpConfigPath: path.join(runDir, "mcp.json"),
       hopBudget: 4,
-      // Parity is conditional: a trigger path makes it fire.
-      parityTriggerPaths: ["src/app.ts"],
+      // The product spec has no conditional hunter, so no trigger path is read.
+      parityTriggerPaths: [],
       suspicionPriors: [],
       boundaryNonce: NONCE,
       spec: localReviewSpec({}),

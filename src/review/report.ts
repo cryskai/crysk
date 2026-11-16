@@ -1610,12 +1610,6 @@ function runLines(doc: FindingsDocument, meta: ReportMeta): string[] {
       `Agents: ${rows.map((r) => `${r.key} ${r.status}`).join(" · ")}`,
     );
   }
-  if (!doc.parity_hunter_fired) {
-    lines.push("");
-    lines.push(
-      "The parity hunter did not fire: no changed path matched its trigger.",
-    );
-  }
   return lines;
 }
 

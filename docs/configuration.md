@@ -17,7 +17,7 @@ covers the two things that section does not: `models` and credentials.
 | Layer | File | Holds |
 | --- | --- | --- |
 | Global / per-person | `~/.crysk/config.json` (or `~/.prhero/config.json`, see below) | `profile`, `models`, `credentials`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
-| Repo | `<repo>/.crysk/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors` |
+| Repo | `<repo>/.crysk/config.json` | `agents_dir`, `default_base`, `suspicion_priors` |
 | Repo, review instructions | `<repo>/REVIEW.md`, else `<repo>/.crysk/gotchas.md` (optional) | facts the hunters and the refuter read; with `materiality_gate` on, the judge also reads it as owner policy for style, test, generated-code and dev-script findings only; see the README's `REVIEW.md` and `gotchas.md` section |
 
 `max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and Crysk can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
@@ -49,6 +49,13 @@ The reverse also throws (a repo-only key in the global file gets ` is a per-repo
 repo config (<repo>/.crysk/config.json, or <repo>/.prhero/config.json in a repo set up before the
 rename)`). Run `crysk config` to see, per key, which of the two files actually
 spoke.
+
+**Removed keys.** `scout` and `parity_trigger_paths` belonged to stages that no longer exist. Either one is
+accepted in both files and ignored, with one warning per file (`... is ignored: the scout stage was removed`,
+`... is ignored: the parity hunter was removed`), and `crysk config set` refuses both. A
+`deep-review-parity.md` left in a custom `agents_dir` is ignored the same way, with one warning
+(`deep-review-parity.md is ignored: the parity hunter was removed`); any other agent file the review does not
+use is still an error.
 
 **`--config <file>` replaces the repo layer only.** There is no flag that repoints the global one —
 it is always read from `os.homedir()`. Pointing `--config` at a file that contains `models` hits the
@@ -124,19 +131,19 @@ it runs on, in the order to try them:
 
 | Role | Steps | When the role is not listed |
 | --- | --- | --- |
-| `hunter.<key>` | one hunter: `hunter.logic`, `hunter.parity`, `hunter.reliability`, `hunter.resilience`, `hunter.security`, or the key of a hunter in your own prompt set | `default` |
+| `hunter.<key>` | one hunter: `hunter.logic`, `hunter.reliability`, `hunter.resilience`, `hunter.security`, or the key of a hunter in your own prompt set | `default` |
 | `refuter` | the refuter, and the re-review verifier and the CI adjudicator, which run as its agent | `default` |
 | `consolidate` | the consolidation pass after the refuter | `default` |
 | `summary` | the summarizer | `default` |
 | `judge` | the materiality judge (`materiality_gate`) | the profile's judge (`claude:sonnet-latest` on `claude`), never `default` |
 | `default` | every role above that is not listed, the judge excepted | the model the step's prompt declares |
 
-`models.scout` is still accepted and ignored, with a warning (`models.scout is ignored: the scout stage was removed`): the scout stage no longer exists, so no step runs under that role.
+`models.scout` is still accepted and ignored, with a warning (`models.scout is ignored: the scout stage was removed`): the scout stage no longer exists, so no step runs under that role. `models.hunter.parity` is accepted and ignored the same way, with one warning (`models.hunter.parity is ignored: the parity hunter was removed`), because no review has a parity hunter.
 
 With no `models` at all, each step runs its [profile](#profiles)'s model. Under `claude`, the default, that is the model its prompt declares, as `claude:<alias>-latest`: the
 bundled hunters and the consolidation pass declare `sonnet`, the refuter `opus`, the summarizer
 `haiku`. A `hunter.<key>` that no hunter of the review declares fails when the plan is built, so a typo never
-goes unnoticed; `hunter.parity` is accepted on the runs where the parity hunter does not fire.
+goes unnoticed (`hunter.parity` is the one exception, above).
 
 **Which model a step runs on**, highest first: `--model` (one model for every step but the judge, no
 fallbacks); `models[role]`; `models.default`; the prompt's own model.

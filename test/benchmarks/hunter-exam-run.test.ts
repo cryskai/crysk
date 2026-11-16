@@ -716,10 +716,10 @@ describe("where the exam writes", () => {
 });
 
 describe("resolveHunter", () => {
-  test("drops the trigger of a conditional hunter", () => {
-    expect(resolveHunter("parity")).toEqual({
-      key: "parity",
-      file: "deep-review-parity.md",
+  test("names a hunter of the local spec by its key", () => {
+    expect(resolveHunter("logic")).toEqual({
+      key: "logic",
+      file: "deep-review-logic.md",
       role: "hunter",
     });
   });
@@ -734,5 +734,11 @@ describe("resolveHunter", () => {
 
   test("refuses a hunter the spec does not carry", () => {
     expect(() => resolveHunter("refuter")).toThrow(/unknown hunter "refuter"/);
+  });
+
+  // The parity hunter left the local spec, so it is no longer a hunter an exam
+  // can name by key.
+  test("no longer knows the removed parity hunter", () => {
+    expect(() => resolveHunter("parity")).toThrow(/unknown hunter "parity"/);
   });
 });

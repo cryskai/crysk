@@ -90,7 +90,7 @@ export function configProvenanceOf(
 // capped" disagree). §3.6's reading is the one that keeps the operator
 // un-surprised: a defaulted value is byte-for-byte pre-C5 behaviour, and the
 // card already prints every one of them in a row of its own — the summarizer
-// row, the parity row, the priors count, the base's source tag. Tagging six
+// row, the priors count, the base's source tag. Tagging five
 // defaults on every quiet repo would bury the one tag that is genuinely new
 // information. Naming every key's layer is `pr-hero config`'s job (§3.10),
 // where the whole point is the exhaustive list.
@@ -147,7 +147,6 @@ function configTags(
       ? `agents_dir ← ${provenance.agentsDirSource}`
       : undefined,
     flagged.base ? undefined : configTag("default_base", s.default_base),
-    configTag("parity_trigger_paths", s.parity_trigger_paths),
     configTag("suspicion_priors", s.suspicion_priors),
     flagged.summary
       ? undefined
@@ -226,7 +225,6 @@ export interface PlanContext {
   runDir: string;
   config: LocalConfig;
   summary: SummarySettings;
-  parityFires: boolean;
   codegraphAvailable: boolean;
   estimate: ReturnType<typeof estimateCost>;
   hunterCount: number;
@@ -556,14 +554,6 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
   push("hop budget", String(ctx.options.hopBudget));
   push("summarizer", summarizerRow(ctx.summary, ctx.routePlan));
   push(
-    "parity",
-    ctx.config.parity_trigger_paths.length === 0
-      ? "no parity_trigger_paths configured — the parity hunter never fires"
-      : ctx.parityFires
-        ? `fires (a changed path matches ${ctx.config.parity_trigger_paths.length} configured pattern(s))`
-        : "configured, but no changed path matches — it will not fire",
-  );
-  push(
     "codegraph",
     ctx.codegraphAvailable
       ? "available (.codegraph found; codegraph_explore is live)"
@@ -595,14 +585,7 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
   ];
   let label = "AGENTS";
   for (const agent of ctx.spec.agents) {
-    const fires =
-      agent.role === "refuter"
-        ? "per severe finding"
-        : agent.trigger === undefined
-          ? "always"
-          : ctx.parityFires
-            ? "triggered"
-            : "✗ will not fire";
+    const fires = agent.role === "refuter" ? "per severe finding" : "always";
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
   }
@@ -688,7 +671,6 @@ export interface PrPlanContext {
     baseSha: string;
     diffFromSha: string;
     diffPath: string;
-    parityFires: boolean;
   };
   // Same contract, same reason as PlanContext.width.
   width?: number;
@@ -726,18 +708,11 @@ function prBaseSourceTag(target: PrTarget): string {
     : "PR base tip";
 }
 
-// Pre-fetch the parity trigger cannot be evaluated (there is no diff yet).
-// When triggers are configured the parity hunter MIGHT fire, so it counts:
-// both recorded cost overruns were under-estimates, and a band that errs
-// high costs a second of hesitation while one that errs low costs money.
-export function dryRunHunterCount(
-  spec: ReviewSpec,
-  config: LocalConfig,
-): number {
+// A dry run has no diff and no review supplies trigger paths, so the hunters
+// that run are the unconditional ones.
+export function dryRunHunterCount(spec: ReviewSpec): number {
   return spec.agents.filter(
-    (a) =>
-      a.role === "hunter" &&
-      (a.trigger === undefined || config.parity_trigger_paths.length > 0),
+    (a) => a.role === "hunter" && a.trigger === undefined,
   ).length;
 }
 
@@ -865,17 +840,6 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
         "exists (idempotent — one comment per PR, found by its marker)",
     );
   }
-  push(
-    "parity",
-    ctx.config.parity_trigger_paths.length === 0
-      ? "no parity_trigger_paths configured — the parity hunter never fires"
-      : ctx.resolved === undefined
-        ? `configured (${ctx.config.parity_trigger_paths.length} ` +
-          "pattern(s)); whether a changed path matches is decided after fetch"
-        : ctx.resolved.parityFires
-          ? `fires (a changed path matches ${ctx.config.parity_trigger_paths.length} configured pattern(s))`
-          : "configured, but no changed path matches — it will not fire",
-  );
   push("codegraph", codegraphPlanNote(ctx.worktreePath));
   push("priors", `${ctx.config.suspicion_priors.length} suspicion prior(s)`);
   push("estimate", ctx.estimate.basis);
@@ -901,16 +865,7 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
   ];
   let label = "AGENTS";
   for (const agent of ctx.spec.agents) {
-    const fires =
-      agent.role === "refuter"
-        ? "per severe finding"
-        : agent.trigger === undefined
-          ? "always"
-          : ctx.resolved === undefined
-            ? "decided by the diff after fetch"
-            : ctx.resolved.parityFires
-              ? "triggered"
-              : "✗ will not fire";
+    const fires = agent.role === "refuter" ? "per severe finding" : "always";
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
   }

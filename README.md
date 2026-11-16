@@ -9,9 +9,9 @@ finding, and deterministic code — never a model — assigns blocking/advisory 
 Its measured profile, stated up front: **high precision, narrow coverage**. What it reports is
 almost always real (13% false positives measured). Its hunters check value contracts across the diff
 (units, domain, conversions, what consumers assume), resilience (lookup and dedupe keys, retries and
-locks, CI guards, test isolation), local logic errors, trust boundaries (outside input reaching a
+locks, CI guards, test isolation), local logic errors, and trust boundaries (outside input reaching a
 query, command, file path or server-side request; missing or misplaced permission checks; a hunter
-added 2026-11-15, after that measurement), and access-control parity with sibling code;
+added 2026-11-15, after that measurement);
 stale state, races and component lifecycle have no dedicated hunter since 2026-11-08. It says nothing
 about style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
 disclaimer, and nothing it prints blocks a merge. In CI its commit status is a gate by default: require the
@@ -287,7 +287,6 @@ never be able to enlarge *your* bill: on the two keys that spend, the team can o
 | --- | --- | --- |
 | `agents_dir` | both | Directory holding the agent prompt files (`deep-review-*.md`, `review-*.md`). Relative paths resolve against **the file that named it**. |
 | `default_base` | **repo only** | Base ref when `--base` is not given (e.g. `"dev"`). Without it: the remote head (`origin/HEAD`), then `main`. Rejected in the global file on purpose — see below. |
-| `parity_trigger_paths` | **repo only** | Glob list. The parity hunter runs only when a changed path matches one — no globs, no parity hunter. |
 | `suspicion_priors` | **repo only** | `[{path, weight, reason}]` hints injected into hunter prompts — point them at your known hotspots. |
 | `summary.enabled` | both — team may only turn it **off** | Whether the engine-owned summarizer runs. Defaults to `true`, because it spends money and a silent opt-out would make the bill differ from the plan. |
 | `models` | **global only** | The models per role (`default`, `hunter.<key>`, `refuter`, `consolidate`, `summary`, `judge`), each a list of one to three tried in order, e.g. `{"summary": ["claude:haiku-latest"]}`. Unset, each step runs the model its prompt declares. See [Models](docs/configuration.md#models). `summary.model` is gone: `"haiku"` still reads, with a warning; anything else is refused. `models.scout` is still accepted and ignored, with a warning: the scout stage was removed. |
@@ -298,6 +297,7 @@ never be able to enlarge *your* bill: on the two keys that spend, the team can o
 | `max_changed_lines` | both — team may only **lower** it | Line budget threshold before the size gate skips a review. Defaults to `4000`; `0` disables line budget check. |
 | `max_changed_files` | both — team may only **lower** it | File count budget threshold before the size gate skips a review. Defaults to `150`; `0` disables file budget check. |
 | `scout` | both | Removed. The key is still accepted and ignored, with a warning (`scout is ignored: the scout stage was removed`); `crysk config set scout` is refused. |
+| `parity_trigger_paths` | both | Removed with the parity hunter. The key is still accepted and ignored, with a warning (`parity_trigger_paths is ignored: the parity hunter was removed`); `crysk config set parity_trigger_paths` is refused. |
 | `materiality_gate` | both — team may only turn it **off** | Defaults to `false`. When `true`, an extra isolated judge checks each blocking finding against Crysk's posting policy; a finding judged not material under normal use is posted as advisory instead of blocking. Findings about security, credentials or data loss are never demoted. Adds one judge call per blocking finding. It runs only on its profile's judge models (Claude sonnet or opus on `claude`, OpenAI Terra on `openai`); on any other route findings stay blocking. Known limitation: on a re-review, a finding that was blocking on an earlier head still counts toward the gate. |
 | `post` | both — team may only turn it **off** | Whether review reports publish as GitHub PR comments by default. Defaults to `false`. |
 | `post_min_severity` | both — the repo file wins either way | The lowest finding a PR review posts: `suggestion` (everything), `warning` (hides advisory suggestions) or `blocking` (hides every advisory finding). A blocking finding always posts. Hidden findings get no comment; the summary counts them in one line. The gate and local reports still see every finding; re-review admission scores only what was posted, so a hidden finding never triggers a re-review. Unset posts everything; `setup --ci` writes the recommended `warning` when the file has no value. |

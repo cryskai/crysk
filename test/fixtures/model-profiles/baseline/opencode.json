@@ -34,22 +34,6 @@
       "argv": null
     },
     {
-      "name": "hunter-parity",
-      "backend": "opencode",
-      "provider": "openai",
-      "model": "sonnet",
-      "modelSnapshot": "gpt-x",
-      "modelVariant": "high",
-      "effort": "xhigh",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "70fbc4e084532d0d8d8f2e1d0b5e192551e5cb2a05381c5063351731916a8ee6",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": null,
-      "argv": null
-    },
-    {
       "name": "hunter-reliability",
       "backend": "opencode",
       "provider": "openai",
@@ -131,7 +115,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "59c699f6068f536d7363835d6863fe666d2a0cf136c167aa6c9d72872ef27b21",
+    "routeFingerprint": "fe1d505b1dd93a842fbb05c4b6e11de22e47f120915643985c49138e861e0f18",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -180,21 +164,6 @@
       },
       {
         "stepKey": "hunter-security",
-        "role": "hunter",
-        "logicalIdentity": "opencode:openai/gpt-x",
-        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
-        "effort": "high",
-        "route": {
-          "backend": "opencode",
-          "provider": "openai",
-          "modelFamily": "gpt-x",
-          "modelSnapshot": "gpt-x",
-          "modelVariant": "high"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "hunter-parity",
         "role": "hunter",
         "logicalIdentity": "opencode:openai/gpt-x",
         "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
@@ -265,14 +234,6 @@
     },
     {
       "name": "hunter-logic",
-      "model": "gpt-x",
-      "effort": "xhigh",
-      "effort_applied": true,
-      "variant": "high",
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "hunter-parity",
       "model": "gpt-x",
       "effort": "xhigh",
       "effort_applied": true,

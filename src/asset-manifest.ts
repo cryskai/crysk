@@ -8,9 +8,6 @@ import consolidatePrompt from "../prompts/consolidate.md" with { type: "file" };
 import logicPrompt from "../prompts/default/deep-review-logic.md" with {
   type: "file",
 };
-import parityPrompt from "../prompts/default/deep-review-parity.md" with {
-  type: "file",
-};
 import reliabilityPrompt from "../prompts/default/deep-review-reliability.md" with {
   type: "file",
 };
@@ -50,7 +47,6 @@ import prSkill from "../skills/crysk-pr/SKILL.md" with { type: "file" };
 
 export const BUNDLED_AGENT_FILES: Record<string, string> = {
   "deep-review-logic.md": logicPrompt,
-  "deep-review-parity.md": parityPrompt,
   "deep-review-reliability.md": reliabilityPrompt,
   "deep-review-resilience.md": resiliencePrompt,
   "deep-review-security.md": securityPrompt,

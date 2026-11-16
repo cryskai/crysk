@@ -76,43 +76,6 @@
       ]
     },
     {
-      "name": "hunter-parity",
-      "backend": "claude-code",
-      "provider": "anthropic",
-      "model": "sonnet",
-      "modelSnapshot": "sonnet",
-      "modelVariant": null,
-      "effort": "xhigh",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "70fbc4e084532d0d8d8f2e1d0b5e192551e5cb2a05381c5063351731916a8ee6",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": "sonnet",
-      "argv": [
-        "claude",
-        "-p",
-        "--append-system-prompt-file",
-        "<RUN>/steps/hunter-parity.system.md",
-        "--output-format",
-        "json",
-        "--mcp-config",
-        "<RUN>/mcp.json",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "Read,Grep,Glob,mcp__codegraph__codegraph_explore",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        "sonnet",
-        "--effort",
-        "xhigh",
-        "--exclude-dynamic-system-prompt-sections"
-      ]
-    },
-    {
       "name": "hunter-reliability",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -336,7 +299,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "e15172255ce1554374f0579a1b0c69d89230239205c760b130697bd5b73653c9",
+    "routeFingerprint": "50d75d566055283b84eaa9f0c84a3a124b83eb4cb4e469947c14259b59c981a0",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -382,20 +345,6 @@
       },
       {
         "stepKey": "hunter-security",
-        "role": "hunter",
-        "logicalIdentity": "claude:sonnet-latest",
-        "routeFingerprint": "1da1f1d92fb6d22f05c7a5ec7079206963c519ed79ede80d92ce4200059854d5",
-        "effort": null,
-        "route": {
-          "backend": "claude-code",
-          "provider": "anthropic",
-          "modelFamily": "sonnet",
-          "modelSnapshot": "sonnet"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "hunter-parity",
         "role": "hunter",
         "logicalIdentity": "claude:sonnet-latest",
         "routeFingerprint": "1da1f1d92fb6d22f05c7a5ec7079206963c519ed79ede80d92ce4200059854d5",
@@ -476,13 +425,6 @@
     },
     {
       "name": "hunter-logic",
-      "model": "sonnet",
-      "effort": "xhigh",
-      "effort_applied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "hunter-parity",
       "model": "sonnet",
       "effort": "xhigh",
       "effort_applied": true,

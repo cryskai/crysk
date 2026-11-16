@@ -566,8 +566,9 @@ export async function checkCase(examCase: ExamCase): Promise<string[]> {
 }
 
 // `logic` names a hunter of the local review spec; `key:file.md` names one
-// that is not in the spec yet (a candidate under --agents). The trigger is
-// dropped either way: an exam run asked for this hunter, so it runs.
+// that is not in the spec yet (a candidate under --agents). Either way the
+// returned hunter carries no trigger: an exam run asked for this hunter, so it
+// runs.
 export function resolveHunter(arg: string): AgentSpec {
   const [key, file] = arg.split(":");
   if (file !== undefined) return { key: key ?? "", file, role: "hunter" };
