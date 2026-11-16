@@ -337,24 +337,30 @@ function openCodeReadback(
   return { requests, complete: readback.data.coverage === "complete" };
 }
 
-// One OpenCode attempt: one request per assistant message of its capture's newest readback. When
-// the readback is missing (the capture was dropped or elided) or does not cover the whole session,
-// what the attempt's streamed totals count beyond the requests read stands in as one remainder
-// under its route, with a `no_readback` gap. An attempt with no capture and no totals reached no
-// session and reports nothing. The contract's `evicted` gap is not emitted: the transport's
-// per-message cap applies to its streamed map, which these facts never read.
+// One OpenCode attempt: one request per assistant message of its capture's newest readback. The
+// readback is trusted whole only when it covers the session and the capture itself is complete
+// (the evidence classifier's two tests): an incomplete capture can have dropped a newer readback,
+// leaving an older one newest. Otherwise the requests read are kept, and what the attempt's
+// streamed totals count beyond them stands in as one remainder under its route, with a
+// `no_readback` gap whenever the readback is missing or something was beyond it. An attempt with
+// no capture and no totals reached no session and reports nothing. The contract's `evicted` gap is
+// not emitted: the transport's per-message cap applies to its streamed map, which these facts
+// never read.
 export function openCodeAttemptUsageFacts(input: {
   attempt: number;
   credential: UsageFactCredential;
   route: { provider: string; model: string };
-  capture: string | undefined;
+  // The transport's capture (TransportOutcome.diagnosticEvidence).
+  capture:
+    | { readonly status: string; readonly redactedJson: string }
+    | undefined;
   totals: NormalizedTokens;
 }): AttemptUsageFacts | undefined {
   const readback =
     input.capture === undefined
       ? undefined
-      : openCodeReadback(input.capture, input.route);
-  if (readback?.complete === true) {
+      : openCodeReadback(input.capture.redactedJson, input.route);
+  if (readback?.complete === true && input.capture?.status === "complete") {
     return facts(input, readback.requests, [], []);
   }
   const t = input.totals;
@@ -374,12 +380,13 @@ export function openCodeAttemptUsageFacts(input: {
     totals,
     sumCounts(requests.map((r) => r.slice(2) as unknown as UsageCounts)),
   );
+  const lost = counts.some((n) => n > 0);
   return facts(
     input,
     requests,
-    counts.some((n) => n > 0)
+    lost
       ? [entry(input.route.provider, { model: input.route.model, counts })]
       : [],
-    ["no_readback"],
+    readback === undefined || lost ? ["no_readback"] : [],
   );
 }

@@ -493,19 +493,29 @@ async function writeAttemptUsageFacts(input: {
       ) {
         return;
       }
-      facts = await claudeAttemptUsageFacts({
-        attempt,
-        credential,
-        provider: route.provider,
+      const claude = (session: AsyncIterable<string> | undefined) =>
+        claudeAttemptUsageFacts({
+          attempt,
+          credential,
+          provider: route.provider,
+          session,
+          summary: outcome?.modelUsage,
+        });
+      try {
         // A line at a time: the copy can be 64 MiB (see claude-session-trace.ts).
-        session: copied
-          ? createInterface({
-              input: createReadStream(trace, "utf8"),
-              crlfDelay: Number.POSITIVE_INFINITY,
-            })
-          : undefined,
-        summary: outcome?.modelUsage,
-      });
+        facts = await claude(
+          copied
+            ? createInterface({
+                input: createReadStream(trace, "utf8"),
+                crlfDelay: Number.POSITIVE_INFINITY,
+              })
+            : undefined,
+        );
+      } catch {
+        // The copy could not be read: report it as missing (a `no_session` gap), so
+        // the CLI's per-model summary still stands in for its requests.
+        facts = await claude(undefined);
+      }
     } else if (
       input.transport.backend === "opencode" &&
       outcome !== undefined
@@ -514,7 +524,7 @@ async function writeAttemptUsageFacts(input: {
         attempt,
         credential,
         route: { provider: route.provider, model: route.modelSnapshot },
-        capture: outcome.diagnosticEvidence?.redactedJson,
+        capture: outcome.diagnosticEvidence,
         totals: outcome.usage.tokens,
       });
     }

@@ -263,6 +263,16 @@ function observedModelsFromCliResult(
 // model, split into the platform's disjoint leaves (thinking out of output, the
 // one-hour write out of the total write). The same absence rule as above: no
 // parse, no block, or no usable entry answers `undefined`.
+//
+// The model is the provider's id, as the session transcript's `message.model`
+// spells it, so the two can be joined: the CLI marks a context-window variant on
+// its own model names with a bracketed suffix (`requestedModel:
+// "claude-opus-5[1m]"` beside `message.model: "claude-opus-5"` in a real
+// session), which names no provider model. A key carrying one is filed under the
+// id without it, and entries that meet there are summed, so a summary key can
+// never miss its transcript requests and count them twice as a remainder.
+const CLI_MODEL_VARIANT = /\[[^\]]*\]$/;
+
 function modelUsageFromCliResult(
   rawStdout: string,
 ): readonly ModelUsageCounts[] | undefined {
@@ -276,8 +286,9 @@ function modelUsageFromCliResult(
   if (raw === undefined || raw === null || typeof raw !== "object") {
     return undefined;
   }
-  const models: ModelUsageCounts[] = [];
-  for (const [model, entry] of Object.entries(raw)) {
+  const models = new Map<string, number[]>();
+  for (const [key, entry] of Object.entries(raw)) {
+    const model = key.replace(CLI_MODEL_VARIANT, "");
     if (
       model.trim().length === 0 ||
       entry === null ||
@@ -285,20 +296,27 @@ function modelUsageFromCliResult(
     ) {
       continue;
     }
-    models.push({
-      model,
-      counts: claudeUsageCounts({
-        uncached: entry.inputTokens,
-        cacheRead: entry.cacheReadInputTokens,
-        cacheWriteTotal: entry.cacheCreationInputTokens,
-        cacheWrite1h: entry.cacheCreationEphemeral1hInputTokens,
-        cacheWrite5m: entry.cacheCreationEphemeral5mInputTokens,
-        output: entry.outputTokens,
-        thinking: entry.thinkingTokens,
-      }),
+    const counts = claudeUsageCounts({
+      uncached: entry.inputTokens,
+      cacheRead: entry.cacheReadInputTokens,
+      cacheWriteTotal: entry.cacheCreationInputTokens,
+      cacheWrite1h: entry.cacheCreationEphemeral1hInputTokens,
+      cacheWrite5m: entry.cacheCreationEphemeral5mInputTokens,
+      output: entry.outputTokens,
+      thinking: entry.thinkingTokens,
     });
+    const sum = models.get(model) ?? [0, 0, 0, 0, 0, 0];
+    counts.forEach((n, i) => {
+      sum[i] = (sum[i] ?? 0) + n;
+    });
+    models.set(model, sum);
   }
-  return models.length === 0 ? undefined : models;
+  return models.size === 0
+    ? undefined
+    : [...models].map(([model, counts]) => ({
+        model,
+        counts: counts as unknown as ModelUsageCounts["counts"],
+      }));
 }
 
 // #299 (2026-10-01): how many tool calls the model made, as far as the CLI's

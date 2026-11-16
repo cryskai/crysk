@@ -909,7 +909,12 @@ function build(
     attrs.text("gen_ai.operation.name", "invoke_agent");
     attrs.text("gen_ai.agent.name", step.name);
     attrs.text("crysk.step.role", stepRole(run.pipeline, step.name));
-    if (meta !== undefined) attrs.flatten("crysk.step", meta);
+    if (meta !== undefined) {
+      // `usage_facts` (one tuple per model request) travels in the run report to the
+      // platform; flattened here it would be hundreds of attributes per attempt.
+      const { usage_facts: _usageFacts, ...stepAttrs } = meta;
+      attrs.flatten("crysk.step", stepAttrs);
+    }
     attrs.text("crysk.step.name", step.name);
     attrs.text("crysk.model.effort", str(meta?.effort));
     const status = str(meta?.status);

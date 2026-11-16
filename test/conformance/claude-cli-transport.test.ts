@@ -588,6 +588,33 @@ describe("ClaudeCodeCliTransport usage normalization (D1-08 PR2)", () => {
     ]);
   });
 
+  // The transcript names the provider's id (`claude-opus-5`); a key with the CLI's context-window
+  // suffix must land on it, or the remainder would count the transcript's requests twice.
+  test("a modelUsage key with the CLI's [1m] suffix is filed under the provider's id, summed", async () => {
+    const fake = makeFakeProc({
+      stdoutBody: JSON.stringify({
+        result: "reviewed",
+        modelUsage: {
+          "claude-opus-5[1m]": { inputTokens: 10, outputTokens: 4 },
+          "claude-opus-5": { inputTokens: 1, outputTokens: 1 },
+        },
+      }),
+      exitCode: 0,
+    });
+    const transport = new ClaudeCodeCliTransport({
+      ...okPromptFns,
+      spawnFn: (() => fake.proc) as unknown as typeof Bun.spawn,
+      getPgid: (pid) => pid,
+      killFn: () => {},
+    });
+    const outcome = await transport.execute(makeRequest(), {
+      signal: new AbortController().signal,
+    });
+    expect(outcome.modelUsage).toEqual([
+      { model: "claude-opus-5", counts: [11, 0, 0, 0, 5, 0] },
+    ]);
+  });
+
   test("no modelUsage block leaves modelUsage absent, never an empty list", async () => {
     for (const stdoutBody of [
       JSON.stringify({ result: "reviewed" }),

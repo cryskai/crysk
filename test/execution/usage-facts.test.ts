@@ -195,20 +195,25 @@ describe("claudeAttemptUsageFacts", () => {
 });
 
 // An OpenCode capture as the evidence collector writes it: the newest `readback` record holds the
-// session's messages as OpenCode returned them, and says whether it covers the whole session.
+// session's messages as OpenCode returned them, and says whether it covers the whole session; the
+// capture's own `status` says whether any record was dropped.
 function capture(
   messages: unknown[] | undefined,
   coverage = "complete",
-): string {
-  return JSON.stringify({
-    schemaVersion: 1,
-    records: [
-      { kind: "readback", data: { coverage: "complete", messages: [] } },
-      ...(messages === undefined
-        ? []
-        : [{ kind: "readback", data: { coverage, messages } }]),
-    ],
-  });
+  status = "complete",
+): { status: string; redactedJson: string } {
+  return {
+    status,
+    redactedJson: JSON.stringify({
+      schemaVersion: 1,
+      records: [
+        { kind: "readback", data: { coverage: "complete", messages: [] } },
+        ...(messages === undefined
+          ? []
+          : [{ kind: "readback", data: { coverage, messages } }]),
+      ],
+    }),
+  };
 }
 
 function assistantMessage(input: number, output: number, modelID?: string) {
@@ -284,7 +289,13 @@ describe("openCodeAttemptUsageFacts", () => {
   test("no readback: the attempt's totals are the remainder under its route, and a gap says so", () => {
     for (const lost of [
       undefined,
-      capture(undefined).replace('"readback"', '"other"'),
+      {
+        status: "complete",
+        redactedJson: capture(undefined).redactedJson.replace(
+          '"readback"',
+          '"other"',
+        ),
+      },
     ]) {
       expect(
         openCodeAttemptUsageFacts({
@@ -359,7 +370,8 @@ describe("openCodeAttemptUsageFacts", () => {
       capture: text,
       totals,
     });
-    const turns = openCodeConversation(JSON.parse(text)).turns ?? [];
+    const turns =
+      openCodeConversation(JSON.parse(text.redactedJson)).turns ?? [];
     expect(facts?.requests.map((r): number | undefined => r[2])).toEqual(
       turns.map((t) => t.inputTokens),
     );
@@ -369,6 +381,40 @@ describe("openCodeAttemptUsageFacts", () => {
       route.model,
       "m-a",
     ]);
+  });
+
+  test("an incomplete capture is trusted only as far as the streamed totals agree with it", () => {
+    const one = [assistantMessage(100, 45, "deepseek-ai/deepseek-v4.1-flash")];
+    const partial = { ...totals, inputCacheRead: 0, inputCacheWrite: 0 };
+    // The streamed totals count nothing beyond the readback: nothing was lost.
+    expect(
+      openCodeAttemptUsageFacts({
+        attempt: 1,
+        credential: "api",
+        route,
+        capture: capture(one, "complete", "incomplete"),
+        totals: { ...partial, outputReasoning: 0 },
+      }),
+    ).toEqual({
+      attempt: 1,
+      credential: "api",
+      requests: [
+        ["aiand", "deepseek-ai/deepseek-v4.1-flash", 100, 0, 0, 0, 45, 0],
+      ],
+    });
+    // A dropped newer readback: the totals count more, which is a remainder and a gap.
+    const lost = openCodeAttemptUsageFacts({
+      attempt: 1,
+      credential: "api",
+      route,
+      capture: capture(one, "complete", "incomplete"),
+      totals,
+    });
+    // Output and reasoning are compared on their sum, which the readback already covers.
+    expect(lost?.remainders).toEqual([
+      ["aiand", "deepseek-ai/deepseek-v4.1-flash", 0, 2000, 30, 0, 0, 0],
+    ]);
+    expect(lost?.gaps).toEqual(["no_readback"]);
   });
 });
 
