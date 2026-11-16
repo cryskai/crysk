@@ -752,10 +752,12 @@ function buildManualRequiredComment(
     "",
     "What the gate does with the next pushes: no review reads them, so it never turns green on its own. " +
       "A red verdict stays red while a blocking finding is unanswered. A green verdict, or a red one whose " +
-      "blocking findings all have a reply from someone with write access (`applied`, or a `dismissed` the " +
-      "CI adjudicator upheld), waits as `pending` until a review verifies the head or " +
-      `${commandHint(OVERRIDE_COMMAND)} merges it unverified. Reply before you push: the gate reads the ` +
-      "replies when the push arrives.",
+      "blocking findings all have a reply from someone with write access, waits as `pending` until a review " +
+      "verifies the head or " +
+      `${commandHint(OVERRIDE_COMMAND)} merges it unverified. A reply counts when it is posted in the ` +
+      "finding's thread and starts with `applied` (a plain comment is enough), or when it is a `dismissed` " +
+      "the CI adjudicator upheld (`crysk triage reply`). Reply before you push: the gate reads the replies " +
+      "when the push arrives.",
     "",
     "The existing review comment still describes the last head Crysk reviewed.",
     "",

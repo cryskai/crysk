@@ -44,6 +44,7 @@ import {
   parseAdjudicationMarker,
   trustedAdjudicator,
 } from "#triage/adjudication";
+import { withPlainAppliedReplies } from "#triage/plain-reply";
 import {
   type ParsedTriageMarker,
   parseTriageMarker,
@@ -179,7 +180,8 @@ interface AnalyzedFinding {
   triagedAtPostedHead: boolean;
 }
 
-export function buildPrStatus(input: PrStatusInput): PrStatusJson {
+export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
+  const input = withPlainReplies(raw);
   const gate = readGate(input);
   const summary = readSummary(input.issueComments);
   const analyzed = readFindings(input, summary.rows);
@@ -254,9 +256,19 @@ function gateStateOf(state: string): PrGateState {
   return "error";
 }
 
+// triage-without-skill S1: a plain `applied` reply to a finding reads as the marker it implies, so the status
+// a person or an agent reads agrees with the gate (triage/plain-reply.ts).
+function withPlainReplies(input: PrStatusInput): PrStatusInput {
+  return {
+    ...input,
+    reviewComments: withPlainAppliedReplies(input.reviewComments),
+  };
+}
+
 // The live blocking findings at input.head, each with its newest triage reply and CI ruling, read exactly as
 // buildPrStatus reads them. The admission gate reads them for the reviewed head (pr/answered-findings.ts).
-export function liveBlockingFindings(input: PrStatusInput): PrStatusFinding[] {
+export function liveBlockingFindings(raw: PrStatusInput): PrStatusFinding[] {
+  const input = withPlainReplies(raw);
   const summary = readSummary(input.issueComments);
   return readFindings(input, summary.rows)
     .filter((a) => a.finding.blocking && a.finding.live_on_head)

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plain `applied` reply now counts.** After the automatic reviews end, a carried red turns `pending` when
+  every blocking finding is answered by someone with write access. Until now only a reply written by
+  `crysk triage reply` (with its hidden marker) counted, so a team without the crysk-loop skill that answered
+  `applied` by hand stayed red with `N blocking carried`. A reply in the finding's thread whose text starts
+  with `applied` (any case) now counts as the same answer, at the head the finding was posted on; `crysk status`
+  and the re-review read it the same way. `dismissed`, `deferred` and `misclassified` still need
+  `crysk triage reply`, because they carry the adjudicator's verdict. The gate's comment says so.
+  **What to check:** a reply that starts with `applied` from someone with write access now answers its finding;
+  write anything else first (for example `not applied yet`) when the fix has not landed.
+
 ### Removed
 
 - **The scout stage** (#545). The diff-only pre-hunter stage never earned its place and was off by default,

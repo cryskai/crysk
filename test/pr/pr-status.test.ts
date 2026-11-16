@@ -818,6 +818,28 @@ describe("buildPrStatus: findings", () => {
     });
   });
 
+  // triage-without-skill S1: a plain `applied` reply reads as the marker crysk triage reply would write.
+  test("a plain applied reply is the finding's triage, at the finding's head, by a human", () => {
+    const status = buildPrStatus(
+      input({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          { id: 2, body: "applied, fixed in the next push", in_reply_to_id: 1 },
+        ],
+      }),
+    );
+    expect(status.findings[0]?.triage).toEqual({
+      tag: "applied",
+      verdict: null,
+      actor: "human",
+      head: CURRENT,
+    });
+  });
+
   test("a reply to another thread is not this finding's triage", () => {
     const status = buildPrStatus(
       input({

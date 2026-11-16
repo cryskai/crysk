@@ -112,7 +112,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "triage",
-    files: ["adjudication", "reply", "triage"],
+    files: ["adjudication", "plain-reply", "reply", "triage"],
   },
   {
     domain: "watch",

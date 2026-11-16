@@ -22,6 +22,7 @@ import {
   skipCommitStatusRequest,
 } from "#pr/preflight";
 import { gotchasUnusableReason, parseLocalConfig } from "#review/preflight";
+import { isPlainApplied } from "#triage/plain-reply";
 import { parseTriageMarker } from "#triage/triage";
 import {
   OVERRIDE_MARKER_PREFIX,
@@ -703,7 +704,9 @@ export class FakeGithub {
       if (newest === undefined) return false;
       if (this.options.budgetCarry === "any-answer-unlocks") return true;
       const parsed = parseTriageMarker(newest.body);
-      return parsed?.tag === "applied" && parsed.headSha === reviewed;
+      // triage-without-skill S1: a plain reply that starts with "applied" counts at the finding's head.
+      if (parsed === null) return isPlainApplied(newest.body);
+      return parsed.tag === "applied" && parsed.headSha === reviewed;
     };
     const unlocked =
       this.options.budgetCarry !== "answers-ignored" &&

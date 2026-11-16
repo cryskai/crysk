@@ -13,6 +13,7 @@ import {
   parseAdjudicationMarker,
   trustedAdjudicator,
 } from "#triage/adjudication";
+import { withPlainAppliedReplies } from "#triage/plain-reply";
 import { parseTriageMarker } from "#triage/triage";
 import {
   classifyPrior,
@@ -985,10 +986,12 @@ export function enrichPriorsFromThreads(input: {
   platformActor?: string;
 }): PriorRecord[] {
   const bound = bindPriorsToPosted(input.priors, input.posted);
+  // triage-without-skill S1: a plain `applied` reply is the triage it implies (triage/plain-reply.ts).
+  const replies = withPlainAppliedReplies(input.replies);
   return input.priors.map((prior) => {
     const parent = bound.get(prior.id);
     if (parent === undefined) return prior;
-    const thread = input.replies.filter(
+    const thread = replies.filter(
       (reply) => reply.in_reply_to_id === parent.id,
     );
     let triage: PriorTriage | null = prior.triage;
