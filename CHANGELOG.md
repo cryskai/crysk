@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **What to check:** (1) a workflow, a script or a config file that still sets any of the options above
   keeps working and now logs the warning: remove the option to silence it; (2) a tool that reads
   `pipeline.json` and expects its `scout` key must stop reading it.
+- **The parity hunter** (#PR). The conditional hunter ran only when a repository declared
+  `parity_trigger_paths`, so a review that did not declare it does not change. The `parity_trigger_paths`
+  key (in the repo file or the person file), the `models.hunter.parity` role and a leftover
+  `deep-review-parity.md` in a custom `agents_dir` are still accepted and have no effect; each prints one
+  warning that contains `is ignored: the parity hunter was removed`. `crysk config set parity_trigger_paths ...`
+  is refused with `parity_trigger_paths was removed: the parity hunter no longer exists`. `crysk config`,
+  the plan card and the report no longer mention it. `parity_hunter_fired` stays in the findings envelope,
+  `pipeline.json` and the store, and is always `false`.
+  **What to check:** (1) a config file, a person profile or a custom prompt directory that still carries any
+  of the above keeps working and now logs the warning: remove the key, the role or the file to silence it;
+  (2) a tool that reads `parity_hunter_fired` still finds it, always `false`.
 
 ## [0.7.0] - 2026-11-16
 

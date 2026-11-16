@@ -97,6 +97,8 @@ over** (found while wiring C5, 2026-08-23):
 ## Architecture (one line per module)
 
 - `src/spec.ts` — `ReviewSpec`/`AgentSpec`: which agents run, their role, trigger, model. THE flow config.
+  `defaultReviewSpec()` is the lab's legacy wiring and still carries the conditional parity hunter; the
+  product's `localReviewSpec()` has no conditional hunter.
   A benchmark arm can append hunters with `PRHERO_EXTRA_HUNTERS=key:file[,...]` (read once in `localReviewSpec`,
   inert when unset).
 - `src/pipeline.ts` — `runPipeline`: gotchas fail-loud → trigger eval → parallel hunter steps → dedupe →
