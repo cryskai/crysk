@@ -73,7 +73,6 @@ function baseOptions(over: Partial<CliOptions> = {}): CliOptions {
     repo: ".",
     head: "HEAD",
     hopBudget: 3,
-    scout: false,
     full: false,
     dryRun: false,
     yes: false,

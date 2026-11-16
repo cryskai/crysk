@@ -3,7 +3,7 @@ import type { ModelProfile } from "../profiles";
 // The `openai` profile: every step on OpenAI models through OpenCode, the same
 // parallel hunters `claude` runs. Juanma's approved table (odd/tasks/
 // openai-profile.md S2, "Asi si"): Sol for the refuter, Terra for the hunters,
-// consolidate, scout and judge, Luna for the summary.
+// consolidate and judge, Luna for the summary.
 //
 // An effort becomes the OpenCode variant (OpenAI's Responses variants are
 // none..xhigh). A role with no effort sends no variant, so it runs at the
@@ -29,7 +29,6 @@ export const OPENAI_PROFILE: ModelProfile = Object.freeze({
       model: "opencode:openai/gpt-6.1-terra",
       effort: "high",
     }),
-    scout: Object.freeze({ model: "opencode:openai/gpt-6.1-terra" }),
     summary: Object.freeze({ model: "opencode:openai/gpt-6-luna" }),
     judge: Object.freeze({ model: "opencode:openai/gpt-6.1-terra" }),
   }),

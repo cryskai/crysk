@@ -108,17 +108,13 @@ export function estimateCost(
   diffStat: DiffStat,
   hunterCount: number,
   summarizerEnabled = false,
-  // ROADMAP-DOORDASH M5. Defaulted OFF so every existing caller keeps its
-  // band byte-identical, and so a caller that forgets it under-quotes
-  // nothing it did not already under-quote.
-  scoutEnabled = false,
   // Item 7 O-5a. Default 0 so every existing caller keeps its band
   // byte-identical. Priced as its own term (not folded into `agents`) so a
   // 40-finding re-review of a 2-file delta is not billed as 40 hunters.
   verificationSteps = 0,
   // The post-refuter consolidation pass. LAST and defaulted OFF so every
   // existing call shape compiles and keeps its band; the product paths pass
-  // true. One seat, the scout's rule: a claims-only sonnet call costs far
+  // true. One seat, the summarizer's rule: a claims-only sonnet call costs far
   // less than a hunter, and over-quoting is the cheap direction to be wrong.
   consolidateEnabled = false,
 ): CostEstimate {
@@ -128,22 +124,12 @@ export function estimateCost(
   // A validated ReviewSpec always carries at least one hunter, so a zero here
   // means a caller asked hypothetically. Clamping keeps the band from
   // collapsing to $0–$0, which would read as "this is free".
-  // The scout takes a full agent seat, the summarizer's precedent, and that
-  // deliberately OVER-quotes: it is diff-only, one attempt, and reads no tree,
-  // so its true cost is a fraction of a hunter's. Two reasons it gets the seat
-  // anyway. First, this band's own rule — every recorded overrun was an
-  // UNDER-estimate, so the generous direction is the cheap one to be wrong in.
-  // Second, the scout has NO calibration point of its own: M4 billed $37.00
-  // across six prompt versions, two probe defects and a reverted experiment,
-  // which is a milestone total and not a per-spawn cost. M6 records cost per
-  // arm; that is the number this coefficient gets recalibrated from, and until
-  // it exists an invented per-scout coefficient would be false precision.
+  // The summarizer takes a full agent seat, and that deliberately OVER-quotes:
+  // this band's own rule is that every recorded overrun was an UNDER-estimate,
+  // so the generous direction is the cheap one to be wrong in.
   const hunterSeats = Math.max(
     0,
-    hunterCount +
-      (summarizerEnabled ? 1 : 0) +
-      (scoutEnabled ? 1 : 0) +
-      (consolidateEnabled ? 1 : 0),
+    hunterCount + (summarizerEnabled ? 1 : 0) + (consolidateEnabled ? 1 : 0),
   );
   const steps = Math.max(0, verificationSteps);
   // A zero-hunter, zero-verify call still needs a band (the hypothetical
@@ -154,7 +140,7 @@ export function estimateCost(
   // a verify step reads one prior finding, not the whole tree, so multiplying
   // it by changed-files would price a 40-finding re-review of a 2-file delta
   // as if it were 40 hunters. The seat is the same per-agent floor — generous
-  // on purpose, same direction as the scout.
+  // on purpose, same direction as the summarizer.
   const mid =
     agents *
       (USD_PER_AGENT_BASE +
@@ -170,7 +156,6 @@ export function estimateCost(
       "+2775 −1237 tree with 5 hunters + refuter, ~$11–$14.78): a " +
       "per-agent floor for hunters + refuter" +
       `${summarizerEnabled ? " + summarizer" : ""}` +
-      `${scoutEnabled ? " + scout" : ""}` +
       `${consolidateEnabled ? " + consolidation" : ""}` +
       `${steps > 0 ? ` + ${steps} verification step(s)` : ""} ` +
       "plus changed lines and files. An order-of-magnitude " +

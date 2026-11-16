@@ -1,5 +1,5 @@
 // Single-step harnesses on the route seam (odd/tasks/route-plan-harness.md S3,
-// S6): refuter-replay, scout-probe, consolidate-replay, live-micro-eval and
+// S6): refuter-replay, consolidate-replay, live-micro-eval and
 // martian-judge each run one step. Each builds a one-step plan from the model
 // it measures, prepares the runner through route-runner.ts, routes its spec,
 // and records the route identity in its rows.
@@ -26,11 +26,7 @@ import {
 // production role (the Martian judge, the trivial micro-eval) under its own
 // key. A harness-only step has no profile seat or `models` role: only the
 // harness's model routes it.
-export type SingleStep =
-  | "refuter"
-  | "scout"
-  | "consolidate"
-  | { readonly key: string };
+export type SingleStep = "refuter" | "consolidate" | { readonly key: string };
 
 export function singleStepPlanInput(
   step: SingleStep,
@@ -43,10 +39,8 @@ export function singleStepPlanInput(
         bundledAgents: true,
         cliModel: model,
       };
-    // These take the model as the stage's own, not cliModel, so the bare
+    // This takes the model as the stage's own, not cliModel, so the bare
     // pinned id is spelled out here as buildHarnessRoutePlan does for cliModel.
-    case "scout":
-      return { scout: { model: harnessModelChoice(model) ?? model } };
     case "consolidate":
       return { consolidate: { model: harnessModelChoice(model) ?? model } };
     default:

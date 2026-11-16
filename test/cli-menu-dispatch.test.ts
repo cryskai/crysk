@@ -215,13 +215,12 @@ describe("5.3 & 5.4 CLI Menu Dispatch & Dispatch Matrix", () => {
     const out: string[] = [];
     // Key sequence:
     // 1. In layer selection: Enter on Repo layer (index 0)
-    // 2. In card: Right ('l') to increment max_changed_lines, then navigate down to [ Save changes ] (index 7: 7 fields = 7 'j's from index 0) and press Enter ('\r')
+    // 2. In card: Right ('l') to increment max_changed_lines, then navigate down to [ Save changes ] (index 6: 6 fields = 6 'j's from index 0) and press Enter ('\r')
     // 3. 'q' to exit back to layer selection, 'q' to exit submenu
     const reader = fakeReader([
       "\r",
       "j",
       "l",
-      "j",
       "j",
       "j",
       "j",
@@ -260,11 +259,10 @@ describe("5.3 & 5.4 CLI Menu Dispatch & Dispatch Matrix", () => {
     const out: string[] = [];
     // Key sequence:
     // 1. In layer selection: Enter on Repo layer (index 0)
-    // 2. In card: navigate down to [ Clear all (unset) ] (index 9: 7 fields + 2 actions before it = index 9) and press Enter ('\r')
+    // 2. In card: navigate down to [ Clear all (unset) ] (index 8: 6 fields + 2 actions before it = index 8) and press Enter ('\r')
     // 3. 'q' to exit back to layer selection, 'q' to exit submenu
     const reader = fakeReader([
       "\r",
-      "j",
       "j",
       "j",
       "j",
@@ -334,7 +332,6 @@ describe("5.3 & 5.4 CLI Menu Dispatch & Dispatch Matrix", () => {
       path.join(tmpRepo, ".prhero", "config.json"),
       JSON.stringify({
         default_base: "develop",
-        scout: true,
         post: true,
       }),
     );
@@ -347,7 +344,7 @@ describe("5.3 & 5.4 CLI Menu Dispatch & Dispatch Matrix", () => {
       home: tmpHome,
     });
 
-    const reader = fakeReader(["j", "j", "j", "j", "j", "j", "j", "\r"]);
+    const reader = fakeReader(["j", "j", "j", "j", "j", "j", "\r"]);
     const outcome = await runReviewMenu({
       createReader: () => reader,
       styles: false,
@@ -358,7 +355,6 @@ describe("5.3 & 5.4 CLI Menu Dispatch & Dispatch Matrix", () => {
     expect(outcome.action).toBe("launch");
     if (outcome.action === "launch") {
       expect(outcome.options.base).toBe("develop");
-      expect(outcome.options.scout).toBe(true);
       expect(outcome.options.post).toBe(true);
       expect(outcome.options.pr).toBe("current");
     }

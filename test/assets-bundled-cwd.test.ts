@@ -24,7 +24,6 @@ describe("bundled engine assets", () => {
           "  assets.consolidatePromptPath,",
           "  assets.summarizerPromptPath,",
           "  assets.materialityPromptPath,",
-          "  assets.scoutPromptPath,",
           "  assets.verifierPromptPath,",
           "  ...Object.values(assets.bundledAgentFiles),",
           "];",

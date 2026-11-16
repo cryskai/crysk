@@ -194,7 +194,6 @@ export function modelNameFromAlias(value: string): ModelName {
 export const FIXED_MODEL_ROLES = [
   "default",
   "consolidate",
-  "scout",
   "judge",
   "refuter",
   "summary",
@@ -369,10 +368,17 @@ export type ModelsConfig = Readonly<Record<string, readonly ModelListEntry[]>>;
 const JUDGE_NO_EFFORT =
   "the materiality judge runs at the effort it was measured at, so models.judge takes model names only";
 
-const ROLE_LIST =
-  "default, hunter.<key>, consolidate, scout, judge, refuter, summary";
+const ROLE_LIST = "default, hunter.<key>, consolidate, judge, refuter, summary";
 
-export function parseModelsConfig(value: unknown): ModelsConfig {
+// Roles that used to exist and are still accepted in `models`, never read: a
+// stored profile naming one must keep loading. `onRemoved` hears each one so
+// the caller can say it was ignored; without it the entry is skipped silently.
+const REMOVED_MODEL_ROLES: readonly string[] = ["scout"];
+
+export function parseModelsConfig(
+  value: unknown,
+  onRemoved?: (role: string) => void,
+): ModelsConfig {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new ModelNameError(
       "models must be an object from role to a list of models",
@@ -380,6 +386,10 @@ export function parseModelsConfig(value: unknown): ModelsConfig {
   }
   const result: Record<string, ModelListEntry[]> = {};
   for (const [role, list] of Object.entries(value)) {
+    if (REMOVED_MODEL_ROLES.includes(role)) {
+      onRemoved?.(role);
+      continue;
+    }
     if (!isModelRole(role)) {
       throw new ModelNameError(
         `models has an unknown role ${quoted(role)}: roles are ${ROLE_LIST}`,

@@ -894,7 +894,7 @@ export function openCodeProvidersOfPerson(person: {
 // resolved routes, any step or fallback, binds an API key, by the same rule the
 // run binds it with (credentialKindForRoute over the secret manifest's names, the
 // provider literal without one). `providers` comes from the run's own route plan,
-// so every source routing reads counts (`models`, `--model`, `--scout-model`, a
+// so every source routing reads counts (`models`, `--model`, a
 // spec model, a prompt's frontmatter, the engine's defaults). Undefined means the
 // routes could not be resolved here: the auth file decides, the old rule, which
 // keeps the ceiling. The file alone is not enough otherwise: it also exists for a

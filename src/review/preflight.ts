@@ -104,19 +104,16 @@ export interface CliOptions {
   // Summary activation is tri-state at parse time: undefined means no flag,
   // so review can apply flag > config > the default-on setting.
   summary?: boolean;
-  // The scout is tri-state at parse time: undefined means no flag,
-  // so review can apply flag > config > default (false).
-  scout?: boolean;
+  // Flags of the removed scout stage that the command line still carried, once
+  // each, in first-seen order. They are accepted and have no effect; the shell
+  // prints one warning per entry (removedFlagWarnings).
+  removedFlags?: string[];
   // `--shared-prefix` / `--no-shared-prefix`. Undefined means the default,
   // which is ON (see resolveSharedPrefix).
   sharedPrefix?: boolean;
-  // Independent model knob (§3.7), and NOT exercised by M6 — the whole
-  // control corpus is sonnet, so ratifying this is ratifying a flag, not a
-  // second variable. `--model` still outranks it (the JD override rule).
-  scoutModel?: string;
   // Item 7: widen discovery to full B..H on a re-review. Default OFF — a
   // second push is delta-scoped unless asked otherwise. Verification,
-  // triage, and classification still run (R2-C5). Review-only, like --scout.
+  // triage, and classification still run (R2-C5). Review-only.
   full: boolean;
   // T5b: with --pr --ci, also have the CI adjudicator rule on each pending
   // dismissal of a blocking finding. Set by a /crysk recheck comment. Absent
@@ -246,7 +243,7 @@ export interface CliOptions {
   // `stepSummary` require `--ci` at parse time (the `--post`-requires-`--pr`
   // precedent above): a spend ceiling or a summary toggle for a mode that
   // never activates would be exactly the "silently dropped intention" the
-  // --bug-labels/--scout-model guards already refuse elsewhere in this file.
+  // --bug-labels guard already refuses elsewhere in this file.
   //
   // Phase 4 (CI Scaffolding) gave `--ci` a SECOND, command-scoped meaning:
   // on `review` it activates the CI headless shell (requires --pr); on
@@ -267,7 +264,7 @@ export interface CliOptions {
   // the ceiling too, but DOES warn: see ci/gates.ts's
   // budgetDisabledWarningMessage for why the two are not the same state.
   budgetUsd?: number;
-  // Tri-state like `summary`/`scout`: unset means "the shell's own default
+  // Tri-state like `summary`: unset means "the shell's own default
   // (on)", so `--step-summary` and `--no-step-summary` stay distinguishable
   // from "nobody said".
   stepSummary?: boolean;
@@ -534,12 +531,6 @@ Options:
                       their effort go in "models" in ~/.crysk/config.json
   --summary           Enable the engine-owned PR summary (default)
   --no-summary        Disable the engine-owned PR summary
-  --scout             review only: run the diff-only scout stage before the
-                      hunters, biasing their scan with unverified leads.
-                      EXPERIMENTAL and off by default — the A/B that decides
-                      whether it earns its cost has not run yet
-  --scout-model <m>   Model for the scout stage (default: the run's model).
-                      Requires --scout
   --no-shared-prefix  review only: turn off the shared hunter prefix. By
                       default the patch and output contract sit in each
                       hunter's system prompt, identical across hunters, and the
@@ -622,6 +613,24 @@ Exit codes of a review (findings never change them):
   2  usage error
   3  the review is incomplete: a step failed (a hunter, the refuter,
      verify, adjudicate, or the time ceiling). Run it again.`;
+
+// The scout stage was removed. Its flags, its config key and its model role
+// keep being accepted so no existing command line, config file or stored
+// profile starts failing; each does nothing and says so, once (S2).
+const SCOUT_REMOVED = "is ignored: the scout stage was removed";
+
+// What the shell prints, as `warning: <line>`, for every flag of the removed
+// stage a command line carried. Pure: the shells decide where it goes.
+export function removedFlagWarnings(
+  options: Pick<CliOptions, "removedFlags">,
+): string[] {
+  return (options.removedFlags ?? []).map((flag) => `${flag} ${SCOUT_REMOVED}`);
+}
+
+function noteRemovedFlag(options: CliOptions, flag: string): void {
+  const seen = options.removedFlags ?? [];
+  if (!seen.includes(flag)) options.removedFlags = [...seen, flag];
+}
 
 const VALUE_FLAGS = new Set([
   "--repo",
@@ -763,12 +772,8 @@ export function parseArgs(argv: string[]): ParsedCli {
       options.summary = false;
       continue;
     }
-    if (arg === "--scout") {
-      options.scout = true;
-      continue;
-    }
-    if (arg === "--no-scout") {
-      options.scout = false;
+    if (arg === "--scout" || arg === "--no-scout") {
+      noteRemovedFlag(options, arg);
       continue;
     }
     if (arg === "--no-shared-prefix") {
@@ -1135,28 +1140,8 @@ export function parseArgs(argv: string[]): ParsedCli {
       'the "ci" command requires a subcommand: "ci init"',
     );
   }
-  // The scout is a `review` stage and nothing else reads either flag.
-  // Rejected elsewhere rather than ignored, the --from guard's reasoning: a
-  // flag that parses and then does nothing is an operator believing they
-  // changed a run they did not.
-  if (
-    command !== "review" &&
-    (options.scout !== undefined || options.scoutModel)
-  ) {
-    throw new CliUsageError(
-      "--scout and --scout-model only apply to the review command",
-    );
-  }
   if (command !== "review" && options.full) {
     throw new CliUsageError("--full only applies to the review command");
-  }
-  // A model for a stage that will not run is the same silent no-op, one level
-  // down — and the likeliest way to produce it is believing the model flag
-  // turns the stage on.
-  if (options.scoutModel !== undefined && !options.scout) {
-    throw new CliUsageError(
-      "--scout-model sets the model for the scout stage, so it requires --scout",
-    );
   }
   // `status` (ROADMAP S9) reads one PR and writes nothing, so its whole surface is --pr <n>
   // and --json. Every other flag is refused here, not ignored: a flag that parses and then
@@ -1429,7 +1414,7 @@ function applyValueFlag(
       options.model = value;
       return;
     case "--scout-model":
-      options.scoutModel = value;
+      noteRemovedFlag(options, flag);
       return;
     case "--from":
       options.from = value;
@@ -2275,10 +2260,9 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   max_concurrent_steps: "capped",
   max_changed_lines: "capped",
   max_changed_files: "capped",
-  scout: "capped",
-  // `capped` like the scout, for the same reason: switching it on adds one
-  // judge spawn per blocking finding, so a committed file may turn it off but
-  // never on against the operator's global ceiling.
+  // `capped`: switching it on adds one judge spawn per blocking finding, so a
+  // committed file may turn it off but never on against the operator's global
+  // ceiling.
   materiality_gate: "capped",
   post: "capped",
   // `person`: a global floor applies to every repo, and a repo file overrides
@@ -2324,12 +2308,11 @@ export interface LocalConfig {
   // `unconfirmed` (the pause switch, same shape as watch daily_cap).
   max_verification_steps?: number;
   // Admission cap on in-flight steps (hunter, refuter, verify, adjudicate,
-  // scout, summarizer attempts). Absent means unlimited: no gate is built.
+  // summarizer attempts). Absent means unlimited: no gate is built.
   // Positive only: 0 would admit nothing and wedge every run.
   max_concurrent_steps?: number;
   max_changed_lines?: number;
   max_changed_files?: number;
-  scout?: boolean;
   // Opt-in judge that demotes immaterial blocking findings to advisory
   // (review/materiality-gate.ts). Absent means off.
   materiality_gate?: boolean;
@@ -2521,6 +2504,12 @@ function parseConfigLayer(
     if (key === "routing") {
       throw new CliUsageError(`${file}: ${REMOVED_ROUTING_MESSAGE}`);
     }
+    // The removed stage's key: still admitted in both layers (a stored person
+    // profile, a committed repo file), never read, said out loud once per file.
+    if (key === "scout") {
+      warnings?.push(`${file}: scout ${SCOUT_REMOVED}`);
+      continue;
+    }
     if (!KNOWN_CONFIG_KEYS.has(key)) {
       throw new CliUsageError(`${file} unknown key: ${redactConfigValue(key)}`);
     }
@@ -2577,7 +2566,7 @@ function parseConfigLayer(
   const profile = parseProfile(config.profile, file);
   const summaryParse = parseSummaryConfig(config.summary, file);
   const summary = summaryParse?.summary;
-  let models = parseModels(config.models, file);
+  let models = parseModels(config.models, file, warnings);
   if (summaryParse?.initModel === true) {
     if (isRepoFile) {
       // L6 item 6: a repo file can no longer pick the summary model, and
@@ -2631,7 +2620,6 @@ function parseConfigLayer(
     "max_changed_files",
     file,
   );
-  const scout = parseOptionalBoolean(config.scout, "scout", file);
   const materialityGate = parseOptionalBoolean(
     config.materiality_gate,
     "materiality_gate",
@@ -2709,7 +2697,6 @@ function parseConfigLayer(
     ...(maxChangedFiles === undefined
       ? {}
       : { max_changed_files: maxChangedFiles }),
-    ...(scout === undefined ? {} : { scout }),
     ...(materialityGate === undefined
       ? {}
       : { materiality_gate: materialityGate }),
@@ -2752,10 +2739,23 @@ function parseProfile(value: unknown, file: string): string | undefined {
 
 // The `models` object (S1, S3). Its rules live in model/model-name.ts; this
 // adds the file to every message, as every other key's error does.
-function parseModels(value: unknown, file: string): ModelsConfig | undefined {
+function parseModels(
+  value: unknown,
+  file: string,
+  warnings: string[] | undefined,
+): ModelsConfig | undefined {
   if (value === undefined) return undefined;
   try {
-    return parseModelsConfig(value);
+    const removed: string[] = [];
+    const models = parseModelsConfig(value, (role) => removed.push(role));
+    for (const role of removed) {
+      warnings?.push(`${file}: models.${role} ${SCOUT_REMOVED}`);
+    }
+    // A models object that named only a removed role chose no routing: handing
+    // back `{}` would read as "the person chose routing" (routingConfigured).
+    return removed.length > 0 && Object.keys(models).length === 0
+      ? undefined
+      : models;
   } catch (error) {
     if (error instanceof ModelNameError) {
       throw new CliUsageError(`${file} ${error.message}`);
@@ -2967,13 +2967,6 @@ export function resolveSharedPrefix(
   return options.sharedPrefix !== false;
 }
 
-export function resolveScout(
-  options: Pick<CliOptions, "scout">,
-  config: Pick<ConfigLayer, "scout">,
-): boolean {
-  return options.scout ?? config.scout ?? false;
-}
-
 // No CLI flag on purpose: the gate is opt-in through config only, so the
 // merged config is the whole answer and absent means off.
 export function resolveMaterialityGate(
@@ -3133,12 +3126,6 @@ export function mergeConfig(
     (layer) => layer.max_changed_files,
     narrowSizeLimit,
   );
-  const scout = foldKey(
-    layers,
-    CONFIG_DIRECTION.scout,
-    (layer) => layer.scout,
-    (a, b) => a && b,
-  );
   const materialityGate = foldKey(
     layers,
     CONFIG_DIRECTION.materiality_gate,
@@ -3251,7 +3238,6 @@ export function mergeConfig(
     ...(maxFiles.value === undefined
       ? {}
       : { max_changed_files: maxFiles.value }),
-    ...(scout.value === undefined ? {} : { scout: scout.value }),
     ...(materialityGate.value === undefined
       ? {}
       : { materiality_gate: materialityGate.value }),
@@ -3299,7 +3285,6 @@ export function mergeConfig(
     max_concurrent_steps: maxConcurrentSteps.source,
     max_changed_lines: maxLines.source,
     max_changed_files: maxFiles.source,
-    scout: scout.source,
     materiality_gate: materialityGate.source,
     post: post.source,
     post_min_severity: postMinSeverity.source,

@@ -1,5 +1,5 @@
 // Caller-level tests for cli.ts's remaining orchestration: main()'s
-// fatal-exit wiring, the summarizer/scout activation shape, the
+// fatal-exit wiring, the summarizer activation shape, the
 // gotchas/cost/discovery/ignore-rule wiring both review shells share, and
 // the in-flight commit-status lock. Same fake-gh pattern as
 // test/pr/pr.test.ts, extended to capture stdin (needed to tell a leftover
@@ -53,7 +53,6 @@ import {
   heldCommitStatusLock,
   holdCommitStatusLock,
   main,
-  pipelineScoutInput,
   pipelineSummarizerInput,
   releaseCommitStatusLock,
   resolvePrDryRunSizeGate,
@@ -238,59 +237,6 @@ describe("CLI summarizer activation", () => {
   });
 });
 
-describe("CLI scout activation (ROADMAP-DOORDASH M5)", () => {
-  const BUNDLED = path.join(import.meta.dir, "..", "prompts", "scout.md");
-
-  test("off resolves to WU2's optional absence — the pipeline sees no scout key", () => {
-    expect(pipelineScoutInput({ scout: false }, RUN_PROMPTS)).toEqual({});
-    expect(
-      pipelineScoutInput({ scout: false, scoutModel: "haiku" }, RUN_PROMPTS),
-    ).toEqual({});
-  });
-
-  test("on supplies the bundled prompt, and the model only when asked for", () => {
-    expect(pipelineScoutInput({ scout: true }, RUN_PROMPTS)).toEqual({
-      scout: { promptPath: BUNDLED, bundled: true },
-    });
-    expect(
-      pipelineScoutInput({ scout: true, scoutModel: "haiku" }, RUN_PROMPTS),
-    ).toEqual({
-      scout: { promptPath: BUNDLED, model: "haiku", bundled: true },
-    });
-  });
-
-  // §3.12 obligation 9, and the failure it prevents is a hard CliError on
-  // EVERY run, not a subtle one: `preflightAgentsDir` treats a
-  // `review-*.md` / `deep-review-*.md` file in the agents dir that the spec
-  // does not name as a prompt-set mismatch and refuses to start.
-  test("the prompt lives in prompts/, is not agent-named, and exists on disk", async () => {
-    const resolved = (
-      pipelineScoutInput({ scout: true }, RUN_PROMPTS) as {
-        scout: { promptPath: string };
-      }
-    ).scout.promptPath;
-    const base = path.basename(resolved);
-    expect(base).toBe("scout.md");
-    expect(base.startsWith("review-")).toBe(false);
-    expect(base.startsWith("deep-review-")).toBe(false);
-    expect(path.basename(path.dirname(resolved))).toBe("prompts");
-    expect(resolved).not.toContain(`${path.sep}agents${path.sep}`);
-    expect(await Bun.file(resolved).exists()).toBe(true);
-  });
-
-  // Not a style check: `tools:` in this file is IGNORED by the engine
-  // (pipeline.ts forces []), so a frontmatter tools line here would document
-  // a capability the scout does not have and cannot get.
-  test("the bundled prompt claims no tools and pins no model", async () => {
-    const raw = await Bun.file(BUNDLED).text();
-    const frontmatter = raw.split("---")[1] ?? "";
-    expect(frontmatter).not.toContain("tools:");
-    // No `model:` on purpose — DEFAULT_SCOUT_MODEL owns that seat, so the
-    // file's sha256 stays the one M4 ratified.
-    expect(frontmatter).not.toContain("model:");
-  });
-});
-
 // review-pr-behavior-seams (Goal B): invariant 10's two scans — "every
 // renderResult(/renderReport( call carries its notionalCostInput companion"
 // (#173) and "every gotchas gate asks the shared predicate, and none
@@ -349,7 +295,6 @@ function runDirOptions(over: Partial<CliOptions> = {}): CliOptions {
     repo: ".",
     head: "HEAD",
     hopBudget: 3,
-    scout: false,
     full: false,
     dryRun: false,
     yes: false,

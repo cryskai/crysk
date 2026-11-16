@@ -306,11 +306,6 @@ export async function buildPlantedFixture(): Promise<PlantedFixture> {
 
 const PROMPTS_DIR = path.join(import.meta.dir, "..", "prompts");
 
-// The scout runs on haiku the same way the rest of the run does (the fixture
-// agents' frontmatter): this eval proves PLUMBING, never recall, and a sonnet
-// scout here would spend real money to prove nothing extra.
-export const FIXTURE_EVAL_SCOUT_MODEL = "haiku";
-
 // The eval's runPipeline input. The route plan is built from this same object
 // (buildPipelineHarnessPlan), so the plan and the steps cannot disagree. The
 // fixture's agents are a lab-style set (bundledAgents unset): their own
@@ -320,7 +315,6 @@ export function fixtureEvalPipelineInput(
   fixture: PlantedFixture,
   options: {
     mcpConfigPath: string;
-    scout?: boolean;
     model?: string;
     agentsDir?: string;
   },
@@ -341,14 +335,6 @@ export function fixtureEvalPipelineInput(
     hopBudget: 4,
     ...(options.model ? { model: options.model } : {}),
     summarizer: { promptPath: path.join(PROMPTS_DIR, "summarizer.md") },
-    ...(options.scout === true
-      ? {
-          scout: {
-            promptPath: path.join(PROMPTS_DIR, "scout.md"),
-            model: FIXTURE_EVAL_SCOUT_MODEL,
-          },
-        }
-      : {}),
     parityTriggerPaths: [], // parity never fires — 2 hunters, cheapest run
     suspicionPriors: [
       {

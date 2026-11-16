@@ -99,7 +99,6 @@ import {
   isBundledAgentsDir,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
-  pipelineScoutInput,
   pipelineSummarizerInput,
   pipelineVerifierInput,
 } from "#review/route-preflight";
@@ -434,7 +433,6 @@ export async function reviewPr(
       target.ghDiffStat,
       hunterCount,
       summary.enabled,
-      options.scout,
       0,
       true,
     );
@@ -809,7 +807,7 @@ export async function reviewPr(
       // into a group nothing ever closes.
       let started = 0;
       await withCiWorkflowGroup(isCi, "crysk review", log, async () => {
-        log(reviewingLine(hunterCount, summary, options));
+        log(reviewingLine(hunterCount, summary));
         // runnerAuthority resolved before confirm with the exact-binding gate.
         // A plan with no claude-code route never starts the Claude CLI.
         if (
@@ -893,9 +891,6 @@ export async function reviewPr(
               ...(skipDiscovery
                 ? {}
                 : pipelineSummarizerInput(summary, { profile })),
-              ...(skipDiscovery
-                ? {}
-                : pipelineScoutInput(options, { profile })),
               ...(skipDiscovery ? {} : pipelineConsolidateInput({ profile })),
               // Gated on skipDiscovery like consolidation: an empty-delta
               // re-review posts no new findings, so there is nothing to judge.

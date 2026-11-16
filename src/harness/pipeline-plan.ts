@@ -32,7 +32,6 @@ export type PipelinePlanInput = Pick<
   | "models"
   | "config"
   | "summarizer"
-  | "scout"
   | "consolidate"
   | "materiality"
 >;
@@ -76,7 +75,6 @@ export async function buildPipelineHarnessPlan(
           bundled: value.bundled === true,
         };
   const summarizer = await stage(input.summarizer);
-  const scout = await stage(input.scout);
   const consolidate = await stage(input.consolidate);
   return buildResolvedRoutePlan({
     agents: spec.agents,
@@ -88,7 +86,6 @@ export async function buildPipelineHarnessPlan(
     ...(input.bundledAgents === true ? { bundledAgents: true } : {}),
     frontmatterModel: (agentKey) => frontmatter.get(agentKey),
     ...(summarizer === undefined ? {} : { summarizer }),
-    ...(scout === undefined ? {} : { scout }),
     ...(consolidate === undefined ? {} : { consolidate }),
     ...(input.materiality === undefined ? {} : { materiality: true as const }),
   });

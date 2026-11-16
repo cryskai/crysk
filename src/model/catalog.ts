@@ -172,14 +172,13 @@ export function isEffort(value: string): value is Effort {
 }
 
 // Which kind of step is being built. Wider than `AgentSpec.role` on purpose:
-// the summarizer, scout and rereview verifier are steps too, and each needs a
+// the summarizer and rereview verifier are steps too, and each needs a
 // resolved level, not an implicit one. `other` is for ad hoc steps (judges,
 // probes) built outside the pipeline.
 export type StepRole =
   | "hunter"
   | "refuter"
   | "summarizer"
-  | "scout"
   | "verifier"
   | "other";
 
@@ -214,7 +213,6 @@ const ROLE_EFFORT: Readonly<Record<StepRole, Effort>> = Object.freeze({
   hunter: profileRoleEffort(FALLBACK_PROFILE, "hunter"),
   refuter: profileRoleEffort(FALLBACK_PROFILE, "refuter"),
   summarizer: profileRoleEffort(FALLBACK_PROFILE, "summary"),
-  scout: profileRoleEffort(FALLBACK_PROFILE, "scout"),
   verifier: "high",
   other: "high",
 });

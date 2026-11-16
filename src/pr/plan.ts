@@ -167,7 +167,6 @@ export async function resolvePrPlanAndConfirm(params: {
     params.diffStat,
     params.hunterCount,
     params.summary.enabled && !params.skipDiscovery,
-    params.options.scout && !params.skipDiscovery,
     queuedVerification,
     !params.skipDiscovery,
   );
@@ -182,7 +181,6 @@ export async function resolvePrPlanAndConfirm(params: {
           params.prDiffStat,
           params.fullHunterCount,
           params.summary.enabled,
-          params.options.scout,
           queuedVerification,
           true,
         )
@@ -255,7 +253,6 @@ export async function resolvePrPlanAndConfirm(params: {
     profile: params.profile,
     summary: params.summary,
     summarizerEnabled: params.summary.enabled && !params.skipDiscovery,
-    scoutEnabled: params.options.scout && !params.skipDiscovery,
     consolidateEnabled: !params.skipDiscovery,
     // Mirrors pipelineMaterialityInput in review-pr.ts: no judge step on a
     // re-review that hunts nothing new.

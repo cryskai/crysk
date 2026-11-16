@@ -6,7 +6,7 @@ import type { ModelProfile } from "../profiles";
 //
 // Exactly what 4898e1b4 runs with no configuration, read off the bundled
 // prompts' frontmatter (prompts/default/*.md, consolidate.md, summarizer.md),
-// the old DEFAULT_SCOUT_MODEL / DEFAULT_CONSOLIDATE_MODEL /
+// the old DEFAULT_CONSOLIDATE_MODEL /
 // DEFAULT_CONSOLIDATE_EFFORT / DEFAULT_SUMMARY_MODEL / MATERIALITY_JUDGE_MODEL
 // constants and ROLE_EFFORT (catalog.ts, where the #299 evidence for the
 // hunter and refuter levels lives). Pinned by
@@ -20,7 +20,6 @@ export const CLAUDE_PROFILE: ModelProfile = Object.freeze({
       model: "claude:sonnet-latest",
       effort: "high",
     }),
-    scout: Object.freeze({ model: "claude:sonnet-latest", effort: "high" }),
     summary: Object.freeze({ model: "claude:haiku-latest", effort: "high" }),
     judge: Object.freeze({ model: "claude:sonnet-latest", effort: "high" }),
   }),

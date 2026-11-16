@@ -195,13 +195,6 @@ import {
   NO_REVIEW_INSTRUCTIONS,
   ownerPolicyText,
 } from "./preflight";
-import {
-  capScoutLeads,
-  renderLeadsBlock,
-  type ScoutLead,
-  scoutPrompt,
-  validateScoutLeads,
-} from "./scout";
 import type { ExcludedPath } from "./size-gate";
 import {
   DEFAULT_STEP_MAX_ATTEMPTS,
@@ -289,7 +282,7 @@ export interface PipelineInput {
   // beside `pipelineTimeoutMs` and is injectable for the same reason: without
   // it every ceiling test would sleep 8.5 real seconds.
   ceilingGraceMs?: number;
-  // `bundled` on the summarizer, scout and consolidate inputs (set by the
+  // `bundled` on the summarizer and consolidate inputs (set by the
   // product paths' pipeline*Input, #review/route-preflight) marks the engine's
   // own prompt, resolved through the active profile's prompt set: its model
   // and effort then come from the profile, never from its frontmatter
@@ -298,22 +291,14 @@ export interface PipelineInput {
   // Optional engine-owned summary step. It is deliberately outside ReviewSpec:
   // this prompt is bundled with pr-hero, not part of the benchmarked agent set.
   summarizer?: { promptPath: string; model?: string; bundled?: boolean };
-  // Optional engine-owned scout step (ROADMAP-DOORDASH M5,
-  // `docs/scout-design.md` §3.3). Outside ReviewSpec for the summarizer's
-  // reason and one more of its own: `ReviewSpec.role` is
-  // `"hunter" | "refuter"` with a runtime guard, so a scout cannot be a spec
-  // entry without widening that union — and widening it would re-fingerprint
-  // the prompt set, which is exactly what M6's one-variable property forbids.
-  // ABSENT means the control pipeline, byte for byte.
-  scout?: { promptPath: string; model?: string; bundled?: boolean };
   // Optional engine-owned consolidation pass over the POSTED findings, after
   // the refuter (prompts/consolidate.md, measured on the Martian 50: F1
   // 39.7 -> 42.3, lab bench/METRICS.md 2026-10-27). Opt-in on the engine input
   // so the lab's direct `runPipeline` callers are unchanged; the CLI and PR
   // paths turn it on. ABSENT means no consolidation step and findings exactly
   // as before; pipeline.json still carries a `consolidation` record
-  // (`enabled: false`, `status: "skipped"`), the scout's rule, so the two
-  // arms are told apart from the artifact alone.
+  // (`enabled: false`, `status: "skipped"`), so the two arms are told apart
+  // from the artifact alone.
   consolidate?: { promptPath: string; model?: string; bundled?: boolean };
   // The re-review verifier's own body (prompts/verifier.md), engine-owned.
   // The product's PR path passes it. ABSENT means the verify steps render the
@@ -324,7 +309,7 @@ export interface PipelineInput {
   // Optional engine-owned materiality gate (odd/tasks/materiality-gate.md):
   // an isolated judge reads every finding that would post as blocking and
   // demotes the immaterial ones to advisory. ABSENT means no judge step and
-  // findings exactly as before (the scout's rule); pipeline.json still
+  // findings exactly as before; pipeline.json still
   // carries a `materiality` record (`enabled: false`, `status: "skipped"`).
   // No `model` seat on purpose: the judge runs only on a model it was
   // measured on (sonnet by default, opus through `models.judge`), and neither
@@ -397,7 +382,7 @@ export interface PipelineInput {
   // config's, as the routing config used to.
   routePlan?: ResolvedRoutePlan;
   models?: ModelsConfig;
-  // Item 7: skip hunter (and scout) fan-out. A re-review whose restricted
+  // Item 7: skip hunter fan-out. A re-review whose restricted
   // delta is empty still classifies and verifies (C6); spawning hunters on
   // an empty patch would bill a first-review for nothing. Absent = run
   // hunters, so every existing caller stays byte-identical.
@@ -514,18 +499,6 @@ export type PipelineProgressEvent =
       durationMs: number;
       // Same contract as hunter-finished's reason.
       reason?: string;
-    }
-  // The scout is the one AWAITED stage between "the run started" and the
-  // first hunter spawn, and M4 measured it at 86-600s. Without a started
-  // event that is up to ten minutes of a paid run looking hung — the exact
-  // incident the progress tap was built for (see PipelineDeps.onProgress).
-  | { kind: "scout-started"; model: string }
-  | {
-      kind: "scout-finished";
-      ok: boolean;
-      durationMs: number;
-      // Leads DELIVERED to the hunters, post-cap. Absent for a failed step.
-      leads?: number;
     }
   // A step about to be retried. Until this existed a retrying hunter looked
   // merely slow: `attempts` was counted in PerAgentUsage after the fact, which
@@ -948,17 +921,10 @@ const SUMMARY_OUTPUT_CONTRACT = [
   "The score_reason is 1-2 sentences explaining that advisory score.",
 ].join("\n");
 
-// `leadsBlock` defaults to the EMPTY STRING and an empty block contributes
-// nothing — not a separator, not a blank line (§3.8). That is what makes M6's
-// control arm a control arm: scout off, and scout on returning zero leads,
-// must both produce the byte-identical prompt an unled run produces. C4's
-// wrapBlock preserves that property by returning "" for empty content, so an
-// empty leads block still leaves no trace — not even an empty tag pair.
-//
-// Both non-engine blocks here are wrapped in the run's nonced boundary tags
+// The non-engine blocks here are wrapped in the run's nonced boundary tags
 // (`docs/c4-preamble-design.md` §3.3-§3.4): the patch is the PR author's, and
-// the leads are model prose derived from it. `nonce` sits ahead of the
-// defaulted parameter so a caller cannot reach this composer without one.
+// so is the intent. `nonce` sits ahead of the defaulted parameter so a caller
+// cannot reach this composer without one.
 // The codegraph mandate, appended only when the run's MCP registry grants
 // codegraph (`codegraphGranted`).
 //
@@ -1012,7 +978,7 @@ async function codegraphGranted(mcpConfigPath: string): Promise<boolean> {
 //
 // WHY the hunters and nobody else: the refuter judges a claim against the code
 // alone, so that an author cannot talk it out of a finding by saying the
-// behaviour is intentional. The summarizer, scout, consolidation and
+// behaviour is intentional. The summarizer, consolidation and
 // adjudicator work from the diff or the findings and never see it either.
 //
 // WHY it renders to NOTHING when both are absent: a hunter's request without
@@ -1086,10 +1052,8 @@ function hunterPrompt(
   nonce: string,
   toolsEnabled: boolean,
   codegraph: boolean,
-  leadsBlock = "",
   intent: PrIntent = { title: "", description: "" },
 ): string {
-  const wrappedLeads = wrapBlock("scout_leads", nonce, leadsBlock);
   const wrappedTitle = wrapBlock("pr_title", nonce, intent.title);
   const wrappedDescription = wrapBlock(
     "pr_description",
@@ -1118,9 +1082,6 @@ function hunterPrompt(
     "`hops_used` and `hop_trail` are self-reported and may be cross-checked",
     "against this run's telemetry MCP-call counts.",
     "",
-    // Leads sit LAST before the contract so the diff is still what the hunter
-    // reads first (§3.8's block order).
-    ...(wrappedLeads.length === 0 ? [] : [wrappedLeads, ""]),
     hunterOutputContract(toolsEnabled),
   ].join("\n");
 }
@@ -1234,12 +1195,12 @@ function agentRoleEffort(input: PipelineInput, agent: AgentSpec): Effort {
 // profile's route for its role, never its frontmatter (S3), so the step
 // agrees with the plan (buildResolvedRoutePlan's `bundled`). Unmarked, its
 // frontmatter holds both seats; `profileFallback` says whether the profile
-// still backs an absent `model:` there (scout, consolidate) or not
+// still backs an absent `model:` there (consolidate) or not
 // (summarizer, which has always failed without one).
 function enginePromptChoice(
   input: PipelineInput,
   prompt: { bundled?: boolean },
-  role: "summary" | "scout" | "consolidate",
+  role: "summary" | "consolidate",
   parsed: ParsedAgent,
   profileFallback: boolean,
 ): { model?: string; effort?: Effort } {
@@ -1308,18 +1269,17 @@ interface StepMeta {
   outPath: string;
   // D1-10c. Stamped at CONSTRUCTION as "unsettled" and overwritten when the
   // step settles, so every row in a v1.0.0 plan answers "did this run" without
-  // the reader inferring anything from an absent key — ScoutRecord's rule below
-  // ("the key is missing" is indistinguishable from "this run predates the
-  // key"), applied to the eight steps that never had it.
+  // the reader inferring anything from an absent key — ConsolidationRecord's rule
+  // below ("the key is missing" is indistinguishable from "this run predates
+  // the key"), applied to the eight steps that never had it.
   //
   // WHY "unsettled" and not "not-run" or "skipped":
   //   - "not-run" would LIE about the commonest case. When the pipeline ceiling
   //     fires, the steps in flight had already been spawned and had already
   //     burned tokens; they simply never came back before the snapshot. A row
   //     claiming they never ran contradicts their own attempt logs on disk.
-  //   - "skipped" is taken, three declarations down, and means something else:
-  //     ScoutRecord uses it for "the flag was off, the stage was never asked
-  //     for". Two neighbouring records spelling one word two ways is how a
+  //   - "skipped" is taken, below, and means something else:
+  //     ConsolidationRecord uses it for "the stage was never asked for". Two neighbouring records spelling one word two ways is how a
   //     reader learns the wrong meaning.
   // "unsettled" is true of both reachable cases — never spawned, and spawned
   // but abandoned — and claims nothing beyond "no terminal verdict reached
@@ -1387,34 +1347,8 @@ interface StepMeta {
   }>;
 }
 
-// pipeline.json's `scout` key (§3.9). Written on EVERY run, including one
-// with no scout at all: M6 has to be able to tell the two arms apart from the
-// artifact alone, and "the key is missing" is indistinguishable from "this run
-// predates the key".
-interface ScoutRecord {
-  enabled: boolean;
-  model?: string;
-  // "skipped" is the flag being off. "failed" and "ok" both mean the stage
-  // was asked for — a failed scout is a CONTROL-arm run wearing a scout-arm
-  // flag, and §3.6's M6 rule excludes and re-runs it on exactly this field.
-  status: "ok" | "failed" | "skipped";
-  // DELIVERED leads, post-cap — the number the hunters actually saw.
-  leads_count: number;
-  // Leads the caps dropped. A truncation that fires routinely is a PROMPT
-  // defect to fix, never a cap to raise (§3.8), so it is recorded per run
-  // rather than left to a probe nobody re-runs.
-  leads_truncated: number;
-  // `why` sentences the 240-char cap cut. Additive beyond §3.9's list, and
-  // deliberately: M5 INHERITS this defect from M4 (it fired in most runs), and
-  // a defect nothing counts in production is a defect nobody notices.
-  why_truncated: number;
-  prompt_sha256?: string;
-  duration_ms: number;
-}
-
-// pipeline.json's `consolidation` key, written on every run for ScoutRecord's
-// reason: "the key is missing" is indistinguishable from "this run predates
-// the key". "skipped" means the stage was not asked for (or the ceiling cut
+// pipeline.json's `consolidation` key, written on every run: "the key is
+// missing" is indistinguishable from "this run predates the key". "skipped" means the stage was not asked for (or the ceiling cut
 // the run first); "passthrough" means it was asked for and had nothing it
 // could safely do (no posted findings, or a claim carrying the nonce), so it
 // never spawned; "failed" means it was asked for and its plan was not applied.
@@ -1433,8 +1367,8 @@ interface ConsolidationRecord {
   duration_ms: number;
 }
 
-// pipeline.json's `materiality` key, written on every run for ScoutRecord's
-// reason: "the key is missing" is indistinguishable from "this run predates
+// pipeline.json's `materiality` key, written on every run for
+// ConsolidationRecord's reason: "the key is missing" is indistinguishable from "this run predates
 // the key". "skipped" means the gate was not asked for; "ceiling" means it was
 // asked for and the pipeline ceiling (or its budget) stood it down before it
 // spawned; "unsupported_route" means the judge would not have run the
@@ -1473,7 +1407,6 @@ interface RunState {
   // after the hunters', and a captured undefined would silently disable the
   // check on exactly the leg that motivated the issue.
   resolveProofRef?: (candidate: string) => boolean;
-  scout?: ScoutRecord;
   consolidation?: ConsolidationRecord;
   // Set only by a consolidation step that returned a VALID plan. finish()
   // applies it; the ceiling path reaches finish() without one and so never
@@ -1828,15 +1761,6 @@ async function execute(
         // ignore if not readable
       }
     }
-    let scoutFrontmatter: string | undefined;
-    if (input.scout && input.scout.bundled !== true) {
-      try {
-        const parsed = await parseAgentFile(input.scout.promptPath);
-        scoutFrontmatter = parsed.model;
-      } catch {
-        // ignore if not readable
-      }
-    }
     let consolidateFrontmatter: string | undefined;
     if (input.consolidate && input.consolidate.bundled !== true) {
       try {
@@ -1861,15 +1785,6 @@ async function execute(
                 model: input.summarizer.model,
                 frontmatterModel: summarizerFrontmatter,
                 bundled: input.summarizer.bundled === true,
-              },
-            }),
-        ...(input.scout === undefined
-          ? {}
-          : {
-              scout: {
-                model: input.scout.model,
-                frontmatterModel: scoutFrontmatter,
-                bundled: input.scout.bundled === true,
               },
             }),
         ...(input.consolidate === undefined
@@ -1977,8 +1892,7 @@ async function execute(
 
   // Step 3a — the run's boundary nonce (C4 O-3.3). HERE, once, and identical
   // for every step of this run: a per-step nonce would give each step a
-  // different prompt for the same bytes, and M6's control arm is a byte
-  // comparison. Drawn against exactly the blocks that already exist — the
+  // different prompt for the same bytes, and runs are compared byte for byte. Drawn against exactly the blocks that already exist — the
   // patch, the operator gotchas, the operator priors, the author's intent —
   // because those are the only ones whose content is fixed before the draw.
   // `renderPriorsBlock` is called here and again inside `renderAgentBody` on
@@ -2003,19 +1917,6 @@ async function execute(
   state.reviewInstructions = gotchas;
 
   const stepsDir = path.join(input.runDir, "steps");
-
-  // Step 3b — the scout (ROADMAP-DOORDASH M5). Here and not elsewhere: after
-  // `patch` and the trigger decision exist, strictly before the hunter
-  // composition loop that consumes its leads. It is AWAITED, unlike the
-  // summarizer, which puts it on the critical path — the cost this design
-  // states out loud (§3.9) rather than hiding.
-  // A ceiling that fired before the scout was even spawned skips it and hunts
-  // without leads — the control pipeline's shape, which is a degraded run, not
-  // a broken one.
-  const leadsBlock =
-    skipDiscovery || ceilingAborted(deps, state)
-      ? ""
-      : await runScout(input, deps, state, patch, stepsDir, boundaryNonce);
 
   // Step 4 — hunter fan-out.
   const stepTimeoutMs = input.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;
@@ -2053,7 +1954,6 @@ async function execute(
       boundaryNonce,
       agent.tools.length > 0,
       codegraph && agent.tools.includes(CODEGRAPH_TOOL),
-      leadsBlock,
       prIntent,
     );
     // The rendered body is written run-dir-side as an audit artifact: the
@@ -3268,251 +3168,9 @@ async function runAdjudicate(
   return outcomes;
 }
 
-// The scout's non-hunter budgets (§3.5 mechanism 4), and the one number here
-// that departs from the ratified design: §3.5 says "a 5-minute watchdog",
-// copying the summarizer. M4 then MEASURED the stage at 86-600s across 60
-// spawns and raised its own probe watchdog from 10 to 15 minutes on that
-// evidence (§3.10bis). A 5-minute ceiling would reap runs the only data we
-// have calls normal, so the measurement wins over the estimate that preceded
-// it. One attempt is unchanged: a scout that could not answer once has
-// nothing the run needs badly enough to pay twice for.
-const SCOUT_TIMEOUT_MS = 15 * 60 * 1000;
-
-// Last resort in the model chain, and it exists because `prompts/scout.md`
-// deliberately carries NO `model:` frontmatter: that file is M4's ratified
-// artifact (sha256 68a81d26081e, v5), and adding a line to it would move the
-// sha the milestone recorded for a prompt whose body nothing changed.
-//
-// The value is not a taste call either. M4 ran every one of its 60 measured
-// spawns on sonnet (`scripts/scout-probe.ts` defaults to it and never reads
-// the prompt's frontmatter), and M6's whole control corpus is sonnet (§1.2) —
-// so this is the model the scout has actually been measured on, and the model
-// the A/B will run it on. `--scout-model` is the documented exit; the cheap
-// tier is its own later experiment (§3.13), not a variable inside M6. Read
-// from the `claude` profile, which holds the value now (model-profiles S2).
-export const DEFAULT_SCOUT_MODEL = profileModelAlias(
-  profileRoute(FALLBACK_PROFILE, "scout").model,
-);
-
-// Runs the scout and returns the block to append to every hunter prompt —
-// the EMPTY STRING whenever there is nothing to append, which covers all four
-// quiet paths: the flag is off, the prompt file would not parse, the step
-// failed, and the scout honestly found nothing.
-//
-// FAIL-OPEN, and it is the load-bearing property (§3.6): nothing in here sets
-// `state.partial`. A run without a scout is the CONTROL pipeline, which is by
-// definition complete — it cannot have lost a finding it was never going to
-// produce. #42's incompleteness notice is about a review that lost a hunter or
-// the refuter, which is a different thing and stays untouched. What this must
-// never be is SILENT, so the failure lands in `pipeline.json` (`status`), in
-// `per_agent.scout`, and on the progress tap.
-async function runScout(
-  input: PipelineInput,
-  deps: PipelineDeps,
-  state: RunState,
-  patch: string,
-  stepsDir: string,
-  nonce: string,
-): Promise<string> {
-  if (!input.scout) {
-    state.scout = {
-      enabled: false,
-      status: "skipped",
-      leads_count: 0,
-      leads_truncated: 0,
-      why_truncated: 0,
-      duration_ms: 0,
-    };
-    return "";
-  }
-
-  const name = "scout";
-  const systemPromptPath = path.join(stepsDir, `${name}.system.md`);
-  // The RAW validated leads, pre-cap, beside every other step's output — the
-  // runner writes it. Capping happens in the driver afterwards, so the
-  // artifact records what the scout SAID and pipeline.json records what the
-  // hunters were given; collapsing the two would delete the evidence that a
-  // cap fired at all.
-  const outPath = path.join(stepsDir, `${name}.leads.json`);
-  const meta: StepMeta = {
-    name,
-    model: input.scout.model ?? input.model ?? "unresolved",
-    effort: profileRoleEffort(activeProfile(input), "scout"),
-    // FORCED to empty here, never read from the prompt file's frontmatter.
-    // §3.5 mechanism 1 — "the scout cannot open a file, grep, or walk a call
-    // graph" — is the guarantee this whole design rests on, and a guarantee a
-    // prompt edit can revoke is not a guarantee. `model:` in that frontmatter
-    // is still honoured; `tools:` is not.
-    tools: [],
-    systemPromptPath,
-    outPath,
-    // Same construction-time default `stepMeta()` stamps; this meta is built by
-    // hand because the scout resolves its model and tools as it goes.
-    status: "unsettled",
-  };
-  const record: ScoutRecord = {
-    enabled: true,
-    model: meta.model,
-    // Pessimistic default: every early return below is a failure, and only
-    // the delivered path overwrites it.
-    status: "failed",
-    leads_count: 0,
-    leads_truncated: 0,
-    why_truncated: 0,
-    duration_ms: 0,
-  };
-  state.scout = record;
-  const startedAt = Date.now();
-
-  const abandon = (error?: unknown): string => {
-    // Status only. `attempts` and the two pointers are NOT cleared here on
-    // purpose: `abandon` is reached by three different roads — a prompt file
-    // that never parsed, a runner that threw, and a step that SETTLED and then
-    // failed (or delivered leads that forged the nonce). On that third road a
-    // paid attempt really ran and really wrote its log and receipt, and those
-    // are already recorded by the time this runs. Overwriting them with
-    // "nothing happened" would erase the only evidence separating a scout that
-    // burned money from one that never spawned. A pre-attempt failure has
-    // none of those artifacts, so the reason lands on the step itself (#199)
-    // and is not written over a reason recordSettlement already kept.
-    if (
-      (meta.attempts === undefined || meta.attempts < 1) &&
-      meta.failure === undefined
-    ) {
-      recordStepFailure(meta, error ?? "scout failed before its first attempt");
-    } else {
-      meta.status = "failed";
-    }
-    state.perAgent.scout ??= failedAgentEntry();
-    record.duration_ms = Date.now() - startedAt;
-    emit(deps, {
-      kind: "scout-finished",
-      ok: false,
-      durationMs: record.duration_ms,
-    });
-    return "";
-  };
-
-  let spec: StepSpec;
-  try {
-    // Read once, hashed and parsed from the same bytes: a fingerprint over a
-    // second read could disagree with the prompt that actually ran.
-    const raw = await Bun.file(input.scout.promptPath).text();
-    const agent = parseAgentSource(raw);
-    await writeSystemPrompt(systemPromptPath, agent.body);
-    // Precedence, the JD rule extended one seat: --model > --scout-model >
-    // the prompt's frontmatter > the active profile's scout. The profile sits
-    // LAST so a frontmatter model added later still outranks it, unless the
-    // prompt is the engine's own (`bundled`), whose seat is the profile's.
-    const own = enginePromptChoice(input, input.scout, "scout", agent, true);
-    meta.model = resolveModel(
-      input,
-      input.scout.model,
-      own.model,
-      input.scout.promptPath,
-    );
-    record.model = meta.model;
-    const scoutEffort = stepEffortFields(
-      state.routePlan,
-      name,
-      own.effort,
-      profileRoleEffort(activeProfile(input), "scout"),
-    );
-    meta.effort = scoutEffort.effort;
-    // FULL sha256, not the 12 chars the probe prints: the probe's artifact
-    // stores the full digest too, so a pipeline.json and a scout-probe.json
-    // naming the same prompt say the same string.
-    record.prompt_sha256 = new Bun.CryptoHasher("sha256")
-      .update(raw)
-      .digest("hex");
-    spec = {
-      name,
-      systemPromptPath,
-      prompt: scoutPrompt(patch, nonce),
-      tools: meta.tools,
-      mcpConfigPath: input.mcpConfigPath,
-      model: meta.model,
-      ...scoutEffort,
-      cwd: input.worktree,
-      outPath,
-      timeoutMs: SCOUT_TIMEOUT_MS,
-      maxAttempts: 1,
-      ...stepRouteFields(state.routePlan, name),
-      parse: (finalText) => {
-        const extracted = extractJsonObject(finalText);
-        if (extracted === undefined) {
-          throw new Error("scout final message has no JSON object");
-        }
-        return validateScoutLeads(extracted);
-      },
-      onRetry: (info) => emit(deps, { kind: "step-retry", ...info }),
-    };
-  } catch (error) {
-    // A missing or malformed prompt file. The step still appears in the plan
-    // with status "failed": a stage that was asked for and never spawned must
-    // be visible, or the artifact reads like the flag was off.
-    state.steps.push(meta);
-    return abandon(error);
-  }
-
-  if (spec.route !== undefined) {
-    meta.route = spec.route;
-    Object.assign(meta, routeEffortFields(spec.route));
-    const routedModel = effectiveExecutionModel(spec);
-    meta.model = routedModel;
-    record.model = routedModel;
-  }
-  state.steps.push(meta);
-  emit(deps, { kind: "scout-started", model: meta.model });
-
-  let result: StepResult;
-  try {
-    result = await deps.runner.run(spec);
-  } catch (error) {
-    return abandon(error);
-  }
-  // Usage lands in BOTH seats whatever the verdict — a failed step still
-  // burned tokens, and a run whose bill excludes them under-reports the arm's
-  // cost, which is one of the numbers M6 exists to compare.
-  state.perAgent.scout = perAgentEntry(result);
-  // BEFORE the verdict branches below, so every road that ends in `abandon`
-  // still carries the attempt count and pointers of the session that ran.
-  recordSettlement(meta, result, input.runDir);
-  // The model that ran, when the scout fell back to another (S4).
-  record.model = meta.model;
-  state.usageTotal = sumUsage(state.usageTotal, result.usage);
-  accumulateUsageV2(state, result);
-  if (result.status !== "ok") return abandon();
-
-  const capped = capScoutLeads(result.output as ScoutLead[]);
-  const block = renderLeadsBlock(capped.leads);
-  // The leads are written by a model that READ the nonce in its own prompt, so
-  // a `why` sentence quoting the patch's boundary tag back at us is the real
-  // way this trips — not a random 1-in-2^32 draw. The nonce cannot be
-  // re-drawn here (the scout's paid spawn already carried it, and every step
-  // of a run must share one), so the leads are dropped and the run continues
-  // as the unled CONTROL pipeline. Routed through `abandon` on purpose: the
-  // hunters were not led, which is exactly what a failed scout means, and
-  // `abandon` is what already records that in all three places.
-  if (blockForgesNonce(block, nonce)) return abandon();
-  meta.status = "ok";
-  record.status = "ok";
-  record.leads_count = capped.leads.length;
-  record.leads_truncated = capped.dropped;
-  record.why_truncated = capped.whyTruncated;
-  record.duration_ms = Date.now() - startedAt;
-  emit(deps, {
-    kind: "scout-finished",
-    ok: true,
-    durationMs: record.duration_ms,
-    leads: capped.leads.length,
-  });
-  return renderLeadsBlock(capped.leads);
-}
-
 // The consolidator's budgets, copied from the measurement that justified the
 // stage (scripts/consolidate-replay.ts): one claims-only call, so ten minutes
-// is generous, and two attempts because unlike the scout a lost answer here
+// is generous, and two attempts because a lost answer here
 // is a lost precision gain on findings the run already paid for.
 const CONSOLIDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const CONSOLIDATE_MAX_ATTEMPTS = 2;
@@ -3632,9 +3290,9 @@ async function runConsolidation(
     name,
     model: input.consolidate.model ?? input.model ?? "unresolved",
     effort: defaultEffortForRole("other"),
-    // FORCED to empty, never read from the prompt's frontmatter, for the
-    // scout's reason: the stage is measured as claims-only, and a guarantee a
-    // prompt edit can revoke is not a guarantee.
+    // FORCED to empty, never read from the prompt's frontmatter: the stage is
+    // measured as claims-only, and a guarantee a prompt edit can revoke is not
+    // a guarantee.
     tools: [],
     systemPromptPath,
     outPath,
@@ -3644,8 +3302,8 @@ async function runConsolidation(
   const startedAt = Date.now();
 
   const abandon = (reason: string, error?: unknown): void => {
-    // The scout's rule: keep the attempt count and pointers of a session that
-    // really ran; only a pre-attempt failure lands its reason on the step.
+    // Keep the attempt count and pointers of a session that really ran; only a
+    // pre-attempt failure lands its reason on the step.
     if (
       (meta.attempts === undefined || meta.attempts < 1) &&
       meta.failure === undefined
@@ -4019,9 +3677,8 @@ async function runMaterialityJudge(
       systemPromptPath,
       prompt,
       // FORCED to empty, never read from the prompt's frontmatter, for the
-      // scout's and the consolidation pass's reason: the judge is measured
-      // without tools, and a guarantee a prompt edit can revoke is not a
-      // guarantee.
+      // consolidation pass's reason: the judge is measured without tools, and a
+      // guarantee a prompt edit can revoke is not a guarantee.
       tools: [],
       mcpConfigPath,
       // PINNED, never `input.model` or the frontmatter: the measured judge is
@@ -4478,14 +4135,13 @@ async function writePipelinePlan(
     ...(state.boundaryNonce === undefined
       ? {}
       : { boundary_nonce: state.boundaryNonce }),
-    ...(state.scout === undefined ? {} : { scout: state.scout }),
     ...(state.consolidation === undefined
       ? {}
       : { consolidation: state.consolidation }),
-    // Unconditional, unlike the two above: every road to this write (the
+    // Unconditional, unlike the one above: every road to this write (the
     // gotchas early return included) records whether the gate was asked for.
     materiality: state.materiality ?? skippedMateriality(input, state),
-    // `--shared-prefix` arm identity, read off the artifact like `scout`: a run
+    // `--shared-prefix` arm identity, read off the artifact: a run
     // whose hunters all sit in groups of one has no warm-up row to tell it
     // from control. Absent means the control layout, byte for byte.
     ...(input.sharedPrefix === true ? { shared_prefix: true } : {}),
@@ -4784,7 +4440,7 @@ function stepMeta(spec: StepSpec): StepMeta {
     tools: spec.tools,
     systemPromptPath: spec.systemPromptPath,
     outPath: spec.outPath,
-    // Pessimistic at construction, exactly like ScoutRecord's `status`: a step
+    // Pessimistic at construction: a step
     // is pushed into the plan BEFORE it is spawned, and the ceiling can
     // snapshot at any instant after that. Only a settled step overwrites this.
     status: "unsettled",

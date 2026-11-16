@@ -41,11 +41,11 @@ export interface HunterDraft {
 // not invent a failure, and must not invent a pass by stamping a 0 it did
 // not see. OpenCode stamps the count (including 0). Claude Code derives it from
 // the CLI result's `num_turns` (#299) and omits it when that is not a valid
-// integer. Scout is out of this rule because the engine forces `tools: []`.
+// integer.
 //
 // Only a parsed `{ findings: [...] }` can trip it. The refuter and verifier
-// emit `results`, the summarizer `prose`/`score`, and the scout a bare lead
-// list; none of them has a `findings` array, so none of them is reached.
+// emit `results` and the summarizer `prose`/`score`; none has a `findings`
+// array, so none of them is reached.
 export function isVacuousHunt(input: {
   readonly tools: readonly string[];
   readonly toolInvocations: number | undefined;

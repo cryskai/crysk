@@ -46,9 +46,8 @@ inputs:
     description: 'Optional model name for every step but the materiality judge (claude:<alias>-latest, claude:claude-<id> or opencode:<provider>/<model>). It overrides models, takes no effort, and has no fallbacks; set models per role in the models input instead.'
     required: false
   scout:
-    description: 'Run the experimental diff-only scout stage before hunting'
+    description: 'Removed: the scout stage no longer exists. The input is still accepted so existing workflows keep running; it is ignored and logs a warning.'
     required: false
-    default: 'false'
   max-changed-lines:
     description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to use the repo config value max_changed_lines; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription (a run draws on quota, not a per-token invoice), 4000 on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret).'
     required: false
@@ -485,7 +484,7 @@ runs:
         # has no TTY to run against here.
         set -- review --pr "$TRIGGER_PR" --ci --yes
         if [ "$POST_INPUT" = "true" ] && [ "$POST_FROM_PLATFORM" != "true" ]; then set -- "$@" --post; fi
-        if [ "$SCOUT_INPUT" = "true" ]; then set -- "$@" --scout; fi
+        if [ -n "$SCOUT_INPUT" ]; then echo "::warning::the scout input is ignored: the scout stage was removed"; fi
         if [ "$STEP_SUMMARY_INPUT" = "false" ]; then set -- "$@" --no-step-summary; fi
         if [ -n "$MODEL_INPUT" ]; then set -- "$@" --model "$MODEL_INPUT"; fi
         if [ -n "$MAX_CHANGED_LINES_INPUT" ]; then set -- "$@" --max-changed-lines "$MAX_CHANGED_LINES_INPUT"; fi

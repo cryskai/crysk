@@ -63,7 +63,6 @@ const options = (over: Partial<CliOptions> = {}): CliOptions => ({
   repo: ".",
   head: "HEAD",
   hopBudget: 3,
-  scout: false,
   full: false,
   dryRun: false,
   yes: false,
@@ -230,54 +229,10 @@ describe("renderPlan", () => {
     expect(text).toContain("+ summarizer disabled");
   });
 
-  // ROADMAP-DOORDASH M5. The scout row prints on EVERY plan, off included:
-  // it adds a paid stage to the front of the run and the band below it
-  // already counts one, so "disabled" is information, not noise.
-  test("the scout row states itself whether or not the flag is on", () => {
-    const off = joined(renderPlan(planContext(), false));
-    expect(off).toContain("scout");
-    expect(off).toContain("disabled");
-    expect(off).not.toContain("+ scout");
-
-    const on = joined(
-      renderPlan(
-        planContext({
-          options: options({ scout: true }),
-          estimate: estimateCost(diffStat, 2, true, true),
-        }),
-        false,
-      ),
-    );
-    expect(on).toContain("diff-only, before the hunters (experimental)");
-    // Default model, shown before the money is spent rather than discovered
-    // in the artifact after.
-    expect(on).toContain("sonnet");
-  });
-
-  test("--scout-model is shown, and --model still outranks it", () => {
-    const scoutModel = joined(
-      renderPlan(
-        planContext({ options: options({ scout: true, scoutModel: "haiku" }) }),
-        false,
-      ),
-    );
-    expect(scoutModel).toContain("haiku");
-
-    const overridden = joined(
-      renderPlan(
-        planContext({
-          options: options({
-            scout: true,
-            scoutModel: "haiku",
-            model: "opus",
-          }),
-        }),
-        false,
-      ),
-    );
-    // The plan must print the model that will actually run, or it is a plan
-    // for a different run than the one about to happen.
-    expect(overridden).toContain("scout       opus");
+  test("the plan carries no scout row and no scout label", () => {
+    const text = joined(renderPlan(planContext(), false));
+    expect(text).not.toContain("scout");
+    expect(text).not.toContain("diff-only");
   });
 
   test("--two-dot renames the range, and --force annotates a failed gate", () => {
@@ -689,7 +644,6 @@ const provenance = (
     max_concurrent_steps: "default",
     max_changed_lines: "default",
     max_changed_files: "default",
-    scout: "default",
     materiality_gate: "default",
     post: "default",
     post_min_severity: "default",
@@ -1096,38 +1050,29 @@ describe("plan card and details route dimensions display", () => {
 });
 
 // S4: the RUN row's count is the config's suspicion priors, labelled as such, not prior findings.
-// E-c: with `models` set, the summarizer and the scout run what the plan says,
-// not the prompt's default, and their rows must say so.
-describe("the summarizer and scout rows read the route plan", () => {
+// E-c: with `models` set, the summarizer runs what the plan says, not the
+// prompt's default, and its row must say so.
+describe("the summarizer row reads the route plan", () => {
   const routePlan = createResolvedRoutePlan([
     resolveStepRoute({
       stepKey: "summarizer",
       role: "summarizer",
       specModel: "claude:fable-latest",
     }),
-    resolveStepRoute({
-      stepKey: "scout",
-      role: "scout",
-      specModel: "opencode:openai/gpt-5-mini",
-    }),
   ]);
 
-  test("both rows show the planned model on every card", () => {
-    const ctx = planContext({
-      routePlan,
-      options: options({ scout: true }),
-    });
+  test("the row shows the planned model on every card", () => {
+    const ctx = planContext({ routePlan });
     for (const text of [
       flat(renderPlan(ctx, false)),
       flat(planDetails(ctx, false)),
     ]) {
       expect(text).toMatch(/summarizer\s+claude:fable-latest/);
-      expect(text).toMatch(/opencode:openai\/gpt-5-mini\s*diff-only/);
       expect(text).not.toMatch(/summarizer\s+haiku/);
     }
     const pr = flat(
       renderPrPlan(
-        prPlanContext({ routePlan, options: options({ pr: 6, scout: true }) }),
+        prPlanContext({ routePlan, options: options({ pr: 6 }) }),
         false,
       ),
     );
@@ -1135,21 +1080,17 @@ describe("the summarizer and scout rows read the route plan", () => {
   });
 
   test("a long model name is separated from what follows it", () => {
-    const ctx = planContext({
-      routePlan,
-      options: options({ scout: true }),
-    });
+    const ctx = planContext({ routePlan });
     const text = flat(renderPlan(ctx, false));
     expect(text).toContain("claude:fable-latest always");
-    expect(text).toContain("opencode:openai/gpt-5-mini diff-only");
   });
 
-  // A re-review with nothing new to discover runs neither stage, so neither row
-  // may name a model: the plan omits both steps, and the defaults are not what runs.
-  test("a pass that skips discovery says the summarizer and the scout do not run", () => {
+  // A re-review with nothing new to discover runs no summarizer, so its row
+  // may not name a model: the plan omits the step, and the default is not what runs.
+  test("a pass that skips discovery says the summarizer does not run", () => {
     const skipped = prPlanContext({
       routePlan: createResolvedRoutePlan([]),
-      options: options({ pr: 6, scout: true }),
+      options: options({ pr: 6 }),
       rereview: {
         case: "B",
         lastHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -1162,14 +1103,13 @@ describe("the summarizer and scout rows read the route plan", () => {
       flat(prPlanDetails(skipped, false)),
     ]) {
       expect(text).toMatch(/summarizer\s+-\s+not run this pass/);
-      expect(text).toMatch(/scout\s+-\s+not run this pass/);
       expect(text).not.toMatch(/summarizer\s+haiku/);
     }
     const discovering = flat(
       renderPrPlan(
         prPlanContext({
           routePlan,
-          options: options({ pr: 6, scout: true }),
+          options: options({ pr: 6 }),
           rereview: {
             case: "B",
             lastHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -1183,10 +1123,8 @@ describe("the summarizer and scout rows read the route plan", () => {
     expect(discovering).toMatch(/summarizer\s+claude:fable-latest always/);
   });
 
-  test("with no plan the rows keep their defaults", () => {
-    const text = flat(
-      renderPlan(planContext({ options: options({ scout: true }) }), false),
-    );
+  test("with no plan the row keeps its default", () => {
+    const text = flat(renderPlan(planContext(), false));
     expect(text).toMatch(/summarizer\s+haiku/);
   });
 });

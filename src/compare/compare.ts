@@ -1,8 +1,8 @@
 // Shared location rules for pr-hero findings: how a repo path is normalized and
 // how wide the line window is when a finding is said to sit "near" a location.
-// Re-review identity, scout lead matching, the CI review-risk path set and the
-// floor-test case gate all compare paths through `normalizePath`; the floor-test
-// case gate and the scout probe use `DEFAULT_LINE_WINDOW`.
+// Re-review identity, the CI review-risk path set and the floor-test case gate
+// all compare paths through `normalizePath`; the floor-test case gate uses
+// `DEFAULT_LINE_WINDOW`.
 //
 // Pure: no I/O, no clock.
 

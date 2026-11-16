@@ -18,7 +18,6 @@ import {
   ModelRoutingError,
   resolveStepRoute,
 } from "#model/routing";
-import { DEFAULT_SCOUT_MODEL } from "#review/pipeline";
 import { DEFAULT_SUMMARY_MODEL } from "#review/preflight";
 
 describe("the registry (S1)", () => {
@@ -46,19 +45,16 @@ describe("the claude profile is exactly today's defaults (S2)", () => {
     ]);
     expect(pick("refuter")).toEqual(["claude:opus-latest", "high"]);
     expect(pick("consolidate")).toEqual(["claude:sonnet-latest", "high"]);
-    expect(pick("scout")).toEqual(["claude:sonnet-latest", "high"]);
     expect(pick("summary")).toEqual(["claude:haiku-latest", "high"]);
     expect(pick("judge")).toEqual(["claude:sonnet-latest", "high"]);
   });
 
   test("the old constants read the profile and keep their alias values", () => {
-    expect(DEFAULT_SCOUT_MODEL).toBe("sonnet");
     expect(DEFAULT_SUMMARY_MODEL).toBe("haiku");
     expect(MATERIALITY_JUDGE_MODEL).toBe("sonnet");
     expect(defaultEffortForRole("hunter")).toBe("xhigh");
     expect(defaultEffortForRole("refuter")).toBe("high");
     expect(defaultEffortForRole("summarizer")).toBe("high");
-    expect(defaultEffortForRole("scout")).toBe("high");
     expect(defaultEffortForRole("verifier")).toBe("high");
     expect(defaultEffortForRole("other")).toBe("high");
   });
@@ -202,7 +198,6 @@ describe("the profile is the last seat (S3)", () => {
       agents,
       frontmatterModel: (key) => frontmatter[key],
       summarizer: { frontmatterModel: "haiku" },
-      scout: { defaultModel: "sonnet" },
       consolidate: { frontmatterModel: "sonnet", defaultModel: "sonnet" },
       materiality: true,
     });
@@ -210,30 +205,27 @@ describe("the profile is the last seat (S3)", () => {
       agents,
       bundledAgents: true,
       summarizer: { frontmatterModel: "haiku" },
-      scout: {},
       consolidate: { frontmatterModel: "sonnet" },
       materiality: true,
     });
     expect(profiled).toEqual(legacy);
   });
 
-  test("the scout and the judge take the active profile's model", () => {
+  test("the judge takes the active profile's model", () => {
     const plan = buildResolvedRoutePlan({
       agents,
       profile: {
         id: "judge-opus",
         roles: {
-          scout: { model: "claude:haiku-latest", effort: "low" },
           judge: { model: "claude:opus-latest", effort: "high" },
         },
       },
       frontmatterModel: () => "sonnet",
-      scout: {},
       materiality: true,
     });
     const identity = (key: string) =>
       plan.steps.find((s) => s.stepKey === key)?.logicalIdentity;
-    expect(identity("scout")).toBe("claude:haiku-latest");
+    expect(identity("scout")).toBeUndefined();
     expect(identity("materiality")).toBe("claude:opus-latest");
   });
 });

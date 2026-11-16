@@ -174,7 +174,7 @@ export interface ResolveStepRouteInput {
   readonly stepKey: string;
   readonly role: string;
   // The `models` key this step reads (`hunter.logic`, `refuter`, `summary`,
-  // `scout`, `consolidate`). Absent: only `models.default` is consulted.
+  // `consolidate`). Absent: only `models.default` is consulted.
   readonly modelRole?: string;
   readonly cliModel?: string;
   readonly specModel?: string;
@@ -439,12 +439,6 @@ export interface BuildRoutePlanInput {
   };
   // `defaultModel` is the legacy spelling of the profile seat, still passed by
   // callers that predate profiles; it outranks the profile when given.
-  readonly scout?: {
-    model?: string;
-    frontmatterModel?: string;
-    defaultModel?: string;
-    bundled?: boolean;
-  };
   readonly consolidate?: {
     model?: string;
     frontmatterModel?: string;
@@ -577,25 +571,6 @@ export function buildResolvedRoutePlan(
           : // No profile seat for an unmarked prompt: the summarizer never had
             // a default, so one without `model:` keeps failing the plan.
             { frontmatterModel: input.summarizer.frontmatterModel }),
-        models: input.models,
-      }),
-    );
-  }
-  if (input.scout) {
-    stepRoutes.push(
-      resolveStepRoute({
-        stepKey: "scout",
-        role: "scout",
-        modelRole: "scout",
-        // `--model` outranks `--scout-model`, as the scout step records it.
-        cliModel: input.cliModel ?? input.scout.model,
-        ...(input.scout.bundled === true
-          ? {}
-          : {
-              frontmatterModel:
-                input.scout.frontmatterModel ?? input.scout.defaultModel,
-            }),
-        ...profileSeat("scout"),
         models: input.models,
       }),
     );

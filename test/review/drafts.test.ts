@@ -412,7 +412,7 @@ describe("isVacuousHunt (#214, #299)", () => {
     ).toBe(false);
   });
 
-  test("scout tools:[] is out of the rule even at zero invocations", () => {
+  test("a tool-less step (tools:[]) is out of the rule even at zero invocations", () => {
     expect(
       isVacuousHunt({
         tools: [],
@@ -483,7 +483,7 @@ describe("isVacuousHunt (#214, #299)", () => {
     ).toBe(false);
   });
 
-  test("refuter and scout shapes have no findings array, so they do not trip", () => {
+  test("refuter and summarizer shapes have no findings array, so they do not trip", () => {
     expect(
       isVacuousHunt({
         tools: ["Read"],
@@ -495,7 +495,7 @@ describe("isVacuousHunt (#214, #299)", () => {
       isVacuousHunt({
         tools: ["Read"],
         toolInvocations: 0,
-        parsed: { leads: [] },
+        parsed: { prose: "p", score: 3 },
       }),
     ).toBe(false);
   });

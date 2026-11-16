@@ -1,11 +1,11 @@
-// M6's PRIMARY instrument (ROADMAP-DOORDASH M6, `docs/scout-design.md` §3.11):
-// the floor test. Deterministic, per-case, no statistics.
+// The floor test (`docs/research/scout-design.md` §3.11): deterministic,
+// per-case, no statistics.
 //
-// The question is binary per case: *did this arm produce a refuter-corroborated
-// finding at the site?* Nothing here scores quality, ranks arms, or computes a
-// p-value — §3.11 states up front that 13 cases cannot rank two arms that both
-// score well, and an instrument that pretended otherwise would be the third
-// thing this milestone had to throw away (§3.10bis killed the second).
+// The question is binary per case: *did a run produce a refuter-corroborated
+// finding at the site?* Nothing here scores quality, ranks runs, or computes a
+// p-value — 13 cases cannot rank two configurations that both score well.
+// Built to compare two arms of the scout stage, which was removed on
+// 2026-11-16; the case list, the scorer and the tallies do not depend on it.
 //
 // PURE on purpose, the ../report.ts rule: no I/O, no clock, no git. The harness
 // reads the run dirs and hands parsed objects in, so a scoring pass can be
@@ -14,7 +14,7 @@
 import type { Finding, FindingsDocument } from "#review/findings";
 import { DEFAULT_LINE_WINDOW, normalizePath } from "./compare";
 
-// §3.11's two case types, and M6 must not blur them: a `miss` case reviews the
+// §3.11's two case types, which must not be blurred: a `miss` case reviews the
 // PR where our engine missed a defect a production reviewer caught; a `corpus` case reviews
 // the INTRODUCER, and `fix_pr` is provenance only.
 export type FloorCaseType = "miss" | "corpus";
@@ -83,7 +83,7 @@ export function parseFloorCases(raw: string): FloorCase[] {
     );
     // A bare filename is the failure §2.4septies's 2026-08-18 note records:
     // `normalizePath` refuses basename matching, so a short path scores as a
-    // miss by BOTH arms and reads as evidence about the scout. Cheap to check,
+    // miss in every run. Cheap to check,
     // and the check is the only thing standing between a display path and a
     // silently unscorable case.
     must(
@@ -126,52 +126,6 @@ export function parseFloorCases(raw: string): FloorCase[] {
 // and count as a miss in the other at the same line.
 export { DEFAULT_LINE_WINDOW };
 
-export type FloorArm = "scout" | "control";
-
-// Which arm a run belongs to, read from the ARTIFACT and never from a
-// directory name or a harness variable — pipeline.json's `scout.enabled` is
-// the field M5 built for exactly this, written on every run including the ones
-// with no scout at all.
-//
-// `null` means the artifact cannot say, which is not the same as "control": a
-// run from before M5, or a corrupt plan, must be excluded from the read rather
-// than silently counted as the arm it happens to resemble.
-export function armOfRun(plan: unknown): FloorArm | null {
-  if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
-    return null;
-  }
-  const scout = (plan as Record<string, unknown>).scout;
-  if (typeof scout !== "object" || scout === null) return null;
-  const enabled = (scout as Record<string, unknown>).enabled;
-  if (typeof enabled !== "boolean") return null;
-  return enabled ? "scout" : "control";
-}
-
-export function diversityArmOfRun(
-  plan: unknown,
-): "diversity" | "control" | null {
-  if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
-    return null;
-  }
-  const diversity = (plan as Record<string, unknown>).multiModelDiversity;
-  if (typeof diversity !== "object" || diversity === null) return null;
-  const enabled = (diversity as Record<string, unknown>).enabled;
-  if (typeof enabled !== "boolean") return null;
-  return enabled ? "diversity" : "control";
-}
-
-// §3.6's exclusion rule, as a predicate: a scout-arm run whose scout FAILED is
-// a control-arm run wearing a scout-arm flag. Counting it would dilute the arm
-// with its own control, which is the exact way an A/B lies quietly. The harness
-// re-runs these; the scorer refuses to score them.
-export function scoutFailed(plan: unknown): boolean {
-  if (typeof plan !== "object" || plan === null) return false;
-  const scout = (plan as Record<string, unknown>).scout;
-  if (typeof scout !== "object" || scout === null) return false;
-  const record = scout as Record<string, unknown>;
-  return record.enabled === true && record.status !== "ok";
-}
-
 export interface FloorHit {
   finding_id: string;
   path: string;
@@ -191,7 +145,7 @@ export interface CaseScore {
   // said. Reported separately and never folded into `hit`, because the gap
   // between the two is a statement about the REFUTER, and an arm that finds
   // the defect and then refutes it away has failed differently from an arm
-  // that never looked. M6 cannot attribute a result it cannot see.
+  // that never looked. A result it cannot see cannot be attributed.
   found: boolean;
   hits: FloorHit[];
 }
@@ -211,9 +165,9 @@ function atSite(
 
 // Scores ONE run against the cases belonging to its PR.
 //
-// `debug.refuted` is deliberately NOT searched. A refuted finding is one the
-// refuter positively disproved, and §3.11's gate says corroborated — counting
-// a refuted finding as a floor hit would score the arm on what it SAID rather
+// `debug.refuted` is deliberately NOT searched. A refuter positively disproved
+// a refuted finding, and §3.11's gate says corroborated — counting a refuted
+// finding as a floor hit would score the run on what it SAID rather
 // than on what survived scrutiny, which is the volume metric M0 already killed
 // (§3.1). `debug.deduped` is likewise out: a merge loser's survivor is in
 // `findings` and would double-count the same site.
@@ -258,8 +212,7 @@ export interface CaseTally {
   replicates: number;
 }
 
-export interface ArmTally {
-  arm: FloorArm;
+export interface FloorTally {
   cases: CaseTally[];
   // Cases hit in AT LEAST ONE replicate. §3.11's read is per case and binary;
   // "at least one" is the recall-shaped reading, and `casesHitEvery` is stated
@@ -272,24 +225,18 @@ export interface ArmTally {
 }
 
 export interface ScoredRun {
-  arm: FloorArm;
   scores: CaseScore[];
 }
 
-// Aggregates scored runs into one row per case per arm.
+// Aggregates scored runs into one row per case.
 //
-// A case with ZERO scored replicates in an arm is kept with `replicates: 0`
-// rather than dropped: a case nobody ran is not a case both arms missed, and
-// silently omitting it would turn an incomplete session into a clean-looking
-// result. It counts toward `total` and toward neither hit column.
-export function tallyArm(
-  arm: FloorArm,
-  runs: ScoredRun[],
-  cases: FloorCase[],
-): ArmTally {
-  const mine = runs.filter((r) => r.arm === arm);
+// A case with ZERO scored replicates is kept with `replicates: 0` rather than
+// dropped: a case nobody ran is not a case every run missed, and silently
+// omitting it would turn an incomplete session into a clean-looking result. It
+// counts toward `total` and toward neither hit column.
+export function tallyRuns(runs: ScoredRun[], cases: FloorCase[]): FloorTally {
   const tallies: CaseTally[] = cases.map((floorCase) => {
-    const scored = mine
+    const scored = runs
       .flatMap((r) => r.scores)
       .filter((s) => s.case_id === floorCase.id);
     return {
@@ -302,7 +249,6 @@ export function tallyArm(
     };
   });
   return {
-    arm,
     cases: tallies,
     casesHitAny: tallies.filter((t) => t.hit > 0).length,
     casesHitEvery: tallies.filter(
@@ -318,154 +264,37 @@ export function tallyArm(
 // because this table is written to a file and read in a diff, not painted.
 export function renderFloorTable(
   cases: FloorCase[],
-  scout: ArmTally,
-  control: ArmTally,
+  tally: FloorTally,
 ): string[] {
   const byId = new Map(cases.map((c) => [c.id, c]));
   const cell = (t: CaseTally | undefined): string =>
     t === undefined || t.replicates === 0
       ? "not run"
       : `${t.hit}/${t.replicates}${t.found > t.hit ? ` (found ${t.found})` : ""}`;
-  const scoutById = new Map(scout.cases.map((t) => [t.case_id, t]));
-  const controlById = new Map(control.cases.map((t) => [t.case_id, t]));
-  const lines = [
-    "| # | PR | type | control | scout | site |",
-    "|---|---|---|---|---|---|",
-  ];
+  const tallyById = new Map(tally.cases.map((t) => [t.case_id, t]));
+  const lines = ["| # | PR | type | hit | site |", "|---|---|---|---|---|"];
   for (const c of cases) {
     const site = `${c.path}:${c.start_line}${
       c.end_line === c.start_line ? "" : `-${c.end_line}`
     }`;
     lines.push(
-      `| ${c.id} | ${c.pr} | ${c.type} | ${cell(controlById.get(c.id))} | ` +
-        `${cell(scoutById.get(c.id))} | \`${site}\` |`,
+      `| ${c.id} | ${c.pr} | ${c.type} | ${cell(tallyById.get(c.id))} | \`${site}\` |`,
     );
   }
   lines.push("");
   lines.push(
-    `control: ${control.casesHitAny}/${control.total} cases hit in at least one ` +
-      `replicate, ${control.casesHitEvery} in every replicate, ` +
-      `${control.casesFoundAny} found at the site before refutation`,
-  );
-  lines.push(
-    `scout:   ${scout.casesHitAny}/${scout.total} cases hit in at least one ` +
-      `replicate, ${scout.casesHitEvery} in every replicate, ` +
-      `${scout.casesFoundAny} found at the site before refutation`,
+    `${tally.casesHitAny}/${tally.total} cases hit in at least one ` +
+      `replicate, ${tally.casesHitEvery} in every replicate, ` +
+      `${tally.casesFoundAny} found at the site before refutation`,
   );
   // C10's blind spot, printed WITH the numbers rather than left to the prose:
   // a table this compact is exactly the kind that gets screenshotted away from
   // its caveat.
   lines.push("");
   lines.push(
-    "Neither arm's number can see a defect BOTH arms missed, and this table " +
-      "cannot rank two arms that both score well (§3.11). It can say `drop` " +
-      "loudly; it cannot distinguish `adopt` from `opt-in`.",
+    "This number cannot see a defect every run missed, and this table " +
+      "cannot rank two configurations that both score well (§3.11).",
   );
   if (byId.size !== cases.length) lines.push("WARNING: duplicate case ids");
-  return lines;
-}
-
-// ---------------------------------------------------------------------------
-// The clean pair (§3.11), which is NOT optional garnish.
-//
-// The floor test only looks at known-bad PRs, so nothing in it can see the
-// failure a "bias, never filter" design is most likely to produce: hunters
-// chasing spurious leads into junk findings on code where the control is
-// quiet. M4's restraint gate measured the SCOUT's lead volume, not that
-// downstream effect, and Tier 2's precision guard runs only on known-bad PRs,
-// so neither instrument covers it either.
-//
-// §3.11's read is one number — *does the scout arm produce MORE findings than
-// the control on a PR where the control produces few?* — and it is the one
-// place this project sanctions a raw count, because the comparison is between
-// arms on the same PR rather than an absolute claim about quality. C1's rule
-// still applies to how it is READ, so the distinct-root-cause count is
-// reported beside the raw one: one systemic defect reported at N call sites is
-// one finding fanned out, and reading it as N is exactly how a correct review
-// scores as a precision collapse.
-// ---------------------------------------------------------------------------
-
-export interface CleanRun {
-  arm: FloorArm;
-  pr: number;
-  findings: number;
-  // Findings the refuter corroborated — the ones that would actually reach a
-  // human as blocking.
-  corroborated: number;
-  // `debug.root_causes.distinct_root_causes` when the artifact carries it.
-  // Absent on runs that predate the clusterer, and absent is not zero.
-  rootCauses?: number;
-}
-
-export interface CleanArmStat {
-  runs: number;
-  findings: number[];
-  corroborated: number[];
-  rootCauses: Array<number | undefined>;
-}
-
-export interface CleanTally {
-  pr: number;
-  control: CleanArmStat;
-  scout: CleanArmStat;
-}
-
-function cleanArmStat(runs: CleanRun[]): CleanArmStat {
-  return {
-    runs: runs.length,
-    findings: runs.map((r) => r.findings),
-    corroborated: runs.map((r) => r.corroborated),
-    rootCauses: runs.map((r) => r.rootCauses),
-  };
-}
-
-export function tallyCleanPrs(runs: CleanRun[], prs: number[]): CleanTally[] {
-  return prs.map((pr) => {
-    const mine = runs.filter((r) => r.pr === pr);
-    return {
-      pr,
-      control: cleanArmStat(mine.filter((r) => r.arm === "control")),
-      scout: cleanArmStat(mine.filter((r) => r.arm === "scout")),
-    };
-  });
-}
-
-// Every replicate is listed, never averaged into one number. §1.3 measured six
-// of eight same-head replicate pairs MOVING, with deltas as large as the whole
-// effect the scout is expected to produce — so a mean over two runs would hide
-// exactly the variance that decides whether any of this is readable.
-function cleanCell(stat: CleanArmStat): string {
-  if (stat.runs === 0) return "not run";
-  return stat.findings
-    .map((n, i) => {
-      const corroborated = stat.corroborated[i] ?? 0;
-      const causes = stat.rootCauses[i];
-      return `${n} (${corroborated} corr${
-        causes === undefined
-          ? ""
-          : `, ${causes} cause${causes === 1 ? "" : "s"}`
-      })`;
-    })
-    .join(" · ");
-}
-
-export function renderCleanTable(tallies: CleanTally[]): string[] {
-  const lines = [
-    "| PR | control | scout |",
-    "|---|---|---|",
-    ...tallies.map(
-      (t) => `| ${t.pr} | ${cleanCell(t.control)} | ${cleanCell(t.scout)} |`,
-    ),
-    "",
-    "Findings per run, one entry per replicate, never averaged (§1.3: six of " +
-      "eight same-head replicate pairs MOVED, by as much as the whole effect " +
-      "the scout is expected to produce). `corr` is refuter-corroborated; " +
-      "`causes` is distinct root causes, because one systemic defect at N call " +
-      "sites is one finding fanned out (C1).",
-    "The question here is RELATIVE and between arms on the same PR: does the " +
-      "scout arm produce MORE than the control where the control is quiet? It " +
-      "is not a claim that these PRs are defect-free — their `prhero_only` " +
-      "rows were never triaged (§2.4).",
-  ];
   return lines;
 }

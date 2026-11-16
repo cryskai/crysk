@@ -20,7 +20,6 @@ import {
   claudeAuthorityRequired,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
-  pipelineScoutInput,
   pipelineSummarizerInput,
 } from "#review/route-preflight";
 import { defaultReviewSpec } from "#review/spec";
@@ -37,7 +36,7 @@ async function openaiPlan(
 ): Promise<ResolvedRoutePlan> {
   return buildCliRoutePlan({
     spec: defaultReviewSpec(),
-    options: { scout: true } as CliOptions,
+    options: {} as CliOptions,
     agentFiles: new Map(),
     bundledAgents: true,
     models: undefined,
@@ -69,7 +68,6 @@ describe("the openai profile (S2)", () => {
       "opencode:openai/gpt-6.1-terra",
       "high",
     ]);
-    expect(pick("scout")).toEqual(["opencode:openai/gpt-6.1-terra", undefined]);
     expect(pick("judge")).toEqual(["opencode:openai/gpt-6.1-terra", undefined]);
     expect(pick("summary")).toEqual(["opencode:openai/gpt-6-luna", undefined]);
   });
@@ -110,8 +108,7 @@ describe("a zero-config openai plan (S4, S5, S9)", () => {
       modelSnapshot: "gpt-6.1-terra",
       modelVariant: "high",
     });
-    expect(byKey.get("scout")?.modelSnapshot).toBe("gpt-6.1-terra");
-    expect(byKey.get("scout")?.modelVariant).toBeUndefined();
+    expect(byKey.has("scout")).toBe(false);
     expect(byKey.get("summarizer")?.modelSnapshot).toBe("gpt-6-luna");
     expect(byKey.get("summarizer")?.modelVariant).toBeUndefined();
   });
@@ -174,7 +171,6 @@ describe("a pipeline run on the openai profile (S5)", () => {
         bundledAgents: true,
         modelProfile: OPENAI,
         ...pipelineSummarizerInput({ enabled: true }, prompts),
-        ...pipelineScoutInput({ scout: true }, prompts),
         ...pipelineConsolidateInput(prompts),
       },
     );

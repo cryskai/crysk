@@ -611,13 +611,13 @@ describe("vacuous hunt is not a delivered draft (#214, #299)", () => {
     expect(await Bun.file(step.outPath).json()).toEqual({ findings: [] });
   });
 
-  test("scout tools:[] at zero invocations still delivers", async () => {
+  test("a tool-less step (tools:[]) at zero invocations still delivers", async () => {
     const dir = await tempDir();
     const { transport } = makeScriptedTransport([
       { ...okOutcome(), toolInvocations: 0 },
     ]);
     const step = await makeStep(dir, {
-      name: "scout",
+      name: "summarizer",
       tools: [],
     });
     const harness = new StepExecutionHarness({

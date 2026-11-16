@@ -113,16 +113,14 @@ export async function resolvePrRunOptions(
   // yet at this point, and a `.crysk/config.json` committed by the PR author
   // must stay unread (O-8). Same loader as local mode, so the two modes
   // cannot drift on precedence.
-  const { loaded, config, summary, scout, post, profile } = await loadRunConfig(
-    {
-      root: operatorRoot,
-      home,
-      configFlag: options.config,
-      options,
-    },
-  );
+  const { loaded, config, summary, post, profile } = await loadRunConfig({
+    root: operatorRoot,
+    home,
+    configFlag: options.config,
+    options,
+  });
   // ROADMAP Pillar 3 (GitHub Actions CI). isCi folds in HERE, alongside
-  // scout/post, so `options.yes` carries the headless bypass (spec 2.1:
+  // post, so `options.yes` carries the headless bypass (spec 2.1:
   // "MUST run headlessly ... equivalent to --yes") through every downstream
   // read of `options.yes` in one move — the confirm gate, the in-flight
   // TOCTOU check (`if (options.yes) return 0` is the correct CI answer to a
@@ -137,7 +135,7 @@ export async function resolvePrRunOptions(
     prNumber,
     home,
     isCi,
-    options: { ...options, scout, post, yes: options.yes || isCi },
+    options: { ...options, post, yes: options.yes || isCi },
     loaded,
     config,
     summary,

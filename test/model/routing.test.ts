@@ -190,15 +190,14 @@ describe("buildResolvedRoutePlan: the consolidate step", () => {
   const step = (plan: ResolvedRoutePlan, key: string) =>
     plan.steps.find((s) => s.stepKey === key);
 
-  test("a route is resolved for consolidate when enabled, like the scout", () => {
+  test("a route is resolved for consolidate when enabled", () => {
     const plan = buildResolvedRoutePlan({
       agents,
-      scout: { defaultModel: "sonnet" },
       consolidate: { defaultModel: "sonnet" },
     });
     expect(step(plan, "consolidate")?.role).toBe("other");
     expect(step(plan, "consolidate")?.logicalIdentity).toBe(
-      step(plan, "scout")?.logicalIdentity,
+      "claude:sonnet-latest",
     );
   });
 
@@ -207,17 +206,15 @@ describe("buildResolvedRoutePlan: the consolidate step", () => {
     expect(step(plan, "consolidate")).toBeUndefined();
   });
 
-  test("models.default on OpenCode gives consolidate the backend and model the scout gets", () => {
+  test("models.default on OpenCode gives consolidate the backend and model", () => {
     const plan = buildResolvedRoutePlan({
       agents,
       models: { default: ["opencode:anthropic/claude-sonnet-5-5"] },
-      scout: { defaultModel: "sonnet" },
       consolidate: { defaultModel: "sonnet" },
     });
     const consolidate = step(plan, "consolidate")?.route;
     expect(consolidate?.backend).toBe("opencode");
     expect(consolidate?.modelSnapshot).toBe("claude-sonnet-5-5");
-    expect(consolidate).toEqual(step(plan, "scout")?.route);
   });
 });
 

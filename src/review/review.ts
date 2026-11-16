@@ -43,7 +43,6 @@ import {
   isBundledAgentsDir,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
-  pipelineScoutInput,
   pipelineSummarizerInput,
 } from "#review/route-preflight";
 import {
@@ -103,15 +102,13 @@ export async function review(options: CliOptions): Promise<number> {
   // Two layers since C5, folded by loadEffectiveConfig into the one
   // LocalConfig everything below already expected. The --config missing-file
   // error and the boundary rules live there.
-  const { loaded, config, summary, scout, post, profile } = await loadRunConfig(
-    {
-      root: repoRoot,
-      home: os.homedir(),
-      configFlag: options.config,
-      options,
-    },
-  );
-  options = { ...options, scout, post };
+  const { loaded, config, summary, post, profile } = await loadRunConfig({
+    root: repoRoot,
+    home: os.homedir(),
+    configFlag: options.config,
+    options,
+  });
+  options = { ...options, post };
   // S5: the Claude credential this run uses, chosen once, here, from
   // `credentials.claude` and what is set. Every runner, binding and child below
   // reads its env, which holds that one credential and no other.
@@ -251,7 +248,6 @@ export async function review(options: CliOptions): Promise<number> {
     diffStat,
     hunterCount,
     summary.enabled,
-    options.scout,
     0,
     true,
   );
@@ -371,7 +367,7 @@ export async function review(options: CliOptions): Promise<number> {
 
   // 15 — run, with live progress: the expectation line up front, then one
   // stderr line per pipeline event (plus a TTY heartbeat between them).
-  log(reviewingLine(hunterCount, summary, options));
+  log(reviewingLine(hunterCount, summary));
   const started = performance.now();
   const progress = startProgressRenderer(
     started,
@@ -444,7 +440,6 @@ export async function review(options: CliOptions): Promise<number> {
         suspicionPriors: config.suspicion_priors,
         modelProfile: profile,
         ...pipelineSummarizerInput(summary, { profile }),
-        ...pipelineScoutInput(options, { profile }),
         ...pipelineConsolidateInput({ profile }),
         ...pipelineMaterialityInput(config, { profile }),
         ...(prTitle === undefined ? {} : { prTitle }),

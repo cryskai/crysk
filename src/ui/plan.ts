@@ -13,7 +13,6 @@ import { isFullCommitId } from "#git/refs";
 import type { FreeRouteBilling } from "#model/free-discovery";
 import type { ResolvedRoutePlan } from "#model/routing";
 import type { PrTarget } from "#pr/preflight";
-import { DEFAULT_SCOUT_MODEL } from "#review/pipeline";
 import {
   type AgentsDirSource,
   type BaseRefResolution,
@@ -344,34 +343,7 @@ export function summarizerLabel(summary: SummarySettings): string {
   return summary.enabled ? "+ summarizer" : "+ summarizer disabled";
 }
 
-// Printed on EVERY plan, off included. The scout adds a paid stage to the
-// front of the run and the operator is about to confirm a band that already
-// counts it, so "scout: off" is information, not noise — and a stage that
-// only appears when it is on is a stage nobody notices arriving.
-function scoutRow(
-  options: Pick<CliOptions, "scout" | "scoutModel" | "model">,
-  routePlan?: ResolvedRoutePlan,
-  skipped = false,
-): string {
-  const label = "scout".padEnd(12);
-  if (!options.scout) return `${label}${"-".padEnd(8)}disabled`;
-  if (skipped) return `${label}${NOT_RUN_THIS_PASS}`;
-  // The same chain the pipeline resolves, printed before the money is spent:
-  // --model > --scout-model > the engine default (the bundled prompt pins no
-  // model, so there is no frontmatter seat to show here).
-  const model =
-    plannedModel(routePlan, "scout") ??
-    options.model ??
-    options.scoutModel ??
-    DEFAULT_SCOUT_MODEL;
-  return `${label}${model.padEnd(8)} diff-only, before the hunters (experimental)`;
-}
-
-export function scoutLabel(options: Pick<CliOptions, "scout">): string {
-  return options.scout ? " + scout" : "";
-}
-
-// Lives here rather than in review/run.ts, beside the two labels it composes.
+// Lives here rather than in review/run.ts, beside the label it composes.
 // It was first extracted into review/run.ts with the other shared run stages,
 // which made that domain module import #ui/plan by value while ui/plan already
 // imports #review/pipeline and #review/size-gate: no file-level cycle, but the
@@ -384,11 +356,10 @@ export function scoutLabel(options: Pick<CliOptions, "scout">): string {
 export function reviewingLine(
   hunterCount: number,
   summary: SummarySettings,
-  options: Pick<CliOptions, "scout">,
 ): string {
   return (
     `reviewing — ${hunterCount} hunter${hunterCount === 1 ? "" : "s"} + ` +
-    `refuter ${summarizerLabel(summary)}${scoutLabel(options)}; ` +
+    `refuter ${summarizerLabel(summary)}; ` +
     "comparable trees have taken " +
     "8–25 minutes"
   );
@@ -584,7 +555,6 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
   push("run dir", ctx.runDir);
   push("hop budget", String(ctx.options.hopBudget));
   push("summarizer", summarizerRow(ctx.summary, ctx.routePlan));
-  push("scout", scoutRow(ctx.options, ctx.routePlan));
   push(
     "parity",
     ctx.config.parity_trigger_paths.length === 0
@@ -638,9 +608,6 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
   }
   lines.push(
     ...row(label, summarizerRow(ctx.summary, ctx.routePlan), { styles, width }),
-  );
-  lines.push(
-    ...row("", scoutRow(ctx.options, ctx.routePlan), { styles, width }),
   );
   label = "";
   lines.push(
@@ -864,7 +831,6 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
   push("hop budget", String(ctx.options.hopBudget));
   const skipped = ctx.rereview?.skipDiscovery === true;
   push("summarizer", summarizerRow(ctx.summary, ctx.routePlan, skipped));
-  push("scout", scoutRow(ctx.options, ctx.routePlan, skipped));
   if (ctx.rereview) {
     const last =
       ctx.rereview.lastHead === null
@@ -953,17 +919,6 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
       label,
       summarizerRow(
         ctx.summary,
-        ctx.routePlan,
-        ctx.rereview?.skipDiscovery === true,
-      ),
-      { styles, width },
-    ),
-  );
-  lines.push(
-    ...row(
-      "",
-      scoutRow(
-        ctx.options,
         ctx.routePlan,
         ctx.rereview?.skipDiscovery === true,
       ),

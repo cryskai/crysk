@@ -10,7 +10,6 @@ import {
   GENERAL_SKILL_FILES,
   MATERIALITY_PROMPT_PATH,
   PR_SKILL_FILES,
-  SCOUT_PROMPT_PATH,
   SUMMARIZER_PROMPT_PATH,
   TRIAGE_SKILL_FILES,
   VERIFIER_PROMPT_PATH,
@@ -24,7 +23,6 @@ export interface EngineAssets {
   defaultAgentsDir: string; // the prompts/default dir in dev/npm, or embedded asset directory when compiled
   consolidatePromptPath: string;
   materialityPromptPath: string;
-  scoutPromptPath: string;
   summarizerPromptPath: string;
   verifierPromptPath: string;
   triageSkillFiles: Record<string, string>; // logical filename → path, from the manifest
@@ -120,7 +118,6 @@ export function resolveEngineAssets(): EngineAssets {
     defaultAgentsDir,
     consolidatePromptPath: resolveBundledFilePath(CONSOLIDATE_PROMPT_PATH),
     materialityPromptPath: resolveBundledFilePath(MATERIALITY_PROMPT_PATH),
-    scoutPromptPath: resolveBundledFilePath(SCOUT_PROMPT_PATH),
     summarizerPromptPath: resolveBundledFilePath(SUMMARIZER_PROMPT_PATH),
     verifierPromptPath: resolveBundledFilePath(VERIFIER_PROMPT_PATH),
     triageSkillFiles: resolveBundledFileMap(TRIAGE_SKILL_FILES),

@@ -42,8 +42,8 @@ export class HarnessRouteError extends Error {
 
 // buildResolvedRoutePlan's input with every step optional and the profile
 // defaulting to `claude`, as a review's does. A single-step harness names its
-// one step: `agents: [{ key: "refuter", role: "refuter" }]`, `scout: {...}`,
-// `materiality: true`. `bundledAgents` (and `bundled` on a root prompt) gives
+// one step: `agents: [{ key: "refuter", role: "refuter" }]`,
+// `consolidate: {...}`, `materiality: true`. `bundledAgents` (and `bundled` on a root prompt) gives
 // the step the profile seat; a lab prompt set passes `frontmatterModel`
 // instead, and its frontmatter wins as in production.
 export type HarnessRoutePlanInput = Partial<BuildRoutePlanInput>;

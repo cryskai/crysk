@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { armOfRun, scoutFailed } from "#compare/floor-test";
 import {
   PIPELINE_SCHEMA_VERSION,
   type PipelineInput,
@@ -93,16 +92,15 @@ const OLD_SHAPE = {
   ],
 };
 
-// OLDER still — pre-M5, before `scout` existed at all. `armOfRun` documents
-// this exact case: null, "the artifact cannot say", which is NOT the same as
-// counting it as the control arm.
+// OLDER still — pre-M5, before `scout` existed at all. The same shape a run
+// written after the scout stage was removed has: no `scout` key.
 const OLD_SHAPE_NO_SCOUT = (() => {
   const { scout: _scout, ...rest } = OLD_SHAPE;
   return rest;
 })();
 
-// An old scout-ARM artifact whose scout failed — §3.6's exclusion case, which
-// must keep reading the same way after versioning.
+// An old scout-ARM artifact whose scout failed. The stage was removed after it
+// was written, and the artifact must keep reading.
 const OLD_SHAPE_SCOUT_FAILED = {
   ...OLD_SHAPE,
   scout: {
@@ -134,14 +132,6 @@ const NEW_SHAPE = {
   prompt_set: { name: "v3", sha256: "deadbeef" },
   generated_at: "2026-08-27T09:15:44.201Z",
   boundary_nonce: "a1b2c3d4",
-  scout: {
-    enabled: false,
-    status: "skipped",
-    leads_count: 0,
-    leads_truncated: 0,
-    why_truncated: 0,
-    duration_ms: 0,
-  },
   steps: [
     {
       name: "hunter-reliability",
@@ -234,28 +224,21 @@ describe("old-shape pipeline.json still reads through the current readers", () =
     });
   });
 
-  test("armOfRun reads the control arm off scout.enabled", () => {
-    expect(armOfRun(OLD_SHAPE)).toBe("control");
+  // The scout stage was removed; artifacts written while it existed still
+  // carry its record and its step, and the readers name keys, so they read.
+  test("an old artifact that carries a scout record is still read", () => {
+    expect("scout" in OLD_SHAPE).toBe(true);
+    expect(parsePipelineMeta(JSON.stringify(OLD_SHAPE_SCOUT_FAILED))).toEqual({
+      pr: 1539,
+      head_sha: HEAD_SHA,
+    });
   });
 
-  test("armOfRun returns null when the artifact predates the scout key", () => {
-    expect(armOfRun(OLD_SHAPE_NO_SCOUT)).toBe(null);
-  });
-
-  test("armOfRun reads the scout arm off an old scout-arm artifact", () => {
-    expect(armOfRun(OLD_SHAPE_SCOUT_FAILED)).toBe("scout");
-  });
-
-  test("scoutFailed is false for a control-arm artifact", () => {
-    expect(scoutFailed(OLD_SHAPE)).toBe(false);
-  });
-
-  test("scoutFailed is false when the artifact predates the scout key", () => {
-    expect(scoutFailed(OLD_SHAPE_NO_SCOUT)).toBe(false);
-  });
-
-  test("scoutFailed is true for an old failed scout-arm artifact", () => {
-    expect(scoutFailed(OLD_SHAPE_SCOUT_FAILED)).toBe(true);
+  test("an old artifact from before the scout existed is read the same way", () => {
+    expect(parsePipelineMeta(JSON.stringify(OLD_SHAPE_NO_SCOUT))).toEqual({
+      pr: 1539,
+      head_sha: HEAD_SHA,
+    });
   });
 });
 
@@ -275,20 +258,10 @@ describe("new-shape pipeline.json reads identically", () => {
     });
   });
 
-  test("armOfRun reads the control arm off scout.enabled", () => {
-    expect(armOfRun(NEW_SHAPE)).toBe("control");
-  });
-
-  test("scoutFailed is false for a control-arm artifact", () => {
-    expect(scoutFailed(NEW_SHAPE)).toBe(false);
-  });
-
   test("every reader gives the OLD artifact's answer for the NEW one", () => {
     expect(parsePipelineMeta(JSON.stringify(NEW_SHAPE))).toEqual(
       parsePipelineMeta(JSON.stringify(OLD_SHAPE)),
     );
-    expect(armOfRun(NEW_SHAPE)).toBe(armOfRun(OLD_SHAPE));
-    expect(scoutFailed(NEW_SHAPE)).toBe(scoutFailed(OLD_SHAPE));
   });
 });
 
@@ -306,8 +279,6 @@ describe("readers tolerate what they cannot understand", () => {
       pr: 1539,
       head_sha: HEAD_SHA,
     });
-    expect(armOfRun(future)).toBe("control");
-    expect(scoutFailed(future)).toBe(false);
   });
 
   test("a truncated artifact degrades instead of throwing", () => {
@@ -318,8 +289,6 @@ describe("readers tolerate what they cannot understand", () => {
 
   test("a non-object artifact degrades instead of throwing", () => {
     expect(parsePipelineMeta("[]")).toBe(null);
-    expect(armOfRun([])).toBe(null);
-    expect(scoutFailed(null)).toBe(false);
   });
 });
 
@@ -450,9 +419,7 @@ describe("the writer stamps the version it writes", () => {
     const raw = await Bun.file(planPath).text();
     const plan = JSON.parse(raw) as unknown;
     expect(parsePipelineMeta(raw)).toEqual({ pr: 1539, head_sha: HEAD_SHA });
-    // No scout in this run, so the writer records the `enabled: false` record
-    // M5 built for exactly this: the artifact can still name its arm.
-    expect(armOfRun(plan)).toBe("control");
-    expect(scoutFailed(plan)).toBe(false);
+    // The scout stage is gone: the writer no longer records it.
+    expect("scout" in (plan as Record<string, unknown>)).toBe(false);
   });
 });
