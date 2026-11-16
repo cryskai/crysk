@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **The scout stage** (#PR). The diff-only pre-hunter stage never earned its place and was off by default,
+- **The scout stage** (#545). The diff-only pre-hunter stage never earned its place and was off by default,
   so no review changes unless it asked for it. `--scout`, `--no-scout`, `--scout-model <model>`, the `scout`
   config key, the `models.scout` role and the action's `scout` input are still accepted and have no
   effect; each prints one warning that contains `is ignored: the scout stage was removed`.
