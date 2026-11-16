@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PipelineInput } from "#review/pipeline";
 import { AGENT_NAMES } from "#review/prompt-set";
+import type { ReviewSpec } from "#review/spec";
 
 export interface PlantedFixture {
   repoDir: string;
@@ -178,28 +179,6 @@ You are read-only: inspect, never edit. Report only defects you can point to
 in the code; an empty findings list is a valid result.
 `;
 
-// Trivial by design: the eval runs with parity un-triggered, so this body
-// exists to satisfy the prompt-set contract (AGENT_NAMES requires the file),
-// not to hunt.
-const PARITY_AGENT = `---
-name: deep-review-parity
-description: Fixture parity hunter — duplicated-implementation drift.
-model: haiku
-tools: Read, Grep, Glob
----
-
-# Fixture Parity Hunter
-
-Compare duplicated implementations touched by the diff. This fixture has
-none, so an empty findings list is the expected result.
-
-Codebase gotchas (authoritative):
-{{GOTCHAS}}
-
-Suspicion priors:
-{{PRIORS}}
-`;
-
 // The refuter body carries no {{PRIORS}}/{{GOTCHAS}} anchors — the pipeline
 // writes it as-is (see runRefuter in src/review/pipeline.ts).
 const REFUTER_AGENT = `---
@@ -222,7 +201,6 @@ JSON with exactly one verdict per submitted finding id.
 const AGENT_SOURCES: Record<(typeof AGENT_NAMES)[number], string> = {
   "deep-review-reliability": RELIABILITY_AGENT,
   "deep-review-resilience": RESILIENCE_AGENT,
-  "deep-review-parity": PARITY_AGENT,
   "review-refuter": REFUTER_AGENT,
 };
 
@@ -306,6 +284,17 @@ export async function buildPlantedFixture(): Promise<PlantedFixture> {
 
 const PROMPTS_DIR = path.join(import.meta.dir, "..", "prompts");
 
+// The two hunters and the refuter this fixture writes a prompt for. Passed
+// explicitly: without a spec the pipeline wires the lab's legacy default, which
+// names a parity hunter whose prompt this fixture no longer carries.
+const FIXTURE_SPEC: ReviewSpec = {
+  agents: [
+    { key: "reliability", file: "deep-review-reliability.md", role: "hunter" },
+    { key: "resilience", file: "deep-review-resilience.md", role: "hunter" },
+    { key: "refuter", file: "review-refuter.md", role: "refuter" },
+  ],
+};
+
 // The eval's runPipeline input. The route plan is built from this same object
 // (buildPipelineHarnessPlan), so the plan and the steps cannot disagree. The
 // fixture's agents are a lab-style set (bundledAgents unset): their own
@@ -335,7 +324,8 @@ export function fixtureEvalPipelineInput(
     hopBudget: 4,
     ...(options.model ? { model: options.model } : {}),
     summarizer: { promptPath: path.join(PROMPTS_DIR, "summarizer.md") },
-    parityTriggerPaths: [], // parity never fires — 2 hunters, cheapest run
+    spec: FIXTURE_SPEC,
+    parityTriggerPaths: [], // 2 hunters, cheapest run
     suspicionPriors: [
       {
         path: "src/volume.ts",

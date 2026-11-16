@@ -64,7 +64,6 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
     expect(routing(baseline)).toEqual({
       // Per-hunter override, then the profile's hunter role.
       "hunter-logic": ["haiku", "haiku", "max", "haiku", "max"],
-      "hunter-parity": ["opus", "opus", "medium", "opus", "medium"],
       "hunter-reliability": ["opus", "opus", "medium", "opus", "medium"],
       "hunter-resilience": ["opus", "opus", "medium", "opus", "medium"],
       "hunter-security": ["opus", "opus", "medium", "opus", "medium"],
@@ -98,7 +97,7 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
     // The model is the entry's; with no entry effort the step keeps the
     // effort its prompt seat holds, which on the bundled set is the profile's.
     expect(r["hunter-logic"]?.slice(0, 3)).toEqual(["sonnet", "haiku", "max"]);
-    expect(r["hunter-parity"]?.[0]).toBe("sonnet");
+    expect(r["hunter-security"]?.[0]).toBe("sonnet");
     expect(r["refuter-F001"]?.[0]).toBe("sonnet");
     expect(r.scout).toBeUndefined();
   });
@@ -109,7 +108,7 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
       modelProfile: FIXTURE_PROFILE,
     });
     const r = routing(baseline);
-    for (const step of ["hunter-logic", "hunter-parity", "refuter-F001"]) {
+    for (const step of ["hunter-logic", "hunter-security", "refuter-F001"]) {
       expect(r[step]?.[0]).toBe("haiku");
     }
   });
@@ -152,7 +151,7 @@ describe("a user prompt set's frontmatter outranks the profile (S3)", () => {
       modelProfile: FIXTURE_PROFILE,
     });
     const r = routing(baseline);
-    expect(r["hunter-parity"]?.slice(0, 3)).toEqual([
+    expect(r["hunter-security"]?.slice(0, 3)).toEqual([
       "sonnet",
       "sonnet",
       "xhigh",

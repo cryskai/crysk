@@ -19,6 +19,8 @@ const SUMMARY_MODEL_GONE =
 // The scout stage is gone, and so is the key's meaning: writing it would plant
 // a setting that does nothing. Removing a stale one (`config unset`) still works.
 const SCOUT_GONE = "scout was removed: the scout stage no longer exists";
+const PARITY_GONE =
+  "parity_trigger_paths was removed: the parity hunter no longer exists";
 
 export interface ConfigEntry {
   key: string;
@@ -455,31 +457,7 @@ export async function setConfigValue(input: {
       }
       currentRepo.default_base = input.value.trim();
     } else if (input.key === "parity_trigger_paths") {
-      let paths: string[];
-      if (input.value.startsWith("[")) {
-        try {
-          paths = JSON.parse(input.value);
-        } catch {
-          throw new Error(
-            "parity_trigger_paths must be an array of non-empty strings",
-          );
-        }
-      } else {
-        paths = input.value
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
-      if (
-        !Array.isArray(paths) ||
-        paths.length === 0 ||
-        paths.some((p) => typeof p !== "string" || p.trim().length === 0)
-      ) {
-        throw new Error(
-          "parity_trigger_paths must be an array of non-empty strings",
-        );
-      }
-      currentRepo.parity_trigger_paths = paths;
+      throw new CliError(PARITY_GONE);
     } else if (input.key === "agents_dir") {
       currentRepo.agents_dir = input.value.trim();
     } else if (input.key === "scout") {
@@ -548,11 +526,10 @@ export async function setConfigValue(input: {
   }
 
   if (input.layer === "person") {
-    if (
-      input.key === "default_base" ||
-      input.key === "parity_trigger_paths" ||
-      input.key === "suspicion_priors"
-    ) {
+    if (input.key === "parity_trigger_paths") {
+      throw new CliError(PARITY_GONE);
+    }
+    if (input.key === "default_base" || input.key === "suspicion_priors") {
       throw new Error(
         `${input.key} is a per-repo key; use --team to configure it.`,
       );

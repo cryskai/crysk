@@ -18,7 +18,6 @@ import { wrapBlock } from "./boundary";
 export const AGENT_NAMES = [
   "deep-review-reliability",
   "deep-review-resilience",
-  "deep-review-parity",
   "review-refuter",
 ] as const;
 

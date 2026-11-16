@@ -85,9 +85,6 @@ describe("pr-hero config names the layer behind every value", () => {
     // default — neither file named it. §5 row 12's "a key absent from both
     // files", and the whole reason §3.2 stopped the parser materialising the
     // two arrays.
-    expect(rowFor(lines, "parity_trigger_paths")).toBe(
-      "parity_trigger_paths default (unset)",
-    );
     expect(rowFor(lines, "suspicion_priors")).toBe(
       "suspicion_priors default (unset)",
     );
@@ -132,18 +129,18 @@ describe("pr-hero config names the layer behind every value", () => {
   });
 
   test("an explicitly empty list is not the same row as an unset one", () => {
-    // The distinction §3.2's parser change bought: `"parity_trigger_paths":
-    // []` is a repo deliberately disarming the parity hunter, and printing it
-    // as `(unset)` would hide a decision someone made on purpose.
+    // The distinction §3.2's parser change bought: `"suspicion_priors": []`
+    // is a repo deliberately naming no priors, and printing it as `(unset)`
+    // would hide a decision someone made on purpose.
+    const empty = render(undefined, { suspicion_priors: [] });
+    expect(rowFor(empty, "suspicion_priors")).toBe(
+      "suspicion_priors repo (empty)",
+    );
     const lines = render(undefined, {
-      parity_trigger_paths: [],
       suspicion_priors: [
         { path: "src/pipeline.ts", weight: "high", reason: "" },
       ],
     });
-    expect(rowFor(lines, "parity_trigger_paths")).toBe(
-      "parity_trigger_paths repo (empty)",
-    );
     expect(rowFor(lines, "suspicion_priors")).toBe(
       "suspicion_priors repo src/pipeline.ts (high)",
     );

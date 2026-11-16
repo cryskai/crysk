@@ -339,7 +339,7 @@ describe("the pipeline over a profile's prompt set (S4, S3)", () => {
     // Fallen back: byte-identical to the default set's.
     for (const name of [
       "hunter-logic",
-      "hunter-parity",
+      "hunter-security",
       "hunter-reliability",
       "hunter-resilience",
       "summarizer",

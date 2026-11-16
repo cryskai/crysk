@@ -23,7 +23,7 @@ import {
 } from "#config/config";
 import type { ModelsConfig } from "#model/model-name";
 import { type ModelProfile, resolveProfile } from "#model/profiles";
-import type { ResolvedRoutePlan } from "#model/routing";
+import { type ResolvedRoutePlan, removedHunterRoles } from "#model/routing";
 import type { CiMode } from "#pr/preflight";
 import {
   type FindingsDocument,
@@ -31,12 +31,7 @@ import {
   type Telemetry,
   writeFindings,
 } from "#review/findings";
-import {
-  changedPathsFromDiff,
-  type PipelineDeps,
-  type PipelineResult,
-  parityTriggered,
-} from "#review/pipeline";
+import type { PipelineDeps, PipelineResult } from "#review/pipeline";
 import {
   type AgentsDirResolution,
   agentFilePath,
@@ -46,6 +41,7 @@ import {
   gotchasUnusableReason,
   type LocalConfig,
   localReviewSpec,
+  PARITY_REMOVED,
   parseNumstatFiles,
   preflightAgentsDir,
   resolveAgentsDir,
@@ -111,6 +107,12 @@ export const CODEGRAPH_ONLY_MCP_CONFIG = {
 
 export const EMPTY_MCP_CONFIG = { mcpServers: {} };
 
+// Where a non-fatal notice goes by default, beside every other `warning:` line
+// a run prints.
+function warnOnStderr(line: string): void {
+  process.stderr.write(`warning: ${line}\n`);
+}
+
 export interface LoadedRunConfig {
   loaded: EffectiveConfig;
   config: LocalConfig;
@@ -143,9 +145,7 @@ export async function loadRunConfig(params: {
     home: params.home,
     configFlag: params.configFlag,
   });
-  const warn =
-    params.warn ??
-    ((line: string) => process.stderr.write(`warning: ${line}\n`));
+  const warn = params.warn ?? warnOnStderr;
   for (const line of loaded.warnings) warn(line);
   const config = loaded.effective;
   const summary = resolveSummary(params.options, config);
@@ -234,45 +234,14 @@ export async function validateGotchas(
   }
 }
 
-// Which hunters actually run: every unconditional hunter, plus every
-// conditional (triggered) hunter when the parity trigger fired. Refuters are
-// never included — they are a different role. Identical in both
-// orchestrators; `reviewPr()`'s own `skipDiscovery` short-circuit to `[]`
-// stays a call-site concern (a re-review with no delta to discover), not a
-// parameter here.
-export function selectActiveHunters(
-  agents: readonly AgentSpec[],
-  parityFires: boolean,
-): AgentSpec[] {
-  return agents.filter(
-    (a) => a.role === "hunter" && (a.trigger === undefined || parityFires),
-  );
-}
-
-// Whether the parity hunter fires for this diff: identical in both
-// orchestrators. `changedPathsFromDiff`'s own list is never read afterward
-// by either caller, only this boolean.
-export function resolveParityFires(
-  patch: string,
-  parityTriggerPaths: string[],
-): boolean {
-  return parityTriggered(changedPathsFromDiff(patch), parityTriggerPaths);
-}
-
-// How many hunters a full review of the whole PR runs: the unconditional ones,
-// plus the parity hunter when the full PR patch touches a trigger path. A
-// narrowed run's own count (none on a verify-only pass, no parity hunter when
-// only the delta was read) would understate a full review, which is what the
-// platform estimate's share divides by (cryskai/platform#12).
-export function fullReviewHunterCount(
-  agents: readonly AgentSpec[],
-  prPatch: string,
-  parityTriggerPaths: string[],
-): number {
-  return selectActiveHunters(
-    agents,
-    resolveParityFires(prPatch, parityTriggerPaths),
-  ).length;
+// Which hunters actually run: every unconditional hunter. A conditional
+// (triggered) hunter never does, because no product review supplies trigger
+// paths (the pipeline gets `[]`). Refuters are never included — they are a
+// different role. Identical in both orchestrators;
+// `reviewPr()`'s own `skipDiscovery` short-circuit to `[]` stays a call-site
+// concern (a re-review with no delta to discover), not a parameter here.
+export function selectActiveHunters(agents: readonly AgentSpec[]): AgentSpec[] {
+  return agents.filter((a) => a.role === "hunter" && a.trigger === undefined);
 }
 
 // The diff stat, TWICE and on purpose (moved here from review()'s own WHY
@@ -459,16 +428,25 @@ export async function resolvePromptSet(
   prompts: NonNullable<Parameters<typeof resolveAgentsDir>[3]> & {
     profile: ModelProfile;
   },
+  // Where the two notices that need the spec go. Each orchestrator resolves its
+  // prompt set once per run, so each notice prints once.
+  warn: (line: string) => void = warnOnStderr,
 ): Promise<ResolvedPromptSet> {
   const agents = resolveAgentsDir(options, loaded, undefined, prompts);
   const spec = validateReviewSpec(localReviewSpec());
   spec.agents.forEach((agent, i) => {
     assertBasenameOnly(agent.file, i);
   });
-  await preflightAgentsDir(
+  // The removed hunter's leftovers: a file in a custom directory, and a
+  // `models.hunter.parity` role. Neither is an error, neither does anything.
+  const warnings = await preflightAgentsDir(
     agents,
     spec.agents.map((a) => a.file),
   );
+  for (const role of removedHunterRoles(loaded.effective.models, spec.agents)) {
+    warnings.push(`models.${role} ${PARITY_REMOVED}`);
+  }
+  for (const line of warnings) warn(line);
   const agentFiles = new Map<string, ParsedAgent>();
   for (const agent of spec.agents) {
     // Parsing every agent file now is a preflight too: a malformed

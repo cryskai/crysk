@@ -2168,7 +2168,6 @@ describe("assembly", () => {
       effective: {
         agents_dir: "/Users/x/.prhero/sets/clean",
         default_base: "dev",
-        parity_trigger_paths: [],
         suspicion_priors: [],
         summary: { enabled: false },
         max_verification_steps: 2,
@@ -2176,7 +2175,6 @@ describe("assembly", () => {
       sources: {
         agents_dir: "global" as const,
         default_base: "repo" as const,
-        parity_trigger_paths: "default" as const,
         suspicion_priors: "default" as const,
         summary: { enabled: "capped" as const },
         models: "default" as const,

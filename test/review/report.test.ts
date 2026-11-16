@@ -449,9 +449,7 @@ describe("renderReport", () => {
       `${SUMMARY.prose}\n\n` +
       `**Confidence: ${SUMMARY.score}/5** — ${SUMMARY.score_reason}`;
     expect(markdown).toContain(block);
-    expect(markdown.indexOf("The parity hunter did not fire")).toBeLessThan(
-      markdown.indexOf(block),
-    );
+    expect(markdown.indexOf("Agents: ")).toBeLessThan(markdown.indexOf(block));
     expect(markdown.indexOf(block)).toBeLessThan(
       markdown.indexOf("## Blocking"),
     );
@@ -463,7 +461,6 @@ describe("renderReport", () => {
       "# Review — musive main..feature\n\n" +
         "3 files, +120 −45 · run complete · $12.90 · 12m 34s\n\n" +
         "Agents: reliability ran · lifecycle ran\n\n" +
-        "The parity hunter did not fire: no changed path matched its trigger.\n\n" +
         "## Blocking (0 findings, 0 root causes)\n\n" +
         "_Nothing blocking._\n\n" +
         "## Advisory (0 findings, 0 root causes)\n\n" +

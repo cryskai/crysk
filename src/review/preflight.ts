@@ -95,9 +95,9 @@ export interface CliOptions {
   out?: string;
   // Gotchas describe the REPO, not the commit under review, so they must be
   // supplyable from outside the reviewed tree — see the note in cli.ts. The
-  // same is true of the config: parity triggers and priors are properties of
-  // the project, and requiring them in-tree silently disables the conditional
-  // parity hunter on any tree you cannot add a file to.
+  // same is true of the config: the suspicion priors are a property of the
+  // project, and requiring them in-tree silently drops them on any tree you
+  // cannot add a file to.
   gotchas?: string;
   config?: string;
   model?: string;
@@ -518,8 +518,8 @@ Options:
                       gotchas.md, else none); supply it from outside to review
                       a tree you cannot dirty
   --config <file>     Local config (default: <repo>/.crysk/config.json) with
-                      agents_dir, default_base, parity_trigger_paths and
-                      suspicion_priors, optional summary settings, and
+                      agents_dir, default_base and suspicion_priors,
+                      optional summary settings, and
                       optional max_verification_steps (re-review verify cap;
                       default 8; 0 pauses verification), and optional
                       max_concurrent_steps (cap on steps in flight at once;
@@ -618,6 +618,11 @@ Exit codes of a review (findings never change them):
 // keep being accepted so no existing command line, config file or stored
 // profile starts failing; each does nothing and says so, once (S2).
 const SCOUT_REMOVED = "is ignored: the scout stage was removed";
+
+// The parity hunter was removed from the product the same way: the config key,
+// the `models.hunter.parity` role and a leftover `deep-review-parity.md` in a
+// custom prompt directory are still accepted, do nothing, and say so once.
+export const PARITY_REMOVED = "is ignored: the parity hunter was removed";
 
 // What the shell prints, as `warning: <line>`, for every flag of the removed
 // stage a command line carried. Pure: the shells decide where it goes.
@@ -2034,6 +2039,25 @@ const ADDED_AGENT_HINTS: Record<string, string> = {
     "this directory",
 };
 
+// Prompt files of a removed hunter that a custom set copied from an older
+// default may still carry. Not a problem and never used: the directory check
+// lets them pass and says so once instead (ignoredAgentFileWarnings).
+const IGNORED_AGENT_FILES: ReadonlySet<string> = new Set([
+  "deep-review-parity.md",
+]);
+
+// One warning per ignored file that is present and that no agent of the spec
+// names, in the order of the set above. A spec that names the file uses it and
+// has nothing to say.
+function ignoredAgentFileWarnings(
+  specFiles: readonly string[],
+  presentFiles: readonly string[],
+): string[] {
+  return [...IGNORED_AGENT_FILES]
+    .filter((file) => presentFiles.includes(file) && !specFiles.includes(file))
+    .map((file) => `${file} ${PARITY_REMOVED}`);
+}
+
 export function agentsDirProblems(
   specFiles: string[],
   presentFiles: string[],
@@ -2050,7 +2074,7 @@ export function agentsDirProblems(
     }
   }
   for (const file of presentFiles) {
-    if (!named.has(file)) {
+    if (!named.has(file) && !IGNORED_AGENT_FILES.has(file)) {
       problems.push(
         `the dir has "${file}" but no agent in the spec references it ` +
           `(it would never run)${RETIRED_AGENT_HINTS[file] ?? ""}`,
@@ -2107,10 +2131,12 @@ export function resolveAgentsDir(
   return resolution;
 }
 
+// Returns the warnings of the check that passed (ignoredAgentFileWarnings), for
+// the caller to print: this function is pure of any output channel.
 export async function preflightAgentsDir(
   agents: Pick<AgentsDirResolution, "kind" | "dir" | "files">,
   specFiles: string[],
-): Promise<void> {
+): Promise<string[]> {
   const present = new Set<string>();
   if (agents.kind === "bundled") {
     // The manifest's keys ARE the present set, and there is nothing to scan:
@@ -2136,6 +2162,7 @@ export async function preflightAgentsDir(
       { cls: { kind: "prompt-set" } },
     );
   }
+  return ignoredAgentFileWarnings(specFiles, [...present]);
 }
 
 // EXPERIMENT (odd/tasks/logic-hunter.md T3): benchmark-only hunter fan-out,
@@ -2177,10 +2204,10 @@ function parseExtraHunters(read: BrandEnvValue | undefined): AgentSpec[] {
   });
 }
 
-// Local mode's wiring: the four unconditional hunters, the conditional
-// parity hunter, and the refuter. Deliberately NOT defaultReviewSpec() — that
-// one omits the logic and security hunters, and local mode targets the 6-file
-// clean set. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
+// Local mode's wiring: the four unconditional hunters and the refuter.
+// Deliberately NOT defaultReviewSpec() — that one omits the logic and security
+// hunters and keeps the conditional parity hunter, which is the lab's legacy
+// wiring and no longer part of the product. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
 // set, which validateReviewSpec enforces.
 //
 // `env` is injectable (defaults to `process.env`) so PRHERO_EXTRA_HUNTERS can
@@ -2200,12 +2227,6 @@ export function localReviewSpec(
       { key: "resilience", file: "deep-review-resilience.md", role: "hunter" },
       { key: "logic", file: "deep-review-logic.md", role: "hunter" },
       { key: "security", file: "deep-review-security.md", role: "hunter" },
-      {
-        key: "parity",
-        file: "deep-review-parity.md",
-        role: "hunter",
-        trigger: "input",
-      },
       // The boundary, not the three throws: assertBasenameOnly inside
       // parseExtraHunters is a fourth usage throw of the same parse (T2d-1).
       ...withUsageClass({ kind: "config-parse", source: "extra-hunters" }, () =>
@@ -2239,10 +2260,6 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   // plan card — verbatim the "wrong answer with a plausible face" failure the
   // comment at the top of this file names.
   default_base: "repo",
-  // The values are paths INSIDE one repository. A global answer is meaningless
-  // everywhere else and would silently arm or disarm the parity hunter across
-  // every repo on the machine.
-  parity_trigger_paths: "repo",
   suspicion_priors: "repo",
   // Per-field below — the two fields disagree, which is why SUMMARY_DIRECTION
   // exists. This row declares the key for the known-key set; the merge
@@ -2287,7 +2304,6 @@ export const SUMMARY_DIRECTION: Record<keyof SummaryConfig, ConfigDirection> = {
 };
 
 export interface LocalConfig {
-  parity_trigger_paths: string[];
   suspicion_priors: SuspicionPrior[];
   // Both optional, and both exist to make `pr-hero review` a zero-flag
   // command: the prompt set lives in a sibling repo, and the default branch is
@@ -2352,16 +2368,15 @@ export interface SummarySettings {
 }
 
 export const EMPTY_LOCAL_CONFIG: LocalConfig = {
-  parity_trigger_paths: [],
   suspicion_priors: [],
 };
 
 // What a layer SAID, not what the engine will use — every key optional,
-// including the two arrays LocalConfig declares required.
+// including the array LocalConfig declares required.
 //
 // WHY the distinction is load-bearing rather than cosmetic: a merge whose
 // input cannot represent absence has already destroyed the fact it needs to
-// fold on. Under LocalConfig a repo file that omits `parity_trigger_paths`
+// fold on. Under LocalConfig a repo file that omits `suspicion_priors`
 // hands the merge a materialised `[]`, the fold sees the repo layer speak,
 // and provenance reports `repo` for a value that file never named. That is a
 // lie in pipeline.json and in `pr-hero config`, and no amount of care in the
@@ -2399,19 +2414,18 @@ const REPO_CONFIG_LABEL = ".crysk/config.json";
 const GLOBAL_CONFIG_LABEL = "~/.crysk/config.json";
 
 // `.crysk/config.json` is optional and every setting inside it is optional —
-// an absent config is a legal, complete configuration (parity simply never
-// fires, while summary activation is resolved by resolveSummary). What is NOT
-// tolerated is a malformed one: a typo'd key silently
-// read as "no triggers" is exactly how the parity hunter stops firing without
-// anyone noticing, so shape violations throw.
+// an absent config is a legal, complete configuration (summary activation is
+// resolved by resolveSummary). What is NOT tolerated is a malformed one: a
+// typo'd key silently read as "no priors" is exactly how a setting stops
+// applying without anyone noticing, so shape violations throw.
 // WHY summary defaults on: it is the first defaulted setting that spends
 // money, and a silent opt-out would make a normal review's bill differ from
 // the plan. `--no-summary` and `summary.enabled: false` are the explicit exits.
 //
-// WHY it returns a ConfigLayer and no longer materialises the two arrays: the
-// return object used to write `parity_trigger_paths` and `suspicion_priors`
-// unconditionally, because LocalConfig required them. That destroyed the
-// difference between "the file said []" and "the file never mentioned it" —
+// WHY it returns a ConfigLayer and no longer materialises the array: the
+// return object used to write `suspicion_priors` (and the removed
+// `parity_trigger_paths`) unconditionally, because LocalConfig required them.
+// That destroyed the difference between "the file said []" and "the file never mentioned it" —
 // and the merge downstream can only report truthful provenance for a key it
 // can still see was absent. The `?? []` locals below stay exactly as they
 // are: they feed the validators, and validating an absent key against the
@@ -2510,6 +2524,13 @@ function parseConfigLayer(
       warnings?.push(`${file}: scout ${SCOUT_REMOVED}`);
       continue;
     }
+    // The removed hunter's key, in either layer: it used to be refused in a
+    // person file as a per-repo key, and telling someone to move a dead key to
+    // another file would be wrong. Whatever the value, it is never read.
+    if (key === "parity_trigger_paths") {
+      warnings?.push(`${file}: parity_trigger_paths ${PARITY_REMOVED}`);
+      continue;
+    }
     if (!KNOWN_CONFIG_KEYS.has(key)) {
       throw new CliUsageError(`${file} unknown key: ${redactConfigValue(key)}`);
     }
@@ -2532,15 +2553,6 @@ function parseConfigLayer(
           "up before the rename)",
       );
     }
-  }
-  const triggers = config.parity_trigger_paths ?? [];
-  if (
-    !Array.isArray(triggers) ||
-    !triggers.every((p) => typeof p === "string" && p.length > 0)
-  ) {
-    throw new CliUsageError(
-      `${file} parity_trigger_paths must be an array of non-empty strings`,
-    );
   }
   const priors = config.suspicion_priors ?? [];
   if (!Array.isArray(priors)) {
@@ -2673,9 +2685,6 @@ function parseConfigLayer(
     file,
   );
   return {
-    ...(given(config.parity_trigger_paths)
-      ? { parity_trigger_paths: triggers as string[] }
-      : {}),
     ...(given(config.suspicion_priors)
       ? { suspicion_priors: priors as SuspicionPrior[] }
       : {}),
@@ -3078,11 +3087,6 @@ export function mergeConfig(
     CONFIG_DIRECTION.default_base,
     (layer) => layer.default_base,
   );
-  const triggers = foldKey(
-    layers,
-    CONFIG_DIRECTION.parity_trigger_paths,
-    (layer) => layer.parity_trigger_paths,
-  );
   const priors = foldKey(
     layers,
     CONFIG_DIRECTION.suspicion_priors,
@@ -3214,7 +3218,6 @@ export function mergeConfig(
     // key nobody named, so the array can be handed to the resolvers without
     // that fact being lost. Materialising it any earlier is what made
     // provenance a lie.
-    parity_trigger_paths: triggers.value ?? [],
     suspicion_priors: priors.value ?? [],
     ...(agentsDir.value === undefined ? {} : { agents_dir: agentsDir.value }),
     ...(defaultBase.value === undefined
@@ -3275,7 +3278,6 @@ export function mergeConfig(
   const sources: ConfigSources = {
     agents_dir: agentsDir.source,
     default_base: defaultBase.source,
-    parity_trigger_paths: triggers.source,
     suspicion_priors: priors.source,
     summary: { enabled: summaryEnabled.source },
     models: models.source,
@@ -3353,8 +3355,8 @@ export interface InitTemplateOmissions {
 //
 // `default_base` is NOT here and must never be: it is a `repo` key (D4),
 // `parseGlobalConfig` rejects it by name, so no global file can supply it and
-// omitting it would scaffold a repo with no base ref at all. The two array
-// keys are `repo` for the same reason. `summary.enabled` IS here even though
+// omitting it would scaffold a repo with no base ref at all. The array key
+// (`suspicion_priors`) is `repo` for the same reason. `summary.enabled` IS here even though
 // O-9's wording names only the person keys — the template hardcodes `true`,
 // which is exactly the value `capped` forbids the team file from raising over
 // a global `false` (judgment ledger JD-17), so seeding it against a global
@@ -3402,7 +3404,6 @@ export function initConfigTemplate(input: InitTemplateInput): string {
       // and configures nothing, which is a line whose only effect is to make
       // the next reader wonder what it does.
       ...(Object.keys(summary).length === 0 ? {} : { summary }),
-      parity_trigger_paths: [],
       suspicion_priors: [],
     },
     null,

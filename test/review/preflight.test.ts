@@ -154,8 +154,8 @@ describe("parseArgs", () => {
 
   // Both exist so a tree you cannot add a file to is still reviewable: an
   // in-tree-only gotchas file dirties the checkout (which the clean-tree gate
-  // then rightly refuses), and an in-tree-only config silently disables the
-  // conditional parity hunter, which looks exactly like parity finding nothing.
+  // then rightly refuses), and an in-tree-only config silently drops the
+  // repo's settings, which looks exactly like a repo with none.
   test("gotchas and config can be supplied from outside the repo", () => {
     const { options } = parseArgs([
       "review",
@@ -948,7 +948,6 @@ describe("assertBasenameOnly", () => {
 describe("agentsDirProblems", () => {
   const CLEAN_SET = [
     "deep-review-logic.md",
-    "deep-review-parity.md",
     "deep-review-reliability.md",
     "deep-review-resilience.md",
     "deep-review-security.md",
@@ -962,21 +961,21 @@ describe("agentsDirProblems", () => {
   test("a file the spec names but the dir lacks is reported", () => {
     const problems = agentsDirProblems(
       CLEAN_SET,
-      CLEAN_SET.filter((f) => f !== "deep-review-parity.md"),
+      CLEAN_SET.filter((f) => f !== "deep-review-logic.md"),
     );
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("deep-review-parity.md");
+    expect(problems[0]).toContain("deep-review-logic.md");
   });
 
   // THE check: a spec that omits a file the dir carries silently drops that
   // hunter, and nothing downstream notices.
   test("an unreferenced agent file in the dir is reported", () => {
-    const specWithoutParity = CLEAN_SET.filter(
-      (f) => f !== "deep-review-parity.md",
+    const specWithoutLogic = CLEAN_SET.filter(
+      (f) => f !== "deep-review-logic.md",
     );
-    const problems = agentsDirProblems(specWithoutParity, CLEAN_SET);
+    const problems = agentsDirProblems(specWithoutLogic, CLEAN_SET);
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("deep-review-parity.md");
+    expect(problems[0]).toContain("deep-review-logic.md");
     expect(problems[0]).toContain("would never run");
   });
 
@@ -1015,10 +1014,10 @@ describe("agentsDirProblems", () => {
   test("a missing file with no history keeps the plain message", () => {
     const problems = agentsDirProblems(
       CLEAN_SET,
-      CLEAN_SET.filter((f) => f !== "deep-review-parity.md"),
+      CLEAN_SET.filter((f) => f !== "deep-review-logic.md"),
     );
     expect(problems).toEqual([
-      'the spec references "deep-review-parity.md" but the dir does not have it',
+      'the spec references "deep-review-logic.md" but the dir does not have it',
     ]);
   });
 
@@ -1052,10 +1051,11 @@ describe("localReviewSpec", () => {
       "resilience",
       "logic",
       "security",
-      "parity",
       "refuter",
     ]);
-    expect(spec.agents.find((a) => a.key === "parity")?.trigger).toBe("input");
+    // No conditional hunter: the parity hunter left the product (the lab's
+    // defaultReviewSpec keeps it).
+    expect(spec.agents.some((a) => a.trigger !== undefined)).toBe(false);
     expect(spec.agents.filter((a) => a.role === "refuter")).toHaveLength(1);
   });
 
@@ -1088,12 +1088,6 @@ describe("localReviewSpec", () => {
           file: "deep-review-security.md",
           role: "hunter",
         },
-        {
-          key: "parity",
-          file: "deep-review-parity.md",
-          role: "hunter",
-          trigger: "input",
-        },
         { key: "refuter", file: "review-refuter.md", role: "refuter" },
       ],
     });
@@ -1115,7 +1109,6 @@ describe("localReviewSpec", () => {
       "resilience",
       "logic",
       "security",
-      "parity",
       "reliability-b",
       "refuter",
     ]);
@@ -1138,7 +1131,6 @@ describe("localReviewSpec", () => {
       "resilience",
       "logic",
       "security",
-      "parity",
       "reliability-b",
       "resilience-b",
       "refuter",
@@ -1233,22 +1225,20 @@ describe("parseLocalConfig", () => {
     expect(parseLocalConfig('{"default_base":"dev"}')).toEqual({
       default_base: "dev",
     });
-    expect(parseLocalConfig('{"parity_trigger_paths":[]}')).toEqual({
-      parity_trigger_paths: [],
+    expect(parseLocalConfig('{"suspicion_priors":[]}')).toEqual({
+      suspicion_priors: [],
     });
   });
 
   test("reads a full config", () => {
     const config = parseLocalConfig(
       JSON.stringify({
-        parity_trigger_paths: ["**/Auth*"],
         suspicion_priors: [
           { path: "src/a.ts", weight: "high", reason: "touched" },
           { path: "src/b.ts", weight: 3, reason: "hot" },
         ],
       }),
     );
-    expect(config.parity_trigger_paths).toEqual(["**/Auth*"]);
     expect(config.suspicion_priors).toHaveLength(2);
   });
 
@@ -1281,15 +1271,12 @@ describe("parseLocalConfig", () => {
     );
   });
 
-  // A typo'd key read as "no triggers" is exactly how the parity hunter stops
-  // firing without anyone noticing.
+  // A typo'd key read as "no priors" is exactly how a setting stops applying
+  // without anyone noticing.
   test("malformed shapes throw instead of degrading silently", () => {
     expect(() => parseLocalConfig("not json")).toThrow(CliUsageError);
     expect(() => parseLocalConfig("[]")).toThrow(CliUsageError);
-    expect(() =>
-      parseLocalConfig('{"parity_trigger_paths": "**/Auth*"}'),
-    ).toThrow(CliUsageError);
-    expect(() => parseLocalConfig('{"parity_trigger_paths": [""]}')).toThrow(
+    expect(() => parseLocalConfig('{"suspicion_priors": "**/Auth*"}')).toThrow(
       CliUsageError,
     );
     expect(() => parseLocalConfig('{"suspicion_priors": [{}]}')).toThrow(
@@ -1454,7 +1441,6 @@ const PRE_C5_LOCAL_KEYS = [
   "max_changed_lines",
   "max_concurrent_steps",
   "max_verification_steps",
-  "parity_trigger_paths",
   "post",
   "post_min_severity",
   "summary",
@@ -1470,7 +1456,6 @@ describe("CONFIG_DIRECTION", () => {
     const populated: Required<LocalConfig> = {
       agents_dir: "/tmp/agents",
       default_base: "dev",
-      parity_trigger_paths: ["**/Auth*"],
       suspicion_priors: [{ path: "a.ts", weight: "high", reason: "hot" }],
       summary: { enabled: false },
       models: { default: ["claude:sonnet-latest"] },
@@ -1512,7 +1497,6 @@ describe("CONFIG_DIRECTION", () => {
     expect(CONFIG_DIRECTION).toEqual({
       agents_dir: "person",
       default_base: "repo",
-      parity_trigger_paths: "repo",
       suspicion_priors: "repo",
       summary: "capped",
       models: "person",
@@ -1539,13 +1523,12 @@ describe("CONFIG_DIRECTION", () => {
 });
 
 describe("parseGlobalConfig", () => {
-  // One case per `repo` key, so the table covers all three. The message is
+  // One case per `repo` key, so the table covers both. The message is
   // templated over the OFFENDING key: a fixed example would send two operators
   // out of three looking for the wrong line.
   test("rejects a repo key and names the repo file", () => {
     const cases: [string, unknown][] = [
       ["default_base", "dev"],
-      ["parity_trigger_paths", ["**/Auth*"]],
       ["suspicion_priors", []],
     ];
     for (const [key, value] of cases) {
@@ -1633,7 +1616,6 @@ describe("parseLocalConfig admits the same keys it does today", () => {
     const full = {
       agents_dir: "/tmp/agents",
       default_base: "dev",
-      parity_trigger_paths: ["**/Auth*"],
       suspicion_priors: [{ path: "a.ts", weight: 3, reason: "hot" }],
       summary: { enabled: false },
       max_verification_steps: 3,
@@ -1882,27 +1864,28 @@ describe("mergeConfig", () => {
   // value that could never apply anywhere else.
   test("a repo key is never taken from a global layer", () => {
     const merged = mergeConfig(
-      { default_base: "main", parity_trigger_paths: ["**/Global*"] },
+      {
+        default_base: "main",
+        suspicion_priors: [{ path: "g.ts", weight: "high", reason: "global" }],
+      },
       { default_base: "dev" },
     );
     expect(merged.effective.default_base).toBe("dev");
     expect(merged.sources.default_base).toBe("repo");
-    expect(merged.effective.parity_trigger_paths).toEqual([]);
-    expect(merged.sources.parity_trigger_paths).toBe("default");
+    expect(merged.effective.suspicion_priors).toEqual([]);
+    expect(merged.sources.suspicion_priors).toBe("default");
   });
 
   test("arrays and the summary block are replaced, never deep-merged", () => {
     const merged = mergeConfig(
       { summary: { enabled: true } },
       {
-        parity_trigger_paths: ["**/Auth*"],
         suspicion_priors: [{ path: "a.ts", weight: "high", reason: "hot" }],
         summary: {},
       },
     );
-    expect(merged.effective.parity_trigger_paths).toEqual(["**/Auth*"]);
-    expect(merged.sources.parity_trigger_paths).toBe("repo");
     expect(merged.effective.suspicion_priors).toHaveLength(1);
+    expect(merged.sources.suspicion_priors).toBe("repo");
     // The block is descended into per field, so the global's `enabled`
     // survives a repo block that names nothing.
     expect(merged.effective.summary).toEqual({ enabled: true });
@@ -1918,7 +1901,6 @@ describe("mergeConfig", () => {
     expect(nothing.sources).toEqual({
       agents_dir: "default",
       default_base: "default",
-      parity_trigger_paths: "default",
       suspicion_priors: "default",
       summary: { enabled: "default" },
       models: "default",
@@ -1952,10 +1934,10 @@ describe("mergeConfig", () => {
         JSON.stringify({ default_base: "dev", suspicion_priors: [] }),
       ),
     );
-    expect(present.sources.parity_trigger_paths).toBe("default");
+    expect(present.sources.agents_dir).toBe("default");
     expect(present.sources.suspicion_priors).toBe("repo");
     expect(present.sources.default_base).toBe("repo");
-    expect(present.effective.parity_trigger_paths).toEqual([]);
+    expect(present.effective.agents_dir).toBeUndefined();
   });
 
   // O-5's pure half: with no global layer the effective config is exactly what
@@ -1964,7 +1946,6 @@ describe("mergeConfig", () => {
     const raw = JSON.stringify({
       agents_dir: "/Users/juanma/Desktop/deep-review/agents/clean",
       default_base: "dev",
-      parity_trigger_paths: [],
       suspicion_priors: [],
       summary: { enabled: false },
     });
@@ -1975,7 +1956,6 @@ describe("mergeConfig", () => {
     expect(effective).toEqual({
       agents_dir: "/Users/juanma/Desktop/deep-review/agents/clean",
       default_base: "dev",
-      parity_trigger_paths: [],
       suspicion_priors: [],
       summary: { enabled: false },
     });
@@ -2000,7 +1980,6 @@ describe("initConfigTemplate", () => {
       agents_dir: "/Users/x/Desktop/deep-review/agents/clean",
       default_base: "dev",
       summary: { enabled: true },
-      parity_trigger_paths: [],
       suspicion_priors: [],
     });
     expect(raw.endsWith("\n")).toBe(true);
@@ -2043,10 +2022,9 @@ describe("initConfigTemplate", () => {
     expect(parseLocalConfig(raw)).toEqual({
       // `default_base` SURVIVES: it is a `repo` key (D4), parseGlobalConfig
       // rejects it by name, and a scaffold without it would leave the repo
-      // with no base ref at all. The two array keys are `repo` for the same
+      // with no base ref at all. The array key is `repo` for the same
       // reason.
       default_base: "dev",
-      parity_trigger_paths: [],
       suspicion_priors: [],
     });
     // Not `"summary": {}` — an empty block parses fine and configures
@@ -2079,7 +2057,6 @@ describe("initConfigTemplate", () => {
           agents_dir: "/seed/agents",
           default_base: "dev",
           summary: { enabled: true },
-          parity_trigger_paths: [],
           suspicion_priors: [],
         },
         null,

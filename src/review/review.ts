@@ -53,7 +53,6 @@ import {
   loadRunConfig,
   NO_INSTRUCTIONS_NOTICE,
   prepareRunnerForRoute,
-  resolveParityFires,
   resolvePipelineRoute,
   resolvePromptSet,
   resolveReviewInstructions,
@@ -235,14 +234,8 @@ export async function review(options: CliOptions): Promise<number> {
   const codegraphAvailable = existsSync(path.join(repoRoot, ".codegraph"));
   await writeMcpConfig(mcpConfigPath, codegraphAvailable);
 
-  // 11 — the plan. Triggers read the EFFECTIVE diff, the same bytes the
-  // pipeline will read back from diff.patch: a conditional hunter must never
-  // fire on a path no hunter was given.
-  const parityFires = resolveParityFires(
-    effectiveDiff.patch,
-    config.parity_trigger_paths,
-  );
-  const activeHunters = selectActiveHunters(spec.agents, parityFires);
+  // 11 — the plan.
+  const activeHunters = selectActiveHunters(spec.agents);
   const hunterCount = activeHunters.length;
   const estimate = estimateCost(
     diffStat,
@@ -297,7 +290,6 @@ export async function review(options: CliOptions): Promise<number> {
     runDir,
     config,
     summary,
-    parityFires,
     codegraphAvailable,
     estimate,
     hunterCount,
@@ -436,7 +428,7 @@ export async function review(options: CliOptions): Promise<number> {
         mcpConfigPath,
         hopBudget: options.hopBudget,
         ...(options.model ? { model: options.model } : {}),
-        parityTriggerPaths: config.parity_trigger_paths,
+        parityTriggerPaths: [],
         suspicionPriors: config.suspicion_priors,
         modelProfile: profile,
         ...pipelineSummarizerInput(summary, { profile }),

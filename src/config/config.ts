@@ -176,8 +176,7 @@ export interface EffectiveConfig {
 // that boundary; it only adds a source the author has strictly less access to.
 //
 // WHY a missing file yields an ABSENT layer instead of EMPTY_LOCAL_CONFIG:
-// the constant materialises `parity_trigger_paths: []` and
-// `suspicion_priors: []`, so handing it to the merge would make "no file at
+// the constant materialises `suspicion_priors: []`, so handing it to the merge would make "no file at
 // all" indistinguishable from "a file that said []", and provenance would
 // report `repo` for a layer that does not exist. mergeConfig decides what an
 // all-silent run resolves to; EMPTY_LOCAL_CONFIG is now the shape that comes
@@ -186,9 +185,9 @@ export interface EffectiveConfig {
 // `--config` overrides the repo path only. A flag that repointed the global
 // layer is a footgun with no use case. Its missing-file CliError is
 // unchanged: an explicitly named file that is not there stays an error,
-// because silently falling back to "no parity triggers" would disable a
-// hunter the caller just asked for, and a hunter that never fires looks
-// exactly like a hunter that found nothing.
+// because silently falling back to "no config" would drop settings the caller
+// just asked for, and a review that ignores them looks exactly like one that
+// had nothing to apply.
 // The global layer on its own, and the ONE place `~/.prhero/config.json` is
 // opened. Two callers need it for different reasons and must not read it two
 // ways: loadEffectiveConfig folds it under the repo file, while `pr-hero init`

@@ -387,15 +387,16 @@ export function agentModelRole(agent: {
   return undefined;
 }
 
-// `hunter.<key>` is open at parse time (the spec is not loaded yet), so it is
-// checked here, against EVERY hunter the spec declares, not only the ones that
-// fire: parity is conditional, and its role must not read as a typo on the
-// runs where it stays quiet.
-function assertHunterRolesExist(
+// The hunter roles of `models` that this review's hunters cannot take. A role
+// of a hunter the product removed (`hunter.parity`) is ignored, not an error:
+// the same file kept working before the removal, so it keeps working. Every
+// other `hunter.<key>` that names no hunter of the spec is a typo.
+const REMOVED_HUNTER_ROLES: readonly string[] = ["hunter.parity"];
+
+function unknownHunterRoles(
   models: ModelsConfig | undefined,
   agents: readonly RouteAgent[],
-): void {
-  if (models === undefined) return;
+): { hunters: string[]; unknown: string[] } {
   const hunters = [
     ...new Set(
       agents
@@ -403,9 +404,36 @@ function assertHunterRolesExist(
         .map((agent) => agent.specialty ?? agent.key),
     ),
   ];
-  for (const role of Object.keys(models)) {
-    if (!role.startsWith("hunter.") || !isModelRole(role)) continue;
-    if (hunters.includes(role.slice("hunter.".length))) continue;
+  const unknown = Object.keys(models ?? {}).filter(
+    (role) =>
+      role.startsWith("hunter.") &&
+      isModelRole(role) &&
+      !hunters.includes(role.slice("hunter.".length)),
+  );
+  return { hunters, unknown };
+}
+
+// The roles of removed hunters the spec does not carry, for the caller to warn
+// about once per run (the config parser cannot: it does not know the spec).
+export function removedHunterRoles(
+  models: ModelsConfig | undefined,
+  agents: readonly RouteAgent[],
+): string[] {
+  return unknownHunterRoles(models, agents).unknown.filter((role) =>
+    REMOVED_HUNTER_ROLES.includes(role),
+  );
+}
+
+// `hunter.<key>` is open at parse time (the spec is not loaded yet), so it is
+// checked here, against EVERY hunter the spec declares, not only the ones that
+// fire.
+function assertHunterRolesExist(
+  models: ModelsConfig | undefined,
+  agents: readonly RouteAgent[],
+): void {
+  const { hunters, unknown } = unknownHunterRoles(models, agents);
+  for (const role of unknown) {
+    if (REMOVED_HUNTER_ROLES.includes(role)) continue;
     throw new InvalidModelError(
       `models.${role} names no hunter in this review: its hunters are ${hunters.join(", ")}`,
     );

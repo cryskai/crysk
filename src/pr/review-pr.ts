@@ -103,9 +103,8 @@ import {
   pipelineVerifierInput,
 } from "#review/route-preflight";
 import {
-  fullReviewHunterCount,
   prepareRunnerForRoute,
-  resolveParityFires,
+  selectActiveHunters,
   validateGotchas,
 } from "#review/run";
 import { sizeGateConfigFor, sizeGateLine } from "#review/size-gate";
@@ -428,7 +427,7 @@ export async function reviewPr(
   // dry run that says SKIP for a PR the real per-file run happily accepts
   // reads as a broken tool, not a conservative estimate.
   if (options.dryRun) {
-    const hunterCount = dryRunHunterCount(spec, config);
+    const hunterCount = dryRunHunterCount(spec);
     const estimate = estimateCost(
       target.ghDiffStat,
       hunterCount,
@@ -702,21 +701,12 @@ export async function reviewPr(
 
     // 7 — the plan and the paid gate, exactly like local mode but with the
     // real numstat replacing GitHub's counters.
-    const parityFires = resolveParityFires(
-      effectiveDiff.patch,
-      config.parity_trigger_paths,
-    );
     const activeHunters = discoveryHunters({
       skipDiscovery,
       agents: spec.agents,
-      parityFires,
     });
     const hunterCount = activeHunters.length;
-    const fullHunterCount = fullReviewHunterCount(
-      spec.agents,
-      anchorPatch,
-      config.parity_trigger_paths,
-    );
+    const fullHunterCount = selectActiveHunters(spec.agents).length;
     // See resolvePrPlanAndConfirm (src/pr/plan.ts) for the full rationale —
     // the CI budget gate, route/capability resolution, the plan card, the
     // interactive confirm, and the "committed to spending" commit-status
@@ -754,7 +744,6 @@ export async function reviewPr(
       skipDiscovery,
       hunterCount,
       fullHunterCount,
-      parityFires,
       verifyQueue,
       prepared,
     });
@@ -885,7 +874,7 @@ export async function reviewPr(
               mcpConfigPath,
               hopBudget: options.hopBudget,
               ...(options.model ? { model: options.model } : {}),
-              parityTriggerPaths: config.parity_trigger_paths,
+              parityTriggerPaths: [],
               suspicionPriors: config.suspicion_priors,
               modelProfile: profile,
               ...(skipDiscovery

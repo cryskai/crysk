@@ -210,10 +210,12 @@ export function validateReviewSpec(candidate: unknown): ReviewSpec {
   return spec as unknown as ReviewSpec;
 }
 
-// EXACTLY today's hard-coded wiring (prose Step 4): reliability + resilience
-// unconditional, parity conditional on the lab's parityTriggerPaths (the
-// "input" sentinel), one refuter. runPipeline without an explicit spec uses
-// this, which is what keeps the default engine behavior byte-stable.
+// The lab's legacy wiring, NOT the product's (localReviewSpec in
+// src/review/preflight.ts is, and it has no parity hunter since the hunter left
+// the product): reliability + resilience unconditional, parity conditional on
+// the lab's parityTriggerPaths (the "input" sentinel), one refuter.
+// runPipeline without an explicit spec uses this, which is what keeps the lab's
+// engine behavior byte-stable.
 export function defaultReviewSpec(): ReviewSpec {
   return {
     agents: [

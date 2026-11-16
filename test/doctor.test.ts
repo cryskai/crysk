@@ -1096,7 +1096,6 @@ describe("doctor tri-state evaluation", () => {
       "deep-review-resilience.md": "/embedded/resilience-bbbb.md",
       "deep-review-logic.md": "/embedded/logic-ffff.md",
       "deep-review-security.md": "/embedded/security-gggg.md",
-      "deep-review-parity.md": "/embedded/parity-dddd.md",
       "review-refuter.md": "/embedded/refuter-eeee.md",
     };
     const compiledAssets = (files: Record<string, string>): EngineAssets => ({
@@ -1129,7 +1128,7 @@ describe("doctor tri-state evaluation", () => {
 
       const check = report.checks.find((c) => c.name === "agents_dir");
       expect(check?.severity).toBe("healthy");
-      expect(check?.message).toContain("6 prompts read");
+      expect(check?.message).toContain("5 prompts read");
     });
 
     test("a prompt that cannot be read is blocking, named by its logical file", async () => {
@@ -1158,14 +1157,14 @@ describe("doctor tri-state evaluation", () => {
         assets: compiledAssets(embedded),
         readFile: (p) => {
           if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
-          if (p === "/embedded/parity-dddd.md") return "   \n";
+          if (p === "/embedded/security-gggg.md") return "   \n";
           return "# a prompt body\n";
         },
       });
 
       const check = report.checks.find((c) => c.name === "agents_dir");
       expect(check?.severity).toBe("blocking");
-      expect(check?.message).toContain("deep-review-parity.md");
+      expect(check?.message).toContain("deep-review-security.md");
     });
 
     test("a manifest the build never embedded is blocking, not a crash", async () => {

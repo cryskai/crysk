@@ -14,7 +14,7 @@
 // passes GitHub comments to hunters.
 //
 // Default is the 3-PR pilot (14943, 8330, 8087). `--all` is the ten.
-// One pipeline: hunters, summarizer off, parity never fires.
+// One pipeline: hunters, summarizer off.
 
 import { existsSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
@@ -56,9 +56,9 @@ const ROOT = path.join(import.meta.dir, "..", "..");
 // below). Derived rather than a hand-maintained literal so an unconditional
 // hunter added to the wiring — including PRHERO_EXTRA_HUNTERS
 // (odd/tasks/logic-hunter.md T3) — is reflected in the estimate without a
-// second place to remember to update. Excludes the parity hunter: its
-// trigger never matches for Cal.com PRs (comment below), matching
-// martian-evidence.ts's freezeBenchmarkIdentity requiredSteps derivation.
+// second place to remember to update. Counts unconditional hunters only
+// (the local spec has no other kind), matching martian-evidence.ts's
+// freezeBenchmarkIdentity requiredSteps derivation.
 const HUNTERS = localReviewSpec().agents.filter(
   (a) => a.role === "hunter" && a.trigger === undefined,
 ).length;
@@ -295,7 +295,7 @@ if (mode === "plan") {
   }
   console.log("");
   console.log(
-    `${rows.length} PR(s). Estimated ${HUNTERS} hunters + refuter, summarizer off, parity never fires.`,
+    `${rows.length} PR(s). Estimated ${HUNTERS} hunters + refuter, summarizer off.`,
   );
   console.log(`arm: ${arm}  (run dirs: ${corpusName}-<pr>-${arm})`);
   console.log(

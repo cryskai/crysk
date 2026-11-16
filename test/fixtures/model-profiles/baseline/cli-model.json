@@ -76,43 +76,6 @@
       ]
     },
     {
-      "name": "hunter-parity",
-      "backend": "claude-code",
-      "provider": "anthropic",
-      "model": "haiku",
-      "modelSnapshot": "haiku",
-      "modelVariant": null,
-      "effort": "xhigh",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "70fbc4e084532d0d8d8f2e1d0b5e192551e5cb2a05381c5063351731916a8ee6",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": "haiku",
-      "argv": [
-        "claude",
-        "-p",
-        "--append-system-prompt-file",
-        "<RUN>/steps/hunter-parity.system.md",
-        "--output-format",
-        "json",
-        "--mcp-config",
-        "<RUN>/mcp.json",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "Read,Grep,Glob,mcp__codegraph__codegraph_explore",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        "haiku",
-        "--effort",
-        "xhigh",
-        "--exclude-dynamic-system-prompt-sections"
-      ]
-    },
-    {
       "name": "hunter-reliability",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -336,7 +299,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "c432777b672dfa0e750937d1a9cec1be990e61f15543bce224d2c1d7c785f32b",
+    "routeFingerprint": "91a299182d1f8d7143b4229946b66f34164fd9a7084f0aac129c935632568d0a",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -382,20 +345,6 @@
       },
       {
         "stepKey": "hunter-security",
-        "role": "hunter",
-        "logicalIdentity": "claude:haiku-latest",
-        "routeFingerprint": "2cfba1ffffbaac16153dcfce6e898a1e88263d6e703911fbf3423a3d20d9687c",
-        "effort": null,
-        "route": {
-          "backend": "claude-code",
-          "provider": "anthropic",
-          "modelFamily": "haiku",
-          "modelSnapshot": "haiku"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "hunter-parity",
         "role": "hunter",
         "logicalIdentity": "claude:haiku-latest",
         "routeFingerprint": "2cfba1ffffbaac16153dcfce6e898a1e88263d6e703911fbf3423a3d20d9687c",
@@ -476,13 +425,6 @@
     },
     {
       "name": "hunter-logic",
-      "model": "haiku",
-      "effort": "xhigh",
-      "effort_applied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "hunter-parity",
       "model": "haiku",
       "effort": "xhigh",
       "effort_applied": true,

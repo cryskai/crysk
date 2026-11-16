@@ -5,13 +5,12 @@
 // (src/pr/review-pr.ts): identifiers moved onto explicit parameters, control
 // flow and WHY comments unchanged.
 //
-// `parityFires` / `activeHunters` / `hunterCount` stay computed in
+// `activeHunters` / `hunterCount` stay computed in
 // reviewPr() itself: `activeHunters` is derived via `discoveryHunters`
 // (src/pr/discovery.ts, invariant 1 — behavior-tested in
 // test/pr/discovery.test.ts, not pinned as literal source) and is read only
 // by reviewPr()'s own progress renderer, never by this stage. Only
-// `hunterCount` (and `parityFires`, for the plan card's `resolved` field)
-// actually cross into this function.
+// `hunterCount` actually crosses into this function.
 //
 // A discriminated union, not a flat result-plus-sentinel: the two early-exit
 // branches (`exitCode: number`) genuinely have no route plan, runner
@@ -141,9 +140,8 @@ export async function resolvePrPlanAndConfirm(params: {
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
   hunterCount: number;
-  // Hunters a full review of the whole PR runs (fullReviewHunterCount).
+  // Hunters a full review of the whole PR runs (selectActiveHunters).
   fullHunterCount: number;
-  parityFires: boolean;
   verifyQueue: ReturnType<typeof buildPhaseBQueue>["queued"];
   prepared: PreparedDiscovery;
 }): Promise<PrPlanAndConfirmResult> {
@@ -190,7 +188,7 @@ export async function resolvePrPlanAndConfirm(params: {
   // BEFORE the plan card/confirm/"committed to spending" commit-status
   // block below: spec 3.1 ("Review MUST halt before agent spawning") is
   // satisfied at any point before runPipeline, and this is the earliest
-  // point the REAL (parity-narrowed) estimate exists — the same one the
+  // point the REAL estimate exists — the same one the
   // plan card is about to show, so the skip comment's number and the
   // (unrendered) plan's number can never have disagreed. `estimate.high`,
   // not `.low`: report.ts's own doctrine (~97-98) is that every recorded
@@ -314,7 +312,6 @@ export async function resolvePrPlanAndConfirm(params: {
       baseSha: params.baseSha,
       diffFromSha: params.diffFromSha,
       diffPath: params.diffPath,
-      parityFires: params.parityFires,
     },
     ...(params.sizeGateConfirmed ? { sizeGateConfirmed: true } : {}),
     ...(queuedVerification > 0
