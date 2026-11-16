@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ResolvedModelRoute, RunnerBackend } from "../execution/contracts";
 import {
+  AGY_NO_EFFORT,
   hunterRole,
   isModelRole,
   type ModelListEntry,
@@ -69,7 +70,7 @@ export class ModelRoutingError extends Error {}
 // run without a plan would send the bad name to a provider as is.
 export class InvalidModelError extends ModelRoutingError {}
 
-const NEW_FORM_PREFIXES = ["claude:", "opencode:"];
+const NEW_FORM_PREFIXES = ["claude:", "opencode:", "agy:"];
 
 // Where a step's model came from, for the error a bad one raises.
 type ModelSource = "--model" | "spec" | "models" | "prompt" | "profile";
@@ -215,7 +216,14 @@ interface StepModel {
 function stepModelOf(entry: ModelListEntry, stepKey: string): StepModel {
   const { name, effort } = modelEntry(entry);
   const parsed = toModelName(name, "models", stepKey);
-  return effort === undefined ? { name: parsed } : { name: parsed, effort };
+  if (effort === undefined) return { name: parsed };
+  // parseModelsConfig refuses this already; a `models` object built in code
+  // reaches here unparsed, and an effort agy would never be sent must not
+  // ride the plan as if it were applied (S4).
+  if (parsed.backend === "antigravity") {
+    throw new InvalidModelError(`models for ${stepKey} ${AGY_NO_EFFORT}`);
+  }
+  return { name: parsed, effort };
 }
 
 function resolveStepChoices(

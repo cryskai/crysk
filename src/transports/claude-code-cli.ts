@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
 import { isEffort } from "#model/catalog";
 import { CLAUDE_CAPABILITY_STATICS } from "#model/provider-capabilities";
 import { claudeCliModel } from "#model/routing";
@@ -31,6 +29,14 @@ import {
   normalizePartialUsage,
   normalizeUnavailableUsage,
 } from "../execution/usage-normalized";
+import {
+  hashPromptFile,
+  type PromptFileStatus,
+  systemPromptStatus,
+  verifyPromptIntegrity,
+} from "./prompt-integrity";
+
+export type { PromptFileStatus };
 
 // §9.2 non-secret provider label this transport's route always resolves to
 // (the only route it drives is Anthropic-via-Claude-CLI). A per-request
@@ -52,26 +58,8 @@ export interface ClaudeCliCapabilitiesInput {
 // §5.2 CLI/POSIX cascade: SIGTERM -> 5,000 ms grace -> SIGKILL -> reap bound
 // 2,000 ms, all inside the harness's 7,500 ms deadline including scheduler
 // margin. The numbers are contract, not taste — do not tune them here.
-const TERM_GRACE_MS = 5000;
-const KILL_REAP_MS = 2000;
-
-export interface PromptFileStatus {
-  readonly mode: number;
-  readonly isSymbolicLink: boolean;
-}
-
-function systemPromptStatus(promptPath: string): PromptFileStatus | undefined {
-  try {
-    const stats = lstatSync(promptPath);
-    return { mode: stats.mode, isSymbolicLink: stats.isSymbolicLink() };
-  } catch {
-    return undefined;
-  }
-}
-
-function hashPromptFile(promptPath: string): string {
-  return createHash("sha256").update(readFileSync(promptPath)).digest("hex");
-}
+export const TERM_GRACE_MS = 5000;
+export const KILL_REAP_MS = 2000;
 
 // #177, 2026-09-02. WHICH basis this attempt's money is filed on, decided from
 // the env the CHILD is spawned with — the one fact that separates a
@@ -394,9 +382,9 @@ function normalizeClaudeCliUsage(
   };
 }
 
-type CliProc = SpawnedProcess & { readonly pid: number };
+export type CliProc = SpawnedProcess & { readonly pid: number };
 
-type CascadeResult =
+export type CascadeResult =
   | { kind: "term" }
   | { kind: "kill" }
   | { kind: "kill_unreaped" }
@@ -420,7 +408,7 @@ const runtimeWithGetpgid = process as typeof process & {
   getpgid?: (pid: number) => number;
 };
 
-function systemGetPgid(pid: number): number | undefined {
+export function systemGetPgid(pid: number): number | undefined {
   if (typeof runtimeWithGetpgid.getpgid === "function") {
     try {
       return runtimeWithGetpgid.getpgid(pid);
@@ -437,7 +425,10 @@ function systemGetPgid(pid: number): number | undefined {
 }
 
 // Resolves true when `p` settled first, false once `ms` elapsed first.
-function raceExitFirst(p: Promise<unknown>, ms: number): Promise<boolean> {
+export function raceExitFirst(
+  p: Promise<unknown>,
+  ms: number,
+): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (value: boolean) => {
@@ -455,7 +446,7 @@ function raceExitFirst(p: Promise<unknown>, ms: number): Promise<boolean> {
   });
 }
 
-async function boundedText(
+export async function boundedText(
   pending: Promise<string>,
   ms: number,
 ): Promise<string | undefined> {
@@ -466,6 +457,61 @@ async function boundedText(
   const value = await Promise.race([pending, timeout]);
   if (timer !== undefined) clearTimeout(timer);
   return value;
+}
+
+// §5.2 cascade, shared with the agy transport (odd/tasks/antigravity-oauth.md
+// E4): SIGTERM to the proven group, a grace window, SIGKILL, a reap bound.
+export function runProcessGroupCascade(
+  proc: CliProc,
+  pgid: number | undefined,
+  options: {
+    readonly killFn: (pid: number, signal?: string | number) => unknown;
+    readonly termGraceMs: number;
+    readonly killReapMs: number;
+  },
+): Promise<CascadeResult> {
+  const deliver = (signal: string): boolean => {
+    let delivered = false;
+    if (pgid !== undefined) {
+      // Negative-pgid signaling reaches every descendant the CLI spawned; a
+      // bare proc.kill() would orphan its subprocesses. Only reachable once
+      // the dedicated-PGID proof held.
+      try {
+        options.killFn(-pgid, signal);
+        delivered = true;
+      } catch {
+        void signal;
+      }
+    }
+    // Direct line to the leader itself: redundant for a live child (it is in
+    // the group) but it unblocks offline doubles whose kill() settles their
+    // streams, and it is the only delivery possible when no kernel pid
+    // exists to prove a group for.
+    try {
+      proc.kill();
+      delivered = true;
+    } catch {
+      void signal;
+    }
+    return delivered;
+  };
+
+  return (async (): Promise<CascadeResult> => {
+    // §5.2: SIGTERM to -pgid, then a 5,000 ms grace window before escalation.
+    if (!deliver("SIGTERM")) {
+      return { kind: "signal_failed", error: new Error("SIGTERM failed") };
+    }
+    const exitedDuringGrace = await raceExitFirst(
+      proc.exited,
+      options.termGraceMs,
+    );
+    if (exitedDuringGrace) return { kind: "term" };
+    if (!deliver("SIGKILL")) {
+      return { kind: "signal_failed", error: new Error("SIGKILL failed") };
+    }
+    const reaped = await raceExitFirst(proc.exited, options.killReapMs);
+    return reaped ? { kind: "kill" } : { kind: "kill_unreaped" };
+  })();
 }
 
 export class ClaudeCodeCliTransport implements ProviderTransport {
@@ -510,23 +556,10 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
   private async verifyPromptIntegrity(
     request: TransportRequest,
   ): Promise<string | undefined> {
-    const status = await this.promptLstatFn(request.systemPromptPath);
-    if (status === undefined) {
-      return `system prompt unreadable: ${request.systemPromptPath}`;
-    }
-    if (status.isSymbolicLink) {
-      return `system prompt is a symlink: ${request.systemPromptPath}`;
-    }
-    // Raw lstat mode carries file-type bits; only the permission bits must be
-    // exactly 0600.
-    if ((status.mode & 0o777) !== 0o600) {
-      return `system prompt mode is ${(status.mode & 0o777).toString(8)}, expected 600`;
-    }
-    const actualSha256 = await this.promptHashFn(request.systemPromptPath);
-    if (actualSha256 !== request.systemPromptSha256) {
-      return "system prompt hash mismatch against request.systemPromptSha256";
-    }
-    return undefined;
+    return verifyPromptIntegrity(request, {
+      lstat: this.promptLstatFn,
+      hash: this.promptHashFn,
+    });
   }
 
   // §11/D1-09: static report built from the SAME constants the report
@@ -663,48 +696,11 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
     proc: CliProc,
     pgid: number | undefined,
   ): Promise<CascadeResult> {
-    const deliver = (signal: string): boolean => {
-      let delivered = false;
-      if (pgid !== undefined) {
-        // Negative-pgid signaling reaches every descendant the CLI spawned; a
-        // bare proc.kill() would orphan its subprocesses. Only reachable once
-        // the dedicated-PGID proof held.
-        try {
-          this.killFn(-pgid, signal);
-          delivered = true;
-        } catch {
-          void signal;
-        }
-      }
-      // Direct line to the leader itself: redundant for a live child (it is in
-      // the group) but it unblocks offline doubles whose kill() settles their
-      // streams, and it is the only delivery possible when no kernel pid
-      // exists to prove a group for.
-      try {
-        proc.kill();
-        delivered = true;
-      } catch {
-        void signal;
-      }
-      return delivered;
-    };
-
-    return (async (): Promise<CascadeResult> => {
-      // §5.2: SIGTERM to -pgid, then a 5,000 ms grace window before escalation.
-      if (!deliver("SIGTERM")) {
-        return { kind: "signal_failed", error: new Error("SIGTERM failed") };
-      }
-      const exitedDuringGrace = await raceExitFirst(
-        proc.exited,
-        this.termGraceMs,
-      );
-      if (exitedDuringGrace) return { kind: "term" };
-      if (!deliver("SIGKILL")) {
-        return { kind: "signal_failed", error: new Error("SIGKILL failed") };
-      }
-      const reaped = await raceExitFirst(proc.exited, this.killReapMs);
-      return reaped ? { kind: "kill" } : { kind: "kill_unreaped" };
-    })();
+    return runProcessGroupCascade(proc, pgid, {
+      killFn: this.killFn,
+      termGraceMs: this.termGraceMs,
+      killReapMs: this.killReapMs,
+    });
   }
 
   async execute(
@@ -1295,7 +1291,7 @@ function providerApiErrorOf(
 
 // The CLI's words as one line: control characters become spaces, whitespace collapses, and
 // the text is cut with an ellipsis to fit `room` characters.
-function oneLine(words: string, room: number): string {
+export function oneLine(words: string, room: number): string {
   const flat = Array.from(words, (char) => {
     const code = char.charCodeAt(0);
     return code < 0x20 || code === 0x7f ? " " : char;
@@ -1339,11 +1335,11 @@ function credentialOf(
 const SPAWN_FAILURE_PREFIX = "[pr-hero] spawn failed: ";
 const SPAWN_FAILURE_SUFFIX = "; no child started";
 
-function spawnFailureTail(error: unknown): string {
+export function spawnFailureTail(error: unknown): string {
   return `${SPAWN_FAILURE_PREFIX}${describeSpawnError(error)}${SPAWN_FAILURE_SUFFIX}`;
 }
 
-function isSpawnFailureTail(stderrTail: string): boolean {
+export function isSpawnFailureTail(stderrTail: string): boolean {
   return (
     stderrTail.startsWith(SPAWN_FAILURE_PREFIX) &&
     stderrTail.endsWith(SPAWN_FAILURE_SUFFIX)

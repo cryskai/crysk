@@ -53,6 +53,7 @@ import {
   type AuthEvent,
   isTransportFailureCause,
   type ProviderTransport,
+  type RunnerBackend,
   type StepAdmissionGate,
   type TransportFailureCause,
   type TransportOutcome,
@@ -374,6 +375,43 @@ const PROJECTION_OWNED_KEYS = [
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
 ] as const satisfies readonly (typeof ENV_PASSTHROUGH)[number][];
+
+// An offline test transport that declares no execution facts gets its
+// backend's own: before odd/tasks/antigravity-oauth.md T3 every backend but
+// opencode was labelled claude/anthropic, so an antigravity (google) route was
+// refused as a provider mismatch, or ran under Claude's name.
+function testFakeAdmissionIdentity(backend: RunnerBackend): {
+  readonly executable: string;
+  readonly provider: string;
+} {
+  if (backend === "opencode") {
+    return { executable: "opencode", provider: "opencode" };
+  }
+  if (backend === "antigravity")
+    return { executable: "agy", provider: "google" };
+  return { executable: "claude", provider: "anthropic" };
+}
+
+function testFakeCancellationSemantics(
+  backend: RunnerBackend,
+): "process-exit" | "provider-proof" {
+  return backend === "opencode" ? "provider-proof" : "process-exit";
+}
+
+// Credential kinds whose projection failure is never degraded to the operator
+// environment, whatever its class (odd/tasks/antigravity-oauth.md S5, L3): an
+// agy step run on the operator's HOME would read the operator's own Google
+// login, MCP servers and agy settings. Its broker never raises the degraded
+// class either (credential-broker.ts); this is the second lock.
+const NEVER_DEGRADED_KINDS: ReadonlySet<string> = new Set([
+  "antigravity_subscription_oauth",
+]);
+// The same rule keyed on the transport that is about to run, so a step that
+// reaches an agy transport without its kind (a caller that built the step by
+// hand) still never runs on the operator's environment.
+const NEVER_DEGRADED_BACKENDS: ReadonlySet<RunnerBackend> = new Set([
+  "antigravity",
+]);
 
 export function projectChildEnv(
   source: Readonly<Record<string, string | undefined>>,
@@ -749,12 +787,7 @@ export class StepExecutionHarness implements StepRunner {
       (transport.backend === "claude-code"
         ? { executable: "claude", provider: "anthropic" }
         : this.isTestFake
-          ? {
-              executable:
-                transport.backend === "opencode" ? "opencode" : "claude",
-              provider:
-                transport.backend === "opencode" ? "opencode" : "anthropic",
-            }
+          ? testFakeAdmissionIdentity(transport.backend)
           : undefined);
 
     const cancellationSemantics =
@@ -762,9 +795,7 @@ export class StepExecutionHarness implements StepRunner {
       (transport.backend === "claude-code"
         ? "process-exit"
         : this.isTestFake
-          ? transport.backend === "opencode"
-            ? "provider-proof"
-            : "process-exit"
+          ? testFakeCancellationSemantics(transport.backend)
           : undefined);
 
     if (
@@ -963,6 +994,29 @@ export class StepExecutionHarness implements StepRunner {
     const consumesPerStepProjection =
       transport.credentialProjection !== "server-lifetime";
 
+    // odd/tasks/antigravity-oauth.md S5 (L13 A1): an agy step runs only inside
+    // its own per-step projection. With no broker, or a transport that claims
+    // server-lifetime protection, nothing would project its home and the child
+    // would read the operator's Google login, MCP servers and agy settings.
+    if (NEVER_DEGRADED_BACKENDS.has(transport.backend)) {
+      const missing =
+        this.credentialBroker === undefined
+          ? "none is configured"
+          : !consumesPerStepProjection
+            ? "its transport declares server-lifetime"
+            : undefined;
+      if (missing !== undefined) {
+        return {
+          name: step.name,
+          status: "failed",
+          usage: zeroUsage(),
+          attempts: 0,
+          stderrTail: `${transport.backend} step refused: it runs only inside a per-step credential projection, and ${missing}; step failed before any spawn`,
+          resultText: "",
+        };
+      }
+    }
+
     // §6.1 D1-05: project credentials ONCE per run, BEFORE admission or
     // spawn — a projection failure must never reach a provider or leak into
     // an attempt count.
@@ -1001,7 +1055,11 @@ export class StepExecutionHarness implements StepRunner {
         // adversarial-diff agent with operator credentials precisely when
         // something suspicious happened. The degradation is stated on the
         // result, never silent.
-        if (failureClass !== "missing_subscription_record") {
+        if (
+          failureClass !== "missing_subscription_record" ||
+          NEVER_DEGRADED_KINDS.has(step.credentialKind ?? "") ||
+          NEVER_DEGRADED_BACKENDS.has(transport.backend)
+        ) {
           return {
             name: step.name,
             status: "failed",
@@ -1385,9 +1443,7 @@ export class StepExecutionHarness implements StepRunner {
           (transport.backend === "claude-code"
             ? "process-exit"
             : this.isTestFake
-              ? transport.backend === "opencode"
-                ? "provider-proof"
-                : "process-exit"
+              ? testFakeCancellationSemantics(transport.backend)
               : undefined);
         const isProviderProof = cancellationSemantics === "provider-proof";
 
@@ -1549,9 +1605,7 @@ export class StepExecutionHarness implements StepRunner {
         (transport.backend === "claude-code"
           ? "process-exit"
           : this.isTestFake
-            ? transport.backend === "opencode"
-              ? "provider-proof"
-              : "process-exit"
+            ? testFakeCancellationSemantics(transport.backend)
             : undefined);
       const isProviderProof = cancellationSemantics === "provider-proof";
 
@@ -1754,10 +1808,13 @@ export class StepExecutionHarness implements StepRunner {
             : {
                 backend: transport.backend,
                 provider: admissionIdentity.provider,
+                // An agy route's family is its model id (routing.ts).
                 modelFamily:
                   transport.backend === "claude-code"
                     ? "claude"
-                    : admissionIdentity.provider,
+                    : transport.backend === "antigravity"
+                      ? step.model
+                      : admissionIdentity.provider,
                 modelSnapshot: step.model,
               }),
         systemPromptPath: step.systemPromptPath,

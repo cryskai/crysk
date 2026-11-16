@@ -1,0 +1,9 @@
+{"event":"init","conversation_id":"c-7","init":{"model":"gemini-3.8-flash-low","cwd":"/w","agent":"crysk-step","tools":["read_file"],"permission_mode":"always-proceed"}}
+{"event":"step_update","step_update":{"conversation_id":"c-7","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"c-7","step_index":1,"state":"DONE","step_type":"agent_response","duration_seconds":2.7}}
+{"event":"step_update","step_update":{"conversation_id":"c-7","step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"read_file"}}
+{"event":"step_update","step_update":{"conversation_id":"c-7","step_index":2,"state":"DONE","step_type":"tool","tool_name":"read_file","duration_seconds":0.05}}
+{"event":"step_update","step_update":{"conversation_id":"c-7","step_index":2,"state":"DONE","step_type":"tool","tool_name":"read_file","duration_seconds":0.05}}
+{"event":"step_update","step_update":{"conversation_id":"c-7","step_index":4,"state":"DONE","step_type":"tool","tool_name":"read_file","duration_seconds":0.06}}
+{"event":"step_update","step_update":{"conversation_id":"c-7","step_index":5,"state":"DONE","step_type":"agent_response","text_delta":"\n"}}
+{"event":"result","result":{"conversation_id":"c-7","status":"SUCCESS","response":"{\"findings\":[]}","duration_seconds":12.1,"num_turns":1,"usage":{"input_tokens":7872,"output_tokens":363,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":8235}}}

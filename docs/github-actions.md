@@ -303,6 +303,7 @@ Each credential gets one secret, with one name per kind:
 | `CRYSK_CLAUDE_API_KEY` | Claude Code on an Anthropic API key (replaces `ANTHROPIC_API_KEY`) |
 | `CRYSK_OPENCODE_<P>_API_KEY` | An OpenCode provider's API key |
 | `CRYSK_OPENCODE_<P>_OAUTH` | That provider's `opencode auth login` record, base64 on one line (`base64 -w0`) |
+| `CRYSK_ANTIGRAVITY_OAUTH` | The Antigravity (Google) subscription record, `{"type": "oauth", "access", "refresh", "expires", "accountId"}`, base64 on one line. The Crysk platform writes and renews it; the engine checks and masks it like an `_OAUTH` record. Reviews of `agy:` models run on it: the setup step writes it, `0600`, where agy steps read it, and the action installs `agy` when the models name an `agy:` model (see [Antigravity in CI](#antigravity-in-ci)) |
 
 `<P>` is the [Models.dev](https://models.dev) provider id in upper case, with `-` and `.` written as `_`:
 `deepseek` becomes `DEEPSEEK`, `github-copilot` becomes `GITHUB_COPILOT`, and `wafer.ai` becomes `WAFER_AI`.
@@ -337,8 +338,9 @@ What the action does with the input:
   strings inside a decoded `_OAUTH` record, which GitHub would not otherwise know are secret.
 - **Later steps learn only what exists**, through the step's outputs: `crysk-secrets` (the names
   kept), `claude-credentials` (`subscription`, `api_key`), `opencode-providers` (the `<P>`
-  tokens) and `opencode-auth-file` (`true` when it wrote the OpenCode auth file, which also installs the
-  OpenCode CLI). Nothing is written to `GITHUB_ENV`.
+  tokens), `opencode-auth-file` (`true` when it wrote the OpenCode auth file, which also installs the
+  OpenCode CLI) and `antigravity-models` (`true` when the models in effect name an `agy:` model, which
+  installs the Antigravity CLI). Nothing is written to `GITHUB_ENV`.
 - **The step fails** with `CRYSK-CRED-UNUSABLE` (`malformed_payload`) and names the secret when:
   - an `_OAUTH` value is not padded standard base64, does not decode to a JSON object, or decodes to a
     record whose `type` is not `oauth`;
@@ -502,6 +504,54 @@ OpenCode-only `CRYSK_MODELS` included.
   rather than skipping as a clean review, unless the provider serves that model free.
 - **48 KB** is the GitHub variable size cap for `CRYSK_MODELS`; a `models` object is far smaller (at most
   three models per role).
+
+## Antigravity in CI
+
+Reviews run on Google Antigravity (`agy:<model-id>` models, the `agy` CLI) on the Google subscription in
+`CRYSK_ANTIGRAVITY_OAUTH`. Connect Antigravity in the Crysk dashboard, which stores that secret and renews
+it, and name `agy:` models in your model settings, `CRYSK_MODELS` or the `model` input:
+
+```bash
+gh variable set CRYSK_MODELS --body '{"default": ["agy:gemini-4-argon-high"]}'
+```
+
+The effort is part of the id (`agy:gemini-4-argon-high`, `agy:claude-sonnet-5-5-high`), so an `agy:` entry
+takes no `effort`. The materiality judge runs only the Claude models it was measured on, so an `agy:` model
+listed for `judge` adds nothing.
+
+- **The record.** When `crysk-secrets` carries `CRYSK_ANTIGRAVITY_OAUTH`, the setup step writes the decoded
+  record, refresh token included, to `$XDG_DATA_HOME/crysk/antigravity-auth.json` (or
+  `~/.local/share/crysk/antigravity-auth.json`), mode `0600` in a `0700` directory. Each agy step gets its
+  own copy in agy's token format, in a home of its own that is removed after the step; agy renews the
+  hour-long access token at startup from the refresh token, which Google does not rotate. In CI only that
+  record is read, never a login already on the runner, and a record an earlier run left is removed when
+  the run has no such secret.
+- **The CLI.** The `Install Antigravity CLI` step runs only when the models in effect name an `agy:` model
+  (the setup step's `antigravity-models` output: any role or fallback of the platform's models or the
+  `models` input, the judge aside) or the `model` input starts with `agy:`. The version is **pinned** in
+  the action's source (`src/ci/agy-install.ts`), currently **1.5.9**, with the archive URL and `sha512` of
+  each runner's build (`linux_amd64`, `linux_arm64`, `darwin_arm64` or `darwin_amd64`). The step downloads
+  only that archive (it asks Google's auto-updater nothing) and checks its `sha512` against the pinned one
+  **before** extracting anything. The archive must hold exactly one regular file, `antigravity`: a second
+  entry, a link, a directory or a path refuses it. That file is installed as `agy`, `0755`, under the
+  runner's temp directory, and the step runs `agy --version`: unless it reports the pinned version, the
+  binary is removed and the step fails, so nothing reaches `PATH`. Otherwise the directory is added to
+  `GITHUB_PATH`. agy's own auto-update stays off in every agy step (`AGY_CLI_DISABLE_AUTO_UPDATE=true`),
+  so the pinned build is the one that runs. A run with no `agy:` model fetches nothing. Any other runner OS
+  or CPU fails the step, naming it.
+- **Bumping the version** (maintainers). `bun run scripts/pin-agy.ts` reads the auto-updater's manifest for
+  each of the four platforms, checks that they name one version, and prints the `AGY_PINNED_RELEASE` table
+  to paste into `src/ci/agy-install.ts`; it edits nothing and downloads no archive. Update the pinned table
+  in `test/ci/agy-install.test.ts` with it. Older release URLs were still served when this was pinned
+  (1.5.7's answered on 2026-11-15), so a pinned version keeps installing after Google publishes a newer one;
+  if Google removes the archive, the step fails with the HTTP status and installs nothing.
+- **What an agy step can do.** It reads files with agy's `read_file` and searches the repository through
+  Crysk's read-only search MCP (`grep`, `glob`, `list`; see [mcp-search.md](mcp-search.md)). No shell, no
+  web, no writes, and the repository's `AGENTS.md`, `GEMINI.md` and `.agents/` do not reach it.
+- **Billing.** An `agy:` route bills the subscription, cash cost `0`, like a ChatGPT subscription: it never
+  makes a run metered on its own. The ceilings still follow the run's Claude credential: a run that chose
+  `CRYSK_CLAUDE_API_KEY`, or that has an OpenCode model on an API key, keeps the metered defaults
+  ([Spend controls](#spend-controls)).
 
 ## Token permissions
 
@@ -775,8 +825,9 @@ recorded and is not an error.
 
 ### Subscription logins
 
-A subscription login (`CRYSK_OPENCODE_<P>_OAUTH`, today `openai`) carries an access token that expires (about
-ten days for OpenAI) and a refresh token that renews it. OpenAI issues a new refresh token on every renewal and
+A subscription login (`CRYSK_OPENCODE_OPENAI_OAUTH` for `openai`, `CRYSK_ANTIGRAVITY_OAUTH` for `antigravity`)
+carries an access token that expires (about ten days for OpenAI, one hour for Google) and a refresh token that
+renews it. Google does not issue a new refresh token on renewal, so an Antigravity renewal keeps the stored one. OpenAI issues a new refresh token on every renewal and
 refuses the old one for good (`refresh_token_reused`), so a review never renews the login (see "A review never
 renews the login" above). Instead, before the access token expires, the platform dispatches the stub with
 `operation: refresh-credential` and `refresh-provider: <provider id>`, one at a time per login. The renewal runs
@@ -794,7 +845,9 @@ value, and then:
 2. `POST https://api.crysk.dev/runs/credential-refresh/begin` with `{"provider": "<id>"}`. The platform records
    that the stored refresh token is about to be spent. Then one form-encoded POST to the provider's token
    endpoint (`grant_type=refresh_token`, the stored refresh token, the provider's `client_id`; for OpenAI,
-   `https://auth.openai.com/oauth/token` and Codex's client id, as OpenCode does). That request is never
+   `https://auth.openai.com/oauth/token` and Codex's client id, as OpenCode does; for Antigravity,
+   `https://oauth2.googleapis.com/token` with agy's own client id and its non-confidential installed-app
+   `client_secret`). That request is never
    retried: one that may have reached the provider may have spent the token.
 3. The new record, in OpenCode's shape (`type: "oauth"`, `access`, `refresh`, `expires` in milliseconds,
    `accountId`), is encoded as the secret stores it (standard base64 of its JSON), sealed with libsodium's
@@ -812,7 +865,7 @@ value, and then:
    ```
 
    `encrypted_value` is exactly what GitHub's "create or update a secret" API takes, and the platform writes it
-   as the same `CRYSK_OPENCODE_<P>_OAUTH`. `issued_at` is the runner's clock when the provider answered,
+   as the same secret (`CRYSK_OPENCODE_OPENAI_OAUTH` or `CRYSK_ANTIGRAVITY_OAUTH`). `issued_at` is the runner's clock when the provider answered,
    `expires_at` the record's `expires`, both ISO 8601 in UTC; `provider_account_id` is null when the provider
    has none. Once the provider has answered with new tokens the stored refresh token is spent, so this POST is
    retried on a network error, a 5xx or a 429, with backoff from 5 seconds up to a minute, for up to 10
@@ -911,7 +964,8 @@ A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode pr
 `CRYSK_OPENCODE_*` secret is an API key, on any route the run resolves: any role or fallback of `models`,
 `--model`, `--scout-model`, a spec agent, a prompt's frontmatter or an engine default) gets a `12.00` default, because that is the
 case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
-subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered. Setting
+subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered,
+and neither does an `agy:` model, which runs on the Google subscription in `CRYSK_ANTIGRAVITY_OAUTH`. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
 
 The default was `10.00` until the security hunter joined the default set. The estimate prices every hunter,
@@ -1499,15 +1553,15 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. A `/crysk review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. A forced run that reviews a head clears a size or budget skip's `failure` status. |
 | `mode` | `gate` | The commit status the review sets: `gate` turns it `failure` on blocking findings and on a size or budget skip, `advisory` keeps it `success` for a finished review. See [Gate mode](#gate-mode-the-status-is-the-check). |
 | `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). A `/crysk review --full` comment sets it on its own; a legacy `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
-| `model` | empty | One model for every step but the materiality judge's (`claude:opus-latest`, `opencode:<provider>/<model>`; a bare `sonnet`, `opus`, `haiku` or `fable` means its `-latest` model), outranking `models`. No effort and no fallbacks. It builds no OpenCode auth file: name an OpenCode model in `models`. |
+| `model` | empty | One model for every step but the materiality judge's (`claude:opus-latest`, `opencode:<provider>/<model>`, `agy:<model-id>`; a bare `sonnet`, `opus`, `haiku` or `fable` means its `-latest` model), outranking `models`. No effort and no fallbacks. It builds no OpenCode auth file: name an OpenCode model in `models`. An `agy:` model installs the Antigravity CLI and runs on `CRYSK_ANTIGRAVITY_OAUTH` ([Antigravity in CI](#antigravity-in-ci)). |
 | `scout` | `false` | Experimental diff-only pre-hunt stage; off by default. |
 | `post` | `true` | Set `false` to run the review and write outputs/summary without posting to the PR. |
 | `step-summary` | `true` | Set `false` to skip the `$GITHUB_STEP_SUMMARY` write. |
 | `anthropic-api-key`, `claude-token`, `opencode-auth`, `routing` | empty | Removed. A value in any of them stops the run with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed): pass the `CRYSK_*` secrets in `crysk-secrets`, and the models per role in `models`. |
 | `crysk-secrets` | empty | The credentials: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets](#crysk_-secrets). |
-| `models` | empty | The models per role, as JSON (the `models` object of a person config), from `vars.CRYSK_MODELS`. See [OpenCode in CI](#opencode-in-ci) and [Configuration, Models](configuration.md#models). Empty: every step runs its prompt's model. Ignored, with a warning, on a repository whose platform settings apply. |
+| `models` | empty | The models per role, as JSON (the `models` object of a person config), from `vars.CRYSK_MODELS`. See [OpenCode in CI](#opencode-in-ci), [Antigravity in CI](#antigravity-in-ci) and [Configuration, Models](configuration.md#models). Empty: every step runs its prompt's model. Ignored, with a warning, on a repository whose platform settings apply. |
 | `operation` | `review` | `review` reviews a pull request; `refresh-credential` renews a subscription login, and only the Crysk platform dispatches it. See [Subscription logins](#subscription-logins). Empty is a review. |
-| `refresh-provider` | empty | With `operation: refresh-credential`, the OpenCode provider id whose login is renewed (`openai`). |
+| `refresh-provider` | empty | With `operation: refresh-credential`, the subscription provider whose login is renewed: `openai` (read from `CRYSK_OPENCODE_OPENAI_OAUTH`) or `antigravity` (read from `CRYSK_ANTIGRAVITY_OAUTH`). Ignored by a review. |
 | `credentials` | empty | The Claude credential order, as JSON (`{"claude": ["subscription", "api_key"]}`), from `vars.CRYSK_CREDENTIALS`. Empty: the subscription first. Ignored like `models`. |
 | `profile` | empty | The model profile, `claude` or `openai`, from `vars.CRYSK_PROFILE`. `models` still wins role by role. An unknown profile fails the run (`CRYSK-CONFIG-INVALID`). Empty: `claude`. Ignored like `models`. |
 
@@ -1579,6 +1633,22 @@ Then re-run the workflow:
 ```bash
 gh run rerun {runId}
 ```
+
+**Fix**, on an Antigravity route (`agy:` models, `backend` is `antigravity`):
+
+Connect Antigravity again in the Crysk dashboard, which stores the Google login as `CRYSK_ANTIGRAVITY_OAUTH`. On a workflow you manage yourself, set it from the record of a Google sign-in:
+
+```bash
+gh secret set CRYSK_ANTIGRAVITY_OAUTH
+```
+
+Then pass it in the crysk-secrets input, for example `CRYSK_ANTIGRAVITY_OAUTH=${{ secrets.CRYSK_ANTIGRAVITY_OAUTH }}`, and ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 <a id="prh-input-removed"></a>
 
@@ -1672,6 +1742,24 @@ Or bill per token with an OpenAI API key instead:
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+On the Antigravity route (`backend` is `antigravity`), the login is the Google record the Crysk platform stores
+and renews. The same fix applies to `subscription_expiring`, `malformed_payload` and `source_read_failed` on
+this route: the record is the dashboard's, so a new one comes from connecting again, never from a local file.
+
+Connect Antigravity again in the Crysk dashboard, which stores the Google login as `CRYSK_ANTIGRAVITY_OAUTH`. On a workflow you manage yourself, set it from the record of a Google sign-in:
+
+```bash
+gh secret set CRYSK_ANTIGRAVITY_OAUTH
+```
+
+Then pass it in the crysk-secrets input, for example `CRYSK_ANTIGRAVITY_OAUTH=${{ secrets.CRYSK_ANTIGRAVITY_OAUTH }}`, and ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 #### `subscription_expiring`
 
@@ -1779,7 +1867,8 @@ When every failed hunter reports the secret it ran on, the fix starts with the o
 action, `{secret}` is the `CRYSK_*` secret the workflow passes (`CRYSK_CLAUDE_API_KEY` or
 `CRYSK_CLAUDE_OAUTH_TOKEN`); a local run names the Claude CLI's own variable (`ANTHROPIC_API_KEY` or
 `CLAUDE_CODE_OAUTH_TOKEN`), which it exports itself. An OpenCode route names its own secret,
-`CRYSK_OPENCODE_<PROVIDER>_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and gets the OpenCode variants below. A provider
+`CRYSK_OPENCODE_<PROVIDER>_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and gets the OpenCode variants below. An
+Antigravity route names `CRYSK_ANTIGRAVITY_OAUTH` and gets the `antigravity_oauth` variant. A provider
 that answers HTTP 401 is a rejected credential whatever its words.
 
 #### `api_key`
@@ -1870,6 +1959,30 @@ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
 Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+#### `antigravity_oauth`
+
+**Why:** Google refused the Antigravity login in that secret: it was revoked, or the Google account no longer allows it
+
+The rejected secret is the Antigravity (Google) subscription record, `CRYSK_ANTIGRAVITY_OAUTH`. agy reported a
+failed sign-in (`authentication failed`, `UNAUTHENTICATED` or `invalid_grant`). The access token's own expiry
+is not this failure: agy renews it from the refresh token at startup.
+
+**Fix:**
+
+Connect Antigravity again in the Crysk dashboard, which stores the Google login as `CRYSK_ANTIGRAVITY_OAUTH`. On a workflow you manage yourself, set it from the record of a Google sign-in:
+
+```bash
+gh secret set CRYSK_ANTIGRAVITY_OAUTH
+```
+
+Then pass it in the crysk-secrets input, for example `CRYSK_ANTIGRAVITY_OAUTH=${{ secrets.CRYSK_ANTIGRAVITY_OAUTH }}`, and ask for a new review:
 
 ```bash
 gh pr comment {pr} --body "/crysk review"
@@ -2356,6 +2469,28 @@ Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} i
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+#### `antigravity_oauth`
+
+**What:** the Antigravity subscription behind {secret} reached its quota
+
+**Why:** the Google subscription refuses requests until its quota resets, so an immediate retry would fail the same way
+
+Every failed hunter ran on the Antigravity (Google) subscription record, `CRYSK_ANTIGRAVITY_OAUTH`, and agy
+reported a spent quota (`RESOURCE_EXHAUSTED` that it does not retry). A retryable `RESOURCE_EXHAUSTED` or a
+429 is a rate limit and gets the default wording.
+
+**Fix:**
+
+Re-run after the quota resets:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+Or choose a claude: or opencode: model for these roles until it does. If the Google account behind the login changed, connect Antigravity again in the Crysk dashboard, which stores the login as `CRYSK_ANTIGRAVITY_OAUTH`.
 
 <a id="prh-provider-unavailable"></a>
 

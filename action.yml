@@ -24,7 +24,7 @@ inputs:
     description: 'Removed: pass one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   models:
-    description: 'The models per role, as JSON: the models object of the personal config, from role (default, hunter.logic, judge, ...) to an ordered list of models, the first one tried first, e.g. {"default": ["claude:sonnet-latest"], "hunter.logic": ["opencode:deepseek/deepseek-chat", "claude:sonnet-latest"]}. An entry is a model name or {"model": ..., "effort": ...}. Pass it from a repository variable, models: followed by the vars.CRYSK_MODELS expression. Read by the setup step only, with the engine''s own parser, and written to the runner''s personal config file; a malformed value fails the run (CRYSK-CONFIG-INVALID). A repository connected to the Crysk platform takes its models from the platform''s model settings, which win whole: this input and credentials are then ignored with a warning. Empty: every role runs the default Claude model.'
+    description: 'The models per role, as JSON: the models object of the personal config, from role (default, hunter.logic, judge, ...) to an ordered list of models, the first one tried first, e.g. {"default": ["claude:sonnet-latest"], "hunter.logic": ["opencode:deepseek/deepseek-chat", "claude:sonnet-latest"]}. An entry is a model name or {"model": ..., "effort": ...}. An agy:<model-id> entry (Google Antigravity, e.g. agy:gemini-4-argon-high) carries its effort in the id and takes no effort; it runs on CRYSK_ANTIGRAVITY_OAUTH, and the action then installs the Antigravity CLI (agy), sha512-verified. Pass it from a repository variable, models: followed by the vars.CRYSK_MODELS expression. Read by the setup step only, with the engine''s own parser, and written to the runner''s personal config file; a malformed value fails the run (CRYSK-CONFIG-INVALID). A repository connected to the Crysk platform takes its models from the platform''s model settings, which win whole: this input and credentials are then ignored with a warning. Empty: every role runs the default Claude model.'
     required: false
     default: ''
   credentials:
@@ -36,27 +36,27 @@ inputs:
     required: false
     default: ''
   crysk-secrets:
-    description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _. A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). With operation: refresh-credential, the refresh step reads the CRYSK_OPENCODE_<P>_OAUTH record it renews. The input is read on stdin by those four steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
+    description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _, and CRYSK_ANTIGRAVITY_OAUTH (base64 -w0 of the Antigravity Google subscription record). A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). With operation: refresh-credential, the refresh step reads the subscription record it renews (CRYSK_OPENCODE_OPENAI_OAUTH or CRYSK_ANTIGRAVITY_OAUTH). The input is read on stdin by those four steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
     required: false
     default: ''
   pr-number:
     description: 'Pull request number. Defaults to the triggering pull_request/issue_comment event.'
     required: false
   model:
-    description: 'Optional model name for every step but the materiality judge (claude:<alias>-latest, claude:claude-<id> or opencode:<provider>/<model>). It overrides models, takes no effort, and has no fallbacks; set models per role in the models input instead.'
+    description: 'Optional model name for every step but the materiality judge (claude:<alias>-latest, claude:claude-<id>, opencode:<provider>/<model> or agy:<model-id>; an agy: model installs the Antigravity CLI and runs on CRYSK_ANTIGRAVITY_OAUTH). It overrides models, takes no effort, and has no fallbacks; set models per role in the models input instead.'
     required: false
   scout:
     description: 'Run the experimental diff-only scout stage before hunting'
     required: false
     default: 'false'
   max-changed-lines:
-    description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to use the repo config value max_changed_lines; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription (a run draws on quota, not a per-token invoice), 4000 on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret).'
+    description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to use the repo config value max_changed_lines; when that is unset too, it resolves from the route billing mode - no limit on a subscription (a Claude subscription, a ChatGPT subscription through CRYSK_OPENCODE_OPENAI_OAUTH, or agy: models on the Google subscription in CRYSK_ANTIGRAVITY_OAUTH: a run draws on quota, not a per-token invoice), 4000 on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_*_API_KEY secret).'
     required: false
   max-changed-files:
-    description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit. Leave unset to use the repo config value max_changed_files; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription, 50 on a metered route.'
+    description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit. Leave unset to use the repo config value max_changed_files; when that is unset too, it resolves from the route billing mode - no limit on a subscription (Claude, ChatGPT or Antigravity), 50 on a metered route.'
     required: false
   budget-usd:
-    description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a Claude subscription (a run draws on quota, not a per-token invoice), a default ceiling on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret). An explicit value is honoured on any route; a value <= 0 disables the ceiling (the size limits above resolve separately).'
+    description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a subscription (a Claude subscription, a ChatGPT subscription through CRYSK_OPENCODE_OPENAI_OAUTH, or agy: models on the Google subscription in CRYSK_ANTIGRAVITY_OAUTH: a run draws on quota, not a per-token invoice), a default ceiling on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_*_API_KEY secret). An explicit value is honoured on any route; a value <= 0 disables the ceiling (the size limits above resolve separately).'
     required: false
     default: ''
   mode:
@@ -84,7 +84,7 @@ inputs:
     required: false
     default: 'review'
   refresh-provider:
-    description: 'With operation: refresh-credential, the OpenCode provider id whose subscription login is renewed (openai), read from its CRYSK_OPENCODE_<P>_OAUTH line in crysk-secrets. Ignored by a review.'
+    description: 'With operation: refresh-credential, the subscription provider whose login is renewed: openai, read from its CRYSK_OPENCODE_OPENAI_OAUTH line in crysk-secrets, or antigravity, read from its CRYSK_ANTIGRAVITY_OAUTH line. Ignored by a review.'
     required: false
     default: ''
 
@@ -361,9 +361,11 @@ runs:
         # Bun hands a child the environment it started with, so a variable bun
         # received would reach git on the platform path. setup.ts masks every
         # value, builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets
-        # the models need, and outputs presence only (crysk-secrets,
-        # claude-credentials, opencode-providers, opencode-auth-file), never a
-        # value and never to GITHUB_ENV.
+        # the models need, writes the CRYSK_ANTIGRAVITY_OAUTH record (0600) where
+        # agy steps read it, and outputs presence only (crysk-secrets,
+        # claude-credentials, opencode-providers, opencode-auth-file,
+        # opencode-models, antigravity-models), never a value and never to
+        # GITHUB_ENV.
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
       run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin
 
@@ -390,6 +392,31 @@ runs:
       run: |
         curl -fsSL https://opencode.ai/install | bash -s -- --version 1.18.30
         echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+    # odd/tasks/antigravity-oauth.md T5 (S7): the Google Antigravity CLI (`agy`),
+    # installed only when the run names an `agy:` model: the setup step's
+    # antigravity-models (the models in effect, the platform's or the models
+    # input's, the judge aside) or a `model` input naming one. src/ci/agy-install.ts
+    # downloads the pinned agy release for this runner (Linux or macOS, x64 or
+    # arm64; AGY_PINNED_RELEASE in that script, bumped with scripts/pin-agy.ts),
+    # checks the download's pinned sha512 before extracting anything, takes the
+    # archive's single `antigravity` file and installs it as `agy` (0755) under
+    # the runner's temp dir, which it adds to GITHUB_PATH, then requires
+    # `agy --version` to report the pinned version. Nothing about the release is
+    # an input. No CRYSK_* secret is bound here: the login reaches agy only
+    # through the record the setup step wrote, projected per step.
+    - name: Install Antigravity CLI
+      if: ${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.antigravity-models == 'true' || startsWith(inputs.model, 'agy:')) && (inputs.operation == 'review' || inputs.operation == '') }}
+      shell: bash
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
+        AGY_INSTALL_DIR: ${{ runner.temp }}/crysk-agy/bin
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/agy-install.ts"
 
     - name: Run Crysk
       id: run-crysk

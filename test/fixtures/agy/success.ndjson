@@ -1,0 +1,7 @@
+{"event":"init","session_id":"s-1","model":"gemini-4-argon-high","tools":["read_file","grep_search","run_command"]}
+{"event":"step_update","step_id":"1","step_type":"tool","tool_name":"read_file","state":"ACTIVE"}
+{"event":"step_update","step_id":"1","step_type":"tool","tool_name":"read_file","state":"DONE"}
+{"event":"step_update","step_id":"2","step_type":"tool","tool_name":"read_file","state":"ACTIVE"}
+{"event":"step_update","step_id":"2","step_type":"tool","tool_name":"read_file","state":"DONE"}
+{"event":"step_update","step_id":"3","step_type":"planner_response","state":"DONE"}
+{"event":"result","result":{"conversation_id":"c-1","status":"SUCCESS","response":"{\"findings\":[]}","duration_seconds":3,"num_turns":1,"usage":{"input_tokens":3258,"output_tokens":120,"thinking_tokens":40,"cache_read_tokens":1000,"total_tokens":3418}}}

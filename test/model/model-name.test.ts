@@ -120,10 +120,10 @@ describe("parseModelName: everything else", () => {
     );
   });
 
-  test("an unprefixed name says which two forms exist", () => {
+  test("an unprefixed name says which three forms exist", () => {
     for (const bad of ["openai/gpt-5", "gpt-5", "anthropic/sonnet", ""]) {
       expect(() => parseModelName(bad), bad).toThrow(
-        'a model is "claude:<name>" or "opencode:<provider>/<model>"',
+        'a model is "claude:<name>", "opencode:<provider>/<model>" or "agy:<model-id>"',
       );
     }
   });

@@ -10,7 +10,11 @@ import {
   claudeCredentialPresence,
   defaultClaudeLoginPresent,
 } from "./security/claude-credential";
-import { resolveOpenCodeAuthPath } from "./security/credential-broker";
+import {
+  lookupAntigravityRecord,
+  resolveAntigravityCredentialSource,
+  resolveOpenCodeAuthPath,
+} from "./security/credential-broker";
 
 export type SystemTool = "git" | "claude" | "gh" | "codegraph";
 
@@ -36,6 +40,69 @@ export interface CheckSystemToolsOptions {
   platform?: NodeJS.Platform;
   // Whether the Keychain item exists; tests inject it so none asks the real Keychain.
   keychainProbe?: () => boolean;
+  // Reads a credential file (checkAgyTool). Injectable so tests need no real one.
+  readText?: (path: string) => Promise<string>;
+}
+
+// odd/tasks/antigravity-oauth.md T5 (S7): the `agy` CLI and the login a review's
+// agy steps would use. Not one of the SystemTool entries every doctor run
+// probes: the doctor asks only when the configuration names an `agy:` model.
+export interface AgyToolStatus {
+  readonly installed: boolean;
+  readonly version?: string;
+  // Where the login is read from: in CI the record the setup step wrote from
+  // CRYSK_ANTIGRAVITY_OAUTH, locally agy's own token file
+  // (resolveAntigravityCredentialSource, the broker's own rule).
+  readonly credentialPath: string;
+  // ok: it parses as a login agy can renew (lookupAntigravityRecord, the same
+  // check admission makes). Never the token itself.
+  readonly credential: "ok" | "missing" | "malformed";
+  readonly hint?: string;
+}
+
+export async function checkAgyTool(
+  options: CheckSystemToolsOptions = {},
+): Promise<AgyToolStatus> {
+  const which = options.which ?? ((bin: string) => Bun.which(bin));
+  const exec = options.exec ?? defaultExec;
+  const env = options.env ?? process.env;
+  const home = options.home ?? os.homedir();
+  const readText =
+    options.readText ?? ((file: string) => Bun.file(file).text());
+  const credentialPath = resolveAntigravityCredentialSource(env, home);
+  const lookup = await lookupAntigravityRecord(() => readText(credentialPath));
+  const credential = lookup.ok
+    ? "ok"
+    : lookup.failureClass === "source_read_failed"
+      ? "missing"
+      : "malformed";
+  const inCi = env.GITHUB_ACTIONS === "true";
+  const credentialHint =
+    credential === "ok"
+      ? undefined
+      : inCi
+        ? "Pass CRYSK_ANTIGRAVITY_OAUTH in the action's crysk-secrets input (connect Antigravity in the Crysk dashboard)"
+        : "Run 'agy' in your terminal and sign in with Google, so agy writes its token file";
+  const agyBin = await which("agy");
+  if (!agyBin) {
+    return {
+      installed: false,
+      credentialPath,
+      credential,
+      hint: inCi
+        ? "The Crysk action installs agy when the models name an agy: model; on another runner, put agy on PATH"
+        : "Install the Antigravity CLI (agy) and put it on PATH",
+    };
+  }
+  const res = await exec([agyBin, "--version"]);
+  const version = res.exitCode === 0 ? res.stdout.trim().split("\n")[0] : "";
+  return {
+    installed: true,
+    ...(version !== undefined && version !== "" ? { version } : {}),
+    credentialPath,
+    credential,
+    ...(credentialHint === undefined ? {} : { hint: credentialHint }),
+  };
 }
 
 export interface InstallSystemToolOptions {

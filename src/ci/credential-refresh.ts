@@ -1,8 +1,8 @@
 // The action's credential refresh step (cryskai/platform odd/tasks/openai-oauth.md,
-// E3): renews an OpenCode subscription login on the customer's runner, seals the
-// new record with the target's GitHub public key, and hands the platform only
-// the ciphertext, which it writes back as the same CRYSK_OPENCODE_<P>_OAUTH
-// secret.
+// E3): renews a subscription login on the customer's runner, seals the new
+// record with the target's GitHub public key, and hands the platform only the
+// ciphertext, which it writes back as the same secret: the descriptor's
+// `secretName` (CRYSK_OPENCODE_OPENAI_OAUTH, CRYSK_ANTIGRAVITY_OAUTH).
 //
 // It runs only when the platform dispatched the workflow with
 // `operation: refresh-credential` (action.yml), after the connect step and
@@ -25,17 +25,17 @@
 // `::add-mask::` before anything else is printed, and every message goes through
 // `redact`, so no value reaches the log even when a request fails.
 //
-// The provider's behavior (token URL, client id, permanent errors, account id)
-// is data in src/security/oauth-providers.ts; this script never names a provider.
+// The provider's behavior (secret name, token URL, client id, permanent errors,
+// account id) is data in src/security/oauth-providers.ts; this script never names a provider.
 
 import {
   type OAuthProviderDescriptor,
   oauthProvider,
+  oauthSecretName,
 } from "../security/oauth-providers";
 import {
   type OpenCodeOAuthRecord,
-  opencodeSecretsFor,
-  opencodeSecretToken,
+  oauthRecordForSecret,
   parseCryskSecrets,
 } from "./crysk-secrets";
 import { PLATFORM_API_URL } from "./platform";
@@ -73,7 +73,7 @@ export type CredentialRefreshResultBody =
       // Standard padded base64 of the libsodium sealed box, as GitHub's
       // "create or update a secret" API takes it. The sealed plaintext is the
       // secret's value: standard base64 of the record's JSON, as
-      // CRYSK_OPENCODE_<P>_OAUTH stores it.
+      // the subscription secret stores it.
       encrypted_value: string;
       // ISO 8601, UTC. When the provider issued the new access token (the
       // runner's clock at its answer) and when the record says it expires.
@@ -251,13 +251,12 @@ export async function runCredentialRefresh(
   }
   const providerId = deps.env.CRYSK_REFRESH_PROVIDER ?? "";
   const descriptor = oauthProvider(providerId);
-  const token = opencodeSecretToken(providerId);
-  if (descriptor === undefined || token === undefined) {
+  const secretName = oauthSecretName(providerId);
+  if (descriptor === undefined || secretName === undefined) {
     return fail(
       `the refresh-provider input "${providerId}" is not a subscription provider Crysk can renew.`,
     );
   }
-  const secretName = `CRYSK_OPENCODE_${token}_OAUTH`;
   const runToken = deps.env.CRYSK_RUN_TOKEN ?? "";
   const dispatchId = deps.env.CRYSK_DISPATCH_ID ?? "";
   if (runToken === "" || dispatchId === "") {
@@ -271,7 +270,7 @@ export async function runCredentialRefresh(
   for (const value of parse.masks) mask(value);
   const problem = parse.problems.find((text) => text.startsWith(secretName));
   if (problem !== undefined) return fail(`${problem}.`);
-  const record = opencodeSecretsFor(parse.secrets, providerId)?.oauth;
+  const record = oauthRecordForSecret(parse.secrets, secretName);
   if (record === undefined) {
     return fail(
       `${secretName} is not set in the crysk-secrets input; connect the subscription again from the Crysk dashboard.`,

@@ -6,13 +6,21 @@
 import { describe, expect, test } from "bun:test";
 import {
   chooseOpenCodeSecret,
+  cryskSecretsCarryCredential,
   cryskSecretsPresence,
   OPENCODE_OAUTH_SECRET_PROVIDER,
+  OPENCODE_SECRET_NAME_RE,
+  oauthRecordForSecret,
   opencodeSecretsFor,
   opencodeSecretToken,
+  PROVIDER_OAUTH_SECRETS,
   parseCryskSecrets,
 } from "#ci/crysk-secrets";
 import { OPENCODE_OAUTH_PROVIDER } from "../../src/security/credential-broker";
+import {
+  OAUTH_PROVIDERS,
+  oauthSecretName,
+} from "../../src/security/oauth-providers";
 
 const b64 = (value: unknown) =>
   Buffer.from(
@@ -270,6 +278,7 @@ describe("parseCryskSecrets: the platform's empty OpenCode slot", () => {
       names: [],
       claude: [],
       opencodeProviders: [],
+      oauthProviders: [],
     });
   });
 
@@ -460,6 +469,7 @@ describe("opencodeSecretsFor and cryskSecretsPresence", () => {
       ],
       claude: ["api_key"],
       opencodeProviders: ["OPENAI", "WAFER_AI"],
+      oauthProviders: [],
     });
     expect(JSON.stringify(cryskSecretsPresence(parsed))).not.toContain(
       "SENTINEL",
@@ -536,5 +546,124 @@ describe("chooseOpenCodeSecret", () => {
 
   test("the subscription provider is the one the OAuth broker projects", () => {
     expect(OPENCODE_OAUTH_SECRET_PROVIDER).toBe(OPENCODE_OAUTH_PROVIDER);
+  });
+});
+
+// Antigravity (odd/tasks/antigravity-oauth.md, S2): a subscription whose secret
+// is not an OpenCode name. Same record check and masks as an _OAUTH record.
+describe("parseCryskSecrets: CRYSK_ANTIGRAVITY_OAUTH", () => {
+  const GOOGLE_RECORD = {
+    type: "oauth" as const,
+    access: "SENTINEL-G-ACCESS",
+    refresh: "SENTINEL-G-REFRESH",
+    expires: 1_900_000_000_000,
+    accountId: "SENTINEL-G-EMAIL",
+  };
+
+  test("keeps the record under its provider id, never as an OpenCode provider", () => {
+    const value = b64(GOOGLE_RECORD);
+    const parsed = parseCryskSecrets(`CRYSK_ANTIGRAVITY_OAUTH=${value}`);
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.notices).toEqual([]);
+    expect(parsed.names).toEqual(["CRYSK_ANTIGRAVITY_OAUTH"]);
+    expect(parsed.secrets.oauth.get("antigravity")).toEqual(GOOGLE_RECORD);
+    expect(parsed.secrets.opencode.size).toBe(0);
+    expect(parsed.masks).toEqual([
+      value,
+      "SENTINEL-G-ACCESS",
+      "SENTINEL-G-REFRESH",
+      "SENTINEL-G-EMAIL",
+    ]);
+  });
+
+  test("an empty value is absent, and a given-twice name is refused", () => {
+    const empty = parseCryskSecrets("CRYSK_ANTIGRAVITY_OAUTH=\n");
+    expect(empty.names).toEqual([]);
+    expect(empty.secrets.oauth.size).toBe(0);
+    expect(empty.problems).toEqual([]);
+    expect(empty.notices).toEqual([]);
+    const twice = parseCryskSecrets(
+      [
+        `CRYSK_ANTIGRAVITY_OAUTH=${b64(GOOGLE_RECORD)}`,
+        `CRYSK_ANTIGRAVITY_OAUTH=${b64(GOOGLE_RECORD)}`,
+      ].join("\n"),
+    );
+    expect(twice.problems).toEqual([
+      "CRYSK_ANTIGRAVITY_OAUTH is given more than once",
+    ]);
+  });
+
+  test("refuses a value that is not a base64 OAuth record, naming only the secret", () => {
+    expect(
+      parseCryskSecrets("CRYSK_ANTIGRAVITY_OAUTH=SENTINEL not b64").problems,
+    ).toEqual([
+      "CRYSK_ANTIGRAVITY_OAUTH is not base64 (encode the OAuth record with base64 -w0)",
+    ]);
+    expect(
+      parseCryskSecrets(`CRYSK_ANTIGRAVITY_OAUTH=${b64("[1]")}`).problems,
+    ).toEqual(["CRYSK_ANTIGRAVITY_OAUTH does not decode to a JSON object"]);
+    const wrongType = parseCryskSecrets(
+      `CRYSK_ANTIGRAVITY_OAUTH=${b64({ type: "api", key: "SENTINEL-K" })}`,
+    );
+    expect(wrongType.problems).toEqual([
+      'CRYSK_ANTIGRAVITY_OAUTH is not an OAuth record (its type is not "oauth")',
+    ]);
+    expect(wrongType.secrets.oauth.size).toBe(0);
+    expect(JSON.stringify(wrongType.problems)).not.toContain("SENTINEL");
+  });
+
+  test("counts as a credential and is present by provider id only", () => {
+    const parsed = parseCryskSecrets(
+      `CRYSK_ANTIGRAVITY_OAUTH=${b64(GOOGLE_RECORD)}`,
+    );
+    expect(cryskSecretsCarryCredential(parsed)).toBe(true);
+    expect(cryskSecretsPresence(parsed)).toEqual({
+      names: ["CRYSK_ANTIGRAVITY_OAUTH"],
+      claude: [],
+      opencodeProviders: [],
+      oauthProviders: ["antigravity"],
+    });
+    expect(JSON.stringify(cryskSecretsPresence(parsed))).not.toContain(
+      "SENTINEL",
+    );
+    expect(cryskSecretsCarryCredential(parseCryskSecrets(""))).toBe(false);
+  });
+
+  test("an OpenCode _OAUTH record still parses and is found by its secret name", () => {
+    const parsed = parseCryskSecrets(
+      [
+        `CRYSK_OPENCODE_OPENAI_OAUTH=${b64(OAUTH_RECORD)}`,
+        `CRYSK_ANTIGRAVITY_OAUTH=${b64(GOOGLE_RECORD)}`,
+      ].join("\n"),
+    );
+    expect(parsed.secrets.opencode.get("OPENAI")).toEqual({
+      oauth: OAUTH_RECORD,
+    });
+    expect(
+      oauthRecordForSecret(parsed.secrets, "CRYSK_OPENCODE_OPENAI_OAUTH"),
+    ).toEqual(OAUTH_RECORD);
+    expect(
+      oauthRecordForSecret(parsed.secrets, "CRYSK_ANTIGRAVITY_OAUTH"),
+    ).toEqual(GOOGLE_RECORD);
+    expect(
+      oauthRecordForSecret(parsed.secrets, "CRYSK_OPENCODE_DEEPSEEK_OAUTH"),
+    ).toBeUndefined();
+    expect(
+      oauthRecordForSecret(parsed.secrets, "CRYSK_OPENCODE_OPENAI_API_KEY"),
+    ).toBeUndefined();
+  });
+
+  // This module has no imports, so it keeps a copy of the descriptor table's
+  // non-OpenCode secret names; this pins the copy to the table.
+  test("the provider OAuth secrets are exactly the descriptors' non-OpenCode secret names", () => {
+    const fromTable = Object.fromEntries(
+      OAUTH_PROVIDERS.filter(
+        (provider) => !OPENCODE_SECRET_NAME_RE.test(provider.secretName),
+      ).map((provider) => [provider.secretName, provider.id]),
+    );
+    expect(PROVIDER_OAUTH_SECRETS).toEqual(fromTable);
+    for (const provider of OAUTH_PROVIDERS) {
+      expect(oauthSecretName(provider.id)).toBe(provider.secretName);
+    }
   });
 });

@@ -2,10 +2,16 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadEffectiveConfig } from "#config/config";
-import { type ModelsConfig, routingNeedsOpenCode } from "#model/model-name";
+import {
+  type ModelsConfig,
+  modelEntry,
+  parseModelName,
+  routingNeedsOpenCode,
+} from "#model/model-name";
 import {
   FALLBACK_PROFILE,
   type ModelProfile,
+  profileModels,
   resolveProfile,
 } from "#model/profiles";
 import {
@@ -48,6 +54,7 @@ import {
 import type { ExactBindingCapabilityReport } from "./execution/contracts";
 import {
   type CheckSystemToolsOptions,
+  checkAgyTool,
   checkCiConfiguration,
   checkSystemTools,
 } from "./system-tools";
@@ -106,6 +113,84 @@ export interface RunDoctorOptions {
   // (reviewNeedsClaude). Absent: required, as every caller that does not
   // resolve the configuration (the updater, the menu) has always had it.
   claudeRequired?: boolean;
+  // odd/tasks/antigravity-oauth.md T5 (S7): whether the configuration names an
+  // `agy:` model (routingNeedsAntigravity). True adds the `agy` check: the CLI on
+  // PATH and the login its steps would read. Absent or false: no check, as before.
+  antigravityRequired?: boolean;
+}
+
+// Whether a configuration names an `agy:` model: any role of `models`, any
+// fallback, the judge aside (it runs only its measured models), or, for the roles
+// `models` does not set (no `default`), the profile's. A model that does not
+// parse names none; the config loader refuses it by name.
+export function routingNeedsAntigravity(
+  models: ModelsConfig | undefined,
+  profile: ModelProfile,
+): boolean {
+  const isAgy = (name: string) => {
+    try {
+      return parseModelName(name).backend === "antigravity";
+    } catch {
+      return false;
+    }
+  };
+  for (const [role, list] of Object.entries(models ?? {})) {
+    if (role === "judge") continue;
+    if (list.some((entry) => isAgy(modelEntry(entry).name))) return true;
+  }
+  if (models?.default !== undefined) return false;
+  return profileModels(profile).some(isAgy);
+}
+
+// The `agy` check (antigravityRequired): blocking when the CLI or the login is
+// missing, since every agy: step would then be refused. It names the login's
+// path and its state, never its content.
+export async function antigravityDoctorChecks(
+  options: CheckSystemToolsOptions,
+): Promise<DoctorCheckItem[]> {
+  const agy = await checkAgyTool(options);
+  const checks: DoctorCheckItem[] = [];
+  if (!agy.installed) {
+    checks.push({
+      name: "agy",
+      severity: "blocking",
+      message:
+        "the Antigravity CLI (agy) is not on PATH, and the configuration names an agy: model",
+      ...(agy.hint === undefined ? {} : { hint: agy.hint }),
+    });
+  } else {
+    checks.push({
+      name: "agy",
+      severity: "healthy",
+      message: `the Antigravity CLI is installed (${agy.version ?? "version unknown"})`,
+    });
+  }
+  const credentialHint = agy.installed ? agy.hint : undefined;
+  if (agy.credential === "ok") {
+    checks.push({
+      name: "agy-login",
+      severity: "healthy",
+      message: `an Antigravity login is present (${agy.credentialPath})`,
+    });
+  } else {
+    checks.push({
+      name: "agy-login",
+      severity: "blocking",
+      message:
+        agy.credential === "missing"
+          ? `no Antigravity login at ${agy.credentialPath}, so every agy: step would be refused`
+          : `the Antigravity login at ${agy.credentialPath} is not one agy can renew (no refresh token, or not a login record), so every agy: step would be refused`,
+      ...(credentialHint === undefined
+        ? {
+            hint:
+              (options.env ?? process.env).GITHUB_ACTIONS === "true"
+                ? "Pass CRYSK_ANTIGRAVITY_OAUTH in the action's crysk-secrets input (connect Antigravity in the Crysk dashboard)"
+                : "Run 'agy' in your terminal and sign in with Google, so agy writes its token file",
+          }
+        : { hint: credentialHint }),
+    });
+  }
+  return checks;
 }
 
 // Whether a review under this configuration sends any step to the Claude CLI
@@ -162,6 +247,8 @@ export function reviewNeedsClaude(input: {
 // required on the fallback profile, and `error` says why.
 export interface DoctorRouting {
   readonly claudeRequired: boolean;
+  // Whether the configuration names an `agy:` model (routingNeedsAntigravity).
+  readonly antigravityRequired: boolean;
   readonly models?: ModelsConfig;
   readonly profile: ModelProfile;
   readonly warnings: readonly string[];
@@ -192,6 +279,10 @@ export async function loadDoctorRouting(input: {
             "") !== "",
         materialityGate: resolveMaterialityGate(loaded.effective),
       }),
+      antigravityRequired: routingNeedsAntigravity(
+        models,
+        resolveProfile(profile),
+      ),
       ...(models === undefined ? {} : { models }),
       profile: resolveProfile(profile),
       warnings: loaded.warnings,
@@ -199,6 +290,7 @@ export async function loadDoctorRouting(input: {
   } catch (error) {
     return {
       claudeRequired: true,
+      antigravityRequired: false,
       profile: FALLBACK_PROFILE,
       warnings: [],
       error: error instanceof Error ? error.message : String(error),
@@ -404,6 +496,17 @@ export async function runDoctor(
       severity: "healthy",
       message: `Claude Code CLI is installed and authenticated (${tools.claude.version ?? "unknown"})`,
     });
+  }
+
+  // agy (odd/tasks/antigravity-oauth.md T5): only when the configuration names
+  // an agy: model.
+  if (options.antigravityRequired === true) {
+    checks.push(
+      ...(await antigravityDoctorChecks({
+        home,
+        ...options.checkToolsOptions,
+      })),
+    );
   }
 
   // GitHub CLI (optional, PR mode)

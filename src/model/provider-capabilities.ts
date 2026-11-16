@@ -32,6 +32,10 @@ export type CredentialKind =
   | "claude_subscription_oauth"
   | "opencode_chatgpt_oauth"
   | "provider_api_token"
+  // odd/tasks/antigravity-oauth.md S1, S4: an `agy:` route runs on the
+  // operator's Google subscription, signed in through OAuth and projected as
+  // agy's own token file. Not metered (`credentialKindBillsMetered` is false).
+  | "antigravity_subscription_oauth"
   // #182: an OpenCode route whose model the provider itself declares free at
   // runtime (all cost leaves === 0, status active, via `opencode models
   // <provider> --verbose --refresh`). Authenticates with NOTHING — no OAuth

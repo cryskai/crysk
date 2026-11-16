@@ -416,6 +416,11 @@ export type CiBillingMode = "subscription" | "metered";
 // from the routes the run resolves (openCodeRoutesBillMetered, ci/setup.ts):
 // an OpenCode provider bound to an API key can invoice; an auth file that only
 // holds providers no model uses cannot (cryskai/platform#12).
+//
+// An `agy:` route (odd/tasks/antigravity-oauth.md S6, T5) has no half here on
+// purpose: it runs only on the Google subscription in CRYSK_ANTIGRAVITY_OAUTH,
+// cash cost 0, like a ChatGPT subscription route, so it can never invoice and
+// leaves the answer to the two halves above (test/ci/gates.test.ts pins it).
 export function deriveCiBillingMode(
   env: Record<string, string | undefined>,
   opts?: { openCodeBillsMetered?: boolean },
@@ -485,7 +490,7 @@ export function budgetUnlimitedNoticeMessage(
   if (ceiling.source !== "unlimited-subscription") return null;
   return (
     "no budget-usd ceiling was applied: this route has no per-token invoice " +
-    "credential (a Claude subscription or a free route), so a run draws on " +
+    "credential (a Claude, ChatGPT or Antigravity subscription, or a free route), so a run draws on " +
     "quota rather than a per-token invoice and the estimated cost is not a " +
     "dollar figure to gate on. The size gate resolves from the route separately. " +
     "Set `budget-usd: <n>` to impose a ceiling anyway."
@@ -566,7 +571,7 @@ export function sizeGateUnlimitedNoticeMessage(
     .map((k) => (k === "lines" ? "changed-lines" : "changed-files"))
     .join(" or ");
   return (
-    `crysk size gate: no ${what} limit on a Claude subscription route — ` +
+    `crysk size gate: no ${what} limit on a subscription or free route — ` +
     "a run draws on quota, not a per-token invoice, so large PRs are " +
     "reviewed instead of skipped. Set `max-changed-lines` / " +
     "`max-changed-files` to impose a limit."

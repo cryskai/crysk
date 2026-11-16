@@ -77,16 +77,19 @@ import {
   validateRouteDrift,
 } from "./security/binding-policy";
 import {
+  lookupAntigravityRecord,
   lookupOpenCodeApiRecord,
   lookupOpenCodeOAuthRecord,
   OPENCODE_OAUTH_PROVIDER,
   OpenCodeApiTokenBroker,
   OpenCodeAuthBroker,
   OpenCodeFreeBroker,
+  resolveAntigravityCredentialSource,
   resolveOpenCodeAuthPath,
 } from "./security/credential-broker";
 import { authorizeWorkspaceCwd } from "./security/execution-authority";
 import {
+  oauthSecretName,
   REVIEW_EXPIRY_MARGIN_MS,
   recordExpiresAt,
 } from "./security/oauth-providers";
@@ -718,7 +721,9 @@ async function resolveFrozenBindings(
       // #133: the provider was in scope here all along and was dropped. It is
       // what decides the credential kind, and through it the billing mode.
       step.route.provider,
-      options,
+      // T3: the registry that will run the route says whether its backend has
+      // a transport; an antigravity route binds only when it does.
+      { ...options, isTransportRegistered: (backend) => registry.has(backend) },
       deps,
     );
     if (
@@ -1438,6 +1443,69 @@ export async function openCodeCredentialRefusal(
   };
 }
 
+// odd/tasks/antigravity-oauth.md T3 (S5): an agy route with no usable Google
+// login, refused before anything spends. The sibling of OpenCodeCredentialRefusal
+// (one record serves every agy route, so the class is always the missing one).
+export interface AntigravityCredentialRefusal {
+  readonly message: string;
+  readonly failureClass: "missing_subscription_record";
+  readonly params: {
+    readonly backend: "antigravity";
+    readonly provider: string;
+    readonly model: string;
+    readonly step: string;
+    readonly secret?: string;
+  };
+}
+
+// Every agy route, fallbacks included, runs on the one Antigravity login the
+// broker reads (resolveAntigravityCredentialSource): the CI record built from
+// CRYSK_ANTIGRAVITY_OAUTH, or locally the developer's agy token. The check asks
+// the broker's own lookup, so it refuses exactly what the first agy step would
+// fail on: a missing, unreadable or malformed record, or one with no refresh
+// token. An expired access token is NOT refused, and REVIEW_EXPIRY_MARGIN_MS does
+// not apply: Google does not rotate the refresh token, and agy renews the access
+// token from it at startup (L6), so the margin guards only rotating providers.
+export async function antigravityCredentialRefusal(
+  plan: ResolvedRoutePlan,
+  env: Readonly<Record<string, string | undefined>>,
+  readerFn: (sourcePath: string) => Promise<string> = (sourcePath) =>
+    Bun.file(sourcePath).text(),
+  homeDir: string = homedir(),
+): Promise<AntigravityCredentialRefusal | undefined> {
+  const steps = planRoutes(plan).filter(
+    (step) => step.route.backend === "antigravity",
+  );
+  const first = steps[0];
+  if (first === undefined) return undefined;
+  const sourcePath = resolveAntigravityCredentialSource(env, homeDir);
+  const lookup = await lookupAntigravityRecord(() => readerFn(sourcePath));
+  if (lookup.ok) return undefined;
+  const models = [...new Set(steps.map((step) => step.route.modelSnapshot))];
+  const stepKeys = [...new Set(steps.map((step) => step.stepKey))];
+  const where = `models name agy ${models.length === 1 ? "model" : "models"} ${models.join(", ")} (${stepKeys.join(", ")})`;
+  const why = "no Antigravity login record with a refresh token";
+  const params = {
+    backend: "antigravity" as const,
+    provider: first.route.provider,
+    model: first.route.modelSnapshot,
+    step: first.stepKey,
+  };
+  if (env.GITHUB_ACTIONS !== "true") {
+    return {
+      message: `${where}, but agy has no usable login (${why}): run \`agy\` and sign in with Google`,
+      failureClass: "missing_subscription_record",
+      params,
+    };
+  }
+  const secret = oauthSecretName("antigravity") ?? "CRYSK_ANTIGRAVITY_OAUTH";
+  return {
+    message: `${where}, but no usable ${secret} secret reached the run (${why}): connect Antigravity in the Crysk dashboard, or set ${secret} and pass it in the crysk-secrets input`,
+    failureClass: "missing_subscription_record",
+    params: { ...params, secret },
+  };
+}
+
 export async function prepareProductionAdmissionContext(input: {
   readonly workspaceRoot: string;
   readonly plan: ResolvedRoutePlan;
@@ -1473,7 +1541,9 @@ export async function prepareProductionAdmissionContext(input: {
   | {
       readonly error: string;
       // Set when the error is a route with no credential record (S1).
-      readonly credentialRefusal?: OpenCodeCredentialRefusal;
+      readonly credentialRefusal?:
+        | OpenCodeCredentialRefusal
+        | AntigravityCredentialRefusal;
     }
 > {
   // U3: the CRYSK_OPENCODE_* names are read ONCE, here, and travel in the
@@ -1561,6 +1631,20 @@ export async function prepareProductionAdmissionContext(input: {
       return { error: credentialRefusal.message, credentialRefusal };
     }
   }
+  // T3 (S5): the same check for agy routes, against the record their broker
+  // reads. Skipped on a dry run and when the caller injected an agy broker.
+  if (
+    input.checkCredentials !== false &&
+    input.credentialBrokers?.antigravity === undefined
+  ) {
+    const credentialRefusal = await antigravityCredentialRefusal(
+      input.plan,
+      input.env ?? process.env,
+    );
+    if (credentialRefusal !== undefined) {
+      return { error: credentialRefusal.message, credentialRefusal };
+    }
+  }
   // S7: after the credential check, before the bindings and the cost
   // confirmation. The probe is built only when a route sends a variant, so a plan
   // without one spawns nothing new.
@@ -1631,6 +1715,7 @@ export async function prepareProductionAdmissionContext(input: {
     mode: "conformance",
     binaryPath: authorityOptions.binaryPath,
     openCodeBinaryPath: authorityOptions.openCodeBinaryPath,
+    antigravityBinaryPath: authorityOptions.antigravityBinaryPath,
     env: authorityOptions.env,
     ...registryCredential,
     ...(input.loadSdk !== undefined ? { loadSdk: input.loadSdk } : {}),
@@ -1704,6 +1789,7 @@ export async function prepareProductionAdmissionContext(input: {
     evidence,
     binaryPath: authorityOptions.binaryPath,
     openCodeBinaryPath: authorityOptions.openCodeBinaryPath,
+    antigravityBinaryPath: authorityOptions.antigravityBinaryPath,
     env: authorityOptions.env,
     ...registryCredential,
     ...(input.loadSdk !== undefined ? { loadSdk: input.loadSdk } : {}),
@@ -2192,6 +2278,7 @@ export async function createProductionRuntime(
       mode: effectiveOptions.mode,
       evidence: effectiveOptions.evidence,
       binaryPath: effectiveOptions.binaryPath,
+      antigravityBinaryPath: effectiveOptions.antigravityBinaryPath,
       env: effectiveOptions.env,
       credentialBrokers: effectiveOptions.credentialBrokers,
       openCodeSecretNames: effectiveOptions.openCodeSecretNames,
@@ -2311,6 +2398,8 @@ export function productionFallbackRegistry(options: {
   readonly evidence?: Map<RunnerBackend, D1_11ReadinessEvidence>;
   readonly binaryPath?: string;
   readonly openCodeBinaryPath?: string;
+  // odd/tasks/antigravity-oauth.md T4 (L13 A3): the authority's agy path.
+  readonly antigravityBinaryPath?: string;
   // #161: matches `RunnerAuthorityOptions.env`'s widened shape — this
   // function is fed `options`/`authorityOptions` (both that type) directly.
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -2367,6 +2456,7 @@ export function productionFallbackRegistry(options: {
     evidence: options.evidence,
     binaryPath: options.binaryPath,
     openCodeBinaryPath: options.openCodeBinaryPath,
+    antigravityBinaryPath: options.antigravityBinaryPath,
     env: options.env,
     // Forwarded only when the caller actually supplied one. Substituting a
     // fresh broker here would erase the difference between "no preference"

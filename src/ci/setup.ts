@@ -43,6 +43,7 @@ import {
   cryskSecretsPresence,
   MAX_OPENCODE_PROVIDER_SLOTS,
   OPENCODE_OAUTH_SECRET_PROVIDER,
+  oauthRecordForSecret,
   opencodeSecretsFor,
   opencodeSecretToken,
   parseCryskSecrets,
@@ -70,6 +71,7 @@ import {
 } from "#ci/trigger";
 import { resolveRepoRoot } from "#git/git";
 import {
+  type ModelName,
   type ModelsConfig,
   modelEntry,
   parseModelName,
@@ -90,7 +92,11 @@ import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import { parseIgnoreFile } from "../ignore-file";
 import { credentialKindForRoute } from "../runner-authority";
-import { resolveOpenCodeAuthPath } from "../security/credential-broker";
+import {
+  resolveAntigravityRecordPath,
+  resolveOpenCodeAuthPath,
+} from "../security/credential-broker";
+import { oauthSecretName } from "../security/oauth-providers";
 import {
   type OpenCodeSecretManifestEntry,
   openCodeSecretManifestPath,
@@ -784,6 +790,13 @@ export interface MaterializeCiOpenCodeDataResult {
   // OpenCode model (the judge's entries aside). The Install OpenCode CLI step
   // runs then too, so a free model with no credential still gets the CLI.
   readonly openCodeModels: boolean;
+  // odd/tasks/antigravity-oauth.md T5 (S7): whether the models in effect run an
+  // `agy:` model (the judge's entries aside). The Install Antigravity CLI step
+  // runs then.
+  readonly antigravityModels: boolean;
+  // Whether this step wrote the Antigravity record from CRYSK_ANTIGRAVITY_OAUTH.
+  // Not an output: the record's presence is no reason to install agy.
+  readonly antigravityRecordWritten: boolean;
 }
 
 // The file the publisher reads when this step fails on a malformed input, and
@@ -847,6 +860,16 @@ async function writeOwnerOnlyFile(file: string, body: string): Promise<void> {
 // that do not parse yield none; assertPlatformPerson and readConfigInput refuse
 // them by name before this runs.
 export function openCodeProvidersOfModels(models: unknown): string[] {
+  const providers = new Set<string>();
+  for (const parsed of routesOfModels(models)) {
+    if (parsed.backend === "opencode") providers.add(parsed.provider);
+  }
+  return [...providers].sort();
+}
+
+// Every model the person layer's `models` names, parsed, the judge's entries
+// aside (see openCodeProvidersOfModels).
+function routesOfModels(models: unknown): ModelName[] {
   if (models === undefined) return [];
   let config: ModelsConfig;
   try {
@@ -854,25 +877,23 @@ export function openCodeProvidersOfModels(models: unknown): string[] {
   } catch {
     return [];
   }
-  const providers = new Set<string>();
+  const routes: ModelName[] = [];
   for (const [role, list] of Object.entries(config)) {
     if (role === "judge") continue;
-    for (const entry of list) {
-      const parsed = parseModelName(modelEntry(entry).name);
-      if (parsed.backend === "opencode") providers.add(parsed.provider);
-    }
+    for (const entry of list)
+      routes.push(parseModelName(modelEntry(entry).name));
   }
-  return [...providers].sort();
+  return routes;
 }
 
-// The OpenCode providers the person layer's routing runs on (openai-profile
-// S6): its models', plus, for the roles `models` does not set (no `default`),
-// its `profile`'s. A profile the parser refused never reaches here.
-export function openCodeProvidersOfPerson(person: {
+// The person layer's routes (openai-profile S6): its models', plus, for the
+// roles `models` does not set (no `default`), its `profile`'s. A profile the
+// parser refused never reaches here.
+function routesOfPerson(person: {
   models?: unknown;
   profile?: unknown;
-}): string[] {
-  const providers = new Set(openCodeProvidersOfModels(person.models));
+}): ModelName[] {
+  const routes = routesOfModels(person.models);
   const models = person.models as Record<string, unknown> | undefined;
   const coversEveryRole = models !== undefined && models.default !== undefined;
   const profile =
@@ -882,11 +903,36 @@ export function openCodeProvidersOfPerson(person: {
       : undefined;
   if (!coversEveryRole && profile !== undefined) {
     for (const model of profileModels(profile)) {
-      const parsed = parseModelName(model);
-      if (parsed.backend === "opencode") providers.add(parsed.provider);
+      routes.push(parseModelName(model));
     }
   }
+  return routes;
+}
+
+// The OpenCode providers the person layer's routing runs on (openai-profile
+// S6): its models', plus, for the roles `models` does not set (no `default`),
+// its `profile`'s.
+export function openCodeProvidersOfPerson(person: {
+  models?: unknown;
+  profile?: unknown;
+}): string[] {
+  const providers = new Set<string>();
+  for (const parsed of routesOfPerson(person)) {
+    if (parsed.backend === "opencode") providers.add(parsed.provider);
+  }
   return [...providers].sort();
+}
+
+// odd/tasks/antigravity-oauth.md T5 (S7): whether the person layer's routing
+// runs an `agy:` model, by the same reading. The Install Antigravity CLI step
+// keys on it (with the `model` input, which this step never reads).
+export function personRunsAntigravity(person: {
+  models?: unknown;
+  profile?: unknown;
+}): boolean {
+  return routesOfPerson(person).some(
+    (parsed) => parsed.backend === "antigravity",
+  );
 }
 
 // Whether an OpenCode route this run takes bills per token (cryskai/platform#12
@@ -1140,12 +1186,52 @@ export async function materializeCiOpenCodeData(
   } else {
     await rm(manifestPath, { force: true });
   }
+  const antigravityRecordWritten = await materializeAntigravityRecord(
+    options.cryskSecrets,
+    resolveAntigravityRecordPath(env, home),
+  );
   return {
     notices,
     warnings,
     openCodeAuthWritten: fromSecrets !== undefined,
     openCodeModels: providers.length > 0,
+    antigravityModels: personRunsAntigravity(personBody),
+    antigravityRecordWritten,
   };
+}
+
+// odd/tasks/antigravity-oauth.md T5 (S7): the CRYSK_ANTIGRAVITY_OAUTH record,
+// already masked and checked by parseCryskSecrets, written whole (refresh token
+// included: agy renews the hour-long access token at startup, L6) to the one
+// path AgyCredentialBroker reads in CI (resolveAntigravityRecordPath), file
+// 0600 in a 0700 directory. Written whenever the secret is present, whatever
+// the models: the broker reads it only for an `agy:` step, and a platform
+// workflow passes the slot to every repository. With no such secret, a record
+// an earlier run left is removed: the path is Crysk's own, and in CI the broker
+// trusts it, so on a runner whose HOME persists it would otherwise stand in for
+// a secret this repository does not have. No notice either way: a run that
+// names no `agy:` model logs exactly what it logged before.
+async function materializeAntigravityRecord(
+  cryskSecrets: CryskSecretsParse | undefined,
+  recordPath: string,
+): Promise<boolean> {
+  const secretName = oauthSecretName("antigravity") as string;
+  const record =
+    cryskSecrets === undefined
+      ? undefined
+      : oauthRecordForSecret(cryskSecrets.secrets, secretName);
+  if (record === undefined) {
+    await rm(recordPath, { force: true });
+    return false;
+  }
+  // Only `crysk/` is the step's own, so only it is made 0700: the data home
+  // above it keeps whatever mode it has, or gets the default.
+  const dir = path.dirname(recordPath);
+  await mkdir(path.dirname(dir), { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+  await writeOwnerOnlyFile(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+  return true;
 }
 
 // The env variable action.yml binds the `crysk-secrets` input to, in this step
@@ -1301,6 +1387,12 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
     }
     if (materialized.openCodeModels) {
       deps.appendOutput("opencode-models=true\n");
+    }
+    // odd/tasks/antigravity-oauth.md T5 (S7): the Install Antigravity CLI step
+    // keys on this (and on a `model` input naming `agy:`). Set only when the
+    // models in effect run an `agy:` model, never for the record alone.
+    if (materialized.antigravityModels) {
+      deps.appendOutput("antigravity-models=true\n");
     }
     // WHY the run step needs to know: it passes `--post` whenever the `post`
     // input is true (the default), and an explicit CLI option outranks the

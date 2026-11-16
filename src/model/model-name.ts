@@ -5,9 +5,13 @@
 // assignment by a Claude alias (`sonnet`), so "which step" and "which model"
 // were the same word, and a hunter could not get a model of its own. A name is
 // now self-describing — `claude:<name>` runs on the Claude Code CLI,
-// `opencode:<provider>/<model>` on OpenCode — and the role it is assigned to
-// (`hunter.logic`, `summary`) is a separate key. How hard the model works is
-// not part of its name: it is a list entry's `effort` (S7, below).
+// `opencode:<provider>/<model>` on OpenCode, `agy:<model-id>` on Google
+// Antigravity — and the role it is assigned to (`hunter.logic`, `summary`) is
+// a separate key. How hard the model works is not part of its name: it is a
+// list entry's `effort` (S7, below). The one exception is Antigravity, whose
+// model ids carry the level (`gemini-4-argon-high`): agy rejects `--model`
+// with a conflicting `--effort`, so an `agy:` entry takes no effort at all
+// (odd/tasks/antigravity-oauth.md S4, L3).
 //
 // WHY `-latest` and not the bare alias: Juanma, on "sonnet-latest": "explicito
 // seria mas claro definitivamente". The Claude Code CLI aliases point to the
@@ -39,7 +43,8 @@ export interface ModelName {
   readonly backend: RunnerBackend;
   readonly provider: string;
   // What reaches the backend: the CLI alias (`sonnet`) or pinned id for
-  // Claude, the provider's model id for OpenCode.
+  // Claude, the provider's model id for OpenCode, the `agy models` id for
+  // Antigravity.
   readonly model: string;
   // Set for the `-latest` names only.
   readonly alias?: ModelAlias;
@@ -47,6 +52,7 @@ export interface ModelName {
 
 const CLAUDE_PREFIX = "claude:";
 const OPENCODE_PREFIX = "opencode:";
+const AGY_PREFIX = "agy:";
 const LATEST_SUFFIX = "-latest";
 
 // A pinned Claude id: `claude-` and then lowercase letters, digits, dots and
@@ -63,10 +69,17 @@ const OPENCODE_RE =
 // keeps no table of them and checks the shape only. The characters the removed
 // `#variant` suffix allowed, with a length cap.
 const OPENCODE_EFFORT_RE = /^[a-zA-Z0-9._-]{1,64}$/;
+// An Antigravity model id as `agy models` lists it (`gemini-4-argon-high`,
+// `gemini-3.8-flash-low`, `gpt-oss-120b-medium`). The list comes from Google's
+// server and changes without a Crysk release, so only the shape is checked.
+const AGY_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+// Antigravity runs as the operator's Google subscription (S1).
+const AGY_PROVIDER = "google";
 
 const CLAUDE_FORMS =
   "claude:sonnet-latest, claude:opus-latest, claude:haiku-latest, claude:fable-latest or a full claude-* model name";
 const OPENCODE_FORM = "opencode:<provider>/<model>";
+const AGY_FORM = "agy:<model-id>";
 
 // Every message quotes the name through redactConfigValue: a config value is
 // echoed back to a terminal and a CI log, and a pasted key must not be.
@@ -112,6 +125,15 @@ function parseClaudeName(raw: string, name: string): ModelName {
   );
 }
 
+function parseAgyName(raw: string, name: string): ModelName {
+  if (!AGY_ID_RE.test(name)) {
+    throw new ModelNameError(
+      `${quoted(raw)} is not an Antigravity model name: use ${AGY_FORM}, the id as \`agy models\` lists it (for example "agy:gemini-4-argon-high")`,
+    );
+  }
+  return { raw, backend: "antigravity", provider: AGY_PROVIDER, model: name };
+}
+
 function parseOpenCodeName(raw: string, name: string): ModelName {
   const match = name.match(OPENCODE_RE);
   if (match === null) {
@@ -133,10 +155,16 @@ function refuseVariantSuffix(raw: string): void {
   const base = raw.slice(0, at);
   const effort = raw.slice(at + 1);
   if (!OPENCODE_EFFORT_RE.test(effort)) return;
+  let parsed: ModelName;
   try {
-    parseModelName(base);
+    parsed = parseModelName(base);
   } catch {
     return;
+  }
+  if (parsed.backend === "antigravity") {
+    throw new ModelNameError(
+      `${quoted(raw)}: the #variant suffix is gone, and an Antigravity model takes no effort: the effort is part of the agy model id, so write ${JSON.stringify(`${base}-${effort}`)} if agy models lists it`,
+    );
   }
   throw new ModelNameError(
     `${quoted(raw)}: the #variant suffix is gone: write {"model": ${JSON.stringify(base)}, "effort": ${JSON.stringify(effort)}} in models`,
@@ -163,13 +191,16 @@ export function parseModelName(raw: string): ModelName {
   if (raw.startsWith(OPENCODE_PREFIX)) {
     return parseOpenCodeName(raw, raw.slice(OPENCODE_PREFIX.length));
   }
+  if (raw.startsWith(AGY_PREFIX)) {
+    return parseAgyName(raw, raw.slice(AGY_PREFIX.length));
+  }
   if (isModelAlias(raw)) {
     throw new ModelNameError(
       `${quoted(raw)} is not a model name: write "claude:${raw}-latest"`,
     );
   }
   throw new ModelNameError(
-    `${quoted(raw)} is not a model name: a model is "claude:<name>" or "${OPENCODE_FORM}"`,
+    `${quoted(raw)} is not a model name: a model is "claude:<name>", "${OPENCODE_FORM}" or "${AGY_FORM}"`,
   );
 }
 
@@ -253,10 +284,17 @@ function levelList(): string {
   return `${EFFORT_LEVELS.slice(0, -1).join(", ")} or ${EFFORT_LEVELS.at(-1)}`;
 }
 
+// Why an `agy:` entry takes no effort (S4). Exported for routing, which
+// refuses the same entry when a `models` object reaches it unparsed.
+export const AGY_NO_EFFORT =
+  'sets an effort on an Antigravity model: the effort is part of the agy model id (for example "agy:gemini-4-argon-high"), so write the id with the level you want and no effort';
+
 // The effort an entry sets, checked against the backend its model runs on.
 // Claude: the CLI's `--effort` vocabulary, closed. OpenCode: a variant name,
 // open (OPENCODE_EFFORT_RE), and run through the same credential check as a
 // model name, because its grammar admits the characters of most API keys.
+// Antigravity: none, refused rather than ignored (S4), after the credential
+// check so a pasted key is still reported as one.
 function checkEffort(effort: unknown, name: ModelName, at: string): string {
   if (typeof effort !== "string") {
     throw new ModelNameError(`${at}: effort must be a string`);
@@ -278,6 +316,9 @@ function checkEffort(effort: unknown, name: ModelName, at: string): string {
       );
     }
     return effort;
+  }
+  if (name.backend === "antigravity") {
+    throw new ModelNameError(`${at} ${AGY_NO_EFFORT}`);
   }
   if (!OPENCODE_EFFORT_RE.test(effort)) {
     throw new ModelNameError(

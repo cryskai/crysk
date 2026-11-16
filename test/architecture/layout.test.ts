@@ -58,6 +58,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
     domain: "ci",
     files: [
       "admission-ledger",
+      "agy-install",
       "classify-error",
       "cli-record",
       "credential-refresh",
