@@ -41,9 +41,11 @@ been burned by a manual match that inflated a score by 50%.
 ## Branch and PR workflow (mandatory since 2026-08-26)
 
 Every slice lands through a feature branch and a pull request targeting `dev` —
-never push directly to `dev`. This is deliberate dogfooding: `crysk.yml` runs this
-engine's own review on every PR, so each slice gets self-reviewed by pr-hero
-before it merges.
+never push directly to `dev`. This is deliberate dogfooding: every PR gets a Crysk
+review before it merges. The review runs the RELEASED engine, not the PR's own
+changes: the Crysk App dispatches `crysk.yml` on `main`, which uses
+`cryskai/crysk@v0`. A change to the engine or its prompts therefore does not
+review the PR that carries it, nor anything else, until a release moves `v0`.
 
 1. Branch per slice off latest `dev` (`feat/d1-09-capability-report`, ...).
 2. Work-unit commits on the branch (one purpose each, tests included).
