@@ -112,8 +112,13 @@ export async function copyRetainedClaudeSession(
 // held, and the copy stops at MAX_COPY_BYTES with the truncated marker.
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_COPY_BYTES = 64 * 1024 * 1024;
-const OMITTED_LINE = JSON.stringify({ crysk: "session line omitted" });
-const TRUNCATED_LINE = `${JSON.stringify({ crysk: "session truncated" })}\n`;
+// The `crysk` value of the two marker lines. Exported for the usage-facts reader
+// (usage-facts.ts), which turns them into gaps: one spelling, so a change here
+// cannot silently stop those gaps from firing.
+export const SESSION_LINE_OMITTED = "session line omitted";
+export const SESSION_TRUNCATED = "session truncated";
+const OMITTED_LINE = JSON.stringify({ crysk: SESSION_LINE_OMITTED });
+const TRUNCATED_LINE = `${JSON.stringify({ crysk: SESSION_TRUNCATED })}\n`;
 const NEWLINE = 0x0a;
 
 async function copySessionJsonl(source: string, dest: string): Promise<void> {

@@ -535,6 +535,19 @@ describe("Claude attempt usage facts", () => {
       ["anthropic", "claude-sonnet-5-5", 2, 5674, 0, 5484, 141, 15],
     ]);
   });
+
+  // Through the real copier, so the gap cannot drift from the marker it writes.
+  test("a transcript line over the copy's cap is a line_omitted gap", async () => {
+    const big = JSON.stringify({ text: "a".repeat(4 * 1024 * 1024 + 1) });
+    const { tracePath } = await reviewWithSession({
+      sessionFile: "written",
+      credential: "projected",
+      transcript: `${message}\n${big}\n`,
+    });
+    const facts = await Bun.file(usagePath(tracePath)).json();
+    expect(facts.requests).toHaveLength(1);
+    expect(facts.gaps).toEqual(["line_omitted", "no_summary"]);
+  });
 });
 
 // Audit R1 and S1 (odd/tasks/review-traces.md L25). Fake credentials are

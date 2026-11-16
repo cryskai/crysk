@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  SESSION_LINE_OMITTED,
+  SESSION_TRUNCATED,
+} from "./claude-session-trace";
 import type { NormalizedTokens, UsageBillingMode } from "./usage-normalized";
 
 // What one attempt measured per model request, with no dollar anywhere: the engine's side of the
@@ -133,21 +137,21 @@ export function claudeUsageCounts(input: {
   ];
 }
 
-const OMITTED_MARKER = "session line omitted";
-const TRUNCATED_MARKER = "session truncated";
-
-// The requests of one Claude session copy (execution/claude-session-trace.ts). The CLI writes one
-// line per content block of a message, each with the message's final usage, so a message id is one
-// request, kept at its first position. A message with no usage at all (a CLI placeholder) is not a
-// request: it bills nothing and would name a model nobody prices.
-function claudeSessionRequests(text: string): {
+// The requests of one Claude session copy (execution/claude-session-trace.ts), read a line at a
+// time: the copy can be 64 MiB and several hunters settle at once, so it is never held whole. The
+// CLI writes one line per content block of a message, each with the message's final usage, so a
+// message id is one request, kept at its first position. A message with no usage at all (a CLI
+// placeholder) is not a request: it bills nothing and would name a model nobody prices.
+async function claudeSessionRequests(
+  lines: AsyncIterable<string> | Iterable<string>,
+): Promise<{
   requests: ModelUsageCounts[];
   gaps: UsageGapReason[];
-} {
+}> {
   const byId = new Map<string, ModelUsageCounts>();
   const requests: ModelUsageCounts[] = [];
   const gaps = new Set<UsageGapReason>();
-  for (const line of text.split("\n")) {
+  for await (const line of lines) {
     // Most lines are prompts and tool results; only these can name usage or a marker.
     if (!line.includes('"usage"') && !line.includes('"crysk"')) continue;
     let parsed: unknown;
@@ -157,8 +161,8 @@ function claudeSessionRequests(text: string): {
       continue;
     }
     if (!isRecord(parsed)) continue;
-    if (parsed.crysk === OMITTED_MARKER) gaps.add("line_omitted");
-    if (parsed.crysk === TRUNCATED_MARKER) gaps.add("truncated");
+    if (parsed.crysk === SESSION_LINE_OMITTED) gaps.add("line_omitted");
+    if (parsed.crysk === SESSION_TRUNCATED) gaps.add("truncated");
     if (parsed.type !== "assistant" || !isRecord(parsed.message)) continue;
     const { id, model, usage } = parsed.message;
     const modelId = nonEmpty(model);
@@ -249,20 +253,20 @@ function facts(
   };
 }
 
-// One Claude CLI attempt: its requests from the session copy (undefined when the copy is missing),
-// and the CLI's per-model summary (undefined when the CLI printed none) for what the copy lost or
-// never had: a side model the CLI ran outside the conversation, a line over the copy's caps.
-export function claudeAttemptUsageFacts(input: {
+// One Claude CLI attempt: its requests from the session copy's lines (undefined when the copy is
+// missing), and the CLI's per-model summary (undefined when the CLI printed none) for what the copy
+// lost or never had: a side model the CLI ran outside the conversation, a line over the copy's caps.
+export async function claudeAttemptUsageFacts(input: {
   attempt: number;
   credential: UsageFactCredential;
   provider: string;
-  session: string | undefined;
+  session: AsyncIterable<string> | Iterable<string> | undefined;
   summary: readonly ModelUsageCounts[] | undefined;
-}): AttemptUsageFacts {
+}): Promise<AttemptUsageFacts> {
   const read =
     input.session === undefined
       ? { requests: [], gaps: ["no_session" as const] }
-      : claudeSessionRequests(input.session);
+      : await claudeSessionRequests(input.session);
   const remainders: UsageFactEntry[] = [];
   for (const total of input.summary ?? []) {
     const seen = sumCounts(
@@ -283,11 +287,14 @@ export function claudeAttemptUsageFacts(input: {
 
 // The newest readback of an OpenCode capture (transports/opencode-evidence.ts): the session's
 // messages as OpenCode returned them, final per message, where the stream's per-message figures
-// can still grow. Undefined when the capture holds no readback.
-function openCodeReadbackRequests(
+// can still grow. One request per assistant message, none skipped, in the order the trace makes
+// its turns of them (ci/trace-transcripts.ts `openCodeConversation`), so a request's index is its
+// turn's. `complete` is the readback's own `coverage`, the same test the evidence classifier uses.
+// Undefined when the capture holds no readback.
+function openCodeReadback(
   capture: string,
   route: { provider: string; model: string },
-): UsageFactEntry[] | undefined {
+): { requests: UsageFactEntry[]; complete: boolean } | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(capture);
@@ -327,12 +334,15 @@ function openCodeReadbackRequests(
       tokens(t.reasoning),
     ]);
   }
-  return requests;
+  return { requests, complete: readback.data.coverage === "complete" };
 }
 
-// One OpenCode attempt: one request per assistant message of its capture's newest readback. With no
-// readback (the capture was dropped or elided) the attempt's streamed totals stand in as one
-// remainder under its route. An attempt with neither reached no session and reports nothing.
+// One OpenCode attempt: one request per assistant message of its capture's newest readback. When
+// the readback is missing (the capture was dropped or elided) or does not cover the whole session,
+// what the attempt's streamed totals count beyond the requests read stands in as one remainder
+// under its route, with a `no_readback` gap. An attempt with no capture and no totals reached no
+// session and reports nothing. The contract's `evicted` gap is not emitted: the transport's
+// per-message cap applies to its streamed map, which these facts never read.
 export function openCodeAttemptUsageFacts(input: {
   attempt: number;
   credential: UsageFactCredential;
@@ -340,13 +350,15 @@ export function openCodeAttemptUsageFacts(input: {
   capture: string | undefined;
   totals: NormalizedTokens;
 }): AttemptUsageFacts | undefined {
-  const requests =
+  const readback =
     input.capture === undefined
       ? undefined
-      : openCodeReadbackRequests(input.capture, input.route);
-  if (requests !== undefined) return facts(input, requests, [], []);
+      : openCodeReadback(input.capture, input.route);
+  if (readback?.complete === true) {
+    return facts(input, readback.requests, [], []);
+  }
   const t = input.totals;
-  const counts: UsageCounts = [
+  const totals: UsageCounts = [
     tokens(t.inputUncached) + tokens(t.inputOther),
     tokens(t.inputCacheRead),
     tokens(t.inputCacheWrite),
@@ -354,12 +366,17 @@ export function openCodeAttemptUsageFacts(input: {
     tokens(t.outputVisible) + tokens(t.outputOther),
     tokens(t.outputReasoning),
   ];
-  if (input.capture === undefined && counts.every((n) => n === 0)) {
+  if (input.capture === undefined && totals.every((n) => n === 0)) {
     return undefined;
   }
+  const requests = readback?.requests ?? [];
+  const counts = beyond(
+    totals,
+    sumCounts(requests.map((r) => r.slice(2) as unknown as UsageCounts)),
+  );
   return facts(
     input,
-    [],
+    requests,
     counts.some((n) => n > 0)
       ? [entry(input.route.provider, { model: input.route.model, counts })]
       : [],

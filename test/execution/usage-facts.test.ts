@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { openCodeConversation } from "../../src/ci/trace-transcripts";
+import {
+  SESSION_LINE_OMITTED,
+  SESSION_TRUNCATED,
+} from "../../src/execution/claude-session-trace";
 import {
   claudeAttemptUsageFacts,
   credentialOfBillingMode,
@@ -57,10 +62,10 @@ const second = assistant("msg_2", "claude-sonnet-5-5", {
 });
 
 describe("claudeAttemptUsageFacts", () => {
-  test("one request per message id, in answer order, with thinking moved out of output", () => {
+  test("one request per message id, in answer order, with thinking moved out of output", async () => {
     // The CLI writes one line per content block, each carrying the same usage.
-    const session = [first, first, second, first].join("\n");
-    const facts = claudeAttemptUsageFacts({
+    const session = [first, first, second, first];
+    const facts = await claudeAttemptUsageFacts({
       attempt: 2,
       credential: "api",
       provider: "anthropic",
@@ -82,12 +87,12 @@ describe("claudeAttemptUsageFacts", () => {
     });
   });
 
-  test("what the CLI's per-model summary counts beyond the transcript is a remainder", () => {
-    const facts = claudeAttemptUsageFacts({
+  test("what the CLI's per-model summary counts beyond the transcript is a remainder", async () => {
+    const facts = await claudeAttemptUsageFacts({
       attempt: 1,
       credential: "subscription",
       provider: "anthropic",
-      session: [first, second].join("\n"),
+      session: [first, second],
       summary: [
         { model: "claude-sonnet-5-5", counts: [5, 16832, 700, 5484, 181, 15] },
         // A side model the CLI ran outside the conversation.
@@ -100,12 +105,12 @@ describe("claudeAttemptUsageFacts", () => {
     expect(facts?.gaps).toBeUndefined();
   });
 
-  test("a summary without the lifetime or thinking split is compared on the combined leaves", () => {
-    const facts = claudeAttemptUsageFacts({
+  test("a summary without the lifetime or thinking split is compared on the combined leaves", async () => {
+    const facts = await claudeAttemptUsageFacts({
       attempt: 1,
       credential: "api",
       provider: "anthropic",
-      session: first,
+      session: [first],
       // An older CLI: the write is one figure and output includes thinking.
       summary: [
         { model: "claude-sonnet-5-5", counts: [2, 5674, 5484, 0, 156, 0] },
@@ -114,14 +119,14 @@ describe("claudeAttemptUsageFacts", () => {
     expect(facts?.remainders).toBeUndefined();
   });
 
-  test("a line the copy omitted or a truncated copy is a gap, and the summary covers what it lost", () => {
-    const omitted = JSON.stringify({ crysk: "session line omitted" });
-    const truncated = JSON.stringify({ crysk: "session truncated" });
-    const facts = claudeAttemptUsageFacts({
+  test("a line the copy omitted or a truncated copy is a gap, and the summary covers what it lost", async () => {
+    const omitted = JSON.stringify({ crysk: SESSION_LINE_OMITTED });
+    const truncated = JSON.stringify({ crysk: SESSION_TRUNCATED });
+    const facts = await claudeAttemptUsageFacts({
       attempt: 1,
       credential: "api",
       provider: "anthropic",
-      session: [first, omitted, truncated].join("\n"),
+      session: [first, omitted, truncated],
       summary: [
         { model: "claude-sonnet-5-5", counts: [5, 16832, 700, 5484, 181, 15] },
       ],
@@ -132,8 +137,8 @@ describe("claudeAttemptUsageFacts", () => {
     ]);
   });
 
-  test("no session copy: the whole summary is the remainder; no summary: a gap", () => {
-    const noSession = claudeAttemptUsageFacts({
+  test("no session copy: the whole summary is the remainder; no summary: a gap", async () => {
+    const noSession = await claudeAttemptUsageFacts({
       attempt: 1,
       credential: "api",
       provider: "anthropic",
@@ -152,18 +157,18 @@ describe("claudeAttemptUsageFacts", () => {
       gaps: ["no_session"],
     });
     // A killed attempt prints no result, but its session is written.
-    const killed = claudeAttemptUsageFacts({
+    const killed = await claudeAttemptUsageFacts({
       attempt: 3,
       credential: "api",
       provider: "anthropic",
-      session: first,
+      session: [first],
       summary: undefined,
     });
     expect(killed?.requests).toHaveLength(1);
     expect(killed?.gaps).toEqual(["no_summary"]);
   });
 
-  test("lines that are not assistant usage, malformed lines and zero-usage messages are not requests", () => {
+  test("lines that are not assistant usage, malformed lines and zero-usage messages are not requests", async () => {
     const synthetic = assistant("msg_s", "<synthetic>", {
       input: 0,
       read: 0,
@@ -173,11 +178,11 @@ describe("claudeAttemptUsageFacts", () => {
       thinking: 0,
     });
     const user = JSON.stringify({ type: "user", message: { content: "hi" } });
-    const facts = claudeAttemptUsageFacts({
+    const facts = await claudeAttemptUsageFacts({
       attempt: 1,
       credential: "api",
       provider: "anthropic",
-      session: ["{not json", user, synthetic, "", second].join("\n"),
+      session: ["{not json", user, synthetic, "", second],
       summary: [
         { model: "claude-sonnet-5-5", counts: [3, 11158, 700, 0, 40, 0] },
       ],
@@ -190,17 +195,32 @@ describe("claudeAttemptUsageFacts", () => {
 });
 
 // An OpenCode capture as the evidence collector writes it: the newest `readback` record holds the
-// session's messages as OpenCode returned them.
-function capture(messages: unknown[] | undefined): string {
+// session's messages as OpenCode returned them, and says whether it covers the whole session.
+function capture(
+  messages: unknown[] | undefined,
+  coverage = "complete",
+): string {
   return JSON.stringify({
     schemaVersion: 1,
     records: [
-      { kind: "readback", data: { messages: [] } },
+      { kind: "readback", data: { coverage: "complete", messages: [] } },
       ...(messages === undefined
         ? []
-        : [{ kind: "readback", data: { messages } }]),
+        : [{ kind: "readback", data: { coverage, messages } }]),
     ],
   });
+}
+
+function assistantMessage(input: number, output: number, modelID?: string) {
+  return {
+    info: {
+      role: "assistant",
+      providerID: "aiand",
+      ...(modelID === undefined ? {} : { modelID }),
+      tokens: { input, output, reasoning: 0, cache: { read: 0, write: 0 } },
+    },
+    parts: [],
+  };
 }
 
 const route = { provider: "aiand", model: "deepseek-ai/deepseek-v4.1-flash" };
@@ -296,6 +316,59 @@ describe("openCodeAttemptUsageFacts", () => {
         totals: {},
       }),
     ).toBeUndefined();
+  });
+
+  test("a readback that does not cover the session keeps its requests, and the totals beyond them are a remainder", () => {
+    const facts = openCodeAttemptUsageFacts({
+      attempt: 1,
+      credential: "api",
+      route,
+      capture: capture(
+        [assistantMessage(60, 25, "deepseek-ai/deepseek-v4.1-flash")],
+        "partial",
+      ),
+      totals,
+    });
+    expect(facts).toEqual({
+      attempt: 1,
+      credential: "api",
+      requests: [
+        ["aiand", "deepseek-ai/deepseek-v4.1-flash", 60, 0, 0, 0, 25, 0],
+      ],
+      remainders: [
+        ["aiand", "deepseek-ai/deepseek-v4.1-flash", 40, 2000, 30, 0, 15, 5],
+      ],
+      gaps: ["no_readback"],
+    });
+  });
+
+  // The platform matches a trace turn to a request by position (contract section 7), so no
+  // assistant message may be skipped: not one with zero tokens, not one with no model id.
+  test("requests are the trace's turns, one for one and in order", () => {
+    const text = capture([
+      { info: { role: "user" }, parts: [] },
+      assistantMessage(10, 1, "m-a"),
+      assistantMessage(0, 0, "m-b"),
+      assistantMessage(5, 2),
+      assistantMessage(7, 3, "m-a"),
+    ]);
+    const facts = openCodeAttemptUsageFacts({
+      attempt: 1,
+      credential: "api",
+      route,
+      capture: text,
+      totals,
+    });
+    const turns = openCodeConversation(JSON.parse(text)).turns ?? [];
+    expect(facts?.requests.map((r): number | undefined => r[2])).toEqual(
+      turns.map((t) => t.inputTokens),
+    );
+    expect(facts?.requests.map((r) => r[1])).toEqual([
+      "m-a",
+      "m-b",
+      route.model,
+      "m-a",
+    ]);
   });
 });
 

@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { releaseExecutionSnapshot } from "#model/exec-snapshots";
 import {
   type ExecutableAllowlistEntry,
@@ -492,11 +493,17 @@ async function writeAttemptUsageFacts(input: {
       ) {
         return;
       }
-      facts = claudeAttemptUsageFacts({
+      facts = await claudeAttemptUsageFacts({
         attempt,
         credential,
         provider: route.provider,
-        session: copied ? await Bun.file(trace).text() : undefined,
+        // A line at a time: the copy can be 64 MiB (see claude-session-trace.ts).
+        session: copied
+          ? createInterface({
+              input: createReadStream(trace, "utf8"),
+              crlfDelay: Number.POSITIVE_INFINITY,
+            })
+          : undefined,
         summary: outcome?.modelUsage,
       });
     } else if (
