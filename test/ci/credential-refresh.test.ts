@@ -178,7 +178,7 @@ describe("action.yml — the operation input", () => {
       (candidate) => candidate.id === "credential-refresh",
     );
     expect(step?.run).toBe(
-      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/credential-refresh.ts" --crysk-secrets-stdin`,
+      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/credential-refresh.ts" --crysk-secrets-stdin`,
     );
     expect(step?.env?.CRYSK_SECRETS_INPUT).toBe(`\${{ inputs.crysk-secrets }}`);
     expect(step?.env?.CRYSK_OPERATION).toBe(`\${{ inputs.operation }}`);
