@@ -17,12 +17,16 @@ import reliabilityPrompt from "../prompts/default/deep-review-reliability.md" wi
 import resiliencePrompt from "../prompts/default/deep-review-resilience.md" with {
   type: "file",
 };
+import securityPrompt from "../prompts/default/deep-review-security.md" with {
+  type: "file",
+};
 import refuterPrompt from "../prompts/default/review-refuter.md" with {
   type: "file",
 };
 import materialityPrompt from "../prompts/materiality.md" with { type: "file" };
 import scoutPrompt from "../prompts/scout.md" with { type: "file" };
 import summarizerPrompt from "../prompts/summarizer.md" with { type: "file" };
+import verifierPrompt from "../prompts/verifier.md" with { type: "file" };
 import generalSkill from "../skills/crysk/SKILL.md" with { type: "file" };
 import ciSetupAdmissionExample from "../skills/crysk-ci-setup/assets/admission-config.example.json" with {
   type: "file",
@@ -50,6 +54,7 @@ export const BUNDLED_AGENT_FILES: Record<string, string> = {
   "deep-review-parity.md": parityPrompt,
   "deep-review-reliability.md": reliabilityPrompt,
   "deep-review-resilience.md": resiliencePrompt,
+  "deep-review-security.md": securityPrompt,
   "review-refuter.md": refuterPrompt,
 };
 
@@ -68,6 +73,7 @@ export const CONSOLIDATE_PROMPT_PATH = consolidatePrompt;
 export const MATERIALITY_PROMPT_PATH = materialityPrompt;
 export const SCOUT_PROMPT_PATH = scoutPrompt;
 export const SUMMARIZER_PROMPT_PATH = summarizerPrompt;
+export const VERIFIER_PROMPT_PATH = verifierPrompt;
 
 export const TRIAGE_SKILL_FILES: Record<string, string> = {
   "SKILL.md": triageSkill,

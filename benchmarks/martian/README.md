@@ -551,6 +551,47 @@ judge calls were silent).
 
 Raw data: lab `bench/experiments/2026-10-25-martian-50-dev-default/`.
 
+## Martian 50, arm `dev-2026-11-13`, Opus 4.5 judge (2026-11-13/15, Martian's own pipeline)
+
+The same 50 PRs and judge as the `dev-default` row above, re-run on what `dev` ships three weeks later. The variable
+is the engine, so the delta is not attributable to one change: it includes consolidation on by default (#400), the
+`lifecycle` hunter retired from the default set (`2398bcba`, so three hunters instead of four) and ~480 other
+commits. The model snapshots are the same in both arms (`claude-sonnet-5-5` hunters, `claude-opus-5-5` refuter, read
+off the session traces).
+
+- **Engine.** `a05ae7fe` (v0.6.1) for all 50. Every kept review started after the checkout settled on it; a window
+  where the checkout sat on `main` (11:06–11:24) only differed in `.github/`, and the reviews from that window were
+  redone because the `claude` CLI binary changed and the harness refused the stale identity.
+- **Qualification.** All 50 qualified; injected without `--allow-unqualified`. Session traces kept for every step.
+- **Judge.** Martian upstream `e616e849`, steps 2/2.5/3, `anthropic/claude-opus-4-5-20251101` through the shim, the
+  same two disclosed deviations (no temperature, `LLM_CALL_TIMEOUT` 300 s). Step 2: 50/50. Step 2.5: 48 ok,
+  0 fallbacks, 0 errors. Step 3 ran over six usage windows: the first pass left 609 failed judge calls on 13 PRs,
+  which the shim reported as a bare `claude exited 1:` (the CLI prints its usage-limit error on stdout; fixed in this
+  PR). Martian's step 3 resumes only PRs with `errors_count > 0`, so those 13 were re-judged until all 50 had zero
+  errors; none of the scored evaluations carries an error.
+- **Cost.** $78.83 notional for the 50 kept reviews ($0 cash, subscription); attempts discarded to quota cuts are not
+  counted. Judge calls are not metered.
+- Unreplicated. Surface B: **not run**.
+
+| | H+C recall | recall | precision | F1 | tp | fp |
+|---|---|---|---|---|---|---|
+| `dev-default` (2026-10-25) | 78.8% (52/66) | 64.2% | 28.8% | 39.7% | 111 | 275 |
+| **`dev-2026-11-13`** | **80.3% (53/66)** | 61.8% | 31.2% | 41.5% | 107 | 236 |
+
+Among the 22 tools judged on the current 173 goldens it stays **#1 on High+Critical recall** (next: augment and
+qodo-extended-v2 at 74.2%). Rows in `evaluations.json` scored on the older 137-golden set (H+C out of 50, such as
+qodo-extended-summary 82.0% 41/50) are not comparable and stay out.
+
+Per corpus (H+C · recall · fp), new vs `dev-default`: Cal.com 18/19 (was 17/19) · 71% · 67; Sentry 12/12 (12/12) ·
+the two sentry repos 47% and 65% · 53; Grafana 8/12 (9/12) · 64% · 33; Keycloak 9/11 (9/11) · 61% · 34; Discourse
+6/12 (5/12) · 56% · 49.
+
+**Reading.** Every difference is within the 1–3 H+C run-to-run variance measured on Cal.com, so this is "no
+regression", not "better". The one consistent direction is fewer false positives (275 → 236), which matches what
+consolidation was built for. Discourse is still the weak corpus.
+
+Raw data: lab `bench/experiments/2026-11-13-martian-50-dev-2026-11-13/`.
+
 ## Benchmark qualification gates and metrics (Unit 7)
 
 Only **schema-valid, attributable completed attempts** qualify for resume and

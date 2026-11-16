@@ -33,6 +33,7 @@ import {
   pipelineMaterialityInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
+  pipelineVerifierInput,
   type RunPromptOptions,
 } from "#review/route-preflight";
 import { resolvePromptSet } from "#review/run";
@@ -190,6 +191,7 @@ describe("engine-owned prompts: the profile's set over default (S4)", () => {
     "scout.md": assets.scoutPromptPath,
     "summarizer.md": assets.summarizerPromptPath,
     "materiality.md": assets.materialityPromptPath,
+    "verifier.md": assets.verifierPromptPath,
   };
 
   test("claude: every engine prompt is today's path", () => {
@@ -200,7 +202,7 @@ describe("engine-owned prompts: the profile's set over default (S4)", () => {
     }
   });
 
-  test("a profile set: its consolidate, the default for the other three", () => {
+  test("a profile set: its consolidate, the default for the others", () => {
     for (const file of ENGINE_PROMPT_FILES) {
       expect(enginePromptPath(file, fixture)).toBe(
         file === "consolidate.md"
@@ -227,6 +229,11 @@ describe("engine-owned prompts: the profile's set over default (S4)", () => {
       pipelineMaterialityInput({ materiality_gate: true }, fixture),
     ).toEqual({
       materiality: { promptPath: assets.materialityPromptPath },
+    });
+    // The verifier's input carries only a path: its model, effort, tools and
+    // route are the refuter agent's, so there is no engine-owned mark to set.
+    expect(pipelineVerifierInput(fixture)).toEqual({
+      verifier: { promptPath: assets.verifierPromptPath },
     });
   });
 

@@ -22,6 +22,12 @@ covers the two things that section does not: `models` and credentials.
 
 `max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate, scout and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and Crysk can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
 
+**A custom `agents_dir` mirrors the default set.** The directory has to hold exactly the prompt files the
+review runs, no more and no fewer, so a hunter is never dropped or left unused in silence. When a hunter joins
+the default set, a directory copied from an older default stops with
+`the spec references "deep-review-security.md" but the dir does not have it`: copy that file from
+`prompts/default/` of the installed package into the directory. The security hunter joined on 2026-11-15.
+
 **Old directory names.** The directories used to be `~/.prhero/` and `<repo>/.prhero/`, and the ignore file
 `.prheroignore`. Those are still read, for one version, when the new name does not exist. Nothing is moved for
 you: `crysk doctor` prints the full procedure for your machine. For the home that is the `mv ~/.prhero ~/.crysk`
@@ -118,8 +124,8 @@ it runs on, in the order to try them:
 
 | Role | Steps | When the role is not listed |
 | --- | --- | --- |
-| `hunter.<key>` | one hunter: `hunter.logic`, `hunter.parity`, `hunter.reliability`, `hunter.resilience`, or the key of a hunter in your own prompt set | `default` |
-| `refuter` | the refuter, and the re-review verifier and the CI adjudicator, which run its prompt family | `default` |
+| `hunter.<key>` | one hunter: `hunter.logic`, `hunter.parity`, `hunter.reliability`, `hunter.resilience`, `hunter.security`, or the key of a hunter in your own prompt set | `default` |
+| `refuter` | the refuter, and the re-review verifier and the CI adjudicator, which run as its agent | `default` |
 | `consolidate` | the consolidation pass after the refuter | `default` |
 | `scout` | the experimental diff-only scout | `default` |
 | `summary` | the summarizer | `default` |
@@ -306,7 +312,10 @@ prompt set still runs at an explicit level:
 | Summarizer, scout, rereview verifier | `high` | Unmeasured, so they keep what every model ran at before the 5.5 family. |
 
 The bundled prompts declare `effort: xhigh` on the hunters and `effort: high` on the refuter. The rereview
-verifier reuses the refuter's prompt, so it follows the refuter's frontmatter. There is no CLI flag or
+verifier runs as the refuter's agent, so it follows the refuter's frontmatter for model, effort and tools.
+What it is told is the engine's own text, not the refuter's: it answers whether an earlier finding's defect is
+still present at the current head, which is not the refuter's question. A custom `review-refuter.md` therefore
+no longer changes the verifier's instructions, only its model, effort and tools. There is no CLI flag or
 environment variable that overrides effort, and the child process never inherits `CLAUDE_CODE_EFFORT_LEVEL`
 from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, and the cost band does
 not price effort yet, so expect the real bill to exceed the quote.
@@ -440,7 +449,7 @@ The Claude child sees only the chosen credential, under the CLI's own name: `CLA
 subscription, `ANTHROPIC_API_KEY` for the key. The other one, and `ANTHROPIC_AUTH_TOKEN`, are removed from its
 environment. `ANTHROPIC_AUTH_TOKEN` is not a credential Crysk chooses: put an API key in `ANTHROPIC_API_KEY`
 instead. How a run bills follows the choice: on the API key it is metered and the CI budget ceiling applies
-(`$10` unless `budget-usd` says otherwise); on the subscription it draws on quota with no ceiling.
+(`$12` unless `budget-usd` says otherwise); on the subscription it draws on quota with no ceiling.
 
 On macOS with `/usr/bin/security` present, a run on the subscription projects the Keychain OAuth record into
 the child. A run on the API key attaches no Keychain broker at all. If the `Claude Code-credentials` item is

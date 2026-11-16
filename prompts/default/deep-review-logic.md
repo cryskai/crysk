@@ -107,33 +107,74 @@ Apply all of them to every added hunk.
 
 {{PRIORS}}
 
-Replaced by the orchestrator with this repo's `suspicion_priors`. Treat higher weight as more reason to be
-thorough there — never as a reason to skip the sweep elsewhere.
+The block above holds the repository's suspicion priors, when it configures any. Treat higher weight as more
+reason to be thorough there — never as a reason to skip the sweep elsewhere.
 
 ## 5. Gotchas (static, out-of-repo knowledge)
 
 {{GOTCHAS}}
 
-Replaced by the orchestrator with this repo's gotchas. Treat them as established facts about this codebase.
+The block above holds the repository owner's review instructions, when there are any. Treat them as
+established facts about this codebase.
 
-## 6. No-Self-Filter Mandate
+## 6. Finding contract
 
-Do not apply a confidence cutoff at finding time. Severity (consequence) and confidence (`evidence_class`) are
-separate axes. If evidence is thin, set `evidence_class: "inferential"` or `"insufficient"` and emit the finding
-anyway; confidence triage is the refuter's job.
+A finding reports one defect. Write `claim` as three links, in this order:
 
-**Severity calibration — consequence-if-true.** Broken core flow, data loss/corruption, or a security hole →
-`BLOCKER`. A user-visible malfunction (stuck spinner, wrong rendered values, dead control, wrongly persisted state) →
-`CRITICAL`. Degraded-but-functional or latent-until-triggered → `WARNING`. Pure hygiene → `SUGGESTION`.
-Never downgrade severity because you are unsure.
+1. **Fact** — what the code does, with the lines you read.
+2. **Trigger** — who or what reaches that code, and with what input or state.
+3. **Consequence** — what goes wrong, and who or what observes it.
+
+Say which links you read with a tool and which you are assuming. A claim that proves the fact and only asserts
+the consequence is the most common way a finding turns out to be wrong.
+
+**`severity` starts from the consequence.** Decide it in two steps:
+
+1. If the consequence is irreversible or crosses a security boundary (data lost or corrupted, a change that
+   cannot be rolled back, access to something the caller is not entitled to), it is `BLOCKER` whatever the
+   trigger is, as long as the trigger can happen in the running system: something a user or a caller does, or
+   a failure the system has to expect, such as a dependency erroring or a process dying part-way. A race or a
+   failed write that corrupts data is `BLOCKER`, not `WARNING`.
+2. Otherwise the wrong behaviour can be recovered from, and the trigger separates two levels:
+   - `CRITICAL` — ordinary operation reaches it: a wrong result returned, a crash on normal input, a command
+     or control that does nothing, a documented contract broken.
+   - `WARNING` — it needs a condition the claim names: two requests interleaving, a dependency failing, data
+     in an unusual state.
+
+`SUGGESTION` is for a finding with no wrong behaviour.
+
+How sure you are, how large the change is and how many other findings you have do not move severity. Being
+unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER`
+and `CRITICAL` findings are checked by a second reviewer and can block a merge; a `WARNING` is posted as an
+advisory comment that nothing verifies, so a severe consequence reported as `WARNING` is never checked.
+
+**`evidence_class` is how much of the claim you verified, not how bad it is.**
+
+- `deterministic` — you read every link with a tool: the code, the path that reaches it, and what consumes the
+  wrong result.
+- `inferential` — you read the fact; the trigger or the consequence is reasoned from it.
+- `insufficient` — you could not read something the claim depends on. Say what.
+
+Do not drop a finding because you are unsure. After you have read the code the claim depends on, report it and
+let `evidence_class` say how much you verified.
+
+**`causal_disposition` is how the change relates to the defect.**
+
+- `introduced` — the change adds the defective code.
+- `behavior-activated` — the defective code was already there and the change makes it reachable.
+- `worsened` — the defect was already there and the change makes its consequence larger or more frequent.
+- `pre-existing` — the defect was already there and the change neither adds nor alters it.
+- `base-only` — the defect is only in the version before the change, which removes or replaces it.
+- `unknown` — you could not tell.
 
 ## 7. Noise Discipline
 
 - Report a defect only when the changed code itself shows the contradiction (names, types, the enclosing
   function, or a definition you read). Do not invent requirements the code does not express.
 - Never flag style, formatting, naming preferences, or missing comments.
-- Prefer `causal_disposition: "introduced"` for defects on added lines; use `pre-existing` when the defect is
-  in unchanged context you read.
+- Prefer `causal_disposition: "introduced"` for defects on added lines. For a defect in unchanged code you
+  read, follow the finding contract: `behavior-activated` or `worsened` when the change makes it reachable or
+  worse, `pre-existing` only when the change does neither.
 - Each distinct defect is its own finding, even when two sit in the same hunk or function.
 
 ## 8. Output
@@ -147,8 +188,8 @@ Return exactly one JSON object, no prose:
 Return `{"findings": []}` when clean — an empty array is a valid, expected result, not a failure.
 
 Fields: `id` only needs to be locally unique within your output (`LOG-1`, `LOG-2`, ...). `category` is always
-`15`. `line` is the line of the defect in the new file. `claim` states the contradiction concretely: what the
-code does, what its own context shows it intends, and the consequence. `proof_refs` cites `path:line` for the
+`15`. `line` is the line of the defect in the new file. `claim` follows the finding contract; its
+fact says what the code does and what its own context shows it intends. `proof_refs` cites `path:line` for the
 defect and for the context that shows the intent. `severity` is `BLOCKER|CRITICAL|WARNING|SUGGESTION`.
 `evidence_class` is `deterministic|inferential|insufficient`. `causal_disposition` is
 `introduced|behavior-activated|worsened|pre-existing|base-only|unknown`. `hunter` is always `"logic"`.

@@ -31,6 +31,7 @@ export const ENGINE_PROMPT_FILES = [
   "scout.md",
   "summarizer.md",
   "materiality.md",
+  "verifier.md",
 ] as const;
 export type EnginePromptFile = (typeof ENGINE_PROMPT_FILES)[number];
 

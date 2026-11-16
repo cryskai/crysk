@@ -50,6 +50,10 @@ export type PrBaseSource = "merge-commit-parent" | "base-branch";
 export interface PrTarget {
   number: number;
   title: string;
+  // The description the author wrote, "" when there is none (gh reports an
+  // empty or null `body`; many PRs have no description). The hunters read it
+  // as the change's stated intent (S10), never as evidence.
+  body: string;
   state: PrState;
   headSha: string;
   // A rev EXPRESSION, not always a sha: for a merged PR it is
@@ -67,9 +71,10 @@ export interface PrTarget {
 
 // Parses the raw stdout of `gh pr view <n> --json number,title,state,
 // headRefOid,baseRefName,baseRefOid,mergeCommit,additions,deletions,
-// changedFiles`. Every field is validated loudly and names itself when it is
-// missing or mistyped: a PR record read wrong reviews a range nobody asked
-// for, and gh's output is still input from outside this process.
+// changedFiles,body`. Every field is validated loudly and names itself when
+// it is missing or mistyped, `body` aside, which may be empty, null or absent:
+// a PR record read wrong reviews a range nobody asked for, and gh's output is
+// still input from outside this process.
 export function resolvePrTarget(raw: string): PrTarget {
   let parsed: unknown;
   try {
@@ -90,6 +95,7 @@ export function resolvePrTarget(raw: string): PrTarget {
     );
   }
   const title = readString(record, "title");
+  const body = readOptionalText(record, "body");
   const state = readString(record, "state");
   if (state !== "OPEN" && state !== "CLOSED" && state !== "MERGED") {
     throw new CliUsageError(
@@ -124,6 +130,7 @@ export function resolvePrTarget(raw: string): PrTarget {
     return {
       number,
       title,
+      body,
       state,
       headSha,
       baseRef: `${mergeOid}^1`,
@@ -138,6 +145,7 @@ export function resolvePrTarget(raw: string): PrTarget {
   return {
     number,
     title,
+    body,
     state,
     headSha,
     baseRef: readSha(record, "baseRefOid"),
@@ -178,6 +186,24 @@ function readString(record: Record<string, unknown>, field: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new CliUsageError(
       `gh pr view "${field}" must be a non-empty string, got: ` +
+        JSON.stringify(value),
+    );
+  }
+  return value;
+}
+
+// A field gh reports as text, null, or leaves out: absent is "" and never an
+// error, because a PR without a description is the ordinary case. Any other
+// type is still gh output this process does not understand, so it fails loud.
+function readOptionalText(
+  record: Record<string, unknown>,
+  field: string,
+): string {
+  const value = record[field];
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") {
+    throw new CliUsageError(
+      `gh pr view "${field}" must be a string or null, got: ` +
         JSON.stringify(value),
     );
   }

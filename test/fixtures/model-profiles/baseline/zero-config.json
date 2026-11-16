@@ -12,7 +12,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": [],
-      "systemPromptSha256": "9fc226dace19631d5587ecb5ccbea27278f30e4d511da2bce647cec006b0d2f7",
+      "systemPromptSha256": "a51e3b718bff5625db54b8eae43d913618d21c38e3c163be2dae4f33e22136a8",
       "promptSha256": "0231a5d9fc6810a4c8b69eebd5d53404e6432825c28db77cafd107dce2902c0d",
       "cliModel": "sonnet",
       "argv": [
@@ -49,7 +49,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "dd873351248817c4d8d156d608891580e3a5b0ff054d6e4753122bac8ab63332",
+      "systemPromptSha256": "a825bb7f6f82f234b785ce029f4a2ade064efda7ae9a468084735b67b26c6ab8",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": "sonnet",
       "argv": [
@@ -86,7 +86,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "c60f46c96bb6e5e1443adcc8657a9cf91fef804951cd3e1130b5e30d5348ee25",
+      "systemPromptSha256": "70fbc4e084532d0d8d8f2e1d0b5e192551e5cb2a05381c5063351731916a8ee6",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": "sonnet",
       "argv": [
@@ -123,7 +123,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "3329a15eac454d06c44b141a24d908b7c8b5b744447da5d460cea435178c29e7",
+      "systemPromptSha256": "197d95844fc8c7603f1e87eeef8127efe249afc0361548e3dfb502d7983ccbf5",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": "sonnet",
       "argv": [
@@ -160,7 +160,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "f3a2375e7aff777897b60980fc2bf44b77d286adaacb10d41bb7d695fc52b9a5",
+      "systemPromptSha256": "c7caae508135a03de10d5cdfd92893240913307ba4b503eb476f81c133ab2402",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": "sonnet",
       "argv": [
@@ -168,6 +168,43 @@
         "-p",
         "--append-system-prompt-file",
         "<RUN>/steps/hunter-resilience.system.md",
+        "--output-format",
+        "json",
+        "--mcp-config",
+        "<RUN>/mcp.json",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "",
+        "--tools",
+        "Read,Grep,Glob,mcp__codegraph__codegraph_explore",
+        "--permission-mode",
+        "bypassPermissions",
+        "--model",
+        "sonnet",
+        "--effort",
+        "xhigh",
+        "--exclude-dynamic-system-prompt-sections"
+      ]
+    },
+    {
+      "name": "hunter-security",
+      "backend": "claude-code",
+      "provider": "anthropic",
+      "model": "sonnet",
+      "modelSnapshot": "sonnet",
+      "modelVariant": null,
+      "effort": "xhigh",
+      "fallbackEfforts": null,
+      "effortApplied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      "systemPromptSha256": "5eaf8812360217a8d09a7f8f61df12be7e4d506350206454b6ad31d0a3788581",
+      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
+      "cliModel": "sonnet",
+      "argv": [
+        "claude",
+        "-p",
+        "--append-system-prompt-file",
+        "<RUN>/steps/hunter-security.system.md",
         "--output-format",
         "json",
         "--mcp-config",
@@ -234,7 +271,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "17694a98710c672032d6edda4f5a98722993b1b5a01e1f4a6664c86fb626b229",
+      "systemPromptSha256": "c3185e34557d426675aef38940fc61ac0c318552c5856ea3e5572e09a0ec9601",
       "promptSha256": "82a74d242804c5b876f6441d3c560d8fa368b459357bb60f735c3ca550ddb8cf",
       "cliModel": "opus",
       "argv": [
@@ -336,7 +373,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "9f888cb1f9d12531f5caaa9d63c0d7897cb240b7f697269ac3e653ff36f9e2a1",
+    "routeFingerprint": "985af0856c03a5cdd72e46ecf0cb73b4f6b6daf9e526108eed1a890f22a99502",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -368,6 +405,20 @@
       },
       {
         "stepKey": "hunter-logic",
+        "role": "hunter",
+        "logicalIdentity": "claude:sonnet-latest",
+        "routeFingerprint": "1da1f1d92fb6d22f05c7a5ec7079206963c519ed79ede80d92ce4200059854d5",
+        "effort": null,
+        "route": {
+          "backend": "claude-code",
+          "provider": "anthropic",
+          "modelFamily": "sonnet",
+          "modelSnapshot": "sonnet"
+        },
+        "fallbacks": null
+      },
+      {
+        "stepKey": "hunter-security",
         "role": "hunter",
         "logicalIdentity": "claude:sonnet-latest",
         "routeFingerprint": "1da1f1d92fb6d22f05c7a5ec7079206963c519ed79ede80d92ce4200059854d5",
@@ -497,6 +548,13 @@
     },
     {
       "name": "hunter-resilience",
+      "model": "sonnet",
+      "effort": "xhigh",
+      "effort_applied": true,
+      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
+    },
+    {
+      "name": "hunter-security",
       "model": "sonnet",
       "effort": "xhigh",
       "effort_applied": true,

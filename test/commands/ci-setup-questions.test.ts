@@ -66,7 +66,7 @@ describe("askChoices", () => {
     expect(lines.join("\n")).toContain("trusted actors");
   });
 
-  test("api: asks the ceiling, re-asks on a non-number, empty takes $10", async () => {
+  test("api: asks the ceiling, re-asks on a non-number, empty takes the default", async () => {
     const { prompter } = scripted([
       "",
       "",
@@ -85,7 +85,7 @@ describe("askChoices", () => {
     expect(c.maxChangedLines).toBe(2000);
 
     const { prompter: p2 } = scripted(["", "", "api", "", "", "n"]);
-    expect((await askChoices(p2, () => {})).budgetUsd).toBe(10);
+    expect((await askChoices(p2, () => {})).budgetUsd).toBe(12);
   });
 
   test("advanced: every answer is written, the default ones included", async () => {

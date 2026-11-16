@@ -1,0 +1,79 @@
+{
+  "id": "py-invoice-reassign",
+  "language": "python",
+  "project": "billing-sample",
+  "origin": "synthetic",
+  "split": "dev",
+  "quick": true,
+  "must_find": [
+    {
+      "id": "reassign-stale-listing",
+      "area": "state",
+      "severity": "blocking",
+      "class": "stale-derived-state",
+      "depth": 1,
+      "what": "reassign changes customer_id before calling _unindex, which looks the listing up by customer_id, so the invoice stays in the old customer's listing and that customer's payments settle it",
+      "sites": [
+        {
+          "path": "billing/store.py",
+          "start_line": 22,
+          "end_line": 31
+        },
+        {
+          "path": "billing/store.py",
+          "start_line": 50,
+          "end_line": 53
+        }
+      ]
+    },
+    {
+      "id": "export-page-base",
+      "area": "contract",
+      "severity": "blocking",
+      "class": "contract-mismatch",
+      "depth": 2,
+      "what": "export_page treats page as 0-based while --page is 1-based with default 1, so the default export skips the first page and returns nothing for a customer with fewer invoices than the page size",
+      "sites": [
+        {
+          "path": "billing/export.py",
+          "start_line": 18,
+          "end_line": 23
+        },
+        {
+          "path": "billing/cli.py",
+          "start_line": 29,
+          "end_line": 30
+        }
+      ]
+    }
+  ],
+  "must_not": [
+    {
+      "id": "void-unindex",
+      "why": "void changes status, not customer_id, so _unindex finds the right listing; leaving the listing while staying retrievable by id is the documented behaviour",
+      "sites": [
+        {
+          "path": "billing/store.py",
+          "start_line": 33,
+          "end_line": 39
+        }
+      ]
+    },
+    {
+      "id": "paid-ratio-division",
+      "why": "Invoice.__post_init__ refuses an invoice without items or with a non-positive amount, so total_cents is never zero",
+      "sites": [
+        {
+          "path": "billing/invoice.py",
+          "start_line": 29,
+          "end_line": 31
+        },
+        {
+          "path": "billing/export.py",
+          "start_line": 12,
+          "end_line": 12
+        }
+      ]
+    }
+  ]
+}

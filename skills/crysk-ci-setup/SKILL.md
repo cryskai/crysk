@@ -55,7 +55,7 @@ Load when the user asks to:
 | Several OpenCode providers in one run | Supported: up to 5 providers through the workflow's slots, each model on its own provider's secret, as primary or fallback. |
 | OpenCode CLI pin | Action installs **1.18.30** iff the setup step wrote an OpenCode auth file OR the models in effect name `opencode:`. Never `latest`. |
 | Fork PRs | Their pushes skip (no secrets). A user with write access comments `/crysk review`, and that run (base context, with secrets) reviews the fork head. Review `if` never reads `secrets`; the action checks for a `CRYSK_*` credential in `crysk-secrets` (or a login file already on the runner). |
-| Spend gates | Defaults: `budget-usd: 10.00` on metered routes (the run chose `CRYSK_CLAUDE_API_KEY`, **or** an OpenCode auth file was built), `max-changed-lines: 4000` and `max-changed-files: 50` on metered routes only; a Claude subscription route has no size limit unless the workflow or `.crysk/config.json` sets one. A subscription run stays unlimited unless an OpenCode auth file is also present. |
+| Spend gates | Defaults: `budget-usd: 12.00` on metered routes (the run chose `CRYSK_CLAUDE_API_KEY`, **or** an OpenCode auth file was built), `max-changed-lines: 4000` and `max-changed-files: 50` on metered routes only; a Claude subscription route has no size limit unless the workflow or `.crysk/config.json` sets one. A subscription run stays unlimited unless an OpenCode auth file is also present. |
 | Existing workflow | `setup --ci` skips; ask before `--force` |
 | First-time admission | Recommend `ci_admission_observe_only: true` — `references/ci-admission.md` |
 | User wants max CI spend | Lower `ci_max_attempts` and/or raise `ci_rereview_min_score` |
@@ -88,8 +88,8 @@ Before step 4, ask the human these questions in their language. Use the native q
    - **Manual**: nothing automatic after the first review; every re-review starts with `/crysk review`.
 2. **Gate or advisory**: gate turns the `crysk` check red on blocking findings (require it in branch protection to block merges); advisory keeps it green.
 3. **How CI pays**:
-   - **Claude subscription** (`CRYSK_CLAUDE_OAUTH_TOKEN`): do not ask for a budget. Tell them no `budget-usd` is written: a subscription review spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and no `CRYSK_OPENCODE_*` secret builds an OpenCode auth file (an OpenCode model brings back the $10 ceiling, so a subscription mixed with OpenCode is the API-key answer). An API key kept beside it is not used unless `CRYSK_CREDENTIALS` puts `api_key` first.
-   - **API key** (`CRYSK_CLAUDE_API_KEY` or an OpenCode provider): ask for the spend ceiling per review in USD (default 10, `0` = none).
+   - **Claude subscription** (`CRYSK_CLAUDE_OAUTH_TOKEN`): do not ask for a budget. Tell them no `budget-usd` is written: a subscription review spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and no `CRYSK_OPENCODE_*` secret builds an OpenCode auth file (an OpenCode model brings back the $12 ceiling, so a subscription mixed with OpenCode is the API-key answer). An API key kept beside it is not used unless `CRYSK_CREDENTIALS` puts `api_key` first.
+   - **API key** (`CRYSK_CLAUDE_API_KEY` or an OpenCode provider): ask for the spend ceiling per review in USD (default 12, `0` = none).
 4. **Changed-lines threshold**: a PR with more changed lines is skipped, not reviewed. Ask on any billing (default 4000, `0` = no limit, only if they say so): unlike the budget it matters on a subscription too, where an unset threshold means no limit at all.
 5. **Advanced settings**: name them, then ask whether to review them now. Each keeps a working default if skipped:
    - score weights: blocking 2, advisory 1 (integers >= 1; `ci_blocking_weight`, `ci_advisory_weight`), and the score floor 4 (`ci_rereview_min_score`); used only by the risk-aware and thresholded policies;

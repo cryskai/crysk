@@ -101,6 +101,7 @@ import {
   pipelineMaterialityInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
+  pipelineVerifierInput,
 } from "#review/route-preflight";
 import {
   fullReviewHunterCount,
@@ -902,6 +903,7 @@ export async function reviewPr(
                 ? {}
                 : pipelineMaterialityInput(config, { profile })),
               prTitle: target.title,
+              prDescription: target.body,
               ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
               // NOT gated on skipDiscovery: an empty-delta re-review still
               // classifies and verifies against this config, and a run whose
@@ -915,6 +917,9 @@ export async function reviewPr(
               ...(skipDiscovery ? { skipDiscovery: true } : {}),
               ...(rereview === undefined ? {} : { rereview }),
               ...(verifyQueue.length > 0 ? { verifyQueue } : {}),
+              // Unconditional: an overlap candidate can queue a verify step
+              // with an empty verifyQueue.
+              ...pipelineVerifierInput({ profile }),
               ...(overlapCandidates.length > 0 ? { overlapCandidates } : {}),
               ...(adjudicationQueue.length > 0 ? { adjudicationQueue } : {}),
               maxVerificationSteps,
