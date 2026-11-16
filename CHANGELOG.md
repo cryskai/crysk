@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **What to check:** (1) a workflow, a script or a config file that still sets any of the options above
   keeps working and now logs the warning: remove the option to silence it; (2) a tool that reads
   `pipeline.json` and expects its `scout` key must stop reading it.
-- **The parity hunter** (#PR). The conditional hunter ran only when a repository declared
+- **The parity hunter** (#546). The conditional hunter ran only when a repository declared
   `parity_trigger_paths`, so a review that did not declare it does not change. The `parity_trigger_paths`
   key (in the repo file or the person file), the `models.hunter.parity` role and a leftover
   `deep-review-parity.md` in a custom `agents_dir` are still accepted and have no effect; each prints one
