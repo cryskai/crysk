@@ -51,6 +51,7 @@ describe("the estimate at the token exchange", () => {
     expect(capability(platformCalls[0])?.split(",")).toEqual([
       "estimate",
       "profile",
+      "usage-facts",
     ]);
     expect(result).toMatchObject({
       ok: true,
@@ -112,6 +113,56 @@ describe("the estimate at the token exchange", () => {
         CRYSK_PLATFORM_ESTIMATE: line?.slice("estimate=".length).trim(),
       }),
     ).toEqual({ usdLow: 0.41, usdHigh: 0.87, basis: "history" });
+  });
+});
+
+// platform-owned-cost T6 (odd/tasks/platform-owned-cost-contract.md, section 4).
+describe("the usage-facts capability at the token exchange", () => {
+  const connect = async (body: unknown) => {
+    const outputs: string[] = [];
+    const { fn } = fakeFetch(body);
+    const code = await runPlatformConnect({
+      fetch: fn,
+      env: ENV,
+      baseUrl: "https://platform.test",
+      stdout: () => {},
+      appendOutput: (text) => outputs.push(text),
+      configDir: path.join(
+        mkdtempSync(path.join(tmpdir(), "crysk-usage-facts-")),
+        "platform",
+      ),
+    });
+    return { code, outputs };
+  };
+
+  test("a platform that echoes it gets the usage-facts output for the report step", async () => {
+    const { code, outputs } = await connect({
+      ...SUCCESS,
+      capabilities: ["usage-facts"],
+    });
+    expect(code).toBe(0);
+    expect(outputs).toContain("usage-facts=true\n");
+  });
+
+  test("no echo, another capability or a malformed list leaves the output unset", async () => {
+    for (const capabilities of [undefined, ["estimate"], "usage-facts", null]) {
+      const { code, outputs } = await connect({ ...SUCCESS, capabilities });
+      expect(code).toBe(0);
+      expect(outputs.some((o) => o.startsWith("usage-facts="))).toBe(false);
+    }
+  });
+
+  test("a refresh step, which declared nothing, never accepts it", async () => {
+    const { fn } = fakeFetch({ ...SUCCESS, capabilities: ["usage-facts"] });
+    const result = await exchangePlatformToken({
+      fetch: fn,
+      env: ENV,
+      baseUrl: "https://platform.test",
+      mask: () => {},
+      ignoreConfig: true,
+    });
+    expect(result.ok).toBe(true);
+    expect("usageFacts" in result).toBe(false);
   });
 });
 

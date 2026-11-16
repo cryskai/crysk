@@ -41,7 +41,7 @@ import {
   redactSessionDocument,
   redactSessionText,
 } from "../execution/claude-session-trace";
-import { metadataOnlyFinding } from "./platform-report";
+import { metadataOnlyFinding, stepRole } from "./platform-report";
 import {
   type ChatMessage,
   type Conversation,
@@ -519,19 +519,6 @@ function writeUsage(attrs: Attributes, usage: Record<string, unknown>): void {
         : undefined;
   attrs.number("gen_ai.usage.cost", listCost);
   attrs.flatten("crysk.usage", usage);
-}
-
-function stepRole(pipeline: unknown, name: string): string {
-  const plan =
-    isRecord(pipeline) && isRecord(pipeline.route_plan)
-      ? pipeline.route_plan
-      : undefined;
-  const planned = Array.isArray(plan?.steps)
-    ? plan.steps.filter(isRecord).find((step) => step.stepKey === name)
-    : undefined;
-  const role = str(planned?.role);
-  if (role !== undefined) return role;
-  return name.split(/[-.]/)[0] ?? name;
 }
 
 function pipelineSteps(pipeline: unknown): Record<string, unknown>[] {

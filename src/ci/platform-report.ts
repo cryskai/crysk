@@ -93,7 +93,8 @@ export interface RunReportAgent extends ReportUsageSplit {
   model?: string;
   tokens_in: number;
   tokens_out: number;
-  cost_usd: number;
+  // Absent when the platform prices the run (`usage_facts`).
+  cost_usd?: number;
   duration_ms?: number;
   attempts?: number;
   status?: string;
@@ -120,7 +121,8 @@ export interface RunReportBody {
   usage: ReportUsageSplit & {
     tokens_in: number;
     tokens_out: number;
-    cost_usd: number;
+    // The four dollar fields are absent when the platform prices the run (`usage_facts`).
+    cost_usd?: number;
     cost_is_floor?: boolean;
     wall_ms?: number;
     index_ms?: number;
@@ -130,6 +132,24 @@ export interface RunReportBody {
   agents: RunReportAgent[];
   // Which findings stay open, under ids that last across runs. Absent when the run recorded none.
   finding_states?: FindingStateRecord;
+  // What the run measured per model request, for the platform to price. Present exactly when the
+  // platform accepted the `usage-facts` capability, and then the body carries no dollar figure.
+  usage_facts?: ReportUsageFacts;
+}
+
+export type ReportCredential = "api" | "subscription" | "free";
+
+// odd/tasks/platform-owned-cost-contract.md section 3. Indexes point into `steps` and `routes`.
+export interface ReportUsageFacts {
+  v: 1;
+  steps: { key: string; role: string; agent?: string }[];
+  routes: { provider: string; model: string; credential: ReportCredential }[];
+  // [step, attempt, route, uncached, cacheRead, cacheWrite, cacheWrite1h, output, reasoning]
+  requests: number[][];
+  // [step, route, uncached, cacheRead, cacheWrite, cacheWrite1h, output, reasoning]
+  remainders?: number[][];
+  // [step, attempt, reason]
+  gaps?: [number, number, string][];
 }
 
 // What the builder knows about the run directory. Either part is absent when
@@ -149,6 +169,9 @@ export interface BuildRunReportInput {
   // The trigger's resolved head, the fallback when no findings were written.
   triggerHeadSha: string;
   run: RunDirFacts;
+  // Whether the platform accepted the `usage-facts` capability at the token exchange: the body then
+  // carries `usage_facts` and no dollar figure anywhere. Absent means it did not.
+  usageFacts?: boolean;
 }
 
 // null when the run has no usable head: the platform requires a 40-hex sha, so
@@ -171,14 +194,23 @@ export function buildRunReport(
   );
   if (headSha === undefined) return null;
 
+  const dollars = input.usageFacts !== true;
   if (doc === undefined) {
     return {
       outcome: input.outcome === "" ? "error" : input.outcome,
       pr_number: input.prNumber,
       head_sha: headSha,
       counts: { blocking: 0, advisory: 0 },
-      usage: { tokens_in: 0, tokens_out: 0, cost_usd: 0 },
+      usage: {
+        tokens_in: 0,
+        tokens_out: 0,
+        ...(dollars ? { cost_usd: 0 } : {}),
+      },
       agents: [],
+      // A run that wrote no findings can still have spent tokens before it died.
+      ...(dollars
+        ? {}
+        : { usage_facts: buildUsageFacts(input.run.pipeline, new Map()) }),
     };
   }
 
@@ -189,6 +221,14 @@ export function buildRunReport(
     if (finding.tier === "blocking") blocking += 1;
     else if (finding.tier === "advisory") advisory += 1;
   }
+  const steps = pipelineSteps(input.run.pipeline);
+  const rows = agentRows(doc);
+  // Owners are decided over every row, the capped ones too, so a step of a row
+  // past the cap is dropped with it instead of landing on another row.
+  const owned = stepsByOwner(
+    steps,
+    rows.map(([key]) => key),
+  );
 
   return {
     outcome: input.outcome === "" ? "error" : input.outcome,
@@ -212,8 +252,8 @@ export function buildRunReport(
     usage: {
       tokens_in: count(telemetry.tokens_in),
       tokens_out: count(telemetry.tokens_out),
-      cost_usd: cost(telemetry.cost_usd_est),
-      ...(telemetry.cost_usd_est_is_floor === true
+      ...(dollars ? { cost_usd: cost(telemetry.cost_usd_est) } : {}),
+      ...(dollars && telemetry.cost_usd_est_is_floor === true
         ? { cost_is_floor: true }
         : {}),
       wall_ms: count(telemetry.wall_ms),
@@ -224,10 +264,18 @@ export function buildRunReport(
       ...(telemetry.sync_ms === undefined
         ? {}
         : { sync_ms: count(telemetry.sync_ms) }),
-      ...runUsageSplit(input.run.pipeline),
+      ...runUsageSplit(input.run.pipeline, dollars),
     },
-    agents: buildAgents(doc, input.run.pipeline),
+    agents: buildAgents(rows, steps, owned, dollars),
     ...findingStates(input.run.findingStates),
+    ...(dollars
+      ? {}
+      : {
+          usage_facts: buildUsageFacts(
+            input.run.pipeline,
+            ownerOfStep(owned, rows.slice(0, MAX_AGENTS)),
+          ),
+        }),
   };
 }
 
@@ -342,26 +390,26 @@ function cost(value: unknown): number {
 // duration_ms) but this engine writes the richer PerAgentUsage, so each field
 // is read through a runtime check, as review/report.ts does. `detail` is never
 // copied: it is the provider's own words and can echo prompt text.
-function buildAgents(
-  doc: FindingsDocument,
-  pipeline: unknown,
-): RunReportAgent[] {
-  const steps = pipelineSteps(pipeline);
+type AgentRow = [string, Record<string, unknown>];
+
+// validateFindingsDocument only checks that `telemetry` is an object, so a
+// row that is not one is skipped instead of read.
+function agentRows(doc: FindingsDocument): AgentRow[] {
   const perAgent = doc.telemetry.per_agent ?? {};
-  // validateFindingsDocument only checks that `telemetry` is an object, so a
-  // row that is not one is skipped instead of read.
-  const rows = Object.entries(perAgent as Record<string, unknown>).filter(
-    (entry): entry is [string, Record<string, unknown>] =>
+  return Object.entries(perAgent as Record<string, unknown>).filter(
+    (entry): entry is AgentRow =>
       typeof entry[1] === "object" &&
       entry[1] !== null &&
       !Array.isArray(entry[1]),
   );
-  // Owners are decided over every row, the capped ones too, so a step of a row
-  // past the cap is dropped with it instead of landing on another row.
-  const owned = stepsByOwner(
-    steps,
-    rows.map(([key]) => key),
-  );
+}
+
+function buildAgents(
+  rows: ReadonlyArray<AgentRow>,
+  steps: ReadonlyArray<PipelineStep>,
+  owned: ReadonlyMap<string, PipelineStep[]>,
+  dollars: boolean,
+): RunReportAgent[] {
   return rows.slice(0, MAX_AGENTS).map(([key, row]) => {
     const model = modelOf(steps, key);
     return {
@@ -369,25 +417,26 @@ function buildAgents(
       ...(model === undefined ? {} : { model }),
       tokens_in: count(row.tokens_in),
       tokens_out: count(row.tokens_out),
-      cost_usd: cost(row.cost_usd_est),
+      ...(dollars ? { cost_usd: cost(row.cost_usd_est) } : {}),
       duration_ms: count(row.duration_ms),
       ...(typeof row.attempts === "number" && row.attempts > 0
         ? { attempts: count(row.attempts) }
         : {}),
       ...(typeof row.status === "string" ? { status: row.status } : {}),
-      ...agentUsageSplit(owned.get(key) ?? []),
+      ...agentUsageSplit(owned.get(key) ?? [], dollars),
     };
   });
 }
 
 // pipeline.json's `steps[]` rows are `{ name, model, usage_v2, model_attempts, ... }`.
-// Only what this file reads is kept, and `usage_v2` stays unread until the
-// split below checks each of its fields.
+// Only what this file reads is kept, and `usage_v2` and `usage_facts` stay
+// unread until the code that sends them checks each of their fields.
 interface PipelineStep {
   name: string;
   model?: string;
   usage?: unknown;
   modelUsages?: unknown[];
+  usageFacts?: unknown;
 }
 
 function pipelineSteps(pipeline: unknown): PipelineStep[] {
@@ -397,10 +446,8 @@ function pipelineSteps(pipeline: unknown): PipelineStep[] {
   const rows: PipelineStep[] = [];
   for (const step of steps) {
     if (typeof step !== "object" || step === null) continue;
-    const { name, model, usage_v2, model_attempts } = step as Record<
-      string,
-      unknown
-    >;
+    const { name, model, usage_v2, model_attempts, usage_facts } =
+      step as Record<string, unknown>;
     if (typeof name !== "string") continue;
     rows.push({
       name,
@@ -413,6 +460,7 @@ function pipelineSteps(pipeline: unknown): PipelineStep[] {
             ),
           }
         : {}),
+      ...(usage_facts === undefined ? {} : { usageFacts: usage_facts }),
     });
   }
   return rows;
@@ -587,12 +635,15 @@ function splitFields(
 // sum of every step's, by the rule an agent row uses: the rolled-up notional total
 // counts only the steps that filed one while the tokens count them all, so a step
 // with no list price drops the run's list cost rather than leaving it short. A
-// pipeline with no per-step usage falls back to the run's own figure.
+// pipeline with no per-step usage falls back to the run's own figure. With
+// `dollars` false (the platform prices the run) only the tokens are sent.
 function runUsageSplit(
   pipeline: unknown,
+  dollars: boolean,
 ): ReportUsageSplit & { billing?: "subscription" | "metered" } {
   const usage = usageRecord(usageRecord(pipeline)?.usage_v2);
   if (usage === undefined) return {};
+  if (!dollars) return splitFields(tokenSplit(usage), undefined);
   const billing = usage.billingMode;
   // Every step that filed usage, a malformed record included: one that cannot be
   // read cannot be priced, so it drops the sum rather than shrinking it.
@@ -609,7 +660,10 @@ function runUsageSplit(
 }
 
 // A row's split is the sum of the steps it owns, refuter fan-out included.
-function agentUsageSplit(steps: ReadonlyArray<PipelineStep>): ReportUsageSplit {
+function agentUsageSplit(
+  steps: ReadonlyArray<PipelineStep>,
+  dollars: boolean,
+): ReportUsageSplit {
   const usages = steps.filter((step) => usageRecord(step.usage) !== undefined);
   if (usages.length === 0) return {};
   const splits = usages.map((step) => tokenSplit(usageRecord(step.usage)));
@@ -626,7 +680,160 @@ function agentUsageSplit(steps: ReadonlyArray<PipelineStep>): ReportUsageSplit {
       return total === undefined ? [] : [[key, total]];
     }),
   );
-  return splitFields(tokens, sumAll(usages, stepListCost));
+  return splitFields(
+    tokens,
+    dollars ? sumAll(usages, stepListCost) : undefined,
+  );
+}
+
+// Which `per_agent` row owns each step, among the rows the report sends, so a
+// usage step names the `run_agents` row it belongs to by the same rule the
+// rows' own usage follows (stepsByOwner), never a second one.
+function ownerOfStep(
+  owned: ReadonlyMap<string, PipelineStep[]>,
+  sent: ReadonlyArray<AgentRow>,
+): Map<string, string> {
+  const owners = new Map<string, string>();
+  for (const [key] of sent) {
+    for (const step of owned.get(key) ?? []) owners.set(step.name, key);
+  }
+  return owners;
+}
+
+// The route plan's role for a step, else the step name's first word. Also the
+// trace step's role (src/ci/trace-bundle.ts), so both name a step alike.
+export function stepRole(pipeline: unknown, name: string): string {
+  const plan = usageRecord(usageRecord(pipeline)?.route_plan);
+  const planned = Array.isArray(plan?.steps)
+    ? plan.steps
+        .map(usageRecord)
+        .find((step) => step !== undefined && step.stepKey === name)
+    : undefined;
+  const role = planned?.role;
+  if (typeof role === "string" && role !== "") return role;
+  return name.split(/[-.]/)[0] ?? name;
+}
+
+const CREDENTIALS = new Set<string>(["api", "subscription", "free"]);
+const GAP_REASONS = new Set<string>([
+  "no_session",
+  "line_omitted",
+  "truncated",
+  "no_readback",
+  "no_summary",
+]);
+// The platform's own bound on a label (apps/api/src/runs/usage-facts.ts).
+const MAX_LABEL = 200;
+
+function label(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_LABEL &&
+    !value.includes("\u0000")
+  );
+}
+
+function tokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+// One [provider, model, ...six counts] entry of a pipeline.json attempt, as the
+// harness wrote it (src/execution/usage-facts.ts), or undefined when it is not one.
+function factEntry(
+  value: unknown,
+): { provider: string; model: string; counts: number[] } | undefined {
+  if (!Array.isArray(value) || value.length !== 8) return undefined;
+  const [provider, model, ...counts] = value as unknown[];
+  return label(provider) && label(model) && counts.every(tokenCount)
+    ? { provider, model, counts: counts as number[] }
+    : undefined;
+}
+
+// The platform's `usage_facts` (odd/tasks/platform-owned-cost-contract.md,
+// section 3) from each step's `usage_facts` in pipeline.json. This only copies:
+// the harness read every number at the attempt's settlement. Identifiers and
+// counts only, so it is safe in metadata-only mode too. An entry that does not
+// check is left out on its own; the platform counts nothing for it.
+function buildUsageFacts(
+  pipeline: unknown,
+  owners: ReadonlyMap<string, string>,
+): ReportUsageFacts {
+  const facts: ReportUsageFacts = {
+    v: 1,
+    steps: [],
+    routes: [],
+    requests: [],
+  };
+  const remainders = new Map<string, number[]>();
+  const gaps: [number, number, string][] = [];
+  const routeIndex = new Map<string, number>();
+  const routeOf = (
+    provider: string,
+    model: string,
+    credential: ReportCredential,
+  ): number => {
+    const key = JSON.stringify([provider, model, credential]);
+    let index = routeIndex.get(key);
+    if (index === undefined) {
+      index = facts.routes.push({ provider, model, credential }) - 1;
+      routeIndex.set(key, index);
+    }
+    return index;
+  };
+  for (const step of pipelineSteps(pipeline)) {
+    if (!Array.isArray(step.usageFacts) || !label(step.name)) continue;
+    const attempts = step.usageFacts
+      .map(usageRecord)
+      .filter(
+        (a): a is UsageRecord =>
+          a !== undefined &&
+          tokenCount(a.attempt) &&
+          a.attempt >= 1 &&
+          typeof a.credential === "string" &&
+          CREDENTIALS.has(a.credential),
+      );
+    if (attempts.length === 0) continue;
+    const owner = owners.get(step.name);
+    const index =
+      facts.steps.push({
+        key: step.name,
+        role: stepRole(pipeline, step.name),
+        ...(owner === undefined ? {} : { agent: owner }),
+      }) - 1;
+    for (const a of attempts) {
+      const attempt = a.attempt as number;
+      const credential = a.credential as ReportCredential;
+      for (const value of Array.isArray(a.requests) ? a.requests : []) {
+        const request = factEntry(value);
+        if (request === undefined) continue;
+        const route = routeOf(request.provider, request.model, credential);
+        facts.requests.push([index, attempt, route, ...request.counts]);
+      }
+      // The platform keys a remainder by step and route, so the step's attempts are summed.
+      for (const value of Array.isArray(a.remainders) ? a.remainders : []) {
+        const remainder = factEntry(value);
+        if (remainder === undefined) continue;
+        const route = routeOf(remainder.provider, remainder.model, credential);
+        const key = `${index}:${route}`;
+        const sum = remainders.get(key) ?? [index, route, 0, 0, 0, 0, 0, 0];
+        remainder.counts.forEach((n, i) => {
+          sum[i + 2] = (sum[i + 2] ?? 0) + n;
+        });
+        remainders.set(key, sum);
+      }
+      for (const reason of Array.isArray(a.gaps) ? a.gaps : []) {
+        if (typeof reason === "string" && GAP_REASONS.has(reason)) {
+          gaps.push([index, attempt, reason]);
+        }
+      }
+    }
+  }
+  return {
+    ...facts,
+    ...(remainders.size === 0 ? {} : { remainders: [...remainders.values()] }),
+    ...(gaps.length === 0 ? {} : { gaps }),
+  };
 }
 
 // Reads findings.json and pipeline.json from a run directory. A missing or
@@ -883,6 +1090,8 @@ export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
       prNumber,
       triggerHeadSha: deps.env.TRIGGER_HEAD_SHA ?? "",
       run,
+      // The connect step's echo of the `usage-facts` capability (action.yml).
+      usageFacts: deps.env.CRYSK_PLATFORM_USAGE_FACTS === "true",
     });
     if (body === null) {
       warn("the run resolved no head sha.");
