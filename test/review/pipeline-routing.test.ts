@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { armOfRun, scoutFailed } from "#compare/floor-test";
 import {
   computeRouteFingerprint,
   createResolvedRoutePlan,
@@ -51,7 +50,6 @@ class RecordingStepRunner implements StepRunner {
     // Default ok response with empty findings
     const isRefuter = step.name.startsWith("refuter");
     const isSummarizer = step.name === "summarizer";
-    const isScout = step.name === "scout";
 
     let resultText = "{}";
     let output: unknown = { findings: [] };
@@ -78,9 +76,6 @@ class RecordingStepRunner implements StepRunner {
     } else if (isSummarizer) {
       resultText = JSON.stringify({ summary: "test summary" });
       output = { summary: "test summary" };
-    } else if (isScout) {
-      resultText = JSON.stringify({ leads: [] });
-      output = { leads: [] };
     } else {
       // Hunter
       resultText = JSON.stringify({
@@ -574,9 +569,8 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
       );
       expect(attemptCount).toBe(1);
 
-      // floor-test armOfRun and scoutFailed
-      expect(armOfRun(parsed)).toBe("control");
-      expect(scoutFailed(parsed)).toBe(false);
+      // The removed stage leaves no trace in the artifact.
+      expect("scout" in (parsed as Record<string, unknown>)).toBe(false);
 
       // rereviewDeltaFromProvenance with mock rereview block
       const delta = rereviewDeltaFromProvenance(
@@ -676,7 +670,6 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
         head,
       ),
     ).toBe(1);
-    expect(armOfRun(mixed)).toBe("control");
   });
 
   // SUGGESTION-4: this used to build its "mixed-route artifact" as a
@@ -724,7 +717,7 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
           head,
         ),
       ).toBe(1);
-      expect(armOfRun(produced)).toBe("control");
+      expect("scout" in produced).toBe(false);
     } finally {
       await env.cleanup();
     }

@@ -2139,7 +2139,7 @@ const MCP_TOOL_ID_SET: ReadonlySet<string> = new Set(ALL_MCP_TOOL_IDS);
 // `tool.ids()`. "bash" has no entry in that table at all (no AgentSpec has
 // ever granted it), so it is unconditionally denied whenever this is called
 // with a non-empty gate; "read" is denied exactly when this call's canonical
-// tools omit "Read" (a tool-less step: summarizer, scout).
+// tools omit "Read" (a tool-less step: the summarizer).
 function deniedFreeTierGatewayTools(
   canonicalTools: readonly string[],
   freeTierGatewayTools: readonly string[],
@@ -2382,11 +2382,11 @@ export function createOpenCodeClient(
   // FREE_TIER_GATEWAY_TOOLS). The registry caches ONE opencode client per
   // route (transport-registry.ts), so every step routed to the same
   // provider_free model shares this server — a hunter-shaped step (grants
-  // read) and a tool-less step (summarizer/scout) on that SAME route would
+  // read) and a tool-less step (the summarizer) on that SAME route would
   // otherwise silently ride whichever one's ask set the server happened to be
   // launched with. This is fixed at spawn exactly like the MCP registry
   // above, and the pipeline's own phase boundaries (hunters all finish before
-  // dedupe releases the idle server, refuter/scout run in a later phase)
+  // dedupe releases the idle server, the refuter runs in a later phase)
   // mean a real run only ever asks this server to relaunch, never to change
   // shape mid-flight — a genuine concurrent mismatch fails loud instead of
   // silently weakening.

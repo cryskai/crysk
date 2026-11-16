@@ -298,43 +298,6 @@
       ]
     },
     {
-      "name": "scout",
-      "backend": "claude-code",
-      "provider": "anthropic",
-      "model": "sonnet",
-      "modelSnapshot": "sonnet",
-      "modelVariant": null,
-      "effort": "high",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": [],
-      "systemPromptSha256": "edb1abfb7d72950040871e8d7968175a73dfd9cc6788bef97fe9e8f15df8e6a2",
-      "promptSha256": "6974b38cf091f0f7311d65af77fa11189dd8ce140332cd9f8a916de8c9aaa5f7",
-      "cliModel": "sonnet",
-      "argv": [
-        "claude",
-        "-p",
-        "--append-system-prompt-file",
-        "<RUN>/steps/scout.system.md",
-        "--output-format",
-        "json",
-        "--mcp-config",
-        "<RUN>/mcp.json",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        "sonnet",
-        "--effort",
-        "high",
-        "--exclude-dynamic-system-prompt-sections"
-      ]
-    },
-    {
       "name": "summarizer",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -373,7 +336,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "8ff5ce220f49c44dd7fb3769967722ca0bbc4855db56fc14f7806e1a9674fbe9",
+    "routeFingerprint": "113b36359f439c12a275b6c49d1667718daf0bfe3110fde14ae2ec68f53823fd",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -474,20 +437,6 @@
         "fallbacks": null
       },
       {
-        "stepKey": "scout",
-        "role": "scout",
-        "logicalIdentity": "claude:sonnet-latest",
-        "routeFingerprint": "1da1f1d92fb6d22f05c7a5ec7079206963c519ed79ede80d92ce4200059854d5",
-        "effort": null,
-        "route": {
-          "backend": "claude-code",
-          "provider": "anthropic",
-          "modelFamily": "sonnet",
-          "modelSnapshot": "sonnet"
-        },
-        "fallbacks": null
-      },
-      {
         "stepKey": "consolidate",
         "role": "other",
         "logicalIdentity": "claude:sonnet-latest",
@@ -573,13 +522,6 @@
       "effort": "medium",
       "effort_applied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "scout",
-      "model": "sonnet",
-      "effort": "high",
-      "effort_applied": true,
-      "tools": []
     },
     {
       "name": "summarizer",

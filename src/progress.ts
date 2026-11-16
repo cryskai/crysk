@@ -53,18 +53,6 @@ interface PanelHunter {
   failureReason?: string;
 }
 
-// The scout is the one stage with a real STARTED event, because it is the one
-// that runs alone: it is awaited before the hunters spawn, and M4 measured it
-// at 86-600s. Without a row of its own the panel shows four hunters "waiting"
-// for up to ten minutes and explains nothing — the silence that once cost a
-// paid run to a reasonable Ctrl-C.
-interface PanelScout {
-  status: "running" | "done" | "failed";
-  durationMs?: number;
-  model?: string;
-  leads?: number;
-}
-
 interface PanelSummarizer {
   // The summarizer starts with the pipeline, but it has no separate started
   // event. Seeding it as running keeps the first frame truthful.
@@ -94,10 +82,6 @@ export interface PanelState {
   // own elapsed, not the panel's.
   huntersStartedAtMs?: number;
   hunters: PanelHunter[];
-  // Absent until the scout-started event arrives — unlike the summarizer,
-  // which is seeded, because a run with no scout must show no scout row and
-  // the caller's flag is not the panel's business.
-  scout?: PanelScout;
   // Cosmetic only: the pipeline owns summary semantics and run status.
   // Absent means the summary step was disabled for this run.
   summarizer?: PanelSummarizer;
@@ -207,20 +191,6 @@ export function applyProgressEvent(
     case "verify-started":
     case "verify-step-finished":
       return;
-    case "scout-started": {
-      state.scout = { status: "running", model: event.model };
-      return;
-    }
-    case "scout-finished": {
-      // Tolerant of a finish with no start: the construction-failure path
-      // emits only the finish, and a panel that threw there would take the
-      // run down with it.
-      state.scout ??= { status: "running" };
-      state.scout.status = event.ok ? "done" : "failed";
-      state.scout.durationMs = event.durationMs;
-      if (event.leads !== undefined) state.scout.leads = event.leads;
-      return;
-    }
     case "summarizer-finished": {
       if (!state.summarizer) return;
       state.summarizer.status = event.ok ? "done" : "failed";
@@ -374,26 +344,6 @@ function refuterNode(
   };
 }
 
-function scoutNode(
-  scout: PanelScout,
-  state: PanelState,
-  nowMs: number,
-  labelWidth: number,
-): TreeNode {
-  const detail =
-    scout.status === "running"
-      ? `reading the diff — ${formatElapsed(nowMs - state.startedAtMs)}`
-      : scout.status === "done"
-        ? `${scout.leads ?? 0} lead${scout.leads === 1 ? "" : "s"} — ` +
-          formatElapsed(scout.durationMs ?? 0)
-        : "failed — the hunters run unled";
-  return {
-    label: pad("scout", labelWidth),
-    status: scout.status,
-    detail,
-  };
-}
-
 function summarizerNode(
   summarizer: PanelSummarizer,
   state: PanelState,
@@ -447,16 +397,12 @@ export function renderPanelLines(
     "dedupe".length,
     "refuter".length,
     state.summarizer === undefined ? 0 : "summarizer".length,
-    state.scout === undefined ? 0 : "scout".length,
   );
   const modelWidth = Math.max(
     0,
     ...state.hunters.map((h) => h.model?.length ?? 0),
   );
-  // FIRST, above the hunters: it ran before them, and a row below rows that
-  // are waiting on it reads as the wrong order.
   const nodes: TreeNode[] = [];
-  if (state.scout) nodes.push(scoutNode(state.scout, state, nowMs, labelWidth));
   nodes.push(
     ...state.hunters.map((hunter) =>
       hunterNode(hunter, state, nowMs, labelWidth, modelWidth),

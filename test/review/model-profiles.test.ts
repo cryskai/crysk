@@ -19,7 +19,6 @@ const FIXTURE_PROFILE: ModelProfile = {
   roles: {
     hunter: { model: "claude:opus-latest", effort: "medium" },
     refuter: { model: "claude:haiku-latest", effort: "low" },
-    scout: { model: "claude:haiku-latest", effort: "low" },
     judge: { model: "claude:opus-latest", effort: "medium" },
   },
   hunters: { logic: { model: "claude:haiku-latest", effort: "max" } },
@@ -70,8 +69,6 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
       "hunter-resilience": ["opus", "opus", "medium", "opus", "medium"],
       "hunter-security": ["opus", "opus", "medium", "opus", "medium"],
       "refuter-F001": ["haiku", "haiku", "low", "haiku", "low"],
-      // prompts/scout.md names no model: the profile's scout.
-      scout: ["haiku", "haiku", "low", "haiku", "low"],
       // The judge reads the profile, still held to the measured list.
       "materiality-F001": ["opus", "opus", "medium", "opus", "medium"],
       // The root prompts reach this harness unmarked, as the lab passes
@@ -103,7 +100,7 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
     expect(r["hunter-logic"]?.slice(0, 3)).toEqual(["sonnet", "haiku", "max"]);
     expect(r["hunter-parity"]?.[0]).toBe("sonnet");
     expect(r["refuter-F001"]?.[0]).toBe("sonnet");
-    expect(r.scout?.[0]).toBe("sonnet");
+    expect(r.scout).toBeUndefined();
   });
 
   test("--model still outranks the profile", async () => {

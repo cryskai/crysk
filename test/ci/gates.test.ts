@@ -662,14 +662,7 @@ describe("resolveCiBudgetCeiling", () => {
       { files: 2, insertions: 10, deletions: 2 },
       { files: 10, insertions: 250, deletions: 50 },
     ]) {
-      const { high } = estimateCost(
-        diffStat,
-        alwaysOnHunters,
-        true,
-        false,
-        0,
-        true,
-      );
+      const { high } = estimateCost(diffStat, alwaysOnHunters, true, 0, true);
       expect(evaluateBudgetGate(high, CI_DEFAULT_METERED_BUDGET_USD)).toEqual({
         allowed: true,
       });

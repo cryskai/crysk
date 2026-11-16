@@ -840,8 +840,8 @@ test("frozen route plan fingerprint equals the one the review command builds", a
       "--no-summary",
       ...(c.model === undefined ? [] : ["--model", c.model]),
     ];
-    let { options } = parseArgs(argv);
-    const { loaded, config, summary, scout, profile } = await loadRunConfig({
+    const { options } = parseArgs(argv);
+    const { loaded, config, summary, profile } = await loadRunConfig({
       root,
       home,
       configFlag: undefined,
@@ -849,7 +849,6 @@ test("frozen route plan fingerprint equals the one the review command builds", a
       warn: () => {},
     });
     expect(config.models).toEqual(c.models);
-    options = { ...options, scout };
     const { agents, spec, agentFiles } = await resolvePromptSet(
       options,
       loaded,

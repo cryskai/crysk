@@ -28,7 +28,6 @@ export const AGENT_NAMES = [
 // (model-profiles S4).
 export const ENGINE_PROMPT_FILES = [
   "consolidate.md",
-  "scout.md",
   "summarizer.md",
   "materiality.md",
   "verifier.md",

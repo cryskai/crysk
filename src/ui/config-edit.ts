@@ -8,12 +8,17 @@ import {
   parseLocalConfig,
 } from "#review/preflight";
 import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
+import { CliError } from "../errors";
 import { redactConfigValue } from "../security/redact";
 import { bold, box, cyan, dim, sanitizeText, yellow } from "./primitives";
 import type { KeyReader } from "./select";
 
 const SUMMARY_MODEL_GONE =
   'summary.model is gone: set the summary model per person, under models in ~/.crysk/config.json, e.g. "models": {"summary": ["claude:haiku-latest"]}';
+
+// The scout stage is gone, and so is the key's meaning: writing it would plant
+// a setting that does nothing. Removing a stale one (`config unset`) still works.
+const SCOUT_GONE = "scout was removed: the scout stage no longer exists";
 
 export interface ConfigEntry {
   key: string;
@@ -51,12 +56,6 @@ export function getEditableLayerEntries(
     const summaryEnabled =
       typeof summaryObj.enabled === "boolean"
         ? summaryObj.enabled
-          ? "[✓] true"
-          : "[ ] false"
-        : "(not set)";
-    const scoutVal =
-      typeof rawData.scout === "boolean"
-        ? rawData.scout
           ? "[✓] true"
           : "[ ] false"
         : "(not set)";
@@ -104,13 +103,6 @@ export function getEditableLayerEntries(
         currentRaw: summaryObj.enabled,
       },
       {
-        key: "scout",
-        value: scoutVal,
-        desc: "Run scout reconnaissance stage",
-        type: "boolean",
-        currentRaw: rawData.scout,
-      },
-      {
         key: "post",
         value: postVal,
         desc: "Publish review as PR comment",
@@ -140,12 +132,6 @@ export function getEditableLayerEntries(
     const summaryEnabled =
       typeof summaryObj.enabled === "boolean"
         ? summaryObj.enabled
-          ? "[✓] true"
-          : "[ ] false"
-        : "(not set)";
-    const scoutVal =
-      typeof rawData.scout === "boolean"
-        ? rawData.scout
           ? "[✓] true"
           : "[ ] false"
         : "(not set)";
@@ -184,13 +170,6 @@ export function getEditableLayerEntries(
         desc: "Generate AI summary overview",
         type: "boolean",
         currentRaw: summaryObj.enabled,
-      },
-      {
-        key: "scout",
-        value: scoutVal,
-        desc: "Personal scout reconnaissance ceiling",
-        type: "boolean",
-        currentRaw: rawData.scout,
       },
       {
         key: "post",
@@ -504,9 +483,7 @@ export async function setConfigValue(input: {
     } else if (input.key === "agents_dir") {
       currentRepo.agents_dir = input.value.trim();
     } else if (input.key === "scout") {
-      const b = input.value.toLowerCase() === "true";
-      parsedVal = b;
-      currentRepo.scout = b;
+      throw new CliError(SCOUT_GONE);
     } else if (input.key === "post") {
       const b = input.value.toLowerCase() === "true";
       parsedVal = b;
@@ -555,12 +532,6 @@ export async function setConfigValue(input: {
           merged.effective.summary?.enabled !== parsedVal
         ) {
           annotation = `written: ${parsedVal} — your effective value remains ${merged.effective.summary?.enabled}, capped by your Person layer`;
-        } else if (
-          input.key === "scout" &&
-          globalLayer.scout !== undefined &&
-          merged.effective.scout !== parsedVal
-        ) {
-          annotation = `written: ${parsedVal} — your effective value remains ${merged.effective.scout}, capped by your Person layer`;
         } else if (
           input.key === "post" &&
           globalLayer.post !== undefined &&
@@ -640,8 +611,7 @@ export async function setConfigValue(input: {
     } else if (input.key === "agents_dir") {
       currentPerson.agents_dir = input.value.trim();
     } else if (input.key === "scout") {
-      const b = input.value.toLowerCase() === "true";
-      currentPerson.scout = b;
+      throw new CliError(SCOUT_GONE);
     } else if (input.key === "post") {
       const b = input.value.toLowerCase() === "true";
       currentPerson.post = b;

@@ -1162,7 +1162,7 @@ export class StepExecutionHarness implements StepRunner {
     //   - attempt vs attempt: every retry receives its own receipt, so a later
     //     attempt never clobbers an earlier one's rejected-event / fence record.
     //   - step vs step: every step of a run shares ONE steps/ directory
-    //     (hunters, summarizer, refuters, scout all write beside each other),
+    //     (hunters, summarizer, refuters all write beside each other),
     //     so a name keyed only on the attempt made each step overwrite the
     //     previous step's receipt. That is not hypothetical — a four-step run
     //     left four attempt logs and exactly one receipt on disk, and three

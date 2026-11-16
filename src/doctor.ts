@@ -110,7 +110,7 @@ export interface RunDoctorOptions {
 
 // Whether a review under this configuration sends any step to the Claude CLI
 // (model-profiles S6): the route plan a review would build, every hunter of
-// the bundled spec, the refuter, consolidate, scout, summarizer and, with the
+// the bundled spec, the refuter, consolidate, summarizer and, with the
 // gate on, the materiality judge, resolved through `models` and the active
 // profile. True whenever the answer is not proven: neither `models` nor a
 // `profile`, a plan that fails to build, or a bad CRYSK_EXTRA_HUNTERS. So zero-config and
@@ -137,7 +137,6 @@ export function reviewNeedsClaude(input: {
       profile: resolveProfile(input.profile),
       bundledAgents: true,
       summarizer: { bundled: true },
-      scout: { bundled: true },
       consolidate: { bundled: true },
       // Unknown counts as on: the judge then joins only when it shares a
       // backend with another step or `models.judge` names it.

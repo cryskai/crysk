@@ -43,13 +43,13 @@ import {
   parseNumstatFiles,
   preflightAgentsDir,
   REVIEW_MD_TEMPLATE,
+  removedFlagWarnings,
   resolveAgentsDir,
   resolveAgentsDirSetting,
   resolveMaterialityGate,
   resolveMaxConcurrentSteps,
   resolveMaxVerificationSteps,
   resolvePost,
-  resolveScout,
   resolveSharedPrefix,
   resolveSummary,
   runDirCandidate,
@@ -235,15 +235,38 @@ describe("parseArgs", () => {
     expect(resolveSharedPrefix({ sharedPrefix: false })).toBe(false);
   });
 
-  test("the scout is tri-state: undefined by default, true with --scout, false with --no-scout", () => {
-    expect(parseArgs(["review"]).options.scout).toBeUndefined();
-    expect(parseArgs(["review", "--scout"]).options.scout).toBe(true);
-    expect(parseArgs(["review", "--no-scout"]).options.scout).toBe(false);
-    expect(parseArgs(["review", "--scout"]).options.scoutModel).toBeUndefined();
-    expect(
-      parseArgs(["review", "--scout", "--scout-model", "haiku"]).options
-        .scoutModel,
-    ).toBe("haiku");
+  test("the flags of the removed scout are accepted, recorded once each, and change nothing else", () => {
+    const base = parseArgs(["review"]).options;
+    expect(base.removedFlags).toBeUndefined();
+    expect(parseArgs(["review", "--scout"]).options.removedFlags).toEqual([
+      "--scout",
+    ]);
+    expect(parseArgs(["review", "--no-scout"]).options.removedFlags).toEqual([
+      "--no-scout",
+    ]);
+    const all = parseArgs([
+      "review",
+      "--scout",
+      "--scout-model",
+      "haiku",
+      "--no-scout",
+      "--scout",
+    ]).options;
+    expect(all.removedFlags).toEqual([
+      "--scout",
+      "--scout-model",
+      "--no-scout",
+    ]);
+    expect({ ...all, removedFlags: undefined }).toEqual({
+      ...base,
+      removedFlags: undefined,
+    });
+    expect(removedFlagWarnings(all)).toEqual([
+      "--scout is ignored: the scout stage was removed",
+      "--scout-model is ignored: the scout stage was removed",
+      "--no-scout is ignored: the scout stage was removed",
+    ]);
+    expect(removedFlagWarnings(base)).toEqual([]);
   });
 
   test("post is tri-state: undefined by default, true with --post, false with --no-post", () => {
@@ -317,32 +340,17 @@ describe("parseArgs", () => {
     expect(HELP_TEXT).toContain("--adjudicate        with --pr --ci:");
   });
 
-  test("--scout-model without --scout is a loud no-op, not a quiet one", () => {
-    expect(() => parseArgs(["review", "--scout-model", "haiku"])).toThrow(
-      "requires --scout",
-    );
+  test("--scout-model without --scout is accepted like the rest of the removed flags", () => {
+    expect(
+      parseArgs(["review", "--scout-model", "haiku"]).options.removedFlags,
+    ).toEqual(["--scout-model"]);
   });
 
-  test("the scout flags belong to review and nothing else", () => {
-    // The watcher spawns `review --pr <n> --yes` and never learns these
-    // exist; a scout flag on any other verb is an operator believing they
-    // changed a run they did not.
-    expect(() => parseArgs(["watch", "--once", "--scout"])).toThrow(
-      "only apply to the review command",
-    );
-    expect(() =>
-      parseArgs(["status", "--scout", "--scout-model", "haiku"]),
-    ).toThrow("only apply to the review command");
-  });
-
-  test("the config file admits scout and post boolean keys", () => {
+  test("the config file admits the post boolean key, and still admits the removed scout key", () => {
+    expect(parseLocalConfig('{"post": false}')).toEqual({ post: false });
     expect(parseLocalConfig('{"scout": true, "post": false}')).toEqual({
-      scout: true,
       post: false,
     });
-    expect(() => parseLocalConfig('{"scout":{"enabled":true}}')).toThrow(
-      "scout must be a boolean",
-    );
   });
 
   test("the config file admits materiality_gate as an optional boolean", () => {
@@ -361,8 +369,8 @@ describe("parseArgs", () => {
     ).toBe(".crysk/config.json materiality_gate must be a boolean");
     // The neighbouring boolean key still parses beside it.
     expect(
-      parseLocalConfig('{"scout": true, "materiality_gate": false}'),
-    ).toEqual({ scout: true, materiality_gate: false });
+      parseLocalConfig('{"post": true, "materiality_gate": false}'),
+    ).toEqual({ post: true, materiality_gate: false });
   });
 
   test("the config file admits post_min_severity and rejects other values", () => {
@@ -1399,15 +1407,7 @@ describe("parseLocalConfig", () => {
   });
 });
 
-describe("resolveScout & resolvePost", () => {
-  test("resolveScout precedence: CLI flag > Merged Config > Default false", () => {
-    expect(resolveScout({ scout: true }, { scout: false })).toBe(true);
-    expect(resolveScout({ scout: false }, { scout: true })).toBe(false);
-    expect(resolveScout({}, { scout: true })).toBe(true);
-    expect(resolveScout({}, { scout: false })).toBe(false);
-    expect(resolveScout({}, {})).toBe(false);
-  });
-
+describe("resolvePost", () => {
   test("resolvePost precedence: CLI flag > Merged Config > Default false", () => {
     expect(resolvePost({ post: true }, { post: false })).toBe(true);
     expect(resolvePost({ post: false }, { post: true })).toBe(false);
@@ -1457,7 +1457,6 @@ const PRE_C5_LOCAL_KEYS = [
   "parity_trigger_paths",
   "post",
   "post_min_severity",
-  "scout",
   "summary",
   "suspicion_priors",
 ];
@@ -1481,7 +1480,6 @@ describe("CONFIG_DIRECTION", () => {
       max_concurrent_steps: 4,
       max_changed_lines: 1500,
       max_changed_files: 150,
-      scout: false,
       materiality_gate: false,
       post: false,
       post_min_severity: "warning",
@@ -1524,7 +1522,6 @@ describe("CONFIG_DIRECTION", () => {
       max_concurrent_steps: "capped",
       max_changed_lines: "capped",
       max_changed_files: "capped",
-      scout: "capped",
       materiality_gate: "capped",
       post: "capped",
       post_min_severity: "person",
@@ -1569,7 +1566,6 @@ describe("parseGlobalConfig", () => {
       models: { default: ["claude:sonnet-latest"] },
       credentials: { claude: ["api_key"] },
       max_verification_steps: 2,
-      scout: false,
       materiality_gate: false,
       post: true,
     };
@@ -1609,7 +1605,6 @@ describe("parseGlobalConfig", () => {
         '{"max_verification_steps": -1}',
         "max_verification_steps must be a non-negative integer",
       ],
-      ['{"scout": "yes"}', "scout must be a boolean"],
       ['{"post": 1}', "post must be a boolean"],
       ['{"materiality_gate": 1}', "materiality_gate must be a boolean"],
     ];
@@ -1642,7 +1637,6 @@ describe("parseLocalConfig admits the same keys it does today", () => {
       suspicion_priors: [{ path: "a.ts", weight: 3, reason: "hot" }],
       summary: { enabled: false },
       max_verification_steps: 3,
-      scout: true,
       post: false,
     };
     expect(parseLocalConfig(JSON.stringify(full))).toEqual(full);
@@ -1792,9 +1786,9 @@ describe("mergeConfig", () => {
     expect(enabled(undefined, undefined).effective.summary).toBeUndefined();
   });
 
-  test("scout, post and materiality_gate are folded with boolean AND (capped)", () => {
+  test("post and materiality_gate are folded with boolean AND (capped)", () => {
     const mergeBool = (
-      key: "scout" | "post" | "materiality_gate",
+      key: "post" | "materiality_gate",
       global?: boolean,
       repo?: boolean,
     ) =>
@@ -1803,7 +1797,7 @@ describe("mergeConfig", () => {
         repo === undefined ? {} : layer({ [key]: repo }),
       );
 
-    for (const key of ["scout", "post", "materiality_gate"] as const) {
+    for (const key of ["post", "materiality_gate"] as const) {
       // Both true -> repo true
       const tt = mergeBool(key, true, true);
       expect(tt.effective[key]).toBe(true);
@@ -1934,7 +1928,6 @@ describe("mergeConfig", () => {
       max_concurrent_steps: "default",
       max_changed_lines: "default",
       max_changed_files: "default",
-      scout: "default",
       materiality_gate: "default",
       post: "default",
       post_min_severity: "default",

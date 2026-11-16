@@ -14,7 +14,7 @@
 // passes GitHub comments to hunters.
 //
 // Default is the 3-PR pilot (14943, 8330, 8087). `--all` is the ten.
-// One pipeline: hunters, scout off, summarizer off, parity never fires.
+// One pipeline: hunters, summarizer off, parity never fires.
 
 import { existsSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
@@ -254,7 +254,7 @@ async function review(
 if (mode === "plan") {
   const gate = DEFAULT_SIZE_GATE;
   console.log(
-    `pr   files   +/−      lines  gate   gold  band (${HUNTERS} hunters, no summary, no scout)`,
+    `pr   files   +/−      lines  gate   gold  band (${HUNTERS} hunters, no summary)`,
   );
   console.log(
     "---- ----- --------  ------  -----  ----  ---------------------------------------",
@@ -280,7 +280,6 @@ if (mode === "plan") {
       },
       HUNTERS,
       false,
-      false,
     );
     const golden = lookupGolden(goldens, row.pr);
     low += estimate.low;
@@ -296,7 +295,7 @@ if (mode === "plan") {
   }
   console.log("");
   console.log(
-    `${rows.length} PR(s). Estimated ${HUNTERS} hunters + refuter, summarizer off, scout off, parity never fires.`,
+    `${rows.length} PR(s). Estimated ${HUNTERS} hunters + refuter, summarizer off, parity never fires.`,
   );
   console.log(`arm: ${arm}  (run dirs: ${corpusName}-<pr>-${arm})`);
   console.log(

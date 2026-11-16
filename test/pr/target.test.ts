@@ -184,14 +184,14 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     return step2.ciBudgetCeiling.budgetUsd;
   }
 
-  test("a per-token OpenCode model on --scout-model keeps the metered ceiling", async () => {
+  test("a model named on the removed --scout-model routes nothing, so a Claude run stays unmetered", async () => {
     expect(
       await ceilingWithAuthFile([
         "--scout",
         "--scout-model",
         "opencode:deepseek/deepseek-v4-flash",
       ]),
-    ).toBe(12);
+    ).toBeUndefined();
   });
 
   test("--model is read the way routing reads it, surrounding spaces included", async () => {

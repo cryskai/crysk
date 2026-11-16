@@ -185,7 +185,6 @@ export function configRows(
       effective.max_changed_files?.toString(),
       sources.max_changed_files,
     ),
-    scout: cell(effective.scout?.toString(), sources.scout),
     materiality_gate: cell(
       effective.materiality_gate?.toString(),
       sources.materiality_gate,

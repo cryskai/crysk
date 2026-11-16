@@ -32,7 +32,7 @@ If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk ci
 | `default` | every role not listed (not the judge) |
 | `hunter.<key>` | one hunter: `logic`, `parity`, `reliability`, `resilience`, `security` |
 | `refuter` | refuter, re-review verifier, CI adjudicator |
-| `consolidate`, `scout`, `summary` | those steps |
+| `consolidate`, `summary` | those steps |
 | `judge` | materiality judge: only `claude:sonnet-latest` or `claude:opus-latest`, never `default` |
 
 Model names: `claude:sonnet-latest` / `opus-latest` / `haiku-latest` / `fable-latest` (newest), a full `claude:claude-…` id (pinned), or `opencode:<provider>/<model>`. There is no `modelSnapshot`, `gateway` or alias mapping any more: the provider's model id is part of the name. Confirm the id with `opencode models <provider>`; do not guess `deepseek-chat` if the CLI lists `deepseek-v4-flash` / `deepseek-v4-pro`. An entry may be `{"model": "...", "effort": "..."}`; on OpenCode the effort must be one of the model's variants (`opencode models <provider> --verbose`), or the review stops before spending.

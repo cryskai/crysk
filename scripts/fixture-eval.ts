@@ -12,7 +12,6 @@ import { validateFinding } from "#review/findings";
 import { runPipeline } from "#review/pipeline";
 import {
   buildPlantedFixture,
-  FIXTURE_EVAL_SCOUT_MODEL,
   fixtureEvalPipelineInput,
 } from "../fixtures/setup";
 import {
@@ -22,10 +21,6 @@ import {
 import { prepareHarnessRunner } from "../src/harness/route-runner";
 import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 
-// `bun run fixture-eval --scout` (ROADMAP-DOORDASH M5's exit: the planted bug
-// is still found with the flag ON and with it OFF). The scout runs on
-// FIXTURE_EVAL_SCOUT_MODEL (haiku), as the rest of the run does.
-const scoutEnabled = Bun.argv.includes("--scout");
 const agentsArgIndex = Bun.argv.indexOf("--agents");
 const customAgentsDir =
   agentsArgIndex !== -1 && Bun.argv[agentsArgIndex + 1]
@@ -46,7 +41,6 @@ await Bun.write(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
 
 const input = fixtureEvalPipelineInput(fixture, {
   mcpConfigPath,
-  scout: scoutEnabled,
   ...(customModel ? { model: customModel } : {}),
   ...(customAgentsDir ? { agentsDir: customAgentsDir } : {}),
 });
@@ -142,54 +136,19 @@ for (const hunter of hunters) {
   }
 }
 
-// (4) Frozen-plan provenance, and the scout row inside it. Read rather than
-// merely existence-checked now: the arm a run belongs to must be legible from
-// the artifact alone (§3.9), and this is the cheapest place that claim gets
-// exercised against a REAL run instead of a fake runner.
+// (4) Frozen-plan provenance. Read rather than merely existence-checked: the
+// plan a run belongs to must be legible from the artifact alone (§3.9), and
+// this is the cheapest place that claim gets exercised against a REAL run
+// instead of a fake runner.
 const planPath = path.join(fixture.runDir, "pipeline.json");
 if (!(await Bun.file(planPath).exists())) {
   failures.push("missing pipeline.json in run dir");
 } else {
   const plan = (await Bun.file(planPath).json()) as {
-    scout?: { enabled?: boolean; status?: string; leads_count?: number };
     generated_at?: string;
   };
   if (typeof plan.generated_at !== "string") {
     failures.push("pipeline.json carries no generated_at");
-  }
-  if (plan.scout?.enabled !== scoutEnabled) {
-    failures.push(
-      `pipeline.json scout.enabled is ${plan.scout?.enabled}, expected ${scoutEnabled}`,
-    );
-  }
-  // A FAILED scout is a legal outcome the run survives (§3.6) — it is not a
-  // legal outcome for the eval, which exists to prove the wiring works.
-  if (scoutEnabled && plan.scout?.status !== "ok") {
-    failures.push(`scout status is "${plan.scout?.status}", expected "ok"`);
-  }
-  if (!scoutEnabled) {
-    const leadsArtifact = path.join(
-      fixture.runDir,
-      "steps",
-      "scout.leads.json",
-    );
-    if (await Bun.file(leadsArtifact).exists()) {
-      failures.push("the control arm wrote a scout artifact");
-    }
-  }
-}
-
-// (4b) With the flag on: the step's own artifact, and its bill.
-if (scoutEnabled) {
-  const leadsArtifact = path.join(fixture.runDir, "steps", "scout.leads.json");
-  if (!(await Bun.file(leadsArtifact).exists())) {
-    failures.push(`missing step artifact: ${leadsArtifact}`);
-  }
-  const entry = result.perAgent.scout;
-  if (!entry) {
-    failures.push("perAgent has no entry for scout");
-  } else if (entry.tokens_total <= 0) {
-    failures.push(`perAgent.scout.tokens_total is ${entry.tokens_total}`);
   }
 }
 
@@ -220,8 +179,6 @@ console.log(
       pass,
       cost_usd: result.usage.cost_usd_est,
       wall_ms: wallMs,
-      scout: scoutEnabled,
-      ...(scoutEnabled ? { scout_model: FIXTURE_EVAL_SCOUT_MODEL } : {}),
       // The identity of what ran, from the run's own pipeline.json.
       route_fingerprint: routeFingerprint,
       findings_count: skillOutput.findings.length,

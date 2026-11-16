@@ -73,7 +73,6 @@ function fakePreparer() {
 describe("singleStepRoute: today's model, as an explicit choice (S6)", () => {
   const steps: [SingleStep, string][] = [
     ["refuter", "refuter"],
-    ["scout", "scout"],
     ["consolidate", "consolidate"],
     [{ key: "martian-judge" }, "martian-judge"],
     [{ key: "micro-eval" }, "micro-eval"],
@@ -106,11 +105,8 @@ describe("singleStepRoute: today's model, as an explicit choice (S6)", () => {
   });
 
   test("the model wins over a profile seat or a lab prompt's frontmatter", () => {
-    // The scout and consolidate steps have a profile seat; the explicit model
-    // must hold it, or a profile change would move what is measured.
-    expect(singleStepRoute("scout", "haiku").identity.route.modelSnapshot).toBe(
-      "haiku",
-    );
+    // The consolidate step has a profile seat; the explicit model must hold
+    // it, or a profile change would move what is measured.
     expect(
       singleStepRoute("consolidate", "opus").identity.route.modelSnapshot,
     ).toBe("opus");
@@ -121,7 +117,7 @@ describe("singleStepRoute: today's model, as an explicit choice (S6)", () => {
 // not only on the cliModel ones.
 describe("bare pinned Claude id", () => {
   const id = "claude-sonnet-4-5-20250929";
-  for (const step of ["refuter", "scout", "consolidate"] as const) {
+  for (const step of ["refuter", "consolidate"] as const) {
     test(`${step} routes it to that Claude model`, () => {
       const route = singleStepRoute(step, id).identity.route;
       expect(route.backend).toBe("claude-code");
@@ -204,14 +200,14 @@ describe("prepareSingleStepRunner", () => {
   });
 
   test("the default stays the Claude route a review runs today", async () => {
-    const route = singleStepRoute("scout", "sonnet");
+    const route = singleStepRoute("consolidate", "sonnet");
     const fake = fakePreparer();
     const runner = await prepareSingleStepRunner({
       workspaceRoot: "/scratch",
       route,
       prepare: fake.prepare,
     });
-    await runner.run(spec({ name: "scout-1-r1", effort: "low" }));
+    await runner.run(spec({ name: "consolidate-1-r1", effort: "low" }));
     expect(fake.seen[0]?.route).toEqual(CLAUDE_SONNET as never);
     expect(fake.seen[0]?.effort).toBe("low");
   });

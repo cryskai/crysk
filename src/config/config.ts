@@ -30,7 +30,7 @@ import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 
 // C5 O-6's half of the pipeline input. Unconditional, unlike its two
-// neighbours above: the summarizer and the scout are stages that may not run,
+// neighbour above: the summarizer is a stage that may not run,
 // while a config ALWAYS resolved to something — and D7's whole point is that
 // the artifact must discriminate the builds. `global_present` is carried
 // separately because `sources` cannot express it: a global file that exists
@@ -38,7 +38,7 @@ import { prheroLayout } from "../home-preflight";
 // file at all.
 // #173 (§8: "Artifacts and reports show cash and notional totals
 // separately"). The shell's one decision on the cash/notional split, extracted
-// into a pure function for the same reason `pipelineScoutInput` above is one:
+// into a pure function for the same reason `pipelineSummarizerInput` above is one:
 // `review()` and `reviewPr()` are I/O shells nothing can call offline, so a
 // decision left inline in them is a decision no test can reach. That matters
 // more here than usual — `notionalCostUsd` spent three slices fully built and

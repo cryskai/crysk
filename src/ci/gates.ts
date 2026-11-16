@@ -960,7 +960,7 @@ export function shouldWriteCiOutputs(
 
 // Spec 2.1: step-summary writing is additionally gated on the tri-state
 // `--step-summary`/`--no-step-summary` flag (`stepSummary`), unset meaning
-// the shell's own default of on — mirroring `summary`/`scout`'s own
+// the shell's own default of on — mirroring `summary`'s own
 // unset-means-default convention (preflight.ts's CliOptions).
 export function shouldWriteStepSummary(
   isCi: boolean,

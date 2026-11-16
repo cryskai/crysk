@@ -88,8 +88,6 @@ export function enginePromptPath(
   switch (file) {
     case "consolidate.md":
       return assets.consolidatePromptPath;
-    case "scout.md":
-      return assets.scoutPromptPath;
     case "summarizer.md":
       return assets.summarizerPromptPath;
     case "materiality.md":
@@ -121,32 +119,7 @@ export function pipelineSummarizerInput(
     : {};
 }
 
-// The scout's prompt is ENGINE-owned and lives outside the agents dir, on
-// purpose and twice over (§3.7): a `review-scout.md` dropped in the agents dir
-// without a spec entry is a hard CliError, and a new prompt-set directory
-// holding byte-identical hunter files would be a new fingerprint — which is
-// exactly the one-variable property M6 needs to be true by construction rather
-// than argued. `prompts/` is the door the summarizer already walked through.
-export function pipelineScoutInput(
-  options: Pick<CliOptions, "scout" | "scoutModel">,
-  prompts: RunPromptOptions,
-):
-  | { scout: { promptPath: string; model?: string; bundled: true } }
-  | Record<string, never> {
-  return options.scout
-    ? {
-        scout: {
-          promptPath: enginePromptPath("scout.md", prompts),
-          ...(options.scoutModel === undefined
-            ? {}
-            : { model: options.scoutModel }),
-          bundled: true,
-        },
-      }
-    : {};
-}
-
-// The consolidation pass is ENGINE-owned like the scout, and on by default in
+// The consolidation pass is ENGINE-owned like the summarizer, and on by default in
 // both product paths (local and PR/CI) with no flag: it was measured as a net
 // gain on the Martian 50 (lab bench/METRICS.md 2026-10-27), and a failed pass
 // falls back to the unconsolidated findings. The lab's direct `runPipeline`
@@ -217,10 +190,9 @@ export async function buildCliRoutePlan(params: {
   models?: ModelsConfig;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
-  scoutEnabled?: boolean;
   // Defaults ON, like the stage itself in both product paths; a re-review
-  // that skips discovery passes false, the scout's condition, so the plan
-  // never carries a route for a step that will not run.
+  // that skips discovery passes false, so the plan never carries a route for a
+  // step that will not run.
   consolidateEnabled?: boolean;
   // Defaults OFF, unlike consolidation: the gate is opt-in, and a judge key in
   // the plan changes its fingerprint, so absent must mean today's plan.
@@ -231,7 +203,6 @@ export async function buildCliRoutePlan(params: {
   profile: ModelProfile;
 }): Promise<ResolvedRoutePlan> {
   const summarizerEnabled = params.summarizerEnabled ?? params.summary.enabled;
-  const scoutEnabled = params.scoutEnabled ?? params.options.scout;
   const consolidateEnabled = params.consolidateEnabled ?? true;
   // The root prompts are the engine's own (pipeline*Input marks them), so
   // their frontmatter is not read: the profile holds their seat (S3), the
@@ -245,9 +216,6 @@ export async function buildCliRoutePlan(params: {
     frontmatterModel: (agentKey) => params.agentFiles.get(agentKey)?.model,
     ...(summarizerEnabled
       ? { summarizer: { model: params.summary.model, bundled: true } }
-      : {}),
-    ...(scoutEnabled
-      ? { scout: { model: params.options.scoutModel, bundled: true } }
       : {}),
     ...(consolidateEnabled ? { consolidate: { bundled: true } } : {}),
     ...(params.materialityEnabled === true

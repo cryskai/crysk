@@ -26,7 +26,6 @@ export const PROFILE_ROLES = [
   "hunter",
   "refuter",
   "consolidate",
-  "scout",
   "summary",
   "judge",
 ] as const;

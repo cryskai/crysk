@@ -190,8 +190,9 @@ export async function benchmarkRoutePlan(input: {
   config: LocalConfig;
   sources: Array<{ name: string; source: string }>;
 }) {
-  const { parseArgs, resolveMaterialityGate, resolveScout, resolveSummary } =
-    await import("#review/preflight");
+  const { parseArgs, resolveMaterialityGate, resolveSummary } = await import(
+    "#review/preflight"
+  );
   const { validateReviewSpec } = await import("#review/spec");
   const { agentModelRole } = await import("#model/routing");
   const { modelNameFromAlias } = await import("#model/model-name");
@@ -223,7 +224,7 @@ export async function benchmarkRoutePlan(input: {
   }
   return buildCliRoutePlan({
     spec,
-    options: { ...options, scout: resolveScout(options, input.config) },
+    options,
     agentFiles,
     // martian-cal always passes `--agents`, so the set is a flag's, never the
     // bundled one, exactly as the review subprocess resolves it.

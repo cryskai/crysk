@@ -229,9 +229,6 @@ class RecordingRunner implements StepRunner {
     if (spec.name === "summarizer") {
       return parsedOrFailed(spec, JSON.stringify({ summary: "a summary" }));
     }
-    if (spec.name === "scout") {
-      return parsedOrFailed(spec, JSON.stringify({ leads: [] }));
-    }
     if (spec.name.startsWith("materiality")) {
       return parsedOrFailed(
         spec,
@@ -310,7 +307,6 @@ export async function captureBaseline(
     | "modelProfile"
     | "agentFiles"
     | "summarizer"
-    | "scout"
     | "consolidate"
     | "materiality"
   > = {},
@@ -358,7 +354,6 @@ export async function captureBaseline(
       boundaryNonce: NONCE,
       spec: localReviewSpec({}),
       summarizer: { promptPath: ROOT_PROMPT("summarizer.md") },
-      scout: { promptPath: ROOT_PROMPT("scout.md") },
       consolidate: { promptPath: ROOT_PROMPT("consolidate.md") },
       materiality: { promptPath: ROOT_PROMPT("materiality.md") },
       ...(c.model === undefined ? {} : { model: c.model }),

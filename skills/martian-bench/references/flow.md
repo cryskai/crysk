@@ -13,7 +13,7 @@ Canonical protocol: `benchmarks/martian/README.md`. This file is the runbook.
 | `benchmarks/martian/corpora/martian-cal-goldens.json` | Vendored Martian Cal.com goldens (10 PRs, 41 issues) |
 | `benchmarks/martian/corpora/martian-cal-gotchas.md` | Intentionally thin. No gold, no vendor comments |
 
-A new arm **must** use a new suffix (`cal-<pr>-scout`, `cal-<pr>-hunters-v2`, …). `run` skips only schema-valid completed reviews with matching frozen identity and attributable attempt evidence. Legacy files alone do not qualify. Unqualified prior directories are preserved under `incomplete-attempts/`; use a new arm rather than rewriting a historical baseline.
+A new arm **must** use a new suffix (`cal-<pr>-hunters-v2`, …). `run` skips only schema-valid completed reviews with matching frozen identity and attributable attempt evidence. Legacy files alone do not qualify. Unqualified prior directories are preserved under `incomplete-attempts/`; use a new arm rather than rewriting a historical baseline.
 
 ## Isolation (fairness)
 
@@ -43,7 +43,7 @@ Engine isolation stays: `--strict-mcp-config`, `--setting-sources ""`, no Write/
 ## Baseline pipeline (arm `hunters`)
 
 - Hunters: reliability, resilience, lifecycle + refuter
-- Scout **off**, summarizer **off**, parity never fires
+- Summarizer **off**, parity never fires (the scout stage no longer exists; arms stored before its removal ran with it off)
 - Prompt set: `slice3b-lifecycle-v6-clean` (`sha256: 5ac28df9bddbd4c8`)
 - Agents dir: `SUGGESTED_AGENTS_DIR` = `/Users/juanma/Desktop/deep-review/agents/slice3b-lifecycle-v6-clean` (immutable — scored)
 

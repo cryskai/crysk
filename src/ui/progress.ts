@@ -199,19 +199,6 @@ export function startLineRenderer(startedAtMs: number): ProgressRenderer {
         case "summarizer-finished":
           line(`summarizer: ${finishedText(event)}`);
           return;
-        case "scout-started":
-          line(`scout: reading the diff (${event.model})`);
-          return;
-        case "scout-finished":
-          // "unled", never "the run continues": a scout failure is not a
-          // partial review, it is the control pipeline. Naming it as a
-          // degradation would teach an operator to distrust a complete run.
-          line(
-            event.ok
-              ? `scout: ${event.leads ?? 0} lead(s)`
-              : "scout: failed (the hunters run unled)",
-          );
-          return;
         case "step-retry":
           // EVERY step, hunters and refuter alike — this is the launchd log,
           // where a retry that explains a long wall time has to be readable

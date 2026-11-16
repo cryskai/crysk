@@ -14,7 +14,6 @@ export interface ReviewMenuState {
   base: string;
   pr?: number | "current";
   post: boolean;
-  scout: boolean;
   force: boolean;
   full: boolean;
   dryRun: boolean;
@@ -48,7 +47,6 @@ export function renderReviewMenuCard(
     `Target: ${targetLabel} — Review target mode`,
     `Base: ${state.base} · Head: ${state.head} — Git diff range`,
     `Post to PR: ${state.post ? "[✓] Yes" : "[ ] No"} — Publish comments to GitHub PR`,
-    `Scout stage: ${state.scout ? "[✓] Enabled" : "[ ] Disabled"} — Run pre-hunt reconnaissance`,
     `Force review: ${state.force ? "[✓] Yes" : "[ ] No"} — Bypass size gate thresholds`,
     `Full verification: ${state.full ? "[✓] Yes" : "[ ] No"} — Run deep refuter checks`,
     `Dry run: ${state.dryRun ? "[✓] Yes" : "[ ] No"} — Execute without posting or resolving`,
@@ -97,14 +95,11 @@ export async function runReviewMenu(
     width?: number;
     effectiveConfig?: LocalConfig;
     defaultBase?: string;
-    defaultScout?: boolean;
     defaultPost?: boolean;
   } = {},
 ): Promise<ReviewMenuOutcome> {
   const resolvedBase =
     deps.defaultBase ?? deps.effectiveConfig?.default_base ?? "main";
-  const resolvedScout =
-    deps.defaultScout ?? deps.effectiveConfig?.scout ?? false;
   const resolvedPost = deps.defaultPost ?? deps.effectiveConfig?.post ?? false;
   const resolvedTarget = resolvedPost ? "pr" : "branch";
 
@@ -113,7 +108,6 @@ export async function runReviewMenu(
     head: "HEAD",
     base: resolvedBase,
     post: resolvedPost,
-    scout: resolvedScout,
     force: false,
     full: false,
     dryRun: false,
@@ -167,7 +161,7 @@ export async function runReviewMenu(
     });
 
   let cursor = 0;
-  const fieldCount = 7;
+  const fieldCount = 6;
   const actions = REVIEW_CARD_ACTIONS;
   const totalItems = fieldCount + actions.length;
   const ESC = "\x1b";
@@ -244,7 +238,6 @@ export async function runReviewMenu(
                 base: state.base,
                 pr: state.target === "pr" ? (state.pr ?? "current") : undefined,
                 post: state.post,
-                scout: state.scout,
                 force: state.force,
                 full: state.full,
                 dryRun: state.dryRun,
@@ -291,12 +284,10 @@ export async function runReviewMenu(
               state.post = !state.post;
             }
           } else if (cursor === 3) {
-            state.scout = !state.scout;
-          } else if (cursor === 4) {
             state.force = !state.force;
-          } else if (cursor === 5) {
+          } else if (cursor === 4) {
             state.full = !state.full;
-          } else if (cursor === 6) {
+          } else if (cursor === 5) {
             state.dryRun = !state.dryRun;
           }
           render(false);

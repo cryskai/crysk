@@ -50,7 +50,6 @@ import {
   preflightAgentsDir,
   resolveAgentsDir,
   resolvePost,
-  resolveScout,
   resolveSummary,
   type SummarySettings,
 } from "#review/preflight";
@@ -116,7 +115,6 @@ export interface LoadedRunConfig {
   loaded: EffectiveConfig;
   config: LocalConfig;
   summary: SummarySettings;
-  scout: boolean;
   post: boolean;
   // The run's model profile, resolved once here from `config.profile`
   // (openai-profile S3). Every route, prompt and pipeline input of the run
@@ -124,10 +122,10 @@ export interface LoadedRunConfig {
   profile: ModelProfile;
 }
 
-// Config load + the three per-run resolvers read right after it: identical
+// Config load + the per-run resolvers read right after it: identical
 // in both orchestrators except the root/home they read from (repoRoot +
 // os.homedir() in review(), operatorRoot + the hoisted `home` in reviewPr()).
-// Callers still own their own `options = { ...options, scout, post, ... }`
+// Callers still own their own `options = { ...options, post, ... }`
 // reassignment — reviewPr() folds an extra `yes` field into the same spread,
 // and forcing that in here would make this a mode flag instead of an
 // explicit parameter.
@@ -135,7 +133,7 @@ export async function loadRunConfig(params: {
   root: string;
   home: string;
   configFlag: string | undefined;
-  options: Pick<CliOptions, "summary" | "model" | "scout" | "post">;
+  options: Pick<CliOptions, "summary" | "model" | "post">;
   // Where config warnings go. Defaults to stderr, beside every other
   // `warning:` line a run prints.
   warn?: (line: string) => void;
@@ -151,10 +149,9 @@ export async function loadRunConfig(params: {
   for (const line of loaded.warnings) warn(line);
   const config = loaded.effective;
   const summary = resolveSummary(params.options, config);
-  const scout = resolveScout(params.options, config);
   const post = resolvePost(params.options, config);
   const profile = resolveProfile(config.profile);
-  return { loaded, config, summary, scout, post, profile };
+  return { loaded, config, summary, post, profile };
 }
 
 // Shared range guard. Both orchestrators check the same thing right after
@@ -535,7 +532,7 @@ export function routingConfigured(
 
 // Production route resolution: identical in both orchestrators except the
 // workspace root and (reviewPr()'s skipped-discovery re-review only) the
-// summarizer/scout enable overrides. Named distinctly from
+// summarizer/consolidate/materiality enable overrides. Named distinctly from
 // resolveProductionRoutePlanAtConfirm (#review/route-preflight), which this
 // wraps — `resolveProductionRoute` reads as a near-duplicate of that name at
 // a glance, which is exactly the confusion a shared wrapper should not add.
@@ -552,7 +549,6 @@ export async function resolvePipelineRoute(params: {
   profile: ModelProfile;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
-  scoutEnabled?: boolean;
   consolidateEnabled?: boolean;
   materialityEnabled?: boolean;
   // S5: the run's Claude credential, chosen once at run start. Required (undefined
@@ -578,7 +574,6 @@ export async function resolvePipelineRoute(params: {
         profile: params.profile,
         summary: params.summary,
         summarizerEnabled: params.summarizerEnabled,
-        scoutEnabled: params.scoutEnabled,
         consolidateEnabled: params.consolidateEnabled,
         materialityEnabled: params.materialityEnabled,
       }),

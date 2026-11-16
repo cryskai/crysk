@@ -249,7 +249,7 @@ describe("materializeCiOpenCodeData with a platform person layer", () => {
     });
     const layer = parseGlobalConfig(await readFile(personPath(), "utf8"));
     expect(layer.models).toEqual(PLATFORM_MODELS);
-    expect(layer.scout).toBe(true);
+    expect("scout" in layer).toBe(false);
     expect(result.warnings).toEqual([
       "The models, credentials and profile inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.",
     ]);

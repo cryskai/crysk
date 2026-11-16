@@ -66,7 +66,7 @@ describe("engine-owned effort", () => {
   test("the per-role table: hunter xhigh, refuter high, every other role high", () => {
     expect(defaultEffortForRole("hunter")).toBe("xhigh");
     expect(defaultEffortForRole("refuter")).toBe("high");
-    for (const role of ["summarizer", "scout", "verifier", "other"] as const) {
+    for (const role of ["summarizer", "verifier", "other"] as const) {
       expect(defaultEffortForRole(role), role).toBe("high");
     }
   });

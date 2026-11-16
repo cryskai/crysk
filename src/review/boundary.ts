@@ -22,7 +22,6 @@
 // untrusted block cannot be wrapped under an invented tag name.
 export type BoundaryTag =
   | "patch"
-  | "scout_leads"
   | "finding"
   | "findings"
   | "gotchas"
@@ -82,16 +81,13 @@ export function selectBoundaryNonce(
   );
 }
 
-// EMPTY CONTENT RENDERS TO THE EMPTY STRING, never to an empty tag pair. This
-// is load-bearing twice over: `renderLeadsBlock` already returns "" so a scout
-// that found nothing produces the control arm's byte-identical hunter prompt
-// (`review/scout.ts`'s note on M6), and an empty priors list must likewise leave no
-// trace in a system prompt. A `<scout_leads nonce></scout_leads nonce>` pair
-// would break both.
+// EMPTY CONTENT RENDERS TO THE EMPTY STRING, never to an empty tag pair: an
+// empty priors list must leave no trace in a system prompt, and a
+// `<priors nonce></priors nonce>` pair would be one.
 //
 // Throwing on a forged nonce is the last line of defence, not the first: every
 // block whose content can arrive after the nonce was committed is guarded by
-// the driver before it reaches here (see `runScout` and `runRefuter`), because
+// the driver before it reaches here (see `runRefuter`), because
 // a throw at prompt-composition time would kill a paid run. A throw that does
 // escape means a block reached composition unguarded — which is a defect to
 // see, not one to paper over by shipping a forgeable boundary.

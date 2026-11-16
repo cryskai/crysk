@@ -4,7 +4,7 @@
 //
 // What "the request the local CLI sends" means here, and why each line is set:
 //   - spec with one hunter and no refuter: one model call per run. No
-//     summarizer, consolidation, materiality or scout input is given, so none
+//     summarizer, consolidation or materiality input is given, so none
 //     of those stages spends anything.
 //   - sharedPrefix true: the layout the CLI uses by default (patch and output
 //     contract in the system prompt, the hunter's role file as the user

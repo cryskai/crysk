@@ -305,7 +305,6 @@ lab ledger the day it runs.
 - Tests and tooling: #174 (tests read the real environment), #46 and #45 (corpus), #113, #119, #134,
   #138, #70, #25 (tech-debt waves).
 - Consolidation: #401 (pooled proof refs shift re-review identity).
-- Remove the scout stage: it never earned its place and is off by default.
 
 ## Standing rules
 

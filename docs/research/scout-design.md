@@ -1,6 +1,6 @@
 # The scout — design (ROADMAP-DOORDASH M3) and its frozen control set (M0)
 
-Status: **M0 section filled 2026-08-16. The design (M3) written 2026-08-16, AWAITING RATIFICATION.**
+Status: **RETIRED 2026-11-16: the scout stage was removed from the engine; this document is kept as history, and the line below no longer applies. M0 section filled 2026-08-16, design (M3) written 2026-08-16, never ratified.**
 Nothing in M4–M6 starts before Juanma ratifies §3.14.
 
 This file has two jobs. The first, done here, is to freeze what the paid A/B in M6 will be read against —

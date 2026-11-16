@@ -15,7 +15,7 @@ On disk. **$0 to re-read.** Do not overwrite these dirs for a new arm.
 | Per-PR runs | `~/Desktop/martian-cal/runs/cal-<pr>-hunters/` |
 | Adapter tests | `test/martian-adapter.test.ts` (offline) |
 
-Pipeline: hunters (reliability/resilience/lifecycle + refuter), scout off, summarizer off, parity off, prompt set `slice3b-lifecycle-v6-clean` (`sha256: 5ac28df9bddbd4c8`). Judge: Martian prompt, Claude Code CLI `sonnet`, `tools:[]`. Unreplicated. Cal.com only.
+Pipeline: hunters (reliability/resilience/lifecycle + refuter), summarizer off, parity off, prompt set `slice3b-lifecycle-v6-clean` (`sha256: 5ac28df9bddbd4c8`). Judge: Martian prompt, Claude Code CLI `sonnet`, `tools:[]`. Unreplicated. Cal.com only.
 
 **Headline (not All F1):** High+Critical recall **13/19 = 0.68**. High 12/17. Low 0/9. All-profile P 0.44 / R 0.41 / F1 0.43 (tp 17 fp 22 fn 24 / 41). Strict gold-side recall 17/35 = 0.49.
 
@@ -40,15 +40,15 @@ A new arm is a delta against **this** table, not against vibes.
 
 `src/compare.ts` + `src/compare-report.ts` + `src/ledger.ts`. Location-only (path + line ±25), not claim text. Live on **our** repo. Cannot see C10’s both-missed cell. **Unchanged by Martian.** Do not retire it. Do not quote Martian F1 as if it replaced this.
 
-## 3. M6 scout A/B — DoorDash track
+## 3. M6 floor test — DoorDash track
 
-`scripts/m6.ts`, `docs/benchmarks/m6-floor-cases.json`, `src/floor-test.ts`. Frozen musive control set. Scout on vs off. Paused 2026-08-19 for calibration. **Different corpus, different question.** Do not mix a Martian weekend with an M6 variable. Scout-led on Cal.com is a **new Martian arm** (one variable: scout), not an M6 substitute.
+`docs/benchmarks/m6-floor-cases.json`, `src/compare/floor-test.ts`. Frozen musive control set. It was built for a scout on/off A/B that was paused 2026-08-19 and retired 2026-11-16, when the scout stage was removed; `scripts/m6.ts` is gone, the case list and its scoring stay. **Different corpus, different question.** Do not mix a Martian weekend with an M6 variable.
 
-Pilot learning (n=12 musive): scout concentrated instead of widening; prompt-set sha was identical across arms. See Engram / M6 notes before assuming scout helps Martian recall.
+Pilot learning (n=12 musive, before the removal): the scout concentrated findings instead of widening them; the prompt-set sha was identical across arms.
 
 ## 4. Fixture eval — cheap gate before Martian money
 
-`bun run fixture-eval` (~$0.08, ~1 min). Planted bug in a disposable repo. A methodology that cannot catch the planted bug does not deserve a Cal.com re-run. Optional `--scout`.
+`bun run fixture-eval` (~$0.08, ~1 min). Planted bug in a disposable repo. A methodology that cannot catch the planted bug does not deserve a Cal.com re-run.
 
 ## 5. Refuter-probe — first gate for refuter prompt edits
 
