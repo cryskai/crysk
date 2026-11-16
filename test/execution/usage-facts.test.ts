@@ -383,6 +383,39 @@ describe("openCodeAttemptUsageFacts", () => {
     ]);
   });
 
+  // opencode-client.ts records a readback it could not read as `coverage: "unknown"` with no message
+  // array; the older array readback before it is then not the session's whole.
+  test("a newer readback with no message array makes the older one partial", () => {
+    const facts = openCodeAttemptUsageFacts({
+      attempt: 1,
+      credential: "api",
+      route,
+      capture: {
+        status: "complete",
+        redactedJson: JSON.stringify({
+          records: [
+            {
+              kind: "readback",
+              data: {
+                coverage: "complete",
+                messages: [assistantMessage(60, 25, route.model)],
+              },
+            },
+            { kind: "readback", data: { coverage: "unknown", messages: {} } },
+          ],
+        }),
+      },
+      totals,
+    });
+    expect(facts?.requests).toEqual([
+      ["aiand", route.model, 60, 0, 0, 0, 25, 0],
+    ]);
+    expect(facts?.remainders).toEqual([
+      ["aiand", route.model, 40, 2000, 30, 0, 15, 5],
+    ]);
+    expect(facts?.gaps).toEqual(["no_readback"]);
+  });
+
   test("an incomplete capture is trusted only as far as the streamed totals agree with it", () => {
     const one = [assistantMessage(100, 45, "deepseek-ai/deepseek-v4.1-flash")];
     const partial = { ...totals, inputCacheRead: 0, inputCacheWrite: 0 };

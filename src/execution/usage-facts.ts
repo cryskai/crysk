@@ -305,15 +305,17 @@ function openCodeReadback(
     isRecord(parsed) && Array.isArray(parsed.records)
       ? parsed.records.filter(isRecord)
       : [];
-  const readback = records
+  const readbacks = records.filter((record) => record.kind === "readback");
+  const readback = readbacks
     .filter(
-      (record) =>
-        record.kind === "readback" &&
-        isRecord(record.data) &&
-        Array.isArray(record.data.messages),
+      (record) => isRecord(record.data) && Array.isArray(record.data.messages),
     )
     .at(-1);
   if (readback === undefined || !isRecord(readback.data)) return undefined;
+  // The newest readback of any shape decides, as in the evidence classifier: when the transport
+  // recorded a later one it could not read (`coverage: "unknown"`, no message array), the older
+  // array is kept for its requests but is no longer the session's whole.
+  const newest = readbacks.at(-1) === readback;
   const requests: UsageFactEntry[] = [];
   for (const message of (readback.data.messages as unknown[]).filter(
     isRecord,
@@ -334,7 +336,10 @@ function openCodeReadback(
       tokens(t.reasoning),
     ]);
   }
-  return { requests, complete: readback.data.coverage === "complete" };
+  return {
+    requests,
+    complete: newest && readback.data.coverage === "complete",
+  };
 }
 
 // One OpenCode attempt: one request per assistant message of its capture's newest readback. The
