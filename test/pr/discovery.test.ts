@@ -5,9 +5,11 @@ import {
   resolvePrDiscovery,
 } from "#pr/discovery";
 import { skippedDiscoveryMessage } from "#rereview/plan";
+import { renderStateBlock, stateFinding } from "#rereview/state";
 import { allExcludedMessage } from "#review/preflight";
 import type { AgentSpec } from "#review/spec";
 import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
+import { triageMarker } from "#triage/triage";
 import { CliError } from "../../src/errors";
 import { parseIgnoreFile } from "../../src/ignore-file";
 
@@ -277,6 +279,61 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
     expect(
       logs.some((line) => line.includes("No prior finding is queued")),
     ).toBe(false);
+  });
+
+  // A prior with no comment of its own: GitHub could not anchor the finding, so it
+  // lives only as row R001 in the summary's state block. Its answer is a top-level
+  // comment whose triage marker names that row.
+  test("an applied reply to a prior with no comment queues it for verification", async () => {
+    const logs: string[] = [];
+    const summary = `${markerCommentForHead(H, true).body}\n\n${renderStateBlock(
+      H,
+      [
+        stateFinding({
+          id: "R001",
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: ["src/a.ts:10"],
+          claim: "a finding GitHub could not anchor",
+        }),
+      ],
+      1,
+      1,
+    )}`;
+    const result = await resolvePrDiscovery({
+      diffFromSha: B,
+      headSha: H,
+      full: false,
+      baseRef: B,
+      headLabel: "PR #1 head",
+      isCi: false,
+      sizeGateOverrides: {},
+      config: { suspicion_priors: [] },
+      prIgnore: { rules: [], found: false },
+      issueComments: [
+        { ...markerCommentForHead(H, true), body: summary },
+        {
+          id: 2,
+          user: "pr-hero",
+          body: `${triageMarker({
+            tag: "applied",
+            headSha: H,
+            actor: "agent",
+            row: "R001",
+          })}\n\nfixed in x`,
+          created_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+      postedFindings: [],
+      reviewComments: [],
+      git: baseGit(),
+      log: (line) => {
+        if (line !== undefined) logs.push(line);
+      },
+    });
+
+    expect(result.verifyQueue.map((v) => v.priorId)).toEqual(["R001"]);
   });
 
   // #286 finding 1: a REAL, non-empty delta that the size gate / ignore

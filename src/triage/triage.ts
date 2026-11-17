@@ -62,6 +62,9 @@ const TRIAGE_VERDICTS: ReadonlySet<string> = new Set<TriageVerdict>([
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
+// A summary row's id, as rereview/state.ts writes it (`R` and three or more digits).
+const ROW_ID = /^R\d{3,}$/;
+
 // Tags that spawn an adjudicator (SKILL.md step 4) and therefore MUST carry
 // its verdict on the marker. `applied` pays no adjudicator and is excluded
 // on purpose — see the builder/parser below for what that means in both
@@ -95,6 +98,10 @@ export interface TriageMarkerFields {
   // claim that a ruling happened when the rule says none may. The builder
   // throws and the parser rejects rather than silently drop it.
   verdict?: TriageVerdict;
+  // The summary row this reply answers, for a finding with no comment of its own (GitHub could not
+  // anchor it, so it lives in the summary only). Absent for a reply in a finding's thread, where
+  // the thread is the binding.
+  row?: string;
 }
 
 const TRIAGE_BADGE: Record<TriageTag, { emoji: string; label: string }> = {
@@ -124,14 +131,22 @@ export function triageBadge(fields: TriageMarkerFields): string {
 // Marker + badge + reasoning, in that order. The driver prepends the wire
 // format; `--body-file` is reasoning prose only. A blank reasoning still
 // emits marker and badge — applied can be a one-line pointer, and an empty
-// file must not drop the human-visible tag.
+// file must not drop the human-visible tag. The optional subject is a visible
+// line naming what the reply answers when no thread does (a summary-row finding).
 export function renderTriageReplyBody(
   fields: TriageMarkerFields,
   reasoning: string,
+  subject?: string,
 ): string {
   const head = `${triageMarker(fields)}\n\n${triageBadge(fields)}`;
+  const withSubject =
+    subject !== undefined && subject.length > 0
+      ? `${head}\n\n${subject}`
+      : head;
   const prose = publishedText(reasoning.trim());
-  return prose.length === 0 ? `${head}\n` : `${head}\n\n${prose}\n`;
+  return prose.length === 0
+    ? `${withSubject}\n`
+    : `${withSubject}\n\n${prose}\n`;
 }
 
 // Builds the marker. `verdict` is required for the three adjudicated tags
@@ -158,15 +173,19 @@ export function triageMarker(fields: TriageMarkerFields): string {
         "no adjudicator (ROADMAP B6b)",
     );
   }
+  if (fields.row !== undefined && !ROW_ID.test(fields.row)) {
+    throw new Error("triageMarker: row must be a summary row id (R001, …)");
+  }
   const issuePart =
     fields.tag === "deferred" && fields.issue !== undefined
       ? ` issue=${fields.issue}`
       : "";
   const verdictPart =
     fields.verdict !== undefined ? ` verdict=${fields.verdict}` : "";
+  const rowPart = fields.row !== undefined ? ` row=${fields.row}` : "";
   return (
     `${TRIAGE_MARKER_PREFIX}tag=${fields.tag} head=${fields.headSha} ` +
-    `actor=${fields.actor}${issuePart}${verdictPart} -->`
+    `actor=${fields.actor}${issuePart}${verdictPart}${rowPart} -->`
   );
 }
 
@@ -182,6 +201,8 @@ export interface ParsedTriageMarker {
   // absent for "applied", which never returns null for a MISSING verdict
   // but DOES for a PRESENT one (see parseTriageMarker).
   verdict?: TriageVerdict;
+  // Present only when the marker names a summary row (see TriageMarkerFields.row).
+  row?: string;
 }
 
 // Parses ONLY the first line of a reply body, mirroring
@@ -216,6 +237,10 @@ export function parseTriageMarker(body: string): ParsedTriageMarker | null {
   if (!FULL_SHA.test(headSha)) return null;
   const tag = rawTag as TriageTag;
   const actor = rawActor as TriageActor;
+  // A present but malformed row is a broken binding, not "no row": reject it, as a bad issue is.
+  const rawRow = parts.get("row");
+  if (rawRow !== undefined && !ROW_ID.test(rawRow)) return null;
+  const rowPart = rawRow === undefined ? {} : { row: rawRow };
 
   // `applied` pays no adjudicator (SKILL.md, ROADMAP B6b), so a verdict on
   // an `applied` marker is not a harmless extra field, it is a false claim
@@ -223,7 +248,7 @@ export function parseTriageMarker(body: string): ParsedTriageMarker | null {
   // the same way an unknown tag is rejected, rather than silently ignore it.
   if (tag === "applied") {
     if (parts.has("verdict")) return null;
-    return { tag, headSha, actor };
+    return { tag, headSha, actor, ...rowPart };
   }
 
   // `dismissed`, `deferred`, and `misclassified` all spawn an adjudicator
@@ -246,11 +271,11 @@ export function parseTriageMarker(body: string): ParsedTriageMarker | null {
   if (tag === "deferred") {
     const rawIssue = parts.get("issue");
     if (rawIssue === undefined) {
-      return { tag, headSha, actor, verdict };
+      return { tag, headSha, actor, verdict, ...rowPart };
     }
     const issue = Number.parseInt(rawIssue, 10);
     if (!Number.isInteger(issue) || issue <= 0) return null;
-    return { tag, headSha, actor, issue, verdict };
+    return { tag, headSha, actor, issue, verdict, ...rowPart };
   }
-  return { tag, headSha, actor, verdict };
+  return { tag, headSha, actor, verdict, ...rowPart };
 }

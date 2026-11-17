@@ -2912,6 +2912,10 @@ function vanishedPriorSummaryDegradedMessage(pr: number): string {
   );
 }
 
+// A row id as wide as any the state merge can assign (`R` and six digits), for the body that sizes
+// the state block's budget before the merge has assigned the real ones.
+const ROW_ID_PLACEHOLDER = "R000000";
+
 export async function postInlineFindings(input: {
   operatorRoot: string;
   pr: number;
@@ -3130,6 +3134,13 @@ export async function postInlineFindings(input: {
     input.ciMode,
     undefined,
     notPosted,
+    // WHY placeholder row ids: the real ids come from the merge this body sizes
+    // the budget for, and each Outside Diff entry will carry one. A placeholder
+    // at least as wide as any id the merge can assign keeps the budget from
+    // undercounting the body by a few bytes per entry.
+    new Map(
+      plannedOutsideDiff.map((finding) => [finding.id, ROW_ID_PLACEHOLDER]),
+    ),
   );
   // WHY one merge function for both writes: the S1 re-merge reruns it with a
   // PATCH-sized budget and the SAME inputs, so the kept ids and hw cannot
@@ -3185,6 +3196,16 @@ export async function postInlineFindings(input: {
     state: MergedState | undefined,
     compactFrom?: number,
   ): string => {
+    // Outside Diff entries name their row: that id is how such a finding is answered.
+    // WHY index-aligned with postedDoc.findings: freshFindings is built from it one-to-one,
+    // and freshIds is aligned with freshFindings by index.
+    const rowIdByFindingId = new Map<string, string>();
+    if (state !== undefined) {
+      for (const [index, finding] of postedDoc.findings.entries()) {
+        const rowId = state.freshIds[index];
+        if (rowId !== undefined) rowIdByFindingId.set(finding.id, rowId);
+      }
+    }
     const body = renderPrComment(
       postedDoc,
       webUrl,
@@ -3195,6 +3216,7 @@ export async function postInlineFindings(input: {
       input.ciMode,
       compactFrom,
       notPosted,
+      rowIdByFindingId,
     );
     // WHY the admission block is written on BOTH paths: its `reviews` is the
     // only count a summary keeps when the count is 0. renderStateBlock omits 0

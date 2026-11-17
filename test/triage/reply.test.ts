@@ -10,6 +10,7 @@ import {
 } from "#pr/preflight";
 import {
   decideThreadResolve,
+  existingRowTriageAtHead,
   existingTriageAtHead,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
@@ -358,5 +359,61 @@ describe("replyAnswersReview", () => {
         }),
       ).toBe(false);
     }
+  });
+});
+
+describe("existingRowTriageAtHead", () => {
+  const rowReply = (row: string, headSha: string) => ({
+    body: `${triageMarker({ tag: "applied", headSha, actor: "agent", row })}\n\nok`,
+  });
+
+  test("detects a same-head reply that names the row", () => {
+    expect(
+      existingRowTriageAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [rowReply("R001", HEAD)],
+      }),
+    ).toBe(true);
+  });
+
+  test("the same row at another head is not a skip", () => {
+    expect(
+      existingRowTriageAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [rowReply("R001", OTHER_HEAD)],
+      }),
+    ).toBe(false);
+  });
+
+  test("another row at the same head is not a skip", () => {
+    expect(
+      existingRowTriageAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [rowReply("R002", HEAD)],
+      }),
+    ).toBe(false);
+  });
+
+  test("a marker with no row is not a skip", () => {
+    expect(
+      existingRowTriageAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [
+          {
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nok`,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  test("an empty list is not a skip", () => {
+    expect(
+      existingRowTriageAtHead({ rowId: "R001", headSha: HEAD, comments: [] }),
+    ).toBe(false);
   });
 });

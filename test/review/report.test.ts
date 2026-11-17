@@ -2730,6 +2730,65 @@ describe("renderPrComment — a compact Outside Diff entry keeps its tier", () =
   });
 });
 
+describe("renderPrComment — Outside Diff entries name their row", () => {
+  const WEB_URL = "https://github.com/musivetech/musive";
+  const a = finding({
+    id: "F001",
+    path: "src/never-a.ts",
+    line: 1,
+    claim: "first un-anchorable claim",
+  });
+  const b = finding({
+    id: "F002",
+    path: "src/never-b.ts",
+    line: 2,
+    claim: "second un-anchorable claim",
+  });
+  const rowOfFirst: ReadonlyMap<string, string> = new Map([["F001", "R003"]]);
+  // Positional arguments up to the last one: ciMode, compactFrom and notPosted
+  // are skipped so the row map can be the final argument.
+  const render = (
+    rowIdByFindingId?: ReadonlyMap<string, string>,
+    compactFrom?: number,
+  ) =>
+    renderPrComment(
+      doc({ findings: [a, b] }),
+      WEB_URL,
+      undefined,
+      [a, b],
+      undefined,
+      undefined,
+      undefined,
+      compactFrom,
+      undefined,
+      rowIdByFindingId,
+    );
+  const outsideSection = (body: string) =>
+    body.slice(body.indexOf("### Comments Outside Diff"));
+
+  test("a full entry's location line ends with its row id, and an entry without a row shows none", () => {
+    const section = outsideSection(render(rowOfFirst));
+    expect(section).toContain(
+      `[\`src/never-a.ts:1\`](${WEB_URL}/blob/${"b".repeat(40)}/src/never-a.ts#L1) (R003)`,
+    );
+    expect(section).toContain("never-b.ts#L2)\n");
+    expect(section).not.toContain("never-b.ts#L2) (R");
+  });
+
+  test("a compact entry's line ends with its row id", () => {
+    const section = outsideSection(render(rowOfFirst, 0));
+    expect(section).toContain(`#L1) (R003)`);
+    expect(section).not.toContain("never-b.ts#L2) (R");
+    expect(section).not.toContain("first un-anchorable claim");
+  });
+
+  test("with no row map, or an empty one, the body is byte-identical and shows no row id", () => {
+    const omitted = render(undefined);
+    expect(render(new Map())).toBe(omitted);
+    expect(omitted).not.toContain("(R0");
+  });
+});
+
 describe("model text is safe to publish", () => {
   const HEAD = "b".repeat(40);
   const WEB_URL = "https://github.com/acme/app";

@@ -155,3 +155,20 @@ export function existingTriageAtHead(input: {
     return marker !== null && marker.headSha === input.headSha;
   });
 }
+
+// The same guard for a finding with no comment: its replies are top-level comments that name its
+// row, so the row and the review's head are what a second reply would repeat.
+export function existingRowTriageAtHead(input: {
+  rowId: string;
+  headSha: string;
+  comments: readonly { body: string }[];
+}): boolean {
+  return input.comments.some((comment) => {
+    const marker = parseTriageMarker(comment.body);
+    return (
+      marker !== null &&
+      marker.row === input.rowId &&
+      marker.headSha === input.headSha
+    );
+  });
+}

@@ -104,7 +104,7 @@ export interface PrStatusFinding {
   // head of its own, and nothing was posted here.
   head: string | null;
   // Null for a finding with no comment thread (a state row no comment bound: summary-only, or
-  // never posted inline). Such a finding cannot be answered with a triage reply.
+  // never posted inline). It is answered with a top-level reply whose marker names the row (triage/triage.ts `row`).
   comment_id: number | null;
   channel: "inline" | "outside";
   severity: string | null;
@@ -296,6 +296,7 @@ export function liveBlockingFindings(raw: PrStatusInput): PrStatusFinding[] {
 // the newest). Its head and completeness come from the marker; its reviews count and its
 // live rows come from the state block that the summary carries.
 function readSummary(comments: PrStatusComment[]): {
+  id: number | null;
   head: string | null;
   complete: boolean | null;
   reviews: number | null;
@@ -304,11 +305,12 @@ function readSummary(comments: PrStatusComment[]): {
   const id = findMarkedCommentId(comments);
   const body = comments.find((c) => c.id === id)?.body ?? null;
   if (id === null || body === null) {
-    return { head: null, complete: null, reviews: null, rows: [] };
+    return { id: null, head: null, complete: null, reviews: null, rows: [] };
   }
   const marker = parsePrCommentMarker(body);
   const state = parseStateBlock(body);
   return {
+    id,
     head: marker?.head ?? null,
     complete: marker?.complete ?? null,
     reviews: state?.reviews ?? null,
@@ -446,15 +448,26 @@ function readFindings(
   // gate counts. Without this row the status could not see a blocking finding the gate names.
   for (const row of rows) {
     if (bound.has(row.id)) continue;
-    out.push({ finding: unthreadedFinding(row), answersReview: false });
+    const replies = rowReplies(row.id, input);
+    out.push({
+      finding: unthreadedFinding(row, newestReply(replies)?.marker ?? null),
+      // A row has no posted head, so only a reply stamped with the reviewed head answers it.
+      answersReview:
+        reviewedHead !== null &&
+        replies.some((r) => r.marker.headSha === reviewedHead),
+    });
   }
   return out;
 }
 
 // A state row with no comment: its anchor is the first of its locs (path:line or path:a-b, the
 // start line), read with the same parser the binder uses. A row with no parseable loc keeps its raw
-// text and line 0, so it still blocks and still reports.
-function unthreadedFinding(row: StateFinding): PrStatusFinding {
+// text and line 0, so it still blocks and still reports. Its newest reply is the newest top-level
+// comment that names the row.
+function unthreadedFinding(
+  row: StateFinding,
+  triage: ParsedTriageMarker | null,
+): PrStatusFinding {
   const first = row.locs[0];
   const span = first === undefined ? undefined : parseProofRefLocs(first)[0];
   // Fail closed: only an advisory tier clears a row, as for a comment.
@@ -470,7 +483,15 @@ function unthreadedFinding(row: StateFinding): PrStatusFinding {
     tier,
     blocking: tier !== "advisory",
     live_on_head: true,
-    triage: null,
+    triage:
+      triage === null
+        ? null
+        : {
+            tag: triage.tag,
+            verdict: triage.verdict ?? null,
+            actor: triage.actor,
+            head: triage.headSha,
+          },
     ci_verdict: null,
   };
 }
@@ -540,7 +561,21 @@ function repliesTo(
   const link = new RegExp(`#issuecomment-${source.id}(?!\\d)`);
   for (const comment of input.issueComments) {
     const marker = parseTriageMarker(comment.body);
-    if (marker === null || !link.test(comment.body)) continue;
+    // A reply that names a row never answers a legacy top-level finding comment, even when its body links one.
+    if (marker === null || marker.row !== undefined || !link.test(comment.body))
+      continue;
+    out.push({ id: comment.id, marker, createdAt: comment.created_at });
+  }
+  return out;
+}
+
+// Every triage reply that answers one summary row: a top-level comment whose marker names the row
+// (triage/triage.ts `row`). A row has no comment of its own, so the token is the only binding.
+function rowReplies(rowId: string, input: PrStatusInput): TriageReplyRow[] {
+  const out: TriageReplyRow[] = [];
+  for (const comment of input.issueComments) {
+    const marker = parseTriageMarker(comment.body);
+    if (marker === null || marker.row !== rowId) continue;
     out.push({ id: comment.id, marker, createdAt: comment.created_at });
   }
   return out;
@@ -738,28 +773,19 @@ function decideNext(
       reason: `The automatic review budget for this PR is used up, or the review policy is manual (ci_review_policy is manual_only); comment ${commandHint(REVIEW_COMMAND, "")} to review this head.`,
     };
   }
-  // A row with no comment has no thread a triage reply could land in, so it is never "untriaged".
+  // WHY a row with no comment counts only under a gate that states a blocking count: only that
+  // gate is the verdict of a review the summary's rows belong to. A skipped or partial gate
+  // reviewed nothing, and its rows may be an older head's, so such a row falls through to the
+  // branches below.
+  const rowsAreThisReviews = gateBlockingCount(gate) !== null;
   const untriaged = liveBlocking.filter(
-    (a) => a.finding.comment_id !== null && !a.answersReview,
+    (a) =>
+      !a.answersReview && (a.finding.comment_id !== null || rowsAreThisReviews),
   );
   if (untriaged.length > 0) {
     return {
       next_action: "triage",
       reason: `${untriaged.length} live blocking finding(s) on this head have no triage reply that answers this review; triage them first.`,
-    };
-  }
-  // WHY this precedes the upheld-dismissal review branch: a blocking row with no thread cannot be
-  // answered, and only a fix clears it. Answering review here would re-run a gate that still counts
-  // it, and the review never stops counting it (review #348 R001/R003).
-  // Only a gate that states a blocking count is the verdict of a review the summary's rows belong
-  // to. A skipped or partial gate reviewed nothing, and its rows may be an older head's, so it falls
-  // through to its own branches below (review #348 R006).
-  const unthreaded = liveBlocking.filter((a) => a.finding.comment_id === null);
-  if (unthreaded.length > 0 && gateBlockingCount(gate) !== null) {
-    const ids = unthreaded.map((a) => a.finding.id ?? "unnamed").join(", ");
-    return {
-      next_action: "fix",
-      reason: `${unthreaded.length} live blocking finding(s) (${ids}) have no comment thread to answer (summary-only or never posted inline); fix them and push, or ${commandHint(OVERRIDE_COMMAND, "")}.`,
     };
   }
   const applied = liveBlocking.filter(
@@ -807,10 +833,12 @@ function decideNext(
   const dismissed = liveBlocking.filter(
     (a) => a.finding.triage?.tag === "dismissed",
   );
-  // Only an inline finding can get a CI ruling: the adjudicator answers on the finding's own review
-  // thread, and an outside-diff finding has none, so recheck would never settle it.
+  // Only a finding with a review thread can get a CI ruling: the adjudicator answers on the finding's
+  // own review comment. A row with no comment has none, and neither has a legacy top-level finding
+  // comment, so recheck would never settle either.
   const pendingRulings = dismissed.filter(
     (a) =>
+      a.finding.comment_id !== null &&
       a.finding.channel === "inline" &&
       (a.finding.ci_verdict === null ||
         a.finding.ci_verdict === "inconclusive"),
