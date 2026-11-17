@@ -71,6 +71,7 @@ import {
   ghPrHeroWorkflowRunHeads,
   listAdmissionCheckRuns,
 } from "#pr/pr";
+import { verdictAtMs } from "#pr/pr-status";
 import {
   type CiMode,
   type CommitStatusContext,
@@ -662,6 +663,66 @@ async function stoppedByMaintainer(
   return false;
 }
 
+// Whether each author of a triage reply has write access: true, false, or null when the permission
+// did not read. One lookup for the gate, crysk status and crysk triage reply, so the three read the
+// same replies. `known` carries answers across calls (a --wait poll must not ask again); only an
+// answer that read is kept in it.
+export async function lookUpReplyWriters(input: {
+  operatorRoot: string;
+  // id is optional, but a plain `applied` reply is found through its finding's id: pass the ids.
+  comments: readonly {
+    id?: number;
+    user: string;
+    body: string;
+    in_reply_to_id?: number | null;
+    created_at?: string;
+  }[];
+  known?: Map<string, boolean>;
+  // The reviewed head and the verdict time (ms): a stale reply's author is not asked.
+  cutoff?: { reviewedHead: string | null; verdictAt: number | null };
+  spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
+}): Promise<Map<string, boolean | null>> {
+  const writers = new Map<string, boolean | null>();
+  for (const login of triageReplyAuthors(input.comments, input.cutoff)) {
+    const cached = input.known?.get(login);
+    if (cached !== undefined) {
+      writers.set(login, cached);
+      continue;
+    }
+    const permission = await ghCollaboratorPermissionRetried(
+      input.operatorRoot,
+      login,
+      input.spawnFn,
+      input.sleepFn,
+    );
+    const writer =
+      permission === null
+        ? null
+        : permission === "admin" || permission === "write";
+    writers.set(login, writer);
+    if (writer !== null) input.known?.set(login, writer);
+  }
+  return writers;
+}
+
+// The same, for a reader that cannot go on without every answer: status and the triage driver.
+export async function requireReplyWriters(
+  input: Parameters<typeof lookUpReplyWriters>[0],
+): Promise<Map<string, boolean>> {
+  const writers = new Map<string, boolean>();
+  for (const [login, writer] of await lookUpReplyWriters(input)) {
+    if (writer === null) {
+      throw new CliError(
+        `could not read whether ${login} has write access to this repository, so its triage ` +
+          "replies cannot be read as the gate reads them. Nothing was changed: run the command again",
+      );
+    }
+    writers.set(login, writer);
+  }
+  return writers;
+}
+
 // budget-exhausted-carry S3, S4: the reader publishCiSkip calls when a skip carries a blocking red. Each
 // triage reply's author is looked up once, with the stop lookup's bounds; a lookup that did not read is null,
 // which answeredBlockingFindings fails closed on. A truncated comment read (authorityFailOpen) or no reviewed
@@ -692,24 +753,13 @@ function answeredReader(input: {
   return async (verdictAt) => {
     const reviewedHead = input.reviewedHead;
     if (reviewedHead === null) return null;
-    const writers = new Map<string, boolean | null>();
-    for (const login of triageReplyAuthors([
-      ...input.reviewComments,
-      ...input.issueComments,
-    ])) {
-      const permission = await ghCollaboratorPermissionRetried(
-        input.operatorRoot,
-        login,
-        input.spawnFn,
-        input.sleepFn,
-      );
-      writers.set(
-        login,
-        permission === null
-          ? null
-          : permission === "admin" || permission === "write",
-      );
-    }
+    const writers = await lookUpReplyWriters({
+      operatorRoot: input.operatorRoot,
+      comments: [...input.reviewComments, ...input.issueComments],
+      cutoff: { reviewedHead, verdictAt: verdictAtMs(verdictAt) },
+      spawnFn: input.spawnFn,
+      sleepFn: input.sleepFn,
+    });
     return answeredBlockingFindings({
       pr: input.prNumber,
       reviewedHead,

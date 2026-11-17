@@ -1252,17 +1252,24 @@ workflow run, so it gets no reaction and costs nothing. It does not cancel a rev
 
 <a id="rechecking-a-dismissal"></a>
 
-**Rechecking a dismissal.** Comment exactly `/crysk recheck` on the pull request. It is `/crysk review` plus the CI adjudicator:
-the same write-access check and the same forced review of the head, and then the adjudicator rules on each pending `dismissed` reply
-to a blocking finding, at most 5 per run. Only a dismissal the adjudicator upholds leaves the gate count. A `deferred` or
-`misclassified` reply never does, and a rejected or inconclusive verdict keeps the finding counted. The verdict is posted by
-`github-actions[bot]` as a reply on the finding's thread, or, for a finding with no comment of its own (one listed only in
-the summary), as a top-level comment that names the reply it rules on. Only verdicts from that login count, so a run with a
-custom token fails closed. In [platform mode](#pr-comment-commands) the run posts as the Crysk App's bot, and its ruling counts
-when that same bot posted the finding (the review summary, for a finding with no comment); a person's login never does, nor
-another App's bot.
-A new dismissal reply is pending again. A verdict counts only on the head it was given, so a push needs a new recheck. An adjudicator step that fails posts nothing for that dismissal: it prints a notice and stays pending for the next recheck. The recheck run itself never changes the count: an upheld verdict leaves it from the next review of the same head (`/crysk review`), which reads the reply back, and only when GitHub recorded the reply under `github-actions[bot]` (or the platform's bot in platform mode). If the reply did not land under that login, the recheck warns and the finding keeps counting. Dismissals never ruled on are adjudicated before retries of an inconclusive one. Not on fork pull requests: the adjudicator needs this repository's checkout of the head,
-so the comment is refused with a notice and a 👎 reaction.
+**Rechecking a dismissal.** Comment exactly `/crysk recheck` on the pull request. It is `/crysk review` plus the CI
+adjudicator: the same write-access check and the same forced review of the head, and then the adjudicator rules on each
+pending `dismissed` reply to a blocking finding, at most 5 per run. Only a reply from a login with write access is read:
+a reply from anyone else is not ruled on and changes nothing in a review. Only a dismissal the adjudicator upholds
+leaves the gate count. A `deferred` or `misclassified` reply never does, and a rejected or inconclusive verdict keeps
+the finding counted. The verdict is posted by `github-actions[bot]` as a reply on the finding's thread, or, for a
+finding with no comment of its own (one listed only in the summary), as a top-level comment that names the reply it
+rules on. Only verdicts from that login count, so a run with a custom token fails closed. In [platform
+mode](#pr-comment-commands) the run posts as the Crysk App's bot, and its ruling counts when that same bot posted the
+finding (the review summary, for a finding with no comment); a person's login never does, nor another App's bot. A new
+dismissal reply is pending again. A verdict counts only on the head it was given, so a push needs a new recheck. An
+adjudicator step that fails posts nothing for that dismissal: it prints a notice and stays pending for the next recheck.
+The recheck run itself never changes the count: an upheld verdict leaves it from the next review of the same head
+(`/crysk review`), which reads the reply back, and only when GitHub recorded the reply under `github-actions[bot]` (or
+the platform's bot in platform mode). If the reply did not land under that login, the recheck warns and the finding
+keeps counting. Dismissals never ruled on are adjudicated before retries of an inconclusive one. Not on fork pull
+requests: the adjudicator needs this repository's checkout of the head, so the comment is refused with a notice and a 👎
+reaction.
 
 <a id="overriding-a-red-gate"></a>
 
@@ -1484,8 +1491,10 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 
 - `gate` is Crysk's own commit status on the head. `state: "none"` means no `crysk` status is on it.
 - `findings` covers every posted `<!-- crysk-finding` comment, on every head. `channel` is `inline` for a review
-  thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread only;
-  for a finding with no comment (`comment_id: null`, a row of the summary) it is the newest top-level reply that names the row.
+  thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread that the gate
+  counts: from a login with write access, and not older than the review's verdict unless it names the reviewed head;
+  for a finding with no comment (`comment_id: null`, a row of the summary) it is the newest top-level reply that
+  names the row.
 - A finding joins its state-block row the way the engine binds a prior to its comment: the comment's anchor must land
   within the row's locations, and the claim fingerprint breaks only a tie. The anchor is the marker's path and line,
   and the review comment's live path and line when GitHub has moved them (a rename, or a re-anchored line), so a row
@@ -1508,14 +1517,20 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
 | `review` | No `crysk` (or `pr-hero`) status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
 | `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. A green over answered findings no review verified (`crysk: N answered finding(s), fixes unverified`) is `done` too, and its reason says so. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. A finding that lives only in the summary comment (outside the diff, `comment_id: null`) has no thread a reply could land in, so it is never owed, but the reason counts it ("N finding(s) live only in the summary comment … read them there before merging"). |
-| `triage` | The gate is red and a live blocking finding on this head has no triage reply that answers this review (a reply from an earlier review of a carried finding does not). A finding with no comment counts too: it is answered by a top-level reply that names its row. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
+| `triage` | The gate is red and a live blocking finding on this head has no triage reply that answers this review: the newest reply the gate counts must name it (a reply from an earlier review of a carried finding does not, and a reply from a login without write access is not counted; the reason names such logins). A finding with no comment counts too: it is answered by a top-level reply that names its row. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
 | `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. When the red is carried (a review rule skipped the head), no review will run: the gate reads the replies on that push instead, and turns green marked unverified, or, under a used-up budget or `manual_only`, holds the head for a manual review. |
 | `recheck` | The gate is red and a live blocking finding with a review thread, or one listed only in the summary, is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. A finding listed only in the summary counts here only under a gate that states a blocking count. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |
 | `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or a dismissed legacy top-level finding comment, which nothing can rule on). A size- or spend-ceiling-skipped review also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. The gate is also `pending` on a manual-review hold (`crysk: waiting for a manual review (<reason>)`, checked before `wait`): no review read the head and none will on its own, so comment `/crysk review` to verify it or `/crysk override` to merge it unverified. |
 
-The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list, or a
-gate status it cannot read exits 1 with nothing on stdout, so a partial answer never looks like a clean PR.
+The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list,
+a reply author's permission that does not read, or a gate status it cannot read exits 1 with nothing on stdout, so a
+partial answer never looks like a clean PR.
+
+`crysk status` reads triage replies exactly as the gate does: it asks GitHub whether each reply's author has write
+access (once per login, also across a `--wait`), drops the replies the gate would drop, and lets the newest remaining
+one decide. Under a green gate the rule is looser on purpose: every finding posted on the head is owed a reply, and a
+reply from anyone satisfies it, because the gate reads no reply there.
 
 ## Optional inputs
 

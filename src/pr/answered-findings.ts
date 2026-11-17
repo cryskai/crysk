@@ -3,6 +3,11 @@ import { parseFindingMarker } from "#pr/preflight";
 import { TIER_UNRECOVERABLE } from "#rereview/classify";
 import { CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { withPlainAppliedReplies } from "#triage/plain-reply";
+import {
+  countedTriageReplies,
+  findingAnswered,
+  isStaleTriageReply,
+} from "#triage/reply";
 import { parseTriageMarker } from "#triage/triage";
 import { parsePrCommentMarker } from "#watch/preflight";
 
@@ -40,13 +45,28 @@ function isTriageReply(body: string): boolean {
 // The logins whose permission the gate must look up: every author of a triage reply, a plain `applied`
 // reply to a finding included (triage/plain-reply.ts).
 export function triageReplyAuthors(
-  comments: readonly (AnswerIssueComment & {
+  comments: readonly {
+    id?: number;
+    user: string;
+    body: string;
     in_reply_to_id?: number | null;
-  })[],
+    created_at?: string;
+  }[],
+  // When given, a reply the read will drop as stale is left out: nobody has to ask for the
+  // permission of an author whose reply cannot count.
+  cutoff?: { reviewedHead: string | null; verdictAt: number | null },
 ): string[] {
   const authors = new Set<string>();
   for (const comment of withPlainAppliedReplies(comments)) {
-    if (isTriageReply(comment.body)) authors.add(comment.user);
+    if (!isTriageReply(comment.body)) continue;
+    if (
+      cutoff !== undefined &&
+      cutoff.reviewedHead !== null &&
+      isStaleTriageReply(comment, cutoff.reviewedHead, cutoff.verdictAt)
+    ) {
+      continue;
+    }
+    authors.add(comment.user);
   }
   return [...authors];
 }
@@ -68,30 +88,8 @@ function isGateInput(body: string): boolean {
   );
 }
 
-// WHY a reply to a finding from an older head must be newer than the carried verdict: such a finding is live
-// on the reviewed head through the summary's rows, so the review that wrote the verdict saw its reply and kept
-// it. A reply from before that verdict is the claim the review already contradicted. A reply written by a
-// current driver carries the reviewed head and is never stale here. An older driver's reply, and a plain
-// `applied` one (triage/plain-reply.ts), carry the head their finding was posted on, so for a finding from
-// an older head their time is the only thing that says they came after.
-// A reply at the reviewed head itself always answers the review of that head.
-function isStaleReply(
-  comment: AnswerIssueComment,
-  reviewedHead: string,
-  verdictAt: number | null,
-): boolean {
-  const marker = parseTriageMarker(comment.body);
-  if (marker === null || marker.headSha === reviewedHead) return false;
-  const createdAt =
-    comment.created_at === undefined
-      ? Number.NaN
-      : Date.parse(comment.created_at);
-  return (
-    verdictAt === null || Number.isNaN(createdAt) || createdAt <= verdictAt
-  );
-}
-
 // The comments the read may trust, or null when one cannot be judged (S5: fail closed).
+// The reply rule itself is triage/reply.ts countedTriageReplies, shared with crysk status.
 // WHY a triage reply needs write access (S4): it is the only thing that turns a red green here, and anyone
 // can comment on a pull request. A reply from a login with no write access is dropped; a login whose
 // permission did not read (null, or never looked up) fails the whole read closed.
@@ -102,23 +100,19 @@ function trustedComments<T extends AnswerIssueComment>(
   reviewedHead: string,
   verdictAt: number | null,
 ): T[] | null {
-  const kept: T[] = [];
-  for (const comment of comments) {
-    if (isTriageReply(comment.body)) {
-      if (isStaleReply(comment, reviewedHead, verdictAt)) continue;
-      const writer = writers.get(comment.user);
-      if (writer === undefined || writer === null) return null;
-      if (writer) kept.push(comment);
-      continue;
-    }
-    if (
-      isGateInput(comment.body) &&
-      !trustedPoster(comment.user, trustedActors)
-    )
-      continue;
-    kept.push(comment);
-  }
-  return kept;
+  const counted = countedTriageReplies({
+    comments,
+    writers,
+    reviewedHead,
+    verdictAt,
+  });
+  if (counted === null) return null;
+  return counted.kept.filter(
+    (comment) =>
+      isTriageReply(comment.body) ||
+      !isGateInput(comment.body) ||
+      trustedPoster(comment.user, trustedActors),
+  );
 }
 
 export function answeredBlockingFindings(input: {
@@ -166,20 +160,8 @@ export function answeredBlockingFindings(input: {
     return null;
   let open = 0;
   for (const finding of findings) {
-    const triage = finding.triage;
-    const answered =
-      triage !== null &&
-      // WHY either head for a finding with a comment: a reply names the review it answers, which
-      // is the reviewed head. A finding carried from an earlier review keeps that review's comment,
-      // so its posted head is older; an older driver's reply and a plain `applied` one still carry
-      // that posted head, and isStaleReply has already dropped those that predate the verdict.
-      // WHY only the reviewed head for a row with no comment: it has no posted head, so there is
-      // nothing a reply could carry but the head of the review it answers.
-      (finding.head === null
-        ? triage.head === input.reviewedHead
-        : triage.head === finding.head || triage.head === input.reviewedHead) &&
-      (triage.tag === "applied" ||
-        (triage.tag === "dismissed" && finding.ci_verdict === "upheld"));
+    // One rule with crysk status (triage/reply.ts findingAnswered).
+    const answered = findingAnswered(finding, input.reviewedHead);
     if (!answered) open++;
   }
   return { blocking: findings.length, open };

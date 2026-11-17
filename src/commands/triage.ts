@@ -5,9 +5,6 @@ import { assertRunMatchesPr } from "#ci/gates";
 import { resolveRepoRoot } from "#git/git";
 import {
   fetchPostedFindingComments,
-  fetchPrComments,
-  fetchPrReviewComments,
-  ghCollaboratorPermissionRetried,
   ghCurrentBranchPr,
   ghPrWebUrl,
   ghRepoNameWithOwner,
@@ -16,7 +13,6 @@ import {
   postReviewCommentReply,
   resolveReviewThreadForComment,
 } from "#pr/pr";
-import { buildPrStatus } from "#pr/pr-status";
 import { findMarkedCommentId, resolveCurrentPrNumber } from "#pr/preflight";
 import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
@@ -25,8 +21,6 @@ import {
   decideThreadResolve,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
-  rowTriageAuthorsAtHead,
-  triageAuthorsAtHead,
 } from "#triage/reply";
 import {
   renderTriageReplyBody,
@@ -40,6 +34,7 @@ import { matchMarkerPrefix } from "../brand";
 import { CliError, CliUsageError } from "../errors";
 import { tryOriginRepoId } from "../home";
 import { prheroLayout } from "../home-preflight";
+import { readPrStatus } from "./status";
 
 // `crysk triage reply --pr <n> [--from <run-dir>] --finding <id> ...`: the
 // only triage verb. It posts one triage reply, records the verdict in the
@@ -133,26 +128,23 @@ async function postedFindingFromPr(
   prNumber: number,
   findingId: string,
   spawnFn: typeof Bun.spawn | undefined,
+  sleepFn: (ms: number) => Promise<void>,
 ): Promise<{
   target: ReplyTarget;
   headSha: string;
-  issueComments: Awaited<ReturnType<typeof fetchPrComments>>;
+  already: boolean;
 }> {
-  const issueComments = await fetchPrComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
-  const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
-  const status = buildPrStatus({
+  // The read `crysk status` makes, so the reply is decided on the replies the gate counts.
+  const read = await readPrStatus({
+    operatorRoot,
     pr: prNumber,
-    head: "",
     nowMs: Date.now(),
-    statuses: [],
-    issueComments,
-    reviewComments,
-    adjudicatorTrust: { kind: "local" },
+    spawnFn,
+    sleepFn,
+    memo: { writers: new Map() },
   });
+  const status = read.status;
+  const issueComments = read.issueComments;
   const finding = status.findings.find((row) => row.id === findingId);
   if (finding === undefined) {
     throw new CliUsageError(
@@ -171,6 +163,9 @@ async function postedFindingFromPr(
         `${findingId} on PR #${prNumber} has no review head to answer under`,
       );
     }
+    // Only the newest reply the gate counts makes a second one a repeat: status's `triage` for this
+    // finding is that reply, read with the same verdict time and the same author rule as the gate.
+    const already = finding.triage !== null && finding.triage.head === headSha;
     return {
       target: {
         kind: "thread",
@@ -180,7 +175,7 @@ async function postedFindingFromPr(
         },
       },
       headSha,
-      issueComments,
+      already,
     };
   }
   const summaryId = findMarkedCommentId(issueComments);
@@ -193,6 +188,9 @@ async function postedFindingFromPr(
       `${findingId} on PR #${prNumber} has no comment and the pull request has no review summary to answer it in`,
     );
   }
+  const headSha = status.report.head;
+  // A summary-row reply is answered by the newest counted reply that names the row, at this head.
+  const already = finding.triage !== null && finding.triage.head === headSha;
   return {
     target: {
       kind: "row",
@@ -201,8 +199,8 @@ async function postedFindingFromPr(
       path: finding.path,
       line: finding.line,
     },
-    headSha: status.report.head,
-    issueComments,
+    headSha,
+    already,
   };
 }
 
@@ -229,28 +227,16 @@ async function carriedRowsHint(input: {
   prNumber: number;
   findingPath: string;
   spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
 }): Promise<string> {
   try {
-    const issueComments = await fetchPrComments(
-      input.operatorRoot,
-      input.prNumber,
-      {
-        spawnFn: input.spawnFn,
-      },
-    );
-    const reviewComments = await fetchPrReviewComments(
-      input.operatorRoot,
-      input.prNumber,
-      { spawnFn: input.spawnFn },
-    );
-    const status = buildPrStatus({
+    const { status } = await readPrStatus({
+      operatorRoot: input.operatorRoot,
       pr: input.prNumber,
-      head: "",
       nowMs: Date.now(),
-      statuses: [],
-      issueComments,
-      reviewComments,
-      adjudicatorTrust: { kind: "local" },
+      spawnFn: input.spawnFn,
+      sleepFn: input.sleepFn,
+      memo: { writers: new Map() },
     });
     const rows = status.findings
       .filter((row) => row.id !== null && row.path === input.findingPath)
@@ -270,10 +256,12 @@ async function postedFindingFromRunDir(input: {
   findingId: string;
   bodyFile: string;
   spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
 }): Promise<{
   target: ReplyTarget;
   headSha: string;
   reasoning: string;
+  already: boolean;
 }> {
   const { operatorRoot, prNumber, runDir, spawnFn } = input;
   const findingsPath = path.join(runDir, "findings.json");
@@ -333,6 +321,7 @@ async function postedFindingFromRunDir(input: {
       prNumber,
       findingPath: finding.path,
       spawnFn,
+      sleepFn: input.sleepFn,
     });
     throw new CliError(
       `no posted <!-- crysk-finding (or <!-- pr-hero-finding) marker matches ${input.findingId} ` +
@@ -349,6 +338,25 @@ async function postedFindingFromRunDir(input: {
         `(ids ${match.ids.join(", ")}) — will not pick by proximity`,
     );
   }
+  // The same read `crysk status` makes: a repeat only when the newest reply the gate counts for this
+  // finding already answers this review.
+  const read = await readPrStatus({
+    operatorRoot,
+    pr: prNumber,
+    nowMs: Date.now(),
+    spawnFn,
+    sleepFn: input.sleepFn,
+    memo: { writers: new Map() },
+  });
+  // WHY the channel too: a review comment's id and an issue comment's id are different id spaces,
+  // so the bare number could name another finding's comment.
+  const postedChannel = match.posted.channel === "issue" ? "outside" : "inline";
+  const postedRow = read.status.findings.find(
+    (row) =>
+      row.comment_id === match.posted.id && row.channel === postedChannel,
+  );
+  const already =
+    postedRow?.triage != null && postedRow.triage.head === doc.head_sha;
   return {
     target: {
       kind: "thread",
@@ -356,47 +364,8 @@ async function postedFindingFromRunDir(input: {
     },
     headSha: doc.head_sha,
     reasoning,
+    already,
   };
-}
-
-// Whether one of these logins may answer a finding: the gate counts a triage reply only from a
-// login with write access (pr/answered-findings.ts trustedComments), so a marker-shaped comment
-// from anyone else is not an answer. Counting it would skip the real reply, and the finding would
-// stay open with no reply the gate reads and no way to post one.
-// WHY a permission that does not read stops the command: both guesses are wrong. Taking it for
-// "no access" posts a duplicate of a real reply, and a second `dismissed` makes an earlier CI
-// ruling stop matching; taking it for "access" lets a forged marker block the real reply. Nothing
-// is posted and the message says to run it again.
-async function someoneMayAnswer(input: {
-  operatorRoot: string;
-  prNumber: number;
-  findingId: string;
-  authors: readonly (string | undefined)[];
-  spawnFn: typeof Bun.spawn | undefined;
-  sleepFn: (ms: number) => Promise<void>;
-}): Promise<boolean> {
-  const logins = new Set(
-    input.authors.filter((login): login is string => login !== undefined),
-  );
-  const unread: string[] = [];
-  for (const login of logins) {
-    const permission = await ghCollaboratorPermissionRetried(
-      input.operatorRoot,
-      login,
-      input.spawnFn,
-      input.sleepFn,
-    );
-    if (permission === "admin" || permission === "write") return true;
-    if (permission === null) unread.push(login);
-  }
-  if (unread.length > 0) {
-    throw new CliError(
-      `${input.findingId} on PR #${input.prNumber} already has a triage reply for this review from ` +
-        `${unread.join(", ")}, and GitHub did not return whether that login may answer. ` +
-        "Nothing was posted: run the same command again",
-    );
-  }
-  return false;
 }
 
 export async function runTriageReplyCommand(input: {
@@ -425,6 +394,7 @@ export async function runTriageReplyCommand(input: {
             prNumber,
             input.findingId,
             spawnFn,
+            input.sleepFn ?? Bun.sleep,
           )),
           reasoning: await readReasoning(input.bodyFile),
         }
@@ -436,10 +406,10 @@ export async function runTriageReplyCommand(input: {
             findingId: input.findingId,
             bodyFile: input.bodyFile,
             spawnFn,
+            sleepFn: input.sleepFn ?? Bun.sleep,
           })),
-          issueComments: undefined,
         };
-  const { target: replyTarget, headSha, reasoning, issueComments } = found;
+  const { target: replyTarget, headSha, reasoning, already } = found;
   const fields: TriageMarkerFields = {
     tag: input.tag,
     headSha,
@@ -465,43 +435,6 @@ export async function runTriageReplyCommand(input: {
     subject === undefined
       ? renderTriageReplyBody(fields, reasoning)
       : renderTriageReplyBody(fields, reasoning, subject);
-  let already: boolean;
-  if (replyTarget.kind === "thread") {
-    const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
-      spawnFn,
-    });
-    already = await someoneMayAnswer({
-      operatorRoot,
-      prNumber,
-      findingId: input.findingId,
-      authors: triageAuthorsAtHead({
-        parentId: replyTarget.parent.id,
-        headSha,
-        replies: reviewComments,
-      }),
-      spawnFn,
-      sleepFn: input.sleepFn ?? Bun.sleep,
-    });
-  } else {
-    // The row's replies are top-level comments, read with the summary, so no second fetch.
-    if (issueComments === undefined) {
-      throw new Error(
-        "triage reply: a summary-row target carries the PR's comments",
-      );
-    }
-    already = await someoneMayAnswer({
-      operatorRoot,
-      prNumber,
-      findingId: input.findingId,
-      authors: rowTriageAuthorsAtHead({
-        rowId: replyTarget.rowId,
-        headSha,
-        comments: issueComments,
-      }),
-      spawnFn,
-      sleepFn: input.sleepFn ?? Bun.sleep,
-    });
-  }
   const resolveDecision = decideThreadResolve({
     channel: replyTarget.kind === "row" ? "issue" : replyTarget.parent.channel,
     verdict: input.verdict,

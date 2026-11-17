@@ -41,6 +41,7 @@ import {
 import {
   evaluateCiAdmissionGate,
   isCiConfigError,
+  lookUpReplyWriters,
   recordCiConfigErrorSkip,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
@@ -1591,6 +1592,55 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
       );
     });
 
+    test("the gate does not ask the permission of a stale reply's author", async () => {
+      // A stale reply (marker at another head, created before the verdict T1) is dropped by the read,
+      // so its author must not be asked: no permission is scripted for ghost, so a lookup would show.
+      const staleGhostReply = {
+        id: 30,
+        user: "ghost",
+        body: `${triageMarker({ tag: "applied", headSha: "d".repeat(40), actor: "agent" })}\n\nfixed earlier`,
+        path: "src/a.ts",
+        line: null,
+        original_line: null,
+        in_reply_to_id: 10,
+        created_at: "2026-10-16T09:00:00Z",
+      };
+      const withStale: ScriptEntry[] = [
+        {
+          match: ["pulls", "comments"],
+          response: {
+            stdout: [
+              findingComment(10, 10, "the value is read in the wrong unit"),
+              applied(11, 10),
+              findingComment(20, 40, "the retry loop never stops"),
+              applied(21, 20),
+              staleGhostReply,
+            ]
+              .map((c) => `${JSON.stringify(c)}\n`)
+              .join(""),
+          },
+        },
+        {
+          match: ["collaborators", "alice", "permission"],
+          response: { stdout: "write\n" },
+        },
+      ];
+      const baselineCalls: string[][] = [];
+      await runGate(
+        [...reviewComments("write"), ...gateScript(RED_2)],
+        "gate",
+        baselineCalls,
+      );
+      const staleCalls: string[][] = [];
+      await runGate([...withStale, ...gateScript(RED_2)], "gate", staleCalls);
+      expect(statusWrites(staleCalls)).toEqual(statusWrites(baselineCalls));
+      expect(
+        staleCalls.some((argv) =>
+          argv.some((token) => token.includes("ghost")),
+        ),
+      ).toBe(false);
+    });
+
     test("the same replies from a login with read access leave the carried red", async () => {
       const calls: string[][] = [];
       await runGate(
@@ -2247,5 +2297,135 @@ describe("evaluateCiAdmissionGate — /crysk stop", () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.recorded).toEqual([STOP_REASON]);
+  });
+});
+
+// A fake gh whose permission endpoint answers the scripted responses in order, one per ask.
+function scriptedPermissionGh(
+  responses: ScriptEntry["response"][],
+  calls: string[][],
+): typeof Bun.spawn {
+  const encoder = new TextEncoder();
+  const queue = [...responses];
+  return ((argv: string[]) => {
+    calls.push(argv);
+    const scripted = queue.shift() ?? { stdout: "", exitCode: 0 };
+    const stream = (text: string) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (text) controller.enqueue(encoder.encode(text));
+          controller.close();
+        },
+      });
+    return {
+      stdout: stream(scripted.stdout ?? ""),
+      stderr: stream(scripted.stderr ?? ""),
+      exited: Promise.resolve(scripted.exitCode ?? 0),
+      kill() {},
+    };
+  }) as unknown as typeof Bun.spawn;
+}
+
+describe("lookUpReplyWriters — a permission that did not read is not remembered", () => {
+  const WORKTREE_ROOT = "/Users/juanma/Desktop/pr-hero-worktrees/status-gate";
+  test("an unread permission is asked again on the next call, and a read one is kept", async () => {
+    const head = "e".repeat(40);
+    const comments = [
+      {
+        id: 7,
+        user: "dev",
+        body: `${triageMarker({ tag: "applied", headSha: head, actor: "agent" })}\n\nreasoning`,
+      },
+    ];
+    const known = new Map<string, boolean>();
+    const calls: string[][] = [];
+    const spawnFn = scriptedPermissionGh(
+      [
+        { stderr: "HTTP 500", exitCode: 1 },
+        { stderr: "HTTP 500", exitCode: 1 },
+        { stdout: "write\n" },
+      ],
+      calls,
+    );
+
+    const first = await lookUpReplyWriters({
+      operatorRoot: WORKTREE_ROOT,
+      comments,
+      known,
+      spawnFn,
+      sleepFn: async () => {},
+    });
+    expect(first.get("dev")).toBeNull();
+    expect(known.has("dev")).toBe(false);
+    expect(calls).toHaveLength(2);
+
+    const second = await lookUpReplyWriters({
+      operatorRoot: WORKTREE_ROOT,
+      comments,
+      known,
+      spawnFn,
+      sleepFn: async () => {},
+    });
+    expect(second.get("dev")).toBe(true);
+    expect(known.get("dev")).toBe(true);
+    expect(calls).toHaveLength(3);
+  });
+});
+
+describe("lookUpReplyWriters — the author of a stale reply is not asked", () => {
+  const WORKTREE_ROOT = "/Users/juanma/Desktop/pr-hero-worktrees/status-gate";
+  const HEAD = "e".repeat(40);
+  const OLDER = "d".repeat(40);
+  const VERDICT_MS = Date.parse("2026-10-30T10:00:00Z");
+  const replyBy = (user: string, headSha: string, created_at: string) => ({
+    id: 7,
+    user,
+    created_at,
+    body: `${triageMarker({ tag: "applied", headSha, actor: "agent" })}\n\nreasoning`,
+  });
+  const asked = (calls: string[][]) => calls.map((argv) => argv.join(" "));
+
+  test("the author of a stale reply is not asked", async () => {
+    const calls: string[][] = [];
+    const writers = await lookUpReplyWriters({
+      operatorRoot: WORKTREE_ROOT,
+      comments: [
+        replyBy("ghost", OLDER, "2026-10-30T09:00:00Z"),
+        replyBy("dev", HEAD, "2026-10-30T11:00:00Z"),
+      ],
+      spawnFn: scriptedPermissionGh([{ stdout: "write\n" }], calls),
+      sleepFn: async () => {},
+      cutoff: { reviewedHead: HEAD, verdictAt: VERDICT_MS },
+    });
+    expect(
+      asked(calls).some((a) => a.includes("collaborators/dev/permission")),
+    ).toBe(true);
+    expect(
+      asked(calls).some((a) => a.includes("collaborators/ghost/permission")),
+    ).toBe(false);
+    expect(writers.has("ghost")).toBe(false);
+    expect(writers.get("dev")).toBe(true);
+  });
+
+  test("without a cutoff every author is asked", async () => {
+    const calls: string[][] = [];
+    await lookUpReplyWriters({
+      operatorRoot: WORKTREE_ROOT,
+      comments: [
+        replyBy("ghost", OLDER, "2026-10-30T09:00:00Z"),
+        replyBy("dev", HEAD, "2026-10-30T11:00:00Z"),
+      ],
+      spawnFn: scriptedPermissionGh(
+        [{ stdout: "read\n" }, { stdout: "write\n" }],
+        calls,
+      ),
+      sleepFn: async () => {},
+    });
+    expect(
+      asked(calls).some((a) => a.includes("collaborators/ghost/permission")),
+    ).toBe(true);
+    expect(
+      asked(calls).some((a) => a.includes("collaborators/dev/permission")),
+    ).toBe(true);
   });
 });

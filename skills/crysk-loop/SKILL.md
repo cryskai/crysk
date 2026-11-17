@@ -165,9 +165,11 @@ for f in crysk.yml pr-hero.yml; do
 done; exit 1
 ```
 
-Post a command as the first line of its comment. Text below it (a signature, a note) is ignored, and other
-words on the same line make it no command at all. An engine older than this rule reads a command only when it
-is the whole comment, so on a repository that has not updated, post the command alone.
+Post a command as the first line of its comment, with nothing before it: not a blank line, not a space. On a
+repository that runs Crysk from its own workflow, a comment that starts with anything else starts no run and
+gets no reaction. Text below the command (a signature, a note) is ignored, and other words on the same line
+make it no command at all. An engine older than this rule reads a command only when it is the whole comment,
+so on a repository that has not updated, post the command alone.
 
 ## The loop, end to end
 
@@ -195,7 +197,8 @@ is the whole comment, so on a repository that has not updated, post the command 
      and a finding posted on this head has no reply yet (advisory findings need one too). Run the
      triage batch below (steps 1–6), which judges every finding, applies real fixes in the tree, posts
      all replies, and either pushes the fixes or triggers `recheck` before looping back to step 0 with
-     `--wait`.
+     `--wait`. When the reason says replies from a login do not count, that login has no write access
+     to the repository: the gate ignores its replies, so someone with write access must answer.
    - `fix`: a blocking finding is tagged `applied`. Commit and `git push` the fix, then
      immediately run step 0 with `--wait` so the next review verifies it.
    - `recheck`: blocking findings are answered `dismissed` (with no pending code fixes to push) and the CI adjudicator has not ruled on
@@ -241,9 +244,10 @@ is the whole comment, so on a repository that has not updated, post the command 
    `head` is null too; it has no thread, and `triage reply --finding R###` answers it with a
    top-level comment that names the row. `ci_verdict` is the CI adjudicator's ruling on that newest
    reply on this head (`upheld`, `rejected`, `inconclusive`, or `null`); for a row with no comment
-   the ruling is a top-level comment that names the reply. `triage` is only the newest reply, so a finding can be
-   answered at its own head and then re-answered at a later head. The thread (step 2 below) settles
-   the per-head question, and the escalation count still reads the thread's prior markers.
+   the ruling is a top-level comment that names the reply. `triage` is only the newest reply the gate
+   counts (from a login with write access), so a finding can be answered at its own head and then
+   re-answered at a later head. The thread (step 2 below) settles the per-head question, and the
+   escalation count still reads the thread's prior markers.
 
 For EVERY `<!-- crysk-finding ` comment on this PR that has not already been triaged for the
 current head:

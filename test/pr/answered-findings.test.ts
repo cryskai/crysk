@@ -720,6 +720,9 @@ describe("answeredBlockingFindings — a summary row with no comment", () => {
       ],
       issueComments: comments,
       reviewComments: [],
+      writers: new Map(
+        comments.map((c) => [c.user, true] as [string, boolean]),
+      ),
     });
     expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
       "upheld",
