@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A re-review no longer reads what a merge of the base branch brought in.** When the author merged the base
+  branch into the pull request between two reviews, the next review's delta carried the base branch's own
+  changes to every file the pull request also touches, and a finding could land on code from another, already
+  merged pull request. The delta now keeps only the hunks that belong to the pull request's own diff. The
+  report's diff stat and the size gate count that filtered delta. A push with no such merge is read exactly as
+  before. The run's `pipeline.json` records how many hunks were left out (`rereview.base_merge_hunks_dropped`),
+  and `diff.raw.patch` keeps the unfiltered delta.
+
 - **A finding carried from an earlier review can be answered again.** A blocking finding that outlives its
   review keeps the comment of the review that first posted it. `crysk triage reply` stamped its reply with that
   comment's head, so in the next round it found the first round's reply and skipped, and `--from <run-dir>`

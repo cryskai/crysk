@@ -111,6 +111,13 @@ export interface RereviewProvenance {
   discovery_skip_reason?: "no_delta" | "all_excluded";
   // Populated only when `discovery_skip_reason` is `"all_excluded"`.
   discovery_excluded_paths?: string[];
+  // Hunks left out of a restricted discovery patch because they came from a
+  // merge of the base branch, not from the pull request (rereview/
+  // base-merge-filter.ts). `discovery_range` still names last-head..head, so
+  // without this count a reader could not tell the hunters read less than
+  // that range. Absent when none was left out, and on every pipeline.json
+  // written before this field existed.
+  base_merge_hunks_dropped?: number;
   // The prior ids this run's gate count released through a materiality
   // demotion (rereview/state.ts materialityReleasedIds). The state merge
   // re-tiers them advisory. Absent when none was released, and on every
