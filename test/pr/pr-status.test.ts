@@ -2396,6 +2396,34 @@ describe("buildPrStatus — answering a row with no comment", () => {
     expect(status.next_action).toBe("recheck");
   });
 
+  // A row's ruling is a top-level comment; the same marker inside a review thread is not read for a row.
+  test("a ruling inside a review thread does not rule on a row", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [RED],
+        issueComments: [
+          {
+            id: 100,
+            user: CI_ADJUDICATOR_LOGIN,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+          rowDismissal(),
+        ],
+        reviewComments: [
+          {
+            id: 61,
+            user: CI_ADJUDICATOR_LOGIN,
+            body: `${adjudicationMarker({ verdict: "upheld", reply: 60, head: CURRENT })}\n\nruling`,
+            in_reply_to_id: 1,
+          },
+        ],
+      }),
+    );
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
   test("(h) of two rulings on the same reply, the highest comment id wins", () => {
     const status = buildPrStatus(
       rowSummary([

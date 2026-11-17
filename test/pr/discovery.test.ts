@@ -660,6 +660,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       body: string;
       created_at?: string;
     }[],
+    summaryUser?: string,
   ) {
     const summary = `${markerCommentForHead(L, true).body}\n\n${renderStateBlock(
       L,
@@ -687,7 +688,11 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       config: { suspicion_priors: [] },
       prIgnore: { rules: [], found: false },
       issueComments: [
-        { ...markerCommentForHead(L, true), body: summary },
+        {
+          ...markerCommentForHead(L, true),
+          body: summary,
+          ...(summaryUser === undefined ? {} : { user: summaryUser }),
+        },
         ...extraIssueComments,
       ],
       postedFindings: [],
@@ -725,6 +730,52 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       },
     ]);
     expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("in platform mode the platform bot's ruling counts when that bot posted the summary", async () => {
+    const previous = process.env.CRYSK_PLATFORM_ACTOR;
+    process.env.CRYSK_PLATFORM_ACTOR = "crysk-app[bot]";
+    try {
+      const result = await summaryRowRun(
+        [
+          ROW_DISMISSAL,
+          {
+            id: 3,
+            user: "crysk-app[bot]",
+            body: adjudicationMarker({ verdict: "upheld", reply: 2, head: H }),
+            created_at: "2026-01-03T00:00:00Z",
+          },
+        ],
+        "crysk-app[bot]",
+      );
+      expect(result.adjudicationQueue).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.CRYSK_PLATFORM_ACTOR;
+      else process.env.CRYSK_PLATFORM_ACTOR = previous;
+    }
+  });
+
+  test("in platform mode the platform bot's ruling does not count when another bot posted the summary", async () => {
+    const previous = process.env.CRYSK_PLATFORM_ACTOR;
+    process.env.CRYSK_PLATFORM_ACTOR = "crysk-app[bot]";
+    try {
+      const result = await summaryRowRun(
+        [
+          ROW_DISMISSAL,
+          {
+            id: 3,
+            user: "crysk-app[bot]",
+            body: adjudicationMarker({ verdict: "upheld", reply: 2, head: H }),
+            created_at: "2026-01-03T00:00:00Z",
+          },
+        ],
+        "github-actions[bot]",
+      );
+      expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+    } finally {
+      if (previous === undefined) delete process.env.CRYSK_PLATFORM_ACTOR;
+      else process.env.CRYSK_PLATFORM_ACTOR = previous;
+    }
   });
 });
 

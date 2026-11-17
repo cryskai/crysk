@@ -139,6 +139,7 @@ function read(options: {
   trustedActors?: ReadonlySet<string>;
   issueComments?: AnswerIssueComment[];
   verdictAt?: string | null;
+  platformActor?: string;
 }) {
   return answeredBlockingFindings({
     pr: 12,
@@ -157,6 +158,9 @@ function read(options: {
     trustedActors: options.trustedActors ?? new Set([AUTHOR]),
     writers: new Map(Object.entries(options.writers ?? { [AUTHOR]: true })),
     verdictAt: options.verdictAt === undefined ? VERDICT_AT : options.verdictAt,
+    ...(options.platformActor === undefined
+      ? {}
+      : { platformActor: options.platformActor }),
   });
 }
 
@@ -474,6 +478,77 @@ describe("answeredBlockingFindings — a summary row with no comment", () => {
         reviewComments: [],
       }),
     ).toEqual({ blocking: 0, open: 0 });
+  });
+
+  // In platform mode the platform's own bot may rule, but only on a summary it posted itself
+  // (trustedAdjudicator: the ruling's author must equal the summary's author and the platform actor).
+  const PLATFORM = "crysk-app[bot]";
+  const platformRowRead = (
+    summaryUser: string,
+    replies: AnswerIssueComment[],
+    rulingUser: string,
+  ) =>
+    read({
+      issueComments: [
+        { id: 1, user: summaryUser, body: summary([ROW_R001]) },
+        ...replies,
+        rowRuling(3, 2, "upheld", { user: rulingUser }),
+      ],
+      reviewComments: [],
+      trustedActors: new Set([AUTHOR, PLATFORM]),
+      platformActor: PLATFORM,
+    });
+
+  test("platform mode: the platform bot's upheld ruling answers a dismissal of a row it summarised", () => {
+    expect(
+      platformRowRead(PLATFORM, [rowReply(2, "R001", "dismissed")], PLATFORM),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("platform mode: the platform bot's ruling does not count on a summary posted by another bot", () => {
+    expect(
+      platformRowRead(BOT, [rowReply(2, "R001", "dismissed")], PLATFORM),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("plain CI mode: a ruling by another app bot does not answer a dismissal", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "upheld", { user: "other-app[bot]" }),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a rejected ruling newer than an upheld one on the same reply leaves the dismissal open", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "upheld"),
+        rowRuling(5, 2, "rejected"),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an upheld ruling inside a review thread does not rule on a row", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "dismissed")], {
+        reviewComments: [ruling(3, 10, 2, "upheld")],
+      }),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an upheld ruling whose marker is not on the first line does not rule", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        {
+          id: 3,
+          user: BOT,
+          body: `note\n${adjudicationMarker({ verdict: "upheld", reply: 2, head: REVIEWED })}\n\nruling`,
+        },
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
   });
 
   test("a deferred reply stays open", () => {
