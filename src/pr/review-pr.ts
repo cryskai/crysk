@@ -65,10 +65,12 @@ import {
   fetchPrReviewComments,
   ghPrFiles,
   ghPrView,
+  postIssueTriageComment,
   postReviewCommentReply,
 } from "#pr/pr";
 import {
   createPrRunDir,
+  findMarkedCommentId,
   resolveCiPosture,
   resolvePrTarget,
 } from "#pr/preflight";
@@ -180,24 +182,20 @@ const ADJUDICATION_BADGES = {
 async function readCommentAuthor(input: {
   operatorRoot: string;
   commentId: number;
+  kind: "review" | "issue";
   spawnFn?: typeof Bun.spawn;
 }): Promise<string> {
   const spawn = input.spawnFn ?? Bun.spawn;
-  const proc = spawn(
-    [
-      "gh",
-      "api",
-      `repos/{owner}/{repo}/pulls/comments/${input.commentId}`,
-      "--jq",
-      ".user.login",
-    ],
-    {
-      cwd: input.operatorRoot,
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: ADJUDICATION_REPLY_TIMEOUT_MS,
-    },
-  );
+  const endpoint =
+    input.kind === "review"
+      ? `repos/{owner}/{repo}/pulls/comments/${input.commentId}`
+      : `repos/{owner}/{repo}/issues/comments/${input.commentId}`;
+  const proc = spawn(["gh", "api", endpoint, "--jq", ".user.login"], {
+    cwd: input.operatorRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: ADJUDICATION_REPLY_TIMEOUT_MS,
+  });
   const [stdout, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     proc.exited,
@@ -206,6 +204,25 @@ async function readCommentAuthor(input: {
     throw new Error(`gh api (read comment author) exited ${exitCode}`);
   }
   return stdout.trim();
+}
+
+// The login that posted the review summary, or undefined when it does not read. For a finding
+// with no comment it is the author a ruling is checked against.
+async function readSummaryAuthor(input: {
+  operatorRoot: string;
+  pr: number;
+  spawnFn?: typeof Bun.spawn;
+}): Promise<string | undefined> {
+  try {
+    const comments = await fetchPrComments(input.operatorRoot, input.pr, {
+      spawnFn: input.spawnFn,
+      timeoutMs: ADJUDICATION_REPLY_TIMEOUT_MS,
+    });
+    const id = findMarkedCommentId(comments);
+    return comments.find((comment) => comment.id === id)?.user;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function postAdjudicationReplies(input: {
@@ -232,17 +249,32 @@ export async function postAdjudicationReplies(input: {
       entry.evidence.length > 0
         ? `\n\nEvidence:\n${entry.evidence.map((e) => `- ${code(e)}`).join("\n")}`
         : "";
-    const body = `${marker}\n\n${ADJUDICATION_BADGES[entry.verdict]}${evidence}`;
+    // A ruling with no thread answers a finding with no comment of its own: it is a top-level
+    // comment, so the body names the finding it rules on.
+    const isRow = entry.threadId === undefined;
+    const body = isRow
+      ? `${marker}\n\n${ADJUDICATION_BADGES[entry.verdict]}\n\nFinding ${entry.priorId}, listed in the review summary: ruling on its dismissal.${evidence}`
+      : `${marker}\n\n${ADJUDICATION_BADGES[entry.verdict]}${evidence}`;
     let commentId: number | undefined;
     try {
-      commentId = await postReviewCommentReply({
-        operatorRoot: input.operatorRoot,
-        pr: input.pr,
-        inReplyTo: entry.threadId,
-        body,
-        spawnFn: input.spawnFn,
-        timeoutMs: ADJUDICATION_REPLY_TIMEOUT_MS,
-      });
+      // Bounded like the thread reply: a hung post must not stall the run that just published its review.
+      commentId =
+        entry.threadId === undefined
+          ? await postIssueTriageComment({
+              operatorRoot: input.operatorRoot,
+              pr: input.pr,
+              body,
+              spawnFn: input.spawnFn,
+              timeoutMs: ADJUDICATION_REPLY_TIMEOUT_MS,
+            })
+          : await postReviewCommentReply({
+              operatorRoot: input.operatorRoot,
+              pr: input.pr,
+              inReplyTo: entry.threadId,
+              body,
+              spawnFn: input.spawnFn,
+              timeoutMs: ADJUDICATION_REPLY_TIMEOUT_MS,
+            });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       process.stdout.write(
@@ -258,20 +290,29 @@ export async function postAdjudicationReplies(input: {
         : await readCommentAuthor({
             operatorRoot: input.operatorRoot,
             commentId,
+            kind: isRow ? "issue" : "review",
             spawnFn: input.spawnFn,
           }).catch(() => undefined);
     // In platform mode the run posts as the platform App's bot, the login the platform's token
     // exchange returned (CRYSK_PLATFORM_ACTOR). Its ruling counts only on a finding that bot
-    // posted, so the finding's own author is read too, as the gate's read does.
+    // posted, so the finding's own author is read too, as the gate's read does. A finding with no
+    // comment has no author of its own: the review summary's stands in.
     const platformActor = process.env.CRYSK_PLATFORM_ACTOR;
     const findingAuthor =
       author === undefined || author === CI_ADJUDICATOR_LOGIN
         ? undefined
-        : await readCommentAuthor({
-            operatorRoot: input.operatorRoot,
-            commentId: entry.threadId,
-            spawnFn: input.spawnFn,
-          }).catch(() => undefined);
+        : entry.threadId === undefined
+          ? await readSummaryAuthor({
+              operatorRoot: input.operatorRoot,
+              pr: input.pr,
+              spawnFn: input.spawnFn,
+            })
+          : await readCommentAuthor({
+              operatorRoot: input.operatorRoot,
+              commentId: entry.threadId,
+              kind: "review",
+              spawnFn: input.spawnFn,
+            }).catch(() => undefined);
     if (
       !trustedAdjudicator(author, findingAuthor, { kind: "ci", platformActor })
     ) {

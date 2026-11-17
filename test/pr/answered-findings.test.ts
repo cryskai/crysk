@@ -7,7 +7,11 @@ import {
   answeredBlockingFindings,
   triageReplyAuthors,
 } from "#pr/answered-findings";
-import { findingMarker } from "#pr/preflight";
+import { buildPrStatus } from "#pr/pr-status";
+import { COMMIT_STATUS_CONTEXT, findingMarker } from "#pr/preflight";
+import { postAdjudicationReplies } from "#pr/review-pr";
+import { classifyPrior, type PriorRecord } from "#rereview/classify";
+import { enrichPriorsFromThreads } from "#rereview/prepare";
 import { renderStateBlock, stateFinding } from "#rereview/state";
 import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { replyAnswersReview } from "#triage/reply";
@@ -135,6 +139,7 @@ function read(options: {
   trustedActors?: ReadonlySet<string>;
   issueComments?: AnswerIssueComment[];
   verdictAt?: string | null;
+  platformActor?: string;
 }) {
   return answeredBlockingFindings({
     pr: 12,
@@ -153,6 +158,9 @@ function read(options: {
     trustedActors: options.trustedActors ?? new Set([AUTHOR]),
     writers: new Map(Object.entries(options.writers ?? { [AUTHOR]: true })),
     verdictAt: options.verdictAt === undefined ? VERDICT_AT : options.verdictAt,
+    ...(options.platformActor === undefined
+      ? {}
+      : { platformActor: options.platformActor }),
   });
 }
 
@@ -374,11 +382,173 @@ describe("answeredBlockingFindings — a summary row with no comment", () => {
     });
   });
 
-  test("a dismissed reply stays open: a row has no thread a CI ruling could sit on", () => {
+  test("a dismissed reply with no ruling stays open", () => {
     expect(rowRead([rowReply(2, "R001", "dismissed")])).toEqual({
       blocking: 1,
       open: 1,
     });
+  });
+
+  // The CI adjudicator's ruling on a row reply: a top-level comment that names the reply by its id.
+  const rowRuling = (
+    id: number,
+    replyId: number,
+    verdict: "upheld" | "rejected" | "inconclusive",
+    options: { user?: string; head?: string } = {},
+  ): AnswerIssueComment => ({
+    id,
+    user: options.user ?? BOT,
+    body: `${adjudicationMarker({ verdict, reply: replyId, head: options.head ?? REVIEWED })}\n\nruling`,
+  });
+
+  test("a dismissed reply the CI bot upheld is answered", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "dismissed"), rowRuling(3, 2, "upheld")]),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("the same ruling written by a stranger does not answer the dismissal", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "upheld", { user: STRANGER }),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("the same ruling written by a writer, not the bot, does not answer the dismissal", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "upheld", { user: AUTHOR }),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an upheld ruling that names another reply does not answer the dismissal", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "dismissed"), rowRuling(3, 99, "upheld")]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an upheld ruling at another head does not answer the dismissal", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "upheld", { head: OLD }),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a rejected ruling leaves the dismissal open", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "dismissed"), rowRuling(3, 2, "rejected")]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an inconclusive ruling leaves the dismissal open", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "inconclusive"),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an upheld ruling on an older reply does not answer a newer dismissal", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "upheld"),
+        rowReply(4, "R001", "dismissed"),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  // Observed before and after the change: an untrusted summary is dropped as a gate input (trustedComments),
+  // so no row is read at all, and the ruling cannot make a blocking finding answered.
+  test("the summary written by an untrusted poster: the observed result of a bot-upheld dismissal", () => {
+    expect(
+      read({
+        issueComments: [
+          { id: 1, user: STRANGER, body: summary([ROW_R001]) },
+          rowReply(2, "R001", "dismissed"),
+          rowRuling(3, 2, "upheld"),
+        ],
+        reviewComments: [],
+      }),
+    ).toEqual({ blocking: 0, open: 0 });
+  });
+
+  // In platform mode the platform's own bot may rule, but only on a summary it posted itself
+  // (trustedAdjudicator: the ruling's author must equal the summary's author and the platform actor).
+  const PLATFORM = "crysk-app[bot]";
+  const platformRowRead = (
+    summaryUser: string,
+    replies: AnswerIssueComment[],
+    rulingUser: string,
+  ) =>
+    read({
+      issueComments: [
+        { id: 1, user: summaryUser, body: summary([ROW_R001]) },
+        ...replies,
+        rowRuling(3, 2, "upheld", { user: rulingUser }),
+      ],
+      reviewComments: [],
+      trustedActors: new Set([AUTHOR, PLATFORM]),
+      platformActor: PLATFORM,
+    });
+
+  test("platform mode: the platform bot's upheld ruling answers a dismissal of a row it summarised", () => {
+    expect(
+      platformRowRead(PLATFORM, [rowReply(2, "R001", "dismissed")], PLATFORM),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("platform mode: the platform bot's ruling does not count on a summary posted by another bot", () => {
+    expect(
+      platformRowRead(BOT, [rowReply(2, "R001", "dismissed")], PLATFORM),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("plain CI mode: a ruling by another app bot does not answer a dismissal", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "upheld", { user: "other-app[bot]" }),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a rejected ruling newer than an upheld one on the same reply leaves the dismissal open", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        rowRuling(3, 2, "upheld"),
+        rowRuling(5, 2, "rejected"),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an upheld ruling inside a review thread does not rule on a row", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "dismissed")], {
+        reviewComments: [ruling(3, 10, 2, "upheld")],
+      }),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an upheld ruling whose marker is not on the first line does not rule", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "dismissed"),
+        {
+          id: 3,
+          user: BOT,
+          body: `note\n${adjudicationMarker({ verdict: "upheld", reply: 2, head: REVIEWED })}\n\nruling`,
+        },
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
   });
 
   test("a deferred reply stays open", () => {
@@ -471,6 +641,125 @@ describe("answeredBlockingFindings — a summary row with no comment", () => {
         rowReply(2, "R001", "applied", { user: "someone" }),
       ]),
     ).toContain("someone");
+  });
+
+  // The CI run posts its ruling through the real poster; every reader then reads that same comment.
+  test("the ruling the CI run posts for a dismissed row is the one every reader counts", async () => {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const posted: string[] = [];
+    const spawnFn = ((argv: string[], opts?: { stdin?: Uint8Array }) => {
+      const isPost = argv.includes("POST");
+      if (isPost && opts?.stdin !== undefined) {
+        posted.push(decoder.decode(opts.stdin));
+      }
+      const text = isPost
+        ? JSON.stringify({ id: 3 })
+        : argv.some((a) => a.endsWith("/issues/comments/3"))
+          ? `${BOT}\n`
+          : "[]";
+      return {
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(text));
+            controller.close();
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        exited: Promise.resolve(0),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+
+    await postAdjudicationReplies({
+      operatorRoot: "/repo",
+      pr: 7,
+      headSha: REVIEWED,
+      adjudications: [
+        {
+          priorId: "R001",
+          replyId: 2,
+          verdict: "upheld",
+          evidence: ["src/a.ts:10"],
+        },
+      ],
+      spawnFn,
+    });
+    expect(posted).toHaveLength(1);
+    const ruling = { id: 3, user: BOT, body: posted[0] ?? "" };
+    const comments = [
+      rowSummary([ROW_R001]),
+      rowReply(2, "R001", "dismissed"),
+      ruling,
+    ];
+
+    // The gate counts the ruling: the row is no longer open.
+    expect(read({ reviewComments: [], issueComments: comments })).toEqual({
+      blocking: 1,
+      open: 0,
+    });
+
+    // The status reads the same ruling as upheld and sends the head to review.
+    const status = buildPrStatus({
+      pr: 7,
+      head: REVIEWED,
+      nowMs: Date.parse("2026-10-17T12:00:00Z"),
+      statuses: [
+        {
+          state: "failure",
+          context: COMMIT_STATUS_CONTEXT,
+          created_at: "2026-10-17T11:55:00Z",
+          description:
+            "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override",
+          target_url: null,
+        },
+      ],
+      issueComments: comments,
+      reviewComments: [],
+    });
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "upheld",
+    );
+    expect(status.next_action).toBe("review");
+
+    // The review reads the ruling onto the prior, and the classifier drops the finding.
+    const enriched = enrichPriorsFromThreads({
+      priors: [
+        {
+          id: "R001",
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: ["src/a.ts:10"],
+          claim: CLAIM_A,
+          triage: null,
+          newThreadReply: false,
+        },
+      ],
+      posted: [],
+      replies: [],
+      rowReplies: comments.slice(1),
+      headSha: REVIEWED,
+      summaryAuthor: BOT,
+      summaryUpdatedAt: null,
+    });
+    const [prior] = enriched;
+    if (prior === undefined) throw new Error("the prior was not enriched");
+    expect(prior.triage?.tag).toBe("dismissed");
+    expect(prior.triage?.ciVerdict).toBe("upheld");
+    const classified = classifyPrior(prior as PriorRecord, {
+      case: "C",
+      deletedFiles: new Set(),
+      renameMap: new Map(),
+      touched: () => false,
+      summaryUpdatedAt: null,
+      verifyAll: false,
+    });
+    expect(classified.status).toBe("ci-dismissed");
   });
 });
 

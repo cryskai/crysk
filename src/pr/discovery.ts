@@ -396,6 +396,8 @@ export async function resolvePrDiscovery(params: {
       posted: postedFindings,
       replies: reviewComments,
       rowReplies: issueComments,
+      summaryAuthor: issueComments.find((c) => c.id === existingSummaryId)
+        ?.user,
       summaryUpdatedAt,
       headSha,
       platformActor: process.env.CRYSK_PLATFORM_ACTOR,

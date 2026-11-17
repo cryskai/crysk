@@ -3021,7 +3021,7 @@ function inconclusiveOutcome(
 ): AdjudicationOutcome {
   return {
     priorId: subject.priorId,
-    threadId: subject.threadId,
+    ...(subject.threadId === undefined ? {} : { threadId: subject.threadId }),
     replyId: subject.replyId,
     verdict: "inconclusive",
     evidence: [],

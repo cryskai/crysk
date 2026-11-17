@@ -140,6 +140,8 @@ export interface PrStatusComment {
   id: number;
   body: string;
   created_at?: string;
+  // The GitHub login that posted it. A CI ruling on a reply to a finding with no comment is trusted by its author.
+  user?: string;
 }
 
 export const STATUS_WAIT_POLL_INTERVAL_MS = 15_000;
@@ -153,8 +155,6 @@ const TRIGGER_COMMANDS = [REVIEW_COMMAND, REVIEW_FULL_COMMAND, RECHECK_COMMAND];
 // shape has them (rereview/prepare.ts PostedForPrior): without them the marker's anchor stands.
 export interface PrStatusReviewComment extends PrStatusComment {
   in_reply_to_id: number | null;
-  // The GitHub login that posted it. The CI adjudicator's ruling is trusted only from trustedAdjudicator.
-  user?: string;
   path?: string;
   line?: number | null;
 }
@@ -194,6 +194,7 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
     summary.rows,
     summary.head,
     verdictMs(input),
+    summary.author,
   );
   const liveBlocking = analyzed.filter(
     (a) => a.finding.blocking && a.finding.live_on_head,
@@ -287,7 +288,7 @@ function withPlainReplies(input: PrStatusInput): PrStatusInput {
 export function liveBlockingFindings(raw: PrStatusInput): PrStatusFinding[] {
   const input = withPlainReplies(raw);
   const summary = readSummary(input.issueComments);
-  return readFindings(input, summary.rows, summary.head, null)
+  return readFindings(input, summary.rows, summary.head, null, summary.author)
     .filter((a) => a.finding.blocking && a.finding.live_on_head)
     .map((a) => a.finding);
 }
@@ -300,11 +301,19 @@ function readSummary(comments: PrStatusComment[]): {
   complete: boolean | null;
   reviews: number | null;
   rows: StateFinding[];
+  author: string | undefined;
 } {
   const id = findMarkedCommentId(comments);
-  const body = comments.find((c) => c.id === id)?.body ?? null;
+  const summaryComment = comments.find((c) => c.id === id);
+  const body = summaryComment?.body ?? null;
   if (id === null || body === null) {
-    return { head: null, complete: null, reviews: null, rows: [] };
+    return {
+      head: null,
+      complete: null,
+      reviews: null,
+      rows: [],
+      author: undefined,
+    };
   }
   const marker = parsePrCommentMarker(body);
   const state = parseStateBlock(body);
@@ -313,6 +322,7 @@ function readSummary(comments: PrStatusComment[]): {
     complete: marker?.complete ?? null,
     reviews: state?.reviews ?? null,
     rows: state?.findings ?? [],
+    author: summaryComment?.user,
   };
 }
 
@@ -336,6 +346,7 @@ function readFindings(
   rows: StateFinding[],
   reviewedHead: string | null,
   verdictAt: number | null,
+  summaryAuthor: string | undefined,
 ): AnalyzedFinding[] {
   const sources: {
     id: number;
@@ -447,8 +458,13 @@ function readFindings(
   for (const row of rows) {
     if (bound.has(row.id)) continue;
     const replies = rowReplies(row.id, input);
+    const newest = newestReply(replies);
     out.push({
-      finding: unthreadedFinding(row, newestReply(replies)?.marker ?? null),
+      finding: unthreadedFinding(
+        row,
+        newest?.marker ?? null,
+        rowCiVerdictOf(newest?.id ?? null, summaryAuthor, input),
+      ),
       // A row has no posted head, so only a reply stamped with the reviewed head answers it.
       answersReview:
         reviewedHead !== null &&
@@ -465,6 +481,7 @@ function readFindings(
 function unthreadedFinding(
   row: StateFinding,
   triage: ParsedTriageMarker | null,
+  ciVerdict: "upheld" | "rejected" | "inconclusive" | null,
 ): PrStatusFinding {
   const first = row.locs[0];
   const span = first === undefined ? undefined : parseProofRefLocs(first)[0];
@@ -490,8 +507,43 @@ function unthreadedFinding(
             actor: triage.actor,
             head: triage.headSha,
           },
-    ci_verdict: null,
+    // Its CI ruling is the top-level comment that names that reply.
+    ci_verdict: ciVerdict,
   };
+}
+
+// The CI adjudicator's ruling on the newest reply to a finding with no comment. The ruling is a
+// top-level comment whose marker names that reply. Same rule as ciVerdictOf: a trusted author, the
+// head under review, the highest comment id wins. The summary's author stands where the finding's
+// own author stands for a thread: only the bot that posted the review rules on it.
+function rowCiVerdictOf(
+  newestReplyId: number | null,
+  summaryAuthor: string | undefined,
+  input: PrStatusInput,
+): "upheld" | "rejected" | "inconclusive" | null {
+  if (newestReplyId === null) return null;
+  let best: {
+    id: number;
+    verdict: "upheld" | "rejected" | "inconclusive";
+  } | null = null;
+  for (const comment of input.issueComments) {
+    if (
+      !trustedAdjudicator(
+        comment.user,
+        summaryAuthor,
+        input.adjudicatorTrust ?? CI_ADJUDICATOR_TRUST,
+      )
+    ) {
+      continue;
+    }
+    const marker = parseAdjudicationMarker(comment.body);
+    if (marker === null) continue;
+    if (marker.reply !== newestReplyId || marker.head !== input.head) continue;
+    if (best === null || comment.id > best.id) {
+      best = { id: comment.id, verdict: marker.verdict };
+    }
+  }
+  return best?.verdict ?? null;
 }
 
 // The CI adjudicator's ruling on the newest triage reply of one inline finding. Only a reply
@@ -833,13 +885,14 @@ function decideNext(
   const dismissed = liveBlocking.filter(
     (a) => a.finding.triage?.tag === "dismissed",
   );
-  // Only a finding with a review thread can get a CI ruling: the adjudicator answers on the finding's
-  // own review comment. A row with no comment has none, and neither has a legacy top-level finding
-  // comment, so recheck would never settle either.
+  // A finding with a review thread gets its ruling there, and a finding with no comment gets it as a
+  // top-level comment that names its reply. Only a legacy top-level finding comment has neither, so
+  // recheck would never settle it. A row is pending only under a gate that states a blocking count, as for `untriaged` above.
   const pendingRulings = dismissed.filter(
     (a) =>
-      a.finding.comment_id !== null &&
-      a.finding.channel === "inline" &&
+      (a.finding.comment_id === null
+        ? rowsAreThisReviews
+        : a.finding.channel === "inline") &&
       (a.finding.ci_verdict === null ||
         a.finding.ci_verdict === "inconclusive"),
   );

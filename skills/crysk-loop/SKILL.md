@@ -208,8 +208,8 @@ done; exit 1
      - the review is "partial again" with the same hunters failing: fix the failing hunter's route
        (model or credential), or ask a maintainer to override;
      - every blocking finding is already answered but none can clear without a fix (a dismissal the
-       CI adjudicator rejected, a `deferred` / `misclassified` tag, or a `dismissed` finding with no
-       review thread, which no adjudicator can rule on): if the adjudicator's rejection exposed a real defect you missed, fix, commit, and `git push` (then step 0 `--wait`); if the finding is `deferred`, `misclassified`, or still contrived/absurd ("Stopping diminishing returns" above), **do not edit code to appease it** — exit the loop and tell the maintainer the PR is ready for `/crysk override` and merge (a `deferred` or `misclassified` finding names a real defect, so accepting it unfixed is the maintainer's call);
+       CI adjudicator rejected, a `deferred` / `misclassified` tag, or a `dismissed` legacy top-level
+       finding comment, which no adjudicator can rule on): if the adjudicator's rejection exposed a real defect you missed, fix, commit, and `git push` (then step 0 `--wait`); if the finding is `deferred`, `misclassified`, or still contrived/absurd ("Stopping diminishing returns" above), **do not edit code to appease it** — exit the loop and tell the maintainer the PR is ready for `/crysk override` and merge (a `deferred` or `misclassified` finding names a real defect, so accepting it unfixed is the maintainer's call);
      - the red gate names no live blocking finding on this head (the `reason` quotes the gate
        description): read that description and act on what it says; when it names nothing you can
        fix, ask a maintainer.
@@ -237,7 +237,7 @@ done; exit 1
    `head` is null too; it has no thread, and `triage reply --finding R###` answers it with a
    top-level comment that names the row. `ci_verdict` is the CI adjudicator's ruling on that newest
    reply on this head (`upheld`, `rejected`, `inconclusive`, or `null`); for a row with no comment
-   it is always `null`, since there is no thread a ruling could sit on. `triage` is only the newest reply, so a finding can be
+   the ruling is a top-level comment that names the reply. `triage` is only the newest reply, so a finding can be
    answered at its own head and then re-answered at a later head. The thread (step 2 below) settles
    the per-head question, and the escalation count still reads the thread's prior markers.
 
@@ -330,9 +330,9 @@ adjudicator. When step 0 says `recheck`:
      human (see "Bound the forced runs" in step 0).
 4. A ruling counts only on the head it was given. After any push, step 0 asks for a recheck again.
 
-Only an inline finding can be rechecked: the CI adjudicator answers on the finding's own review
-thread. A legacy top-level finding and a finding with no comment (a summary row) have no review thread,
-so neither can be cleared by a dismissal; step 0 says `override-or-fix` for it.
+The CI adjudicator answers where the finding is answered: on an inline finding's review thread, and, for a finding with
+no comment (a summary row), in a top-level comment that names your reply. Only a legacy top-level finding comment cannot be
+rechecked; step 0 says `override-or-fix` for it.
 
 ## The four tags
 
@@ -538,10 +538,9 @@ this PR. The engine typed it wrong, not the code.
   If that command posted the reply and then failed to resolve, re-run the
   **same** command — same-head skip retries resolve only. Do not `gh`.
 - A finding that only exists under `### Comments Outside Diff` in the summary is answered by its
-  `R###` id: the driver posts a top-level comment that names the row. Only `applied` clears a
-  blocking one; a `dismissed` reply to it cannot get a CI ruling, so it stays counted until a fix
-  or `/crysk override`. If `npx -y crysk@0.8.1 triage reply` reports no matching marker, follow its
-  message.
+  `R###` id: the driver posts a top-level comment that names the row. It is triaged like any other finding: `applied` buys the
+  next review's verification, and a `dismissed` one is ruled on by `/crysk recheck`. If `npx -y crysk@0.8.1 triage reply`
+  reports no matching marker, follow its message.
 - `dismissed`, `deferred`, and `misclassified` without `--verdict` are malformed. `applied` WITH
   `--verdict` is equally malformed.
 - Never re-triage a finding whose reviewed head is unchanged since its last triage on this PR (the driver
