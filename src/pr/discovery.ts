@@ -15,6 +15,7 @@
 // are not.
 
 import { formatWorkflowCommand } from "#ci/reporter";
+import { triageReplyAuthors } from "#pr/answered-findings";
 import type {
   fetchPostedFindingComments,
   fetchPrComments,
@@ -62,6 +63,8 @@ import {
 } from "#review/size-gate";
 import type { AgentSpec } from "#review/spec";
 import type { AdjudicationSubject } from "#triage/adjudication";
+import { withPlainAppliedReplies } from "#triage/plain-reply";
+import { countedTriageReplies } from "#triage/reply";
 import { parsePrCommentMarker, summaryMarkerFields } from "#watch/preflight";
 import { CliError } from "../errors";
 import type { IgnoreFileReadResult } from "../ignore-read";
@@ -142,6 +145,64 @@ export interface PrDiscoveryResult {
   sizeGate: SizeGateVerdict;
 }
 
+// The triage replies the review may read: those from a login with write access. A bare `applied`
+// reply is a triage reply too, so it is read as one before its author is judged. Returns the notes
+// the review logs about the replies it leaves out.
+function readableReplies<
+  R extends { user: string; body: string; in_reply_to_id: number | null },
+  I extends { user: string; body: string },
+>(input: {
+  reviewComments: readonly R[];
+  issueComments: readonly I[];
+  replyWriters: ReadonlyMap<string, boolean | null>;
+}): { reviewComments: R[]; issueComments: I[]; notes: string[] } {
+  const reviewComments = withPlainAppliedReplies(input.reviewComments);
+  const writers = new Map<string, boolean>();
+  const unread: string[] = [];
+  for (const login of triageReplyAuthors([
+    ...reviewComments,
+    ...input.issueComments,
+  ])) {
+    const writer = input.replyWriters.get(login);
+    if (writer === undefined || writer === null) unread.push(login);
+    writers.set(login, writer === true);
+  }
+  const review = countedTriageReplies({
+    comments: reviewComments,
+    writers,
+    reviewedHead: null,
+    verdictAt: null,
+  });
+  const issue = countedTriageReplies({
+    comments: input.issueComments,
+    writers,
+    reviewedHead: null,
+    verdictAt: null,
+  });
+  if (review === null || issue === null) {
+    throw new Error("review: a triage reply author has no permission entry");
+  }
+  const dropped = [
+    ...new Set([...review.uncounted, ...issue.uncounted]),
+  ].filter((login) => !unread.includes(login));
+  const notes: string[] = [];
+  if (dropped.length > 0) {
+    notes.push(
+      `Triage replies from ${dropped.join(", ")} are not read: a reply counts only from a login with write access.`,
+    );
+  }
+  if (unread.length > 0) {
+    notes.push(
+      `Could not read whether ${unread.join(", ")} has write access, so the triage replies from that login are not read on this review.`,
+    );
+  }
+  return {
+    reviewComments: review.kept,
+    issueComments: issue.kept,
+    notes,
+  };
+}
+
 export async function resolvePrDiscovery(params: {
   diffFromSha: string;
   headSha: string;
@@ -157,6 +218,9 @@ export async function resolvePrDiscovery(params: {
   issueComments: Awaited<ReturnType<typeof fetchPrComments>>;
   postedFindings: Awaited<ReturnType<typeof fetchPostedFindingComments>>;
   reviewComments: Awaited<ReturnType<typeof fetchPrReviewComments>>;
+  // Whether each author of a triage reply has write access (pr/ci-admission-gate.ts
+  // lookUpReplyWriters): true, false, or null when the permission did not read.
+  replyWriters: ReadonlyMap<string, boolean | null>;
   git: PrDiscoveryGit;
   log: (line?: string) => void;
 }): Promise<PrDiscoveryResult> {
@@ -174,6 +238,7 @@ export async function resolvePrDiscovery(params: {
     issueComments,
     postedFindings,
     reviewComments,
+    replyWriters,
     git,
     log,
   } = params;
@@ -391,11 +456,25 @@ export async function resolvePrDiscovery(params: {
             })),
           )
         : priorsFromStateFindings(state.findings);
+    // WHY the review reads a triage reply only from a login with write access: a reply steers
+    // the review (an `applied` one buys a verification, a `dismissed` one is ruled on by the CI
+    // adjudicator and, upheld, leaves the count), and anyone can comment on a pull request. It is
+    // the gate's and crysk status's rule (triage/reply.ts countedTriageReplies). A permission that
+    // did not read counts as no access here: the finding then stays counted, which is the closed
+    // side, and the next review asks again.
+    const readable = readableReplies({
+      reviewComments,
+      issueComments,
+      replyWriters,
+    });
+    for (const line of readable.notes) {
+      log(isCi ? formatWorkflowCommand("notice", line) : line);
+    }
     const priors = enrichPriorsFromThreads({
       priors: rawPriors,
       posted: postedFindings,
-      replies: reviewComments,
-      rowReplies: issueComments,
+      replies: readable.reviewComments,
+      rowReplies: readable.issueComments,
       summaryAuthor: issueComments.find((c) => c.id === existingSummaryId)
         ?.user,
       summaryUpdatedAt,

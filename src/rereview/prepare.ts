@@ -978,7 +978,7 @@ export function adjudicationQueue(
 
 export function enrichPriorsFromThreads(input: {
   priors: readonly PriorRecord[];
-  posted: readonly PostedForPrior[];
+  posted: readonly (PostedForPrior & { channel: "review" | "issue" })[];
   // The head under review. A bot verdict counts only when its `head=` is this
   // head; when it is undefined no bot verdict counts.
   headSha?: string;
@@ -1062,6 +1062,11 @@ export function enrichPriorsFromThreads(input: {
       );
       return { ...prior, triage: rowTriage, newThreadReply: newRowReply };
     }
+    // WHY only a review comment has a thread here: `replies` are review comments, matched by the
+    // id they reply to, and an issue comment's id lives in another id space. A finding posted as a
+    // top-level comment (an old pull request) could otherwise take a reply from an unrelated review
+    // thread whose root happens to share its id.
+    if (parent.channel !== "review") return prior;
     const thread = replies.filter(
       (reply) => reply.in_reply_to_id === parent.id,
     );

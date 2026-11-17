@@ -94,6 +94,17 @@ function markerComment(complete: boolean) {
   };
 }
 
+// Every login the fixtures reply as is a writer, so the existing expectations hold. A test that
+// depends on a login's permission passes its own map.
+const WRITERS: ReadonlyMap<string, boolean | null> = new Map([
+  ["pr-hero", true],
+  ["reviewer", true],
+  ["someone", true],
+  ["author", true],
+  [CI_ADJUDICATOR_LOGIN, true],
+  ["crysk-app[bot]", true],
+]);
+
 const POSTED_FINDING = {
   id: 100,
   channel: "review" as const,
@@ -123,6 +134,7 @@ describe("resolvePrDiscovery — rereview-coverage fix (invariants 2 & 3)", () =
       prIgnore: { rules: [], found: false },
       issueComments: [markerComment(false)],
       postedFindings: [POSTED_FINDING],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: () => {},
@@ -145,6 +157,7 @@ describe("resolvePrDiscovery — rereview-coverage fix (invariants 2 & 3)", () =
       prIgnore: { rules: [], found: false },
       issueComments: [markerComment(true)],
       postedFindings: [POSTED_FINDING],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: () => {},
@@ -199,6 +212,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
           marker: { ...POSTED_FINDING.marker, headSha: H },
         },
       ],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: (line) => {
@@ -254,6 +268,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       // exactly what `enrichPriorsFromThreads` reads to set
       // `newThreadReply: true`, the input `classifyPrior`'s case-B branch
       // gates on.
+      replyWriters: WRITERS,
       reviewComments: [
         {
           id: 900,
@@ -329,6 +344,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
         },
       ],
       postedFindings: [],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: (line) => {
@@ -389,6 +405,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       prIgnore: { rules: parseIgnoreFile("dist/**\n", "user"), found: true },
       issueComments: [markerCommentForHead(L, true)],
       postedFindings: [],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: excludingGit,
       log: (line) => {
@@ -430,6 +447,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
           marker: { ...POSTED_FINDING.marker, headSha: H },
         },
       ],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: () => {},
@@ -527,6 +545,7 @@ describe("resolvePrDiscovery — #206 body recovery keys by comment kind", () =>
         },
       ],
       postedFindings: [POSTED_FINDING],
+      replyWriters: WRITERS,
       reviewComments: [
         {
           id: POSTED_FINDING.id,
@@ -569,6 +588,11 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
     Parameters<typeof resolvePrDiscovery>[0]["reviewComments"]
   >[number];
 
+  type RunOptions = {
+    writers?: ReadonlyMap<string, boolean | null>;
+    log?: (line?: string) => void;
+  };
+
   function run(adjudicate: boolean | undefined) {
     return runWithReplies(adjudicate, []);
   }
@@ -576,6 +600,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
   function runWithReplies(
     adjudicate: boolean | undefined,
     extraReplies: readonly ReviewComment[],
+    options: RunOptions = {},
   ) {
     return resolvePrDiscovery({
       diffFromSha: B,
@@ -589,6 +614,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       prIgnore: { rules: [], found: false },
       issueComments: [markerCommentForHead(L, true)],
       postedFindings: [POSTED_FINDING],
+      replyWriters: options.writers ?? WRITERS,
       reviewComments: [
         {
           id: POSTED_FINDING.id,
@@ -613,7 +639,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
         ...extraReplies,
       ],
       git: baseGit(),
-      log: () => {},
+      log: options.log ?? (() => {}),
       ...(adjudicate === undefined ? {} : { adjudicate }),
     });
   }
@@ -661,6 +687,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       created_at?: string;
     }[],
     summaryUser?: string,
+    options: RunOptions = {},
   ) {
     const summary = `${markerCommentForHead(L, true).body}\n\n${renderStateBlock(
       L,
@@ -696,9 +723,10 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
         ...extraIssueComments,
       ],
       postedFindings: [],
+      replyWriters: options.writers ?? WRITERS,
       reviewComments: [],
       git: baseGit(),
-      log: () => {},
+      log: options.log ?? (() => {}),
       adjudicate: true,
     });
   }
@@ -777,6 +805,158 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       else process.env.CRYSK_PLATFORM_ACTOR = previous;
     }
   });
+
+  // The review reads a triage reply only from a login with write access, the rule the gate and
+  // crysk status apply (triage/reply.ts countedTriageReplies).
+  function writersWith(login: string, writer: boolean | null) {
+    const writers = new Map(WRITERS);
+    writers.set(login, writer);
+    return writers;
+  }
+
+  function collectLog(logged: string[]) {
+    return (line?: string) => {
+      if (line !== undefined) logged.push(line);
+    };
+  }
+
+  function priorTriageTag(result: {
+    phaseB?: { priors: { id: string; triage: { tag: string } | null }[] };
+  }) {
+    return (
+      result.phaseB?.priors.find((prior) => prior.id === "R001")?.triage?.tag ??
+      null
+    );
+  }
+
+  test("a dismissed reply from a login without write access is not queued", async () => {
+    const result = await runWithReplies(true, [], {
+      writers: writersWith("author", false),
+    });
+    expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("a dismissed row reply from a login without write access is not queued", async () => {
+    const result = await summaryRowRun([ROW_DISMISSAL], undefined, {
+      writers: writersWith("author", false),
+    });
+    expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("a permission that did not read counts as no access", async () => {
+    const logged: string[] = [];
+    const nulled = await runWithReplies(true, [], {
+      writers: writersWith("author", null),
+      log: collectLog(logged),
+    });
+    expect(nulled.adjudicationQueue).toEqual([]);
+    expect(
+      logged.some(
+        (line) =>
+          line.includes("Could not read whether") && line.includes("author"),
+      ),
+    ).toBe(true);
+
+    logged.length = 0;
+    const missing = await runWithReplies(true, [], {
+      writers: new Map<string, boolean | null>(),
+      log: collectLog(logged),
+    });
+    expect(missing.adjudicationQueue).toEqual([]);
+    expect(
+      logged.some(
+        (line) =>
+          line.includes("Could not read whether") && line.includes("author"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a writer's dismissal is queued as before", async () => {
+    const result = await runWithReplies(true, [], {
+      writers: writersWith("author", true),
+    });
+    expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+  });
+
+  test("an upheld dismissal from a login without write access stays counted", async () => {
+    const result = await runWithReplies(
+      true,
+      [
+        {
+          id: 201,
+          user: CI_ADJUDICATOR_LOGIN,
+          body: adjudicationMarker({ verdict: "upheld", reply: 200, head: H }),
+          path: "src/a.ts",
+          line: 10,
+          original_line: 10,
+          in_reply_to_id: POSTED_FINDING.id,
+          created_at: "2026-01-03T00:00:00Z",
+        },
+      ],
+      { writers: writersWith("author", false) },
+    );
+    expect(result.adjudicationQueue).toEqual([]);
+    // The non-writer's dismissal is not read at all, so the prior carries no dismissal.
+    expect(priorTriageTag(result)).not.toBe("dismissed");
+  });
+
+  test("a bare applied reply from a login without write access is not read", async () => {
+    const plainApplied = {
+      id: 202,
+      user: "author",
+      body: "applied: the timer is cleared in the caller",
+      path: "src/a.ts",
+      line: 10,
+      original_line: 10,
+      in_reply_to_id: POSTED_FINDING.id,
+      created_at: "2026-01-05T00:00:00Z",
+    };
+    const denied = await runWithReplies(false, [plainApplied], {
+      writers: writersWith("author", false),
+    });
+    expect(priorTriageTag(denied)).not.toBe("applied");
+
+    const allowed = await runWithReplies(false, [plainApplied], {
+      writers: writersWith("author", true),
+    });
+    expect(priorTriageTag(allowed)).toBe("applied");
+  });
+
+  test("the note names the logins whose replies are not read", async () => {
+    const logged: string[] = [];
+    await runWithReplies(true, [], {
+      writers: writersWith("author", false),
+      log: collectLog(logged),
+    });
+    expect(
+      logged.some(
+        (line) => line.includes("are not read") && line.includes("author"),
+      ),
+    ).toBe(true);
+
+    logged.length = 0;
+    await runWithReplies(true, [], { log: collectLog(logged) });
+    expect(logged.some((line) => line.includes("are not read"))).toBe(false);
+  });
+
+  test("a comment that is not a triage reply is untouched", async () => {
+    const logged: string[] = [];
+    const result = await summaryRowRun(
+      [
+        ROW_DISMISSAL,
+        {
+          id: 3,
+          user: CI_ADJUDICATOR_LOGIN,
+          body: adjudicationMarker({ verdict: "upheld", reply: 2, head: H }),
+          created_at: "2026-01-03T00:00:00Z",
+        },
+      ],
+      undefined,
+      { writers: new Map([["author", true]]), log: collectLog(logged) },
+    );
+    expect(result.adjudicationQueue).toEqual([]);
+    expect(logged.some((line) => line.includes("Could not read"))).toBe(false);
+  });
 });
 
 // Inline anchoring (the review payload's path/line) must see the FULL PR
@@ -837,6 +1017,7 @@ function discoveryFor(
     prIgnore: { rules: [], found: false },
     issueComments: [markerCommentForHead(L, true)],
     postedFindings: [],
+    replyWriters: WRITERS,
     reviewComments: [],
     git,
     log: () => {},
@@ -956,6 +1137,7 @@ describe("resolvePrDiscovery — a first review with every file excluded (#317)"
       prIgnore: { rules: parseIgnoreFile("dist/**\n", "user"), found: true },
       issueComments: [],
       postedFindings: [],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: excludingGit(),
       log: () => {},
