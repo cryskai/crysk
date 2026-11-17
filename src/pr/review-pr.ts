@@ -570,6 +570,7 @@ export async function reviewPr(
       prepared,
       skipDiscovery,
       rawDiff,
+      baseMergeHunksDropped,
       effectiveDiff,
       anchorPatch,
       gateConfig,
@@ -674,14 +675,15 @@ export async function reviewPr(
     recordRunDir(runDir);
     // diff.patch is the EFFECTIVE diff — exactly what the hunters read (see
     // filterDiffByIgnoreRules); diff.raw.patch preserves the unfiltered
-    // bytes, and only when the filter actually dropped something.
+    // bytes, and only when an exclusion dropped a file or a merge of the base
+    // branch brought in hunks that were left out.
     const diffPath = path.join(runDir, "diff.patch");
     await Bun.write(diffPath, effectiveDiff.patch);
     // anchor.patch is the full PR diff inline comments anchor against (see
     // resolvePrDiscovery). post --from and triage read it, falling back to
     // diff.patch for run dirs written before it existed.
     await Bun.write(path.join(runDir, "anchor.patch"), anchorPatch);
-    if (effectiveDiff.droppedPaths.length > 0) {
+    if (effectiveDiff.droppedPaths.length > 0 || baseMergeHunksDropped > 0) {
       await Bun.write(path.join(runDir, "diff.raw.patch"), rawDiff);
     }
 

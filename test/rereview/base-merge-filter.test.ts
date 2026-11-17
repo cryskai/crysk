@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   changeSitesByPath,
   keepPrOwnedHunks,
+  patchNumstat,
 } from "#rereview/base-merge-filter";
 
 const HUNK_A = [
@@ -199,6 +200,69 @@ describe("keepPrOwnedHunks", () => {
   });
 });
 
+describe("patchNumstat", () => {
+  test("counts the +/- lines of every hunk and skips the file headers", () => {
+    const patch = [
+      "diff --git a/src/x.ts b/src/x.ts",
+      "index 111..222 100644",
+      "--- a/src/x.ts",
+      "+++ b/src/x.ts",
+      "@@ -1,3 +1,4 @@",
+      " keep",
+      "-old1",
+      "+new1",
+      "+new2",
+      " keep2",
+      "@@ -20,2 +21,2 @@",
+      "-old3",
+      "+new3",
+      " tail",
+      "",
+    ].join("\n");
+    expect(patchNumstat(patch)).toEqual([
+      { path: "src/x.ts", insertions: 3, deletions: 2, binary: false },
+    ]);
+  });
+
+  test("does not count a no-newline marker and does not end the hunk", () => {
+    const patch = [
+      "diff --git a/f.ts b/f.ts",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      "@@ -1,2 +1,3 @@",
+      " a",
+      "-b",
+      "\\ No newline at end of file",
+      "+B",
+      "+C",
+      "",
+    ].join("\n");
+    expect(patchNumstat(patch)).toEqual([
+      { path: "f.ts", insertions: 2, deletions: 1, binary: false },
+    ]);
+  });
+
+  test("gives a binary record a file with no lines and binary set", () => {
+    const patch = [
+      "diff --git a/img.png b/img.png",
+      "index 111..222 100644",
+      "Binary files a/img.png and b/img.png differ",
+      "",
+    ].join("\n");
+    expect(patchNumstat(patch)).toEqual([
+      { path: "img.png", insertions: 0, deletions: 0, binary: true },
+    ]);
+  });
+
+  test("gives one entry per record, in order", () => {
+    const patch = `${HUNK_A}${HUNK_A.replaceAll("src/a.ts", "src/b.ts")}`;
+    expect(patchNumstat(patch).map((f) => f.path)).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+  });
+});
+
 describe("keepPrOwnedHunks against real git", () => {
   test("drops a base-branch hunk merged into the PR branch and keeps the PR's own change", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "base-merge-"));
@@ -265,6 +329,23 @@ describe("keepPrOwnedHunks against real git", () => {
       expect(result.patch).toContain("+feature 20");
       expect(result.patch).not.toContain("main 50");
       expect(result.droppedHunks).toBe(1);
+
+      // The per-file counts must agree with what git itself reports for the delta.
+      const [insertions, deletions] = git(
+        "diff",
+        `${L}..${H}`,
+        "--numstat",
+        "--",
+        "f.txt",
+      )
+        .trim()
+        .split("\t");
+      expect(patchNumstat(delta).find((f) => f.path === "f.txt")).toMatchObject(
+        {
+          insertions: Number(insertions),
+          deletions: Number(deletions),
+        },
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

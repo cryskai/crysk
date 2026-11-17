@@ -518,7 +518,7 @@ Run artifacts land **outside** the repo, in `~/.crysk/repos/<origin>/runs/<run>/
 | `report.md` | The human-readable review. |
 | `findings.json` | The machine artifact (schema v1.0.0): findings, tiers, refuter verdicts, usage, provenance. |
 | `diff.patch`, `pipeline.json`, `steps/` | The exact diff reviewed — after exclusions, so it is byte-for-byte what the hunters read — plus pipeline provenance (including the excluded paths), per-agent drafts and logs. On an incremental re-review after the base branch was merged into the pull request, hunks that came from that merge are left out. |
-| `diff.raw.patch` | The unfiltered diff of the same range. Written **only** when exclusions actually dropped a file, since otherwise it would duplicate `diff.patch`. |
+| `diff.raw.patch` | The unfiltered diff of the same range. Written **only** when exclusions dropped a file, or when an incremental re-review left out hunks a merge of the base branch brought in, since otherwise it would duplicate `diff.patch`. |
 | `anchor.patch` | The full PR diff (merge-base..head, after exclusions) that inline comments anchor against. On a first review it equals `diff.patch`; on an incremental re-review `diff.patch` is only the push delta, and this file still covers the whole PR, so a finding on an untouched line of the PR gets a review thread. |
 
 ### Exit codes

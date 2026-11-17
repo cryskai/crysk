@@ -21,7 +21,7 @@ import type {
   fetchPrReviewComments,
 } from "#pr/pr";
 import { findMarkedCommentId } from "#pr/preflight";
-import { keepPrOwnedHunks } from "#rereview/base-merge-filter";
+import { keepPrOwnedHunks, patchNumstat } from "#rereview/base-merge-filter";
 import {
   adjudicationQueue,
   buildPhaseBQueue,
@@ -54,6 +54,7 @@ import {
 } from "#review/run";
 import {
   type ExcludedPath,
+  effectiveDiffStat,
   evaluateSizeGate,
   filterDiffByIgnoreRules,
   type SizeGateVerdict,
@@ -110,6 +111,8 @@ export interface PrDiscoveryResult {
   prepared: PreparedDiscovery;
   skipDiscovery: boolean;
   rawDiff: string;
+  // Hunks left out of the discovery patch because a merge of the base branch brought them in.
+  baseMergeHunksDropped: number;
   effectiveDiff: {
     patch: string;
     droppedPaths: string[];
@@ -214,19 +217,21 @@ export async function resolvePrDiscovery(params: {
   const skipPlannedDiscovery =
     prepared.plan.skipDiscovery || prepared.discoverySkippedEmptyDelta;
 
+  // rawDiff keeps the unfiltered bytes; ownedDiff is what the hunters read.
   let rawDiff = "";
+  let ownedDiff = "";
   let baseMergeHunksDropped = 0;
   if (!skipPlannedDiscovery) {
     const diff = await git.runGit(["diff", discoveryRange, ...pathArgs]);
     if (!diff.ok) throw new CliError(`git diff failed: ${diff.stderr}`);
     rawDiff = diff.stdout;
+    ownedDiff = rawDiff;
     // WHY a second diff: a restricted re-review reads last-head..head, and when
     // the author merged the base branch in between, that range also carries
     // the base branch's own changes to every file the pull request touches.
     // The merge base moves past the last reviewed head only through such a
     // merge, so this probe leaves an ordinary push on the exact patch it
-    // always read. The size gate still measures the unfiltered range: it is a
-    // cost bound, and the unfiltered count is the upper one.
+    // always read. `rawDiff` keeps the unfiltered bytes for diff.raw.patch.
     if (
       prepared.discoveryPaths !== null &&
       prepared.last.L !== null &&
@@ -241,7 +246,7 @@ export async function resolvePrDiscovery(params: {
         throw new CliError(`git diff failed: ${prRange.stderr}`);
       }
       const owned = keepPrOwnedHunks(rawDiff, prRange.stdout);
-      rawDiff = owned.patch;
+      ownedDiff = owned.patch;
       baseMergeHunksDropped = owned.droppedHunks;
     }
   }
@@ -255,7 +260,7 @@ export async function resolvePrDiscovery(params: {
         droppedPaths: [] as string[],
         exclusions: [] as ExcludedPath[],
       }
-    : filterDiffByIgnoreRules(rawDiff, gateConfig.excludeRules);
+    : filterDiffByIgnoreRules(ownedDiff, gateConfig.excludeRules);
   if (
     prepared.plan.emptyDeltaIsError &&
     effectiveDiff.patch.trim().length === 0
@@ -446,6 +451,15 @@ export async function resolvePrDiscovery(params: {
   if (skipDiscovery) {
     diffStat = { files: 0, insertions: 0, deletions: 0 };
     sizeGate = evaluateSizeGate([], gateConfig);
+  } else if (baseMergeHunksDropped > 0) {
+    // WHY not git's numstat: no range describes the delta once hunks are left
+    // out, and the stat must be of what the hunters read (ReportMeta.diffStat).
+    // The gate loses its whitespace-insensitive count here (that needs git), so
+    // an author's whitespace-only lines count toward it: an over-count, on the
+    // safe side of a cost bound, and far below counting the base branch's hunks.
+    const files = patchNumstat(ownedDiff);
+    diffStat = effectiveDiffStat(files, gateConfig.excludeRules);
+    sizeGate = evaluateSizeGate(files, gateConfig);
   } else {
     // See computeDiffStatAndSizeGate (src/review/run.ts) for the full
     // rationale.
@@ -461,6 +475,7 @@ export async function resolvePrDiscovery(params: {
     prepared,
     skipDiscovery,
     rawDiff,
+    baseMergeHunksDropped,
     effectiveDiff,
     anchorPatch,
     gateConfig,

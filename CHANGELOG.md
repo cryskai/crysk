@@ -12,9 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A re-review no longer reads what a merge of the base branch brought in.** When the author merged the base
   branch into the pull request between two reviews, the next review's delta carried the base branch's own
   changes to every file the pull request also touches, and a finding could land on code from another, already
-  merged pull request. The delta now keeps only the hunks that belong to the pull request's own diff. A push
-  with no such merge is read exactly as before. The run's `pipeline.json` records how many hunks were left out
-  (`rereview.base_merge_hunks_dropped`).
+  merged pull request. The delta now keeps only the hunks that belong to the pull request's own diff. The
+  report's diff stat and the size gate count that filtered delta. A push with no such merge is read exactly as
+  before. The run's `pipeline.json` records how many hunks were left out (`rereview.base_merge_hunks_dropped`),
+  and `diff.raw.patch` keeps the unfiltered delta.
 
 ## [0.8.1] - 2026-11-17
 

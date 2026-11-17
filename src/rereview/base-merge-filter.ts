@@ -1,3 +1,4 @@
+import type { NumstatFile } from "#review/preflight";
 import { diffRecordPath, splitDiffRecords } from "#review/size-gate";
 
 const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
@@ -96,6 +97,39 @@ export function keepPrOwnedHunks(
     emitted.push(preamble, ...kept);
   }
   return { patch: emitted.join(""), droppedHunks };
+}
+
+// The per-file counts `git diff --numstat` would give for this patch, read
+// from the patch itself: once hunks are left out, no git range describes what
+// remains. One entry per record with a resolvable path; a record with no hunk
+// (binary, rename only, mode only) counts as a file with no lines.
+export function patchNumstat(patch: string): NumstatFile[] {
+  const files: NumstatFile[] = [];
+  for (const record of splitDiffRecords(patch)) {
+    const path = diffRecordPath(record);
+    if (path === undefined) continue;
+    let insertions = 0;
+    let deletions = 0;
+    let inHunk = false;
+    for (const line of record.split("\n")) {
+      if (HUNK_HEADER.test(line)) {
+        inHunk = true;
+        continue;
+      }
+      if (!inHunk) continue;
+      if (line.startsWith("+")) insertions++;
+      else if (line.startsWith("-")) deletions++;
+      else if (!line.startsWith(" ") && !line.startsWith("\\")) inHunk = false;
+    }
+    files.push({
+      path,
+      insertions,
+      deletions,
+      binary:
+        /^Binary files /m.test(record) || /^GIT binary patch$/m.test(record),
+    });
+  }
+  return files;
 }
 
 interface RecordHunks {

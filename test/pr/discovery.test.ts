@@ -5,8 +5,10 @@ import {
   type PrDiscoveryGit,
   resolvePrDiscovery,
 } from "#pr/discovery";
+import { patchNumstat } from "#rereview/base-merge-filter";
 import { skippedDiscoveryMessage } from "#rereview/plan";
 import { allExcludedMessage } from "#review/preflight";
+import { evaluateSizeGate } from "#review/size-gate";
 import type { AgentSpec } from "#review/spec";
 import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { CliError } from "../../src/errors";
@@ -825,8 +827,10 @@ describe("resolvePrDiscovery — a merge of the base branch between reviews", ()
         logs.push(line ?? "");
       },
     });
-    expect(result.rawDiff).toContain("+author new");
-    expect(result.rawDiff).not.toContain("base new");
+    expect(result.effectiveDiff.patch).toContain("+author new");
+    expect(result.effectiveDiff.patch).not.toContain("base new");
+    expect(result.rawDiff).toBe(FILE_HEADER + AUTHOR_HUNK + BASE_HUNK);
+    expect(result.baseMergeHunksDropped).toBe(1);
     expect(result.rereview?.base_merge_hunks_dropped).toBe(1);
     expect(logs.some((line) => line.includes("merge of the base branch"))).toBe(
       true,
@@ -844,6 +848,10 @@ describe("resolvePrDiscovery — a merge of the base branch between reviews", ()
     );
     const result = await discoveryFor(git, {});
     expect(result.rawDiff).toBe(FILE_HEADER + AUTHOR_HUNK + BASE_HUNK);
+    expect(result.effectiveDiff.patch).toBe(
+      FILE_HEADER + AUTHOR_HUNK + BASE_HUNK,
+    );
+    expect(result.baseMergeHunksDropped).toBe(0);
     expect(result.rereview?.base_merge_hunks_dropped).toBeUndefined();
     const prRangeCalls = calls.filter(
       (args) =>
@@ -853,6 +861,32 @@ describe("resolvePrDiscovery — a merge of the base branch between reviews", ()
         !args.includes("--numstat"),
     );
     expect(prRangeCalls).toEqual([]);
+    // The ordinary path still reads its stat from git's numstat.
+    expect(calls.some((args) => args.includes("--numstat"))).toBe(true);
+  });
+
+  test("the stat and the size gate count the filtered delta, not the range", async () => {
+    const WIDE_AUTHOR_HUNK =
+      "@@ -10,3 +10,4 @@\n ctx\n-author old\n+author new\n+author more\n ctx\n";
+    const WIDE_PR_RANGE = `${FILE_HEADER}@@ -10,3 +10,4 @@\n ctx\n-author older\n+author new\n+author more\n ctx\n`;
+    const calls: string[][] = [];
+    const git = mergedGit(
+      {
+        [`${L}..${H}`]: FILE_HEADER + WIDE_AUTHOR_HUNK + BASE_HUNK,
+        [`${B}..${H}`]: WIDE_PR_RANGE,
+      },
+      calls,
+    );
+    const result = await discoveryFor(git, {});
+    // The fake numstat would report 1 file with 1 insertion and 1 deletion.
+    expect(result.diffStat).toEqual({ files: 1, insertions: 2, deletions: 1 });
+    expect(calls.some((args) => args.includes("--numstat"))).toBe(false);
+    expect(result.sizeGate).toEqual(
+      evaluateSizeGate(
+        patchNumstat(FILE_HEADER + WIDE_AUTHOR_HUNK),
+        result.gateConfig,
+      ),
+    );
   });
 
   test("a delta made only of the merge skips discovery", async () => {
