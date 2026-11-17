@@ -148,15 +148,28 @@ function triageReply(options: {
   };
 }
 
+// A comment with no author is posted by the login the fixtures use for a writer (dev).
+function withAuthor<T extends { user?: string }>(comment: T): T {
+  return comment.user === undefined ? { ...comment, user: "dev" } : comment;
+}
+
+// Every author of a fixture comment has write access, so the reader counts their replies.
 function input(overrides: Partial<PrStatusInput> = {}): PrStatusInput {
+  const issueComments = (overrides.issueComments ?? []).map(withAuthor);
+  const reviewComments = (overrides.reviewComments ?? []).map(withAuthor);
+  const authors = [...issueComments, ...reviewComments].map(
+    (comment) => comment.user ?? "dev",
+  );
   return {
     pr: 12,
     head: CURRENT,
     nowMs: NOW,
     statuses: [],
-    issueComments: [],
-    reviewComments: [],
     ...overrides,
+    issueComments,
+    reviewComments,
+    writers:
+      overrides.writers ?? new Map(authors.map((login) => [login, true])),
   };
 }
 
@@ -2963,8 +2976,9 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
-    expect(status.reason).toContain("are still open");
+    // The newest counted reply is at another head, so it does not answer this review (as at the gate).
+    expect(status.next_action).toBe("triage");
+    expect(status.reason).toContain("no triage reply that answers this review");
   });
 
   // PR #442 F (blocking): one applied beside a deferred must not promise that replies unlock the red.

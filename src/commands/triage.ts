@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { assertRunMatchesPr } from "#ci/gates";
 import { resolveRepoRoot } from "#git/git";
+import { requireReplyWriters } from "#pr/ci-admission-gate";
 import {
   fetchPostedFindingComments,
   fetchPrComments,
   fetchPrReviewComments,
-  ghCollaboratorPermissionRetried,
   ghCurrentBranchPr,
   ghPrWebUrl,
   ghRepoNameWithOwner,
@@ -25,8 +25,8 @@ import {
   decideThreadResolve,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
-  rowTriageAuthorsAtHead,
-  triageAuthorsAtHead,
+  newestCountedRowReplyHead,
+  newestCountedThreadReplyHead,
 } from "#triage/reply";
 import {
   renderTriageReplyBody,
@@ -133,16 +133,25 @@ async function postedFindingFromPr(
   prNumber: number,
   findingId: string,
   spawnFn: typeof Bun.spawn | undefined,
+  sleepFn: (ms: number) => Promise<void>,
 ): Promise<{
   target: ReplyTarget;
   headSha: string;
   issueComments: Awaited<ReturnType<typeof fetchPrComments>>;
+  reviewComments: Awaited<ReturnType<typeof fetchPrReviewComments>>;
+  writers: Map<string, boolean>;
 }> {
   const issueComments = await fetchPrComments(operatorRoot, prNumber, {
     spawnFn,
   });
   const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
     spawnFn,
+  });
+  const writers = await requireReplyWriters({
+    operatorRoot,
+    comments: [...reviewComments, ...issueComments],
+    spawnFn,
+    sleepFn,
   });
   const status = buildPrStatus({
     pr: prNumber,
@@ -151,6 +160,7 @@ async function postedFindingFromPr(
     statuses: [],
     issueComments,
     reviewComments,
+    writers,
     adjudicatorTrust: { kind: "local" },
   });
   const finding = status.findings.find((row) => row.id === findingId);
@@ -181,6 +191,8 @@ async function postedFindingFromPr(
       },
       headSha,
       issueComments,
+      reviewComments,
+      writers,
     };
   }
   const summaryId = findMarkedCommentId(issueComments);
@@ -203,6 +215,8 @@ async function postedFindingFromPr(
     },
     headSha: status.report.head,
     issueComments,
+    reviewComments,
+    writers,
   };
 }
 
@@ -229,6 +243,7 @@ async function carriedRowsHint(input: {
   prNumber: number;
   findingPath: string;
   spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
 }): Promise<string> {
   try {
     const issueComments = await fetchPrComments(
@@ -243,6 +258,12 @@ async function carriedRowsHint(input: {
       input.prNumber,
       { spawnFn: input.spawnFn },
     );
+    const writers = await requireReplyWriters({
+      operatorRoot: input.operatorRoot,
+      comments: [...reviewComments, ...issueComments],
+      spawnFn: input.spawnFn,
+      sleepFn: input.sleepFn,
+    });
     const status = buildPrStatus({
       pr: input.prNumber,
       head: "",
@@ -250,6 +271,7 @@ async function carriedRowsHint(input: {
       statuses: [],
       issueComments,
       reviewComments,
+      writers,
       adjudicatorTrust: { kind: "local" },
     });
     const rows = status.findings
@@ -270,6 +292,7 @@ async function postedFindingFromRunDir(input: {
   findingId: string;
   bodyFile: string;
   spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
 }): Promise<{
   target: ReplyTarget;
   headSha: string;
@@ -333,6 +356,7 @@ async function postedFindingFromRunDir(input: {
       prNumber,
       findingPath: finding.path,
       spawnFn,
+      sleepFn: input.sleepFn,
     });
     throw new CliError(
       `no posted <!-- crysk-finding (or <!-- pr-hero-finding) marker matches ${input.findingId} ` +
@@ -357,46 +381,6 @@ async function postedFindingFromRunDir(input: {
     headSha: doc.head_sha,
     reasoning,
   };
-}
-
-// Whether one of these logins may answer a finding: the gate counts a triage reply only from a
-// login with write access (pr/answered-findings.ts trustedComments), so a marker-shaped comment
-// from anyone else is not an answer. Counting it would skip the real reply, and the finding would
-// stay open with no reply the gate reads and no way to post one.
-// WHY a permission that does not read stops the command: both guesses are wrong. Taking it for
-// "no access" posts a duplicate of a real reply, and a second `dismissed` makes an earlier CI
-// ruling stop matching; taking it for "access" lets a forged marker block the real reply. Nothing
-// is posted and the message says to run it again.
-async function someoneMayAnswer(input: {
-  operatorRoot: string;
-  prNumber: number;
-  findingId: string;
-  authors: readonly (string | undefined)[];
-  spawnFn: typeof Bun.spawn | undefined;
-  sleepFn: (ms: number) => Promise<void>;
-}): Promise<boolean> {
-  const logins = new Set(
-    input.authors.filter((login): login is string => login !== undefined),
-  );
-  const unread: string[] = [];
-  for (const login of logins) {
-    const permission = await ghCollaboratorPermissionRetried(
-      input.operatorRoot,
-      login,
-      input.spawnFn,
-      input.sleepFn,
-    );
-    if (permission === "admin" || permission === "write") return true;
-    if (permission === null) unread.push(login);
-  }
-  if (unread.length > 0) {
-    throw new CliError(
-      `${input.findingId} on PR #${input.prNumber} already has a triage reply for this review from ` +
-        `${unread.join(", ")}, and GitHub did not return whether that login may answer. ` +
-        "Nothing was posted: run the same command again",
-    );
-  }
-  return false;
 }
 
 export async function runTriageReplyCommand(input: {
@@ -425,6 +409,7 @@ export async function runTriageReplyCommand(input: {
             prNumber,
             input.findingId,
             spawnFn,
+            input.sleepFn ?? Bun.sleep,
           )),
           reasoning: await readReasoning(input.bodyFile),
         }
@@ -436,8 +421,11 @@ export async function runTriageReplyCommand(input: {
             findingId: input.findingId,
             bodyFile: input.bodyFile,
             spawnFn,
+            sleepFn: input.sleepFn ?? Bun.sleep,
           })),
           issueComments: undefined,
+          reviewComments: undefined,
+          writers: undefined,
         };
   const { target: replyTarget, headSha, reasoning, issueComments } = found;
   const fields: TriageMarkerFields = {
@@ -465,42 +453,39 @@ export async function runTriageReplyCommand(input: {
     subject === undefined
       ? renderTriageReplyBody(fields, reasoning)
       : renderTriageReplyBody(fields, reasoning, subject);
+  // Only the newest reply the gate would count makes a second one a repeat (triage/reply.ts).
   let already: boolean;
   if (replyTarget.kind === "thread") {
-    const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
-      spawnFn,
-    });
-    already = await someoneMayAnswer({
-      operatorRoot,
-      prNumber,
-      findingId: input.findingId,
-      authors: triageAuthorsAtHead({
+    const reviewComments =
+      found.reviewComments ??
+      (await fetchPrReviewComments(operatorRoot, prNumber, { spawnFn }));
+    const writers =
+      found.writers ??
+      (await requireReplyWriters({
+        operatorRoot,
+        comments: reviewComments,
+        spawnFn,
+        sleepFn: input.sleepFn ?? Bun.sleep,
+      }));
+    already =
+      newestCountedThreadReplyHead({
         parentId: replyTarget.parent.id,
-        headSha,
         replies: reviewComments,
-      }),
-      spawnFn,
-      sleepFn: input.sleepFn ?? Bun.sleep,
-    });
+        writers,
+      }) === headSha;
   } else {
     // The row's replies are top-level comments, read with the summary, so no second fetch.
-    if (issueComments === undefined) {
+    if (issueComments === undefined || found.writers === undefined) {
       throw new Error(
-        "triage reply: a summary-row target carries the PR's comments",
+        "triage reply: a summary-row target carries the PR's comments and their authors' permissions",
       );
     }
-    already = await someoneMayAnswer({
-      operatorRoot,
-      prNumber,
-      findingId: input.findingId,
-      authors: rowTriageAuthorsAtHead({
+    already =
+      newestCountedRowReplyHead({
         rowId: replyTarget.rowId,
-        headSha,
         comments: issueComments,
-      }),
-      spawnFn,
-      sleepFn: input.sleepFn ?? Bun.sleep,
-    });
+        writers: found.writers,
+      }) === headSha;
   }
   const resolveDecision = decideThreadResolve({
     channel: replyTarget.kind === "row" ? "issue" : replyTarget.parent.channel,

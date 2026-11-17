@@ -64,6 +64,7 @@ function triage(overrides: Partial<PriorTriage> = {}): PriorTriage {
 const posted = [
   {
     id: FINDING,
+    channel: "review" as const,
     marker: { path: "src/app.ts", line: 10, c: claimFingerprint(claim) },
   },
 ];

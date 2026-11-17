@@ -358,6 +358,8 @@ function greptileCollisionScript(input?: {
         }),
       },
     },
+    // The reply author of the fixtures has write access.
+    permissionEntry("dev", { stdout: "write\n" }),
   ];
 }
 
@@ -1102,6 +1104,7 @@ describe("runTriageReplyCommand — without a run directory", () => {
     const { bodyFile, cleanup } = await bodyOnly();
     try {
       const { spawnFn, calls } = makeFakeGh([
+        permissionEntry("dev", { stderr: "HTTP 500", exitCode: 1 }),
         ...carriedScript([
           {
             id: 23,
@@ -1110,7 +1113,6 @@ describe("runTriageReplyCommand — without a run directory", () => {
             body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
           },
         ]),
-        permissionEntry("dev", { stderr: "HTTP 500", exitCode: 1 }),
       ]);
       await expect(
         runTriageReplyCommand({
@@ -1124,7 +1126,7 @@ describe("runTriageReplyCommand — without a run directory", () => {
           sleepFn: async () => {},
         }),
       ).rejects.toThrow(
-        "GitHub did not return whether that login may answer. Nothing was posted",
+        /could not read whether dev has write access[\s\S]*Nothing was changed/,
       );
       expect(
         calls.filter((call) => call.argv.includes("--method")),
@@ -1209,6 +1211,48 @@ describe("runTriageReplyCommand — without a run directory", () => {
             call.argv.join(" ").includes("pulls/42/comments"),
         ),
       ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("an older reply at this head does not block when a newer counted reply names another head", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const foreignHead = "e".repeat(40);
+      const { spawnFn, calls } = makeFakeGh(
+        carriedScript([
+          {
+            id: 23,
+            user: "dev",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+          },
+          {
+            id: 24,
+            user: "dev",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent" })}\n\nlater`,
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const posts = calls.filter(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
+      );
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.stdin).toContain(`head=${HEAD}`);
     } finally {
       await cleanup();
     }
@@ -1406,6 +1450,7 @@ describe("triage reply — the reply the driver posts is the one the gate counts
         head: HEAD,
         nowMs: Date.parse(AFTER) + 60_000,
         statuses: [failingGate],
+        writers: new Map([["dev", true]]),
         issueComments: rows(script[0]),
         reviewComments: [...rows(script[1]), ...reviewComments],
       });
@@ -1418,6 +1463,55 @@ describe("triage reply — the reply the driver posts is the one the gate counts
         { id: 99, user: "dev", in_reply_to_id: 22, body, created_at: AFTER },
       ]).next_action,
     ).toBe("fix");
+  });
+
+  test("an older reply at this head and a newer one at another head: the driver replies, then the gate and status agree", async () => {
+    const foreignHead = "e".repeat(40);
+    const script = carriedScript([
+      {
+        id: 23,
+        user: "dev",
+        in_reply_to_id: 22,
+        created_at: AFTER,
+        body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+      },
+      {
+        id: 24,
+        user: "dev",
+        in_reply_to_id: 22,
+        created_at: AFTER,
+        body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent" })}\n\nlater`,
+      },
+    ]);
+    const failingGate: CommitStatusFact = {
+      state: "failure",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: VERDICT,
+      description:
+        "crysk: 1 blocking finding(s) — fix and push, or /crysk override",
+      target_url: null,
+    };
+    const statusFor = (reviewComments: unknown[]) =>
+      buildPrStatus({
+        pr: 42,
+        head: HEAD,
+        nowMs: Date.parse(AFTER) + 60_000,
+        statuses: [failingGate],
+        writers: new Map([["dev", true]]),
+        verdictAt: VERDICT,
+        issueComments: rows(script[0]),
+        reviewComments: [...rows(script[1]), ...reviewComments],
+      });
+
+    expect(gateFor(script, HEAD)).toEqual({ blocking: 1, open: 1 });
+    expect(statusFor([]).next_action).toBe("triage");
+    const body = await driverReply(script);
+    expect(body).toContain(`head=${HEAD}`);
+    const posted = [
+      { id: 99, user: "dev", in_reply_to_id: 22, body, created_at: AFTER },
+    ];
+    expect(gateFor(script, HEAD, posted)).toEqual({ blocking: 1, open: 0 });
+    expect(statusFor(posted).next_action).toBe("fix");
   });
 
   test("a finding with no comment", async () => {
@@ -1448,6 +1542,7 @@ describe("triage reply — the reply the driver posts is the one the gate counts
         head: HEAD,
         nowMs: Date.parse(AFTER) + 60_000,
         statuses: [failingGate],
+        writers: new Map([["dev", true]]),
         issueComments: [...rows(script[0]), ...issueComments],
         reviewComments: rows(script[1]),
       });
@@ -1669,6 +1764,7 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
     const { bodyFile, cleanup } = await bodyOnly();
     try {
       const { spawnFn, calls } = makeFakeGh([
+        permissionEntry("dev", { stderr: "HTTP 500", exitCode: 1 }),
         ...rowScript([
           {
             id: 60,
@@ -1676,7 +1772,6 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
             body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nearlier`,
           },
         ]),
-        permissionEntry("dev", { stderr: "HTTP 500", exitCode: 1 }),
       ]);
       await expect(
         runTriageReplyCommand({
@@ -1690,7 +1785,7 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
           sleepFn: async () => {},
         }),
       ).rejects.toThrow(
-        "GitHub did not return whether that login may answer. Nothing was posted",
+        /could not read whether dev has write access[\s\S]*Nothing was changed/,
       );
       expect(
         calls.filter((call) => call.argv.includes("--method")),
@@ -1825,6 +1920,46 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
       });
       expect(exitCode).toBe(0);
       expect(rowPosts(calls)).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("an older reply at this head does not block when a newer counted reply names another head", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const foreignHead = "e".repeat(40);
+      const { spawnFn, calls } = makeFakeGh(
+        rowScript([
+          {
+            id: 60,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nthis round`,
+          },
+          {
+            id: 61,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent", row: "R001" })}\n\nlater`,
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const posts = calls.filter(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("issues/42/comments"),
+      );
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.stdin).toContain(`head=${HEAD}`);
     } finally {
       await cleanup();
     }

@@ -9,12 +9,15 @@ import {
   parseFindingMarker,
 } from "#pr/preflight";
 import {
+  countedTriageReplies,
   decideThreadResolve,
+  findingAnswered,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
+  newestCountedRowReplyHead,
+  newestCountedThreadReplyHead,
   replyAnswersReview,
-  rowTriageAuthorsAtHead,
-  triageAuthorsAtHead,
+  replyHeadAnswers,
 } from "#triage/reply";
 import { triageMarker } from "#triage/triage";
 
@@ -211,108 +214,6 @@ describe("decideThreadResolve", () => {
   });
 });
 
-describe("triageAuthorsAtHead", () => {
-  test("returns the author of a same-head triage reply on the parent", () => {
-    expect(
-      triageAuthorsAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 22,
-            user: "dev",
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
-          },
-        ],
-      }),
-    ).toEqual(["dev"]);
-  });
-
-  test("two matching replies return both authors in order", () => {
-    expect(
-      triageAuthorsAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 22,
-            user: "dev",
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
-          },
-          {
-            in_reply_to_id: 22,
-            user: "drive-by",
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nagain`,
-          },
-        ],
-      }),
-    ).toEqual(["dev", "drive-by"]);
-  });
-
-  test("a matching reply with no user yields an undefined author", () => {
-    expect(
-      triageAuthorsAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 22,
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
-          },
-        ],
-      }),
-    ).toEqual([undefined]);
-  });
-
-  test("a different head is not a skip", () => {
-    expect(
-      triageAuthorsAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 22,
-            user: "dev",
-            body: `${triageMarker({ tag: "applied", headSha: OTHER_HEAD, actor: "agent" })}\nok`,
-          },
-        ],
-      }),
-    ).toEqual([]);
-  });
-
-  test("a reply to a different parent is not a skip", () => {
-    expect(
-      triageAuthorsAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 11,
-            user: "dev",
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
-          },
-        ],
-      }),
-    ).toEqual([]);
-  });
-
-  test("a thread reply that names a row is not this thread's reply", () => {
-    expect(
-      triageAuthorsAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 22,
-            user: "dev",
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\nok`,
-          },
-        ],
-      }),
-    ).toEqual([]);
-  });
-});
-
 describe("replyAnswersReview", () => {
   const POSTED = "a".repeat(40);
   const REVIEWED = "b".repeat(40);
@@ -417,73 +318,320 @@ describe("replyAnswersReview", () => {
   });
 });
 
-describe("rowTriageAuthorsAtHead", () => {
-  const rowReply = (row: string, headSha: string, user: string) => ({
+describe("countedTriageReplies", () => {
+  const WRITER_LOGIN = "dev";
+  const READER_LOGIN = "visitor";
+  const VERDICT = Date.parse("2026-11-10T12:00:00Z");
+  const BEFORE = "2026-11-10T11:00:00Z";
+  const AFTER = "2026-11-10T13:00:00Z";
+  const writers = new Map<string, boolean | null>([
+    [WRITER_LOGIN, true],
+    [READER_LOGIN, false],
+  ]);
+  const reply = (
+    id: number,
+    user: string | undefined,
+    head: string,
+    created_at?: string,
+  ) => ({
+    id,
     user,
-    body: `${triageMarker({ tag: "applied", headSha, actor: "agent", row })}\n\nok`,
+    created_at,
+    body: `${triageMarker({ tag: "applied", headSha: head, actor: "agent" })}\n\nreasoning`,
+  });
+  const plain = { id: 1, user: "someone", body: "a comment" };
+
+  test("keeps a comment that is not a triage reply", () => {
+    const result = countedTriageReplies({
+      comments: [plain],
+      writers: new Map(),
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [plain], uncounted: [] });
   });
 
-  test("returns the author of a same-head reply that names the row", () => {
+  test("keeps a reply from a login with write access", () => {
+    const kept = reply(2, WRITER_LOGIN, HEAD, AFTER);
+    const result = countedTriageReplies({
+      comments: [kept],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [kept], uncounted: [] });
+  });
+
+  test("drops a reply from a login without write access and names it once", () => {
+    const result = countedTriageReplies({
+      comments: [
+        reply(2, READER_LOGIN, HEAD, AFTER),
+        reply(3, READER_LOGIN, HEAD, AFTER),
+      ],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [], uncounted: [READER_LOGIN] });
+  });
+
+  test("an author whose permission did not read fails the whole read", () => {
+    const result = countedTriageReplies({
+      comments: [reply(2, "unread", HEAD, AFTER)],
+      writers: new Map<string, boolean | null>([["unread", null]]),
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("an author missing from the map fails the whole read", () => {
+    const result = countedTriageReplies({
+      comments: [reply(2, "missing", HEAD, AFTER)],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("drops a stale reply at an older head, created before the verdict, without naming it", () => {
+    const result = countedTriageReplies({
+      comments: [reply(2, READER_LOGIN, OTHER_HEAD, BEFORE)],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [], uncounted: [] });
+  });
+
+  test("keeps a reply stamped with the reviewed head even when it predates the verdict", () => {
+    const kept = reply(2, WRITER_LOGIN, HEAD, BEFORE);
+    const result = countedTriageReplies({
+      comments: [kept],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [kept], uncounted: [] });
+  });
+
+  test("with no summary no reply is stale, so an older-head reply is kept", () => {
+    const kept = reply(2, WRITER_LOGIN, OTHER_HEAD, BEFORE);
+    const result = countedTriageReplies({
+      comments: [kept],
+      writers,
+      reviewedHead: null,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [kept], uncounted: [] });
+  });
+});
+
+describe("replyHeadAnswers", () => {
+  test("a reply at the reviewed head answers the review", () => {
     expect(
-      rowTriageAuthorsAtHead({
-        rowId: "R001",
-        headSha: HEAD,
-        comments: [rowReply("R001", HEAD, "dev")],
+      replyHeadAnswers({
+        findingHead: OTHER_HEAD,
+        replyHead: HEAD,
+        reviewedHead: HEAD,
       }),
-    ).toEqual(["dev"]);
+    ).toBe(true);
   });
 
-  test("two matching replies return both authors in order", () => {
+  test("a reply at the finding's own head answers a carried finding", () => {
     expect(
-      rowTriageAuthorsAtHead({
-        rowId: "R001",
-        headSha: HEAD,
-        comments: [
-          rowReply("R001", HEAD, "dev"),
-          rowReply("R001", HEAD, "drive-by"),
-        ],
+      replyHeadAnswers({
+        findingHead: OTHER_HEAD,
+        replyHead: OTHER_HEAD,
+        reviewedHead: HEAD,
       }),
-    ).toEqual(["dev", "drive-by"]);
+    ).toBe(true);
   });
 
-  test("the same row at another head is not a skip", () => {
+  test("a reply at a foreign head does not answer", () => {
     expect(
-      rowTriageAuthorsAtHead({
-        rowId: "R001",
-        headSha: HEAD,
-        comments: [rowReply("R001", OTHER_HEAD, "dev")],
+      replyHeadAnswers({
+        findingHead: OTHER_HEAD,
+        replyHead: "e".repeat(40),
+        reviewedHead: HEAD,
       }),
-    ).toEqual([]);
+    ).toBe(false);
   });
 
-  test("another row at the same head is not a skip", () => {
+  test("a row (no finding head) is answered only at the reviewed head", () => {
     expect(
-      rowTriageAuthorsAtHead({
-        rowId: "R001",
-        headSha: HEAD,
-        comments: [rowReply("R002", HEAD, "dev")],
+      replyHeadAnswers({
+        findingHead: null,
+        replyHead: HEAD,
+        reviewedHead: HEAD,
       }),
-    ).toEqual([]);
-  });
-
-  test("a marker with no row is not a skip", () => {
+    ).toBe(true);
     expect(
-      rowTriageAuthorsAtHead({
-        rowId: "R001",
-        headSha: HEAD,
-        comments: [
-          {
-            user: "dev",
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nok`,
-          },
-        ],
+      replyHeadAnswers({
+        findingHead: null,
+        replyHead: OTHER_HEAD,
+        reviewedHead: HEAD,
       }),
-    ).toEqual([]);
+    ).toBe(false);
   });
 
-  test("an empty list is not a skip", () => {
+  test("with no reviewed head, a reply at the finding's own head still answers", () => {
     expect(
-      rowTriageAuthorsAtHead({ rowId: "R001", headSha: HEAD, comments: [] }),
-    ).toEqual([]);
+      replyHeadAnswers({
+        findingHead: HEAD,
+        replyHead: HEAD,
+        reviewedHead: null,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("findingAnswered", () => {
+  const finding = (
+    tag: string | null,
+    ci_verdict: string | null,
+    head = HEAD,
+    replyHead = HEAD,
+  ) => ({
+    head,
+    triage: tag === null ? null : { tag, head: replyHead },
+    ci_verdict,
+  });
+
+  test("an applied reply at the reviewed head answers", () => {
+    expect(findingAnswered(finding("applied", null), HEAD)).toBe(true);
+  });
+
+  test("a dismissal the CI adjudicator upheld answers", () => {
+    expect(findingAnswered(finding("dismissed", "upheld"), HEAD)).toBe(true);
+  });
+
+  test("a dismissal with no ruling does not answer", () => {
+    expect(findingAnswered(finding("dismissed", null), HEAD)).toBe(false);
+  });
+
+  test("a deferred reply does not answer", () => {
+    expect(findingAnswered(finding("deferred", null), HEAD)).toBe(false);
+  });
+
+  test("no triage reply does not answer", () => {
+    expect(findingAnswered(finding(null, null), HEAD)).toBe(false);
+  });
+
+  test("an applied reply at a foreign head does not answer", () => {
+    expect(
+      findingAnswered(finding("applied", null, HEAD, OTHER_HEAD), HEAD),
+    ).toBe(false);
+  });
+});
+
+describe("newestCountedThreadReplyHead", () => {
+  const thread = (
+    id: number,
+    user: string | undefined,
+    head: string,
+    parent = 7,
+  ) => ({
+    id,
+    user,
+    in_reply_to_id: parent,
+    body: triageMarker({ tag: "applied", headSha: head, actor: "agent" }),
+  });
+  const writers = new Map([
+    ["dev", true],
+    ["visitor", false],
+  ]);
+
+  test("the newest reply from a writer decides, not an older one at the same head", () => {
+    expect(
+      newestCountedThreadReplyHead({
+        parentId: 7,
+        replies: [thread(1, "dev", HEAD), thread(2, "dev", OTHER_HEAD)],
+        writers,
+      }),
+    ).toBe(OTHER_HEAD);
+  });
+
+  test("a newer reply from a login without write access is not counted", () => {
+    expect(
+      newestCountedThreadReplyHead({
+        parentId: 7,
+        replies: [thread(1, "dev", HEAD), thread(2, "visitor", OTHER_HEAD)],
+        writers,
+      }),
+    ).toBe(HEAD);
+  });
+
+  test("a reply in another thread or a row reply is not this thread's reply", () => {
+    expect(
+      newestCountedThreadReplyHead({
+        parentId: 7,
+        replies: [thread(1, "dev", HEAD, 8)],
+        writers,
+      }),
+    ).toBeNull();
+  });
+
+  test("a reply with no author is not counted", () => {
+    expect(
+      newestCountedThreadReplyHead({
+        parentId: 7,
+        replies: [thread(1, undefined, HEAD)],
+        writers,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("newestCountedRowReplyHead", () => {
+  const row = (
+    id: number,
+    user: string | undefined,
+    head: string,
+    rowId = "R001",
+  ) => ({
+    id,
+    user,
+    body: triageMarker({
+      tag: "applied",
+      headSha: head,
+      actor: "agent",
+      row: rowId,
+    }),
+  });
+  const writers = new Map([
+    ["dev", true],
+    ["visitor", false],
+  ]);
+
+  test("the newest reply from a writer that names the row decides", () => {
+    expect(
+      newestCountedRowReplyHead({
+        rowId: "R001",
+        comments: [row(1, "dev", HEAD), row(2, "dev", OTHER_HEAD)],
+        writers,
+      }),
+    ).toBe(OTHER_HEAD);
+  });
+
+  test("a newer reply from a login without write access is not counted", () => {
+    expect(
+      newestCountedRowReplyHead({
+        rowId: "R001",
+        comments: [row(1, "dev", HEAD), row(2, "visitor", OTHER_HEAD)],
+        writers,
+      }),
+    ).toBe(HEAD);
+  });
+
+  test("a reply that names another row is not counted", () => {
+    expect(
+      newestCountedRowReplyHead({
+        rowId: "R001",
+        comments: [row(1, "dev", HEAD, "R002")],
+        writers,
+      }),
+    ).toBeNull();
   });
 });

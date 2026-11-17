@@ -45,7 +45,12 @@ import {
   trustedAdjudicator,
 } from "#triage/adjudication";
 import { withPlainAppliedReplies } from "#triage/plain-reply";
-import { replyAnswersReview } from "#triage/reply";
+import {
+  countedTriageReplies,
+  findingAnswered,
+  replyAnswersReview,
+  replyHeadAnswers,
+} from "#triage/reply";
 import {
   type ParsedTriageMarker,
   parseTriageMarker,
@@ -117,6 +122,7 @@ export interface PrStatusFinding {
   // that cannot be read as advisory is never waved through.
   blocking: boolean;
   live_on_head: boolean;
+  // The newest triage reply the gate counts: from a login with write access, and not older than the review's verdict.
   triage: PrStatusTriage | null;
   // The CI adjudicator's ruling on the newest triage reply, counted only when github-actions[bot] posted it on the head being read (src/triage/adjudication.ts). Null when there is none.
   ci_verdict: "upheld" | "rejected" | "inconclusive" | null;
@@ -159,7 +165,7 @@ export interface PrStatusReviewComment extends PrStatusComment {
   line?: number | null;
 }
 
-export interface PrStatusInput {
+export interface PrStatusRead {
   pr: number;
   head: string;
   nowMs: number;
@@ -174,6 +180,12 @@ export interface PrStatusInput {
   adjudicatorTrust?: AdjudicatorTrust;
 }
 
+export interface PrStatusInput extends PrStatusRead {
+  // Whether each author of a triage reply has write access (triage/reply.ts countedTriageReplies):
+  // status counts a reply exactly as the gate does. Every such author must be in the map.
+  writers: ReadonlyMap<string, boolean>;
+}
+
 // The window a pending status is trusted for, named from the constant that defines it, so
 // the reason a stale pending reads as "review" never drifts from the watcher's own rule.
 const IN_FLIGHT_WINDOW_MINUTES = Math.round(IN_FLIGHT_TTL_MS / 60_000);
@@ -183,23 +195,33 @@ const IN_FLIGHT_WINDOW_MINUTES = Math.round(IN_FLIGHT_TTL_MS / 60_000);
 interface AnalyzedFinding {
   finding: PrStatusFinding;
   answersReview: boolean;
+  // Under a green gate every finding posted on the head is owed a reply, and any author's satisfies it: the gate reads no reply there, so this is not the gate's rule.
+  replied: boolean;
 }
 
 export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
   const input = withPlainReplies(raw);
   const gate = readGate(input);
   const summary = readSummary(input.issueComments);
+  const counted = countedReplies(input, summary.head);
   const analyzed = readFindings(
-    input,
+    counted.input,
     summary.rows,
     summary.head,
     verdictMs(input),
     summary.author,
+    input,
   );
   const liveBlocking = analyzed.filter(
     (a) => a.finding.blocking && a.finding.live_on_head,
   );
-  const decision = decideNext(gate, analyzed, input.head, summary);
+  const decision = decideNext(
+    gate,
+    analyzed,
+    input.head,
+    summary,
+    counted.uncounted,
+  );
   return {
     schema: PR_STATUS_SCHEMA,
     pr: input.pr,
@@ -223,17 +245,51 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
   };
 }
 
+// The comments as the gate reads them (triage/reply.ts countedTriageReplies). The command that
+// builds the input looks every reply author's permission up first, so an unread one is a defect.
+function countedReplies(
+  input: PrStatusInput,
+  reviewedHead: string | null,
+): { input: PrStatusInput; uncounted: string[] } {
+  const verdictAt = verdictMs(input);
+  const issue = countedTriageReplies({
+    comments: input.issueComments,
+    writers: input.writers,
+    reviewedHead,
+    verdictAt,
+  });
+  const review = countedTriageReplies({
+    comments: input.reviewComments,
+    writers: input.writers,
+    reviewedHead,
+    verdictAt,
+  });
+  if (issue === null || review === null) {
+    throw new Error(
+      "crysk status: a triage reply author's permission was not looked up",
+    );
+  }
+  return {
+    input: {
+      ...input,
+      issueComments: issue.kept,
+      reviewComments: review.kept,
+    },
+    uncounted: [...new Set([...issue.uncounted, ...review.uncounted])],
+  };
+}
+
 // The gate is crysk's own commit status on the head, read by its context alone (the legacy
 // pr-hero name counts as the same context), so a local run's crysk/local status never
 // answers for the gate.
 // The caller's verdict time in ms, or null when it is unknown or does not parse.
-function verdictMs(input: PrStatusInput): number | null {
+function verdictMs(input: PrStatusRead): number | null {
   if (input.verdictAt === undefined || input.verdictAt === null) return null;
   const at = Date.parse(input.verdictAt);
   return Number.isNaN(at) ? null : at;
 }
 
-function readGate(input: PrStatusInput): PrStatusGate {
+function readGate(input: PrStatusRead): PrStatusGate {
   const latest = latestStatusInContext(input.statuses, COMMIT_STATUS_CONTEXT);
   if (latest === null) {
     return {
@@ -276,7 +332,7 @@ function gateStateOf(state: string): PrGateState {
 
 // triage-without-skill S1: a plain `applied` reply to a finding reads as the marker it implies, so the status
 // a person or an agent reads agrees with the gate (triage/plain-reply.ts).
-function withPlainReplies(input: PrStatusInput): PrStatusInput {
+function withPlainReplies<T extends PrStatusRead>(input: T): T {
   return {
     ...input,
     reviewComments: withPlainAppliedReplies(input.reviewComments),
@@ -285,10 +341,17 @@ function withPlainReplies(input: PrStatusInput): PrStatusInput {
 
 // The live blocking findings at input.head, each with its newest triage reply and CI ruling, read exactly as
 // buildPrStatus reads them. The admission gate reads them for the reviewed head (pr/answered-findings.ts).
-export function liveBlockingFindings(raw: PrStatusInput): PrStatusFinding[] {
+export function liveBlockingFindings(raw: PrStatusRead): PrStatusFinding[] {
   const input = withPlainReplies(raw);
   const summary = readSummary(input.issueComments);
-  return readFindings(input, summary.rows, summary.head, null, summary.author)
+  return readFindings(
+    input,
+    summary.rows,
+    summary.head,
+    null,
+    summary.author,
+    input,
+  )
     .filter((a) => a.finding.blocking && a.finding.live_on_head)
     .map((a) => a.finding);
 }
@@ -342,11 +405,12 @@ function outcomeCodeOf(comments: PrStatusComment[]): string | null {
 // Every posted finding, from both streams, in comment order. Only a comment that parses
 // as a finding marker is a finding, so the summary and a human's reply drop out here.
 function readFindings(
-  input: PrStatusInput,
+  input: PrStatusRead,
   rows: StateFinding[],
   reviewedHead: string | null,
   verdictAt: number | null,
   summaryAuthor: string | undefined,
+  raw: PrStatusRead,
 ): AnalyzedFinding[] {
   const sources: {
     id: number;
@@ -441,8 +505,15 @@ function readFindings(
             ? ciVerdictOf(source.id, newest?.id ?? null, input)
             : null,
       },
-      // A reply at another review's head does not answer this one (replyAnswersReview).
-      answersReview: replies.some((r) =>
+      // The newest reply the gate counts decides, as at the gate (triage/reply.ts).
+      answersReview:
+        triage !== null &&
+        replyHeadAnswers({
+          findingHead: marker.headSha,
+          replyHead: triage.headSha,
+          reviewedHead,
+        }),
+      replied: repliesTo(source, raw).some((r) =>
         replyAnswersReview({
           replyHead: r.marker.headSha,
           replyCreatedAt: r.createdAt,
@@ -465,10 +536,14 @@ function readFindings(
         newest?.marker ?? null,
         rowCiVerdictOf(newest?.id ?? null, summaryAuthor, input),
       ),
-      // A row has no posted head, so only a reply stamped with the reviewed head answers it.
+      // A row has no posted head, so only the newest counted reply, stamped with the reviewed head, answers it.
       answersReview:
+        newest !== null &&
         reviewedHead !== null &&
-        replies.some((r) => r.marker.headSha === reviewedHead),
+        newest.marker.headSha === reviewedHead,
+      replied:
+        reviewedHead !== null &&
+        rowReplies(row.id, raw).some((r) => r.marker.headSha === reviewedHead),
     });
   }
   return out;
@@ -519,7 +594,7 @@ function unthreadedFinding(
 function rowCiVerdictOf(
   newestReplyId: number | null,
   summaryAuthor: string | undefined,
-  input: PrStatusInput,
+  input: PrStatusRead,
 ): "upheld" | "rejected" | "inconclusive" | null {
   if (newestReplyId === null) return null;
   let best: {
@@ -552,7 +627,7 @@ function rowCiVerdictOf(
 function ciVerdictOf(
   threadId: number,
   newestTriageId: number | null,
-  input: PrStatusInput,
+  input: PrStatusRead,
 ): "upheld" | "rejected" | "inconclusive" | null {
   if (newestTriageId === null) return null;
   let best: {
@@ -596,7 +671,7 @@ interface TriageReplyRow {
 // is not a reply, whatever it links.
 function repliesTo(
   source: { id: number; channel: "inline" | "outside" },
-  input: PrStatusInput,
+  input: PrStatusRead,
 ): TriageReplyRow[] {
   const out: TriageReplyRow[] = [];
   if (source.channel === "inline") {
@@ -623,7 +698,7 @@ function repliesTo(
 
 // Every triage reply that answers one summary row: a top-level comment whose marker names the row
 // (triage/triage.ts `row`). A row has no comment of its own, so the token is the only binding.
-function rowReplies(rowId: string, input: PrStatusInput): TriageReplyRow[] {
+function rowReplies(rowId: string, input: PrStatusRead): TriageReplyRow[] {
   const out: TriageReplyRow[] = [];
   for (const comment of input.issueComments) {
     const marker = parseTriageMarker(comment.body);
@@ -709,6 +784,7 @@ function decideNext(
   analyzed: AnalyzedFinding[],
   head: string,
   summary: { head: string | null; complete: boolean | null },
+  uncounted: readonly string[],
 ): { next_action: PrNextAction; reason: string } {
   const liveBlocking = analyzed.filter(
     (a) => a.finding.blocking && a.finding.live_on_head,
@@ -781,9 +857,7 @@ function decideNext(
     // The triage skill answers every finding, advisory included, so a green gate is not the
     // end while a finding posted on this head has no reply at that head. A finding posted on an
     // older head is not this head's to answer.
-    const owed = analyzed.filter(
-      (a) => a.finding.head === head && !a.answersReview,
-    );
+    const owed = analyzed.filter((a) => a.finding.head === head && !a.replied);
     if (owed.length > 0) {
       return {
         next_action: "triage",
@@ -835,9 +909,13 @@ function decideNext(
       !a.answersReview && (a.finding.comment_id !== null || rowsAreThisReviews),
   );
   if (untriaged.length > 0) {
+    const uncountedNote =
+      uncounted.length === 0
+        ? ""
+        : ` Replies from ${uncounted.join(", ")} do not count: the gate counts a triage reply only from a login with write access.`;
     return {
       next_action: "triage",
-      reason: `${untriaged.length} live blocking finding(s) on this head have no triage reply that answers this review; triage them first.`,
+      reason: `${untriaged.length} live blocking finding(s) on this head have no triage reply that answers this review; triage them first.${uncountedNote}`,
     };
   }
   const applied = liveBlocking.filter(
@@ -853,15 +931,9 @@ function decideNext(
     ) {
       // The gate's own rules (admission.ts admissionSkipDecision, answered-findings.ts): a finding is
       // answered only by its newest reply at the head it was posted on or at the reviewed head, and the gate must see at least as
-      // many blocking findings as the red counts. This count does not apply the stale-reply cutoff, so the reason says the push can turn green, never that it will.
+      // many blocking findings as the red counts. This is the gate's own rule (triage/reply.ts findingAnswered), over the replies the gate counts.
       const open = liveBlocking.filter(
-        (a) =>
-          !(
-            (a.finding.triage?.tag === "applied" &&
-              (a.finding.triage.head === a.finding.head ||
-                a.finding.triage.head === summary.head)) ||
-            upheldDismissal(a)
-          ),
+        (a) => !findingAnswered(a.finding, summary.head),
       ).length;
       const counted = gateBlockingCount(gate);
       const unseen =

@@ -452,7 +452,11 @@ describe("S-B — enrichPriorsFromThreads newness", () => {
     // keying on `c` alone (F001/F003). Same prior, same comment, same
     // assertions — the marker now simply carries the identity it always had.
     const posted = [
-      { id: 22, marker: { path: "src/app.ts", line: 10, c: fingerprint } },
+      {
+        id: 22,
+        channel: "review" as const,
+        marker: { path: "src/app.ts", line: 10, c: fingerprint },
+      },
     ];
     const applied = `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n`;
     const after = enrichPriorsFromThreads({
@@ -500,6 +504,70 @@ describe("S-B — enrichPriorsFromThreads newness", () => {
     });
     expect(queuedBefore.queued).toEqual([]);
     expect(queuedBefore.settled[0]?.status).toBe("carried");
+  });
+});
+
+describe("enrichPriorsFromThreads — the channel of the bound comment", () => {
+  const HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const claim = "a live defect";
+  const prior = {
+    id: "R001",
+    sev: "CRITICAL" as const,
+    tier: "blocking" as const,
+    channel: "inline" as const,
+    locs: ["src/app.ts:10"],
+    claim,
+    triage: null,
+    newThreadReply: false,
+  };
+  const applied = `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n`;
+
+  test("a reply in a review thread is not read for a finding posted as a top-level comment, even when the ids coincide", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [prior],
+      posted: [
+        {
+          id: 500,
+          channel: "issue",
+          marker: { path: "src/app.ts", line: 10, c: claimFingerprint(claim) },
+        },
+      ],
+      replies: [
+        {
+          id: 501,
+          in_reply_to_id: 500,
+          user: "dev",
+          body: applied,
+          created_at: "2026-08-21T12:00:00Z",
+        },
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage).toBeNull();
+  });
+
+  test("a finding posted as a review comment still reads its thread", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [prior],
+      posted: [
+        {
+          id: 500,
+          channel: "review",
+          marker: { path: "src/app.ts", line: 10, c: claimFingerprint(claim) },
+        },
+      ],
+      replies: [
+        {
+          id: 501,
+          in_reply_to_id: 500,
+          user: "dev",
+          body: applied,
+          created_at: "2026-08-21T12:00:00Z",
+        },
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage?.tag).toBe("applied");
   });
 });
 
@@ -658,7 +726,11 @@ describe("enrichPriorsFromThreads — a prior with no comment", () => {
     const [enriched] = enrichPriorsFromThreads({
       priors: [rowPrior],
       posted: [
-        { id: 22, marker: { path: "src/app.ts", line: 10, c: fingerprint } },
+        {
+          id: 22,
+          channel: "review",
+          marker: { path: "src/app.ts", line: 10, c: fingerprint },
+        },
       ],
       replies: [
         {
@@ -824,6 +896,7 @@ describe("enrichPriorsFromThreads — a prior with no comment", () => {
         posted: [
           {
             id: 22,
+            channel: "review",
             marker: {
               path: "src/app.ts",
               line: 10,

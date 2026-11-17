@@ -34,7 +34,17 @@ function makeFakeGh(script: ScriptEntry[]): {
   const spawnFn = ((argv: string[]) => {
     calls.push({ argv });
     const joined = argv.join(" ");
-    const entry = script.find((s) => s.match.every((t) => joined.includes(t)));
+    // The reply authors of the fixtures have write access. These entries come last, so a test
+    // scripts another answer for a login by putting its own entry first.
+    const entry = [
+      ...script,
+      ...["dev", "developer"].map(
+        (login): ScriptEntry => ({
+          match: [`collaborators/${login}/permission`],
+          response: { stdout: "write\n" },
+        }),
+      ),
+    ].find((s) => s.match.every((t) => joined.includes(t)));
     const scripted = entry?.response ?? { stdout: "", exitCode: 0 };
     const stream = (text: string) =>
       new ReadableStream<Uint8Array>({
@@ -1034,5 +1044,112 @@ describe("crysk status — the review's verdict time", () => {
     expect(code).toBe(0);
     expect(commitListings).toBe(2);
     expect(JSON.parse(written[0] ?? "").next_action).toBe("fix");
+  });
+});
+
+describe("runStatusCommand: the reply authors' permissions", () => {
+  const replyBy = (user: string, id: number) => ({
+    id,
+    user,
+    created_at: new Date(NOW - 60_000).toISOString(),
+    body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nreasoning`,
+    path: "src/a.ts",
+    line: 10,
+    original_line: 10,
+    in_reply_to_id: 41,
+  });
+  const withReplies = (replies: unknown[]): ScriptEntry[] =>
+    happyScript.map((entry) =>
+      entry.match[0] === "pulls/12/comments"
+        ? {
+            ...entry,
+            response: {
+              stdout: ndjson([
+                {
+                  id: 41,
+                  user: "pr-hero",
+                  body: findingBody,
+                  path: "src/a.ts",
+                  line: 10,
+                  original_line: 10,
+                  in_reply_to_id: null,
+                },
+                ...replies,
+              ]),
+            },
+          }
+        : entry,
+    );
+
+  test("a reply author's permission that does not read fails the command, and nothing reaches stdout", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["collaborators/stranger/permission"],
+        response: { stderr: "HTTP 500", exitCode: 1 },
+      },
+      ...withReplies([replyBy("stranger", 42)]),
+    ]);
+    const written: string[] = [];
+    const run = runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    await expect(run).rejects.toBeInstanceOf(CliError);
+    await expect(run).rejects.toThrow(
+      /could not read whether stranger has write access/,
+    );
+    expect(written).toEqual([]);
+  });
+
+  test("the permission of a reply author is asked once across polls", async () => {
+    const pending = {
+      state: "pending",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: new Date(NOW - 5_000).toISOString(),
+      description: "pr-hero: review in progress",
+      target_url: null,
+    };
+    const base = makeFakeGh(withReplies([replyBy("dev", 42)])).spawnFn;
+    let statusPolls = 0;
+    let permissionAsks = 0;
+    const spawnFn = ((argv: string[], opts?: unknown) => {
+      const joined = argv.join(" ");
+      if (joined.includes("collaborators/dev/permission")) permissionAsks += 1;
+      if (joined.includes(`commits/${HEAD}/status`)) {
+        statusPolls += 1;
+        const row = statusPolls === 1 ? pending : gateRow;
+        return makeFakeGh([
+          {
+            match: [`commits/${HEAD}/status`],
+            response: { stdout: ndjson([row]) },
+          },
+        ]).spawnFn(argv);
+      }
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }) as unknown as typeof Bun.spawn;
+
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      wait: true,
+      spawnFn,
+      nowMs: NOW,
+      pollIntervalMs: 1_000,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(statusPolls).toBe(2);
+    expect(permissionAsks).toBe(1);
   });
 });

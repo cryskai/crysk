@@ -14,6 +14,7 @@ import {
   headStatusRed,
   ownReviewVerdictTime,
 } from "#pr/admission";
+import { requireReplyWriters } from "#pr/ci-admission-gate";
 import {
   CommentsTruncatedError,
   fetchCommitStatuses,
@@ -96,6 +97,8 @@ export async function runStatusCommand(input: {
   let headStartMs = startMs;
   let polls = 0;
   let consecutivePollErrors = 0;
+  // A --wait run asks each reply author's permission once, not on every poll.
+  const knownWriters = new Map<string, boolean>();
 
   let status: PrStatusJson;
   while (true) {
@@ -143,6 +146,13 @@ export async function runStatusCommand(input: {
         spawnFn,
         timeoutMs: commentTimeoutMs,
       });
+      const writers = await requireReplyWriters({
+        operatorRoot,
+        comments: [...reviewComments, ...issueComments],
+        known: knownWriters,
+        spawnFn,
+        sleepFn: sleep,
+      });
       status = buildPrStatus({
         pr,
         head,
@@ -151,6 +161,7 @@ export async function runStatusCommand(input: {
         verdictAt,
         issueComments,
         reviewComments,
+        writers,
         // A developer's machine never learns the platform's login (src/triage/adjudication.ts).
         adjudicatorTrust: { kind: "local" },
       });
