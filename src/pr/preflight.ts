@@ -818,7 +818,7 @@ export function skipCommitStatusRequest(input: {
   const reason =
     input.kind === "size"
       ? "diff over the size gate"
-      : "estimated cost over the CI budget";
+      : "over a cost limit set in Crysk";
   return {
     state: "failure",
     context: input.context ?? LOCAL_COMMIT_STATUS_CONTEXT,

@@ -195,6 +195,7 @@ describe("action.yml", () => {
       (s) => s.env?.CRYSK_PLATFORM_LIMITS !== undefined,
     );
     expect(runStep?.env?.CRYSK_PLATFORM_LIMITS).toBe(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a template literal
       "${{ steps.platform.outputs.limits }}",
     );
   });

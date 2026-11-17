@@ -251,6 +251,17 @@ describe("Local Store Server & Typed Client", () => {
       });
       expect(usageRepoA.rows.length).toBe(1);
       expect(usageRepoA.total_tokens).toBe(5500);
+
+      // S3: the store keeps `cost_usd_est` as a legacy column (0 on new rows); no dollar leaves
+      // the engine through its API, where a 0 would read as a free run.
+      const runId = allRuns[0]?.id ?? 0;
+      for (const row of [
+        ...allRuns,
+        ...usageAll.rows,
+        (await client.getRun(runId)) ?? {},
+      ]) {
+        expect(row).not.toHaveProperty("cost_usd_est");
+      }
     } finally {
       serverHandle.stop();
     }

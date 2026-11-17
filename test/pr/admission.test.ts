@@ -398,7 +398,7 @@ describe("publishCiSkip: the outcome record", () => {
       await publishCiSkip(gateInput("skipped-budget", recordingStatus(calls)));
       expect(calls).toHaveLength(1);
       expect(calls[0]?.state).toBe("failure");
-      expect(calls[0]?.description).toContain("CI budget");
+      expect(calls[0]?.description).toContain("cost limit");
     });
 
     // #317: every changed file is excluded, so there is nothing to review.
