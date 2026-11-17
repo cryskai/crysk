@@ -1252,17 +1252,24 @@ workflow run, so it gets no reaction and costs nothing. It does not cancel a rev
 
 <a id="rechecking-a-dismissal"></a>
 
-**Rechecking a dismissal.** Comment exactly `/crysk recheck` on the pull request. It is `/crysk review` plus the CI adjudicator:
-the same write-access check and the same forced review of the head, and then the adjudicator rules on each pending `dismissed` reply
-to a blocking finding, at most 5 per run. Only a dismissal the adjudicator upholds leaves the gate count. A `deferred` or
-`misclassified` reply never does, and a rejected or inconclusive verdict keeps the finding counted. The verdict is posted by
-`github-actions[bot]` as a reply on the finding's thread, or, for a finding with no comment of its own (one listed only in
-the summary), as a top-level comment that names the reply it rules on. Only verdicts from that login count, so a run with a
-custom token fails closed. In [platform mode](#pr-comment-commands) the run posts as the Crysk App's bot, and its ruling counts
-when that same bot posted the finding (the review summary, for a finding with no comment); a person's login never does, nor
-another App's bot.
-A new dismissal reply is pending again. A verdict counts only on the head it was given, so a push needs a new recheck. An adjudicator step that fails posts nothing for that dismissal: it prints a notice and stays pending for the next recheck. The recheck run itself never changes the count: an upheld verdict leaves it from the next review of the same head (`/crysk review`), which reads the reply back, and only when GitHub recorded the reply under `github-actions[bot]` (or the platform's bot in platform mode). If the reply did not land under that login, the recheck warns and the finding keeps counting. Dismissals never ruled on are adjudicated before retries of an inconclusive one. Not on fork pull requests: the adjudicator needs this repository's checkout of the head,
-so the comment is refused with a notice and a 👎 reaction.
+**Rechecking a dismissal.** Comment exactly `/crysk recheck` on the pull request. It is `/crysk review` plus the CI
+adjudicator: the same write-access check and the same forced review of the head, and then the adjudicator rules on each
+pending `dismissed` reply to a blocking finding, at most 5 per run. Only a reply from a login with write access is read:
+a reply from anyone else is not ruled on and changes nothing in a review. Only a dismissal the adjudicator upholds
+leaves the gate count. A `deferred` or `misclassified` reply never does, and a rejected or inconclusive verdict keeps
+the finding counted. The verdict is posted by `github-actions[bot]` as a reply on the finding's thread, or, for a
+finding with no comment of its own (one listed only in the summary), as a top-level comment that names the reply it
+rules on. Only verdicts from that login count, so a run with a custom token fails closed. In [platform
+mode](#pr-comment-commands) the run posts as the Crysk App's bot, and its ruling counts when that same bot posted the
+finding (the review summary, for a finding with no comment); a person's login never does, nor another App's bot. A new
+dismissal reply is pending again. A verdict counts only on the head it was given, so a push needs a new recheck. An
+adjudicator step that fails posts nothing for that dismissal: it prints a notice and stays pending for the next recheck.
+The recheck run itself never changes the count: an upheld verdict leaves it from the next review of the same head
+(`/crysk review`), which reads the reply back, and only when GitHub recorded the reply under `github-actions[bot]` (or
+the platform's bot in platform mode). If the reply did not land under that login, the recheck warns and the finding
+keeps counting. Dismissals never ruled on are adjudicated before retries of an inconclusive one. Not on fork pull
+requests: the adjudicator needs this repository's checkout of the head, so the comment is refused with a notice and a 👎
+reaction.
 
 <a id="overriding-a-red-gate"></a>
 

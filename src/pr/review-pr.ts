@@ -49,6 +49,7 @@ import {
 import {
   evaluateCiAdmissionGate,
   isCiConfigError,
+  lookUpReplyWriters,
   recordCiConfigErrorSkip,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
@@ -555,6 +556,12 @@ export async function reviewPr(
       fetchPostedFindingComments(operatorRoot, prNumber),
       fetchPrReviewComments(operatorRoot, prNumber),
     ]);
+    const replyWriters = await lookUpReplyWriters({
+      operatorRoot,
+      comments: [...reviewComments, ...issueComments],
+      spawnFn: undefined,
+      sleepFn: Bun.sleep,
+    });
     let discovery: Awaited<ReturnType<typeof resolvePrDiscovery>>;
     try {
       discovery = await resolvePrDiscovery({
@@ -571,6 +578,7 @@ export async function reviewPr(
         issueComments,
         postedFindings,
         reviewComments,
+        replyWriters,
         git: {
           commitExists: (sha) => gitCommitExists(gitDirOwner, sha),
           isAncestor: (ancestor, descendant) =>
