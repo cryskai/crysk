@@ -11,9 +11,9 @@ import { parsePrCommentMarker } from "#watch/preflight";
 // to the repository) is the gate's, which passes its lookups in as `writers`.
 
 // The blocking findings the read could see, and how many of them are still open. A finding is answered when
-// its newest triage reply sits at the head it was posted on (the rule crysk status uses) and is `applied`, or
-// is a `dismissed` the CI adjudicator upheld. `deferred` and `misclassified` stay open: they name a real
-// finding, and only a fix or a human override may close one.
+// its newest triage reply answers the reviewed head's review (triage/reply.ts replyAnswersReview, the rule
+// crysk status uses) and is `applied`, or is a `dismissed` the CI adjudicator upheld. `deferred` and
+// `misclassified` stay open: they name a real finding, and only a fix or a human override may close one.
 export interface AnsweredFindings {
   blocking: number;
   open: number;
@@ -69,8 +69,10 @@ function isGateInput(body: string): boolean {
 
 // WHY a reply to a finding from an older head must be newer than the carried verdict: such a finding is live
 // on the reviewed head through the summary's rows, so the review that wrote the verdict saw its reply and kept
-// it. A reply from before that verdict is the claim the review already contradicted. A reply carries the
-// head its finding was posted on (triage/reply.ts), so its time is the only thing that says it came after.
+// it. A reply from before that verdict is the claim the review already contradicted. A reply written by a
+// current driver carries the reviewed head and is never stale here. An older driver's reply, and a plain
+// `applied` one (triage/plain-reply.ts), carry the head their finding was posted on, so for a finding from
+// an older head their time is the only thing that says they came after.
 // A reply at the reviewed head itself always answers the review of that head.
 function isStaleReply(
   comment: AnswerIssueComment,
@@ -167,7 +169,11 @@ export function answeredBlockingFindings(input: {
     const answered =
       triage !== null &&
       finding.head !== null &&
-      triage.head === finding.head &&
+      // WHY either head: a reply names the review it answers, which is the reviewed head. A
+      // finding carried from an earlier review keeps that review's comment, so its posted head is
+      // older; an older driver's reply and a plain `applied` one still carry that posted head, and
+      // isStaleReply has already dropped those that predate the verdict.
+      (triage.head === finding.head || triage.head === input.reviewedHead) &&
       (triage.tag === "applied" ||
         (triage.tag === "dismissed" && finding.ci_verdict === "upheld"));
     if (!answered) open++;

@@ -291,7 +291,7 @@ describe("buildPrStatus: next_action, first match wins", () => {
       state: "failure",
     },
     {
-      name: "a triage reply at another head does not count as triage at the posted head",
+      name: "a reply stamped with the reviewed head answers a finding carried from an earlier head",
       input: input({
         statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
         reviewComments: [
@@ -304,6 +304,33 @@ describe("buildPrStatus: next_action, first match wins", () => {
             id: 2,
             parent: 1,
             head: CURRENT,
+            tag: "applied",
+          }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+        ],
+      }),
+      action: "fix",
+      state: "failure",
+    },
+    {
+      name: "a triage reply at a head that is neither the posted nor the reviewed one does not answer",
+      input: input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: "9".repeat(40),
             tag: "applied",
           }),
         ],
@@ -2491,5 +2518,96 @@ describe("buildPrStatus: a head a review rule skipped", () => {
     expect(status.next_action).toBe("fix");
     expect(status.reason).toContain("1 blocking finding(s) are still open");
     expect(status.reason).not.toContain("turns green");
+  });
+});
+
+describe("buildPrStatus — a finding carried from an earlier review", () => {
+  const VERDICT_AT = "2026-10-30T10:00:00Z";
+  const RED_DESCRIPTION =
+    "crysk: 1 blocking finding(s) — fix and push, or /crysk override";
+  // The finding was posted on EARLIER and carried into the review of CURRENT: its row is in the
+  // summary written for CURRENT.
+  const carried = (extra: Partial<PrStatusInput> = {}): PrStatusInput =>
+    input({
+      statuses: [
+        {
+          state: "failure",
+          context: COMMIT_STATUS_CONTEXT,
+          created_at: VERDICT_AT,
+          description: RED_DESCRIPTION,
+          target_url: null,
+        },
+      ],
+      issueComments: [
+        { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+      ],
+      reviewComments: [
+        {
+          id: 1,
+          body: findingBody({ head: EARLIER, claim: CLAIM }),
+          in_reply_to_id: null,
+        },
+      ],
+      ...extra,
+    });
+
+  test("an earlier-round reply does not answer the new review", () => {
+    const status = buildPrStatus(
+      carried({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T09:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("a reply stamped with the reviewed head answers it", () => {
+    const status = buildPrStatus(
+      carried({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("a reply at the posted head, newer than the verdict, answers it", () => {
+    const status = buildPrStatus(
+      carried({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T11:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("no reply at all: triage, and the reason says no reply answers this review", () => {
+    const status = buildPrStatus(carried());
+    expect(status.next_action).toBe("triage");
+    expect(status.reason).toContain("no triage reply that answers this review");
   });
 });

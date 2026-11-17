@@ -13,6 +13,7 @@ import {
   existingTriageAtHead,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
+  replyAnswersReview,
 } from "#triage/reply";
 import { triageMarker } from "#triage/triage";
 
@@ -253,5 +254,109 @@ describe("existingTriageAtHead", () => {
         ],
       }),
     ).toBe(false);
+  });
+});
+
+describe("replyAnswersReview", () => {
+  const POSTED = "a".repeat(40);
+  const REVIEWED = "b".repeat(40);
+  const OTHER = "c".repeat(40);
+  const VERDICT = Date.parse("2026-10-30T10:00:00Z");
+  const BEFORE = "2026-10-30T09:00:00Z";
+  const AFTER = "2026-10-30T11:00:00Z";
+
+  test("a reply at the reviewed head answers a finding posted on that head", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: REVIEWED,
+        replyCreatedAt: BEFORE,
+        findingHead: REVIEWED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at the reviewed head answers a finding carried from an older head", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: REVIEWED,
+        replyCreatedAt: BEFORE,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at the posted head, created after the verdict, answers a carried finding", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: AFTER,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at the posted head, created before the verdict, does not answer a carried finding", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: BEFORE,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
+      }),
+    ).toBe(false);
+  });
+
+  test("a posted-head reply with an unknown time or an unknown verdict time fails closed", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: undefined,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
+      }),
+    ).toBe(false);
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: AFTER,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: null,
+      }),
+    ).toBe(false);
+  });
+
+  test("a reply at the posted head answers it when the pull request has no summary", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: BEFORE,
+        findingHead: POSTED,
+        reviewedHead: null,
+        verdictAt: null,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at a head that is neither the posted nor the reviewed one never answers", () => {
+    for (const reviewedHead of [REVIEWED, null]) {
+      expect(
+        replyAnswersReview({
+          replyHead: OTHER,
+          replyCreatedAt: AFTER,
+          findingHead: POSTED,
+          reviewedHead,
+          verdictAt: VERDICT,
+        }),
+      ).toBe(false);
+    }
   });
 });

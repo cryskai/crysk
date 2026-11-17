@@ -3,7 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runTriageReplyCommand, triageCommand } from "#commands/triage";
-import { findingMarker } from "#pr/preflight";
+import { answeredBlockingFindings } from "#pr/answered-findings";
+import { buildPrStatus } from "#pr/pr-status";
+import {
+  COMMIT_STATUS_CONTEXT,
+  type CommitStatusFact,
+  findingMarker,
+} from "#pr/preflight";
 import { renderStateBlock, stateFinding } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
@@ -345,6 +351,75 @@ function greptileCollisionScript(input?: {
       },
     },
   ];
+}
+
+// A PR whose finding comment was posted by an earlier review: the summary is written for
+// summaryHead (HEAD by default), the finding comment still carries commentHead (RUN_HEAD by
+// default), and extraReviewComments are further review comments on the PR.
+function carriedScript(
+  extraReviewComments: unknown[] = [],
+  options: { summaryHead?: string; commentHead?: string } = {},
+): ScriptEntry[] {
+  const summaryHead = options.summaryHead ?? HEAD;
+  const commentHead = options.commentHead ?? RUN_HEAD;
+  const script = greptileCollisionScript();
+  const summaryBody = [
+    `<!-- pr-hero-report head=${summaryHead} -->`,
+    "",
+    renderStateBlock(
+      summaryHead,
+      [
+        stateFinding({
+          id: "R001",
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: [`${F001_PATH}:144`],
+          claim: F001_CLAIM,
+        }),
+      ],
+      undefined,
+      1,
+    ),
+  ].join("\n");
+  script[0] = {
+    match: ["issues/42/comments", "--paginate"],
+    response: {
+      stdout: ndjson([{ id: 5, user: "pr-hero", body: summaryBody }]),
+    },
+  };
+  script[1] = {
+    match: ["pulls/42/comments", "--paginate"],
+    response: {
+      stdout: ndjson([
+        {
+          id: 11,
+          user: "greptile-apps",
+          body: "same line, not ours",
+          path: F001_PATH,
+          line: 144,
+          original_line: 144,
+          in_reply_to_id: null,
+        },
+        {
+          id: 22,
+          user: "pr-hero",
+          body: `${findingMarker({
+            path: F001_PATH,
+            line: 144,
+            headSha: commentHead,
+            claim: F001_CLAIM,
+          })}\n${F001_CLAIM}`,
+          path: F001_PATH,
+          line: 144,
+          original_line: 144,
+          in_reply_to_id: null,
+        },
+        ...extraReviewComments,
+      ]),
+    },
+  };
+  return script;
 }
 
 describe("runTriageReplyCommand", () => {
@@ -744,6 +819,37 @@ describe("runTriageReplyCommand", () => {
   });
 });
 
+describe("runTriageReplyCommand — a --from id whose finding was carried", () => {
+  test("a --from id whose finding was carried names the R### exit", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    try {
+      const { spawnFn } = makeFakeGh(
+        carriedScript([], { summaryHead: RUN_HEAD, commentHead: OLD_HEAD }),
+      );
+      const error = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      const message = (error as Error).message;
+      expect(message).toContain("no posted");
+      expect(message).toContain("without --from");
+      expect(message).toContain("crysk status --pr 42 --json");
+      expect(message).toContain("R001");
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
 describe("runTriageReplyCommand — anchor.patch is the anchoring diff", () => {
   test("reads anchor.patch when diff.patch is absent", async () => {
     const { dir, bodyFile, cleanup } = await writeReplyRunDir();
@@ -849,6 +955,104 @@ describe("runTriageReplyCommand — without a run directory", () => {
     }
   });
 
+  test("a finding carried from an earlier review is stamped with the reviewed head", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(carriedScript());
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const post = calls.find(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
+      );
+      expect(post?.argv.join(" ")).toContain("in_reply_to=22");
+      expect(post?.stdin).toContain(
+        `<!-- crysk-triage tag=applied head=${HEAD} actor=agent -->`,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a carried finding with a reply from the earlier review is answered again", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        carriedScript([
+          {
+            id: 23,
+            user: "dev",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: RUN_HEAD, actor: "agent" })}\n\nfirst round`,
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const post = calls.find(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
+      );
+      expect(post).toBeDefined();
+      expect(post?.stdin).toContain(`head=${HEAD}`);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a second reply to the same review is skipped", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        carriedScript([
+          {
+            id: 23,
+            user: "dev",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(
+        calls.some(
+          (call) =>
+            call.argv.includes("--method") &&
+            call.argv.join(" ").includes("pulls/42/comments"),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("an id the PR does not carry is refused, naming the PR", async () => {
     const { bodyFile, cleanup } = await bodyOnly();
     try {
@@ -872,5 +1076,146 @@ describe("runTriageReplyCommand — without a run directory", () => {
     } finally {
       await cleanup();
     }
+  });
+});
+
+describe("triage reply — the reply the driver posts is the one the gate counts", () => {
+  const VERDICT = "2026-10-30T10:00:00Z";
+  const BEFORE = "2026-10-30T09:00:00Z";
+  const AFTER = "2026-10-30T11:00:00Z";
+
+  const rows = (entry: ScriptEntry) =>
+    (entry.response?.stdout ?? "")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
+
+  function gateFor(
+    script: ScriptEntry[],
+    reviewedHead: string,
+    extraReviewComments: unknown[] = [],
+  ) {
+    return answeredBlockingFindings({
+      pr: 42,
+      reviewedHead,
+      issueComments: rows(script[0]),
+      reviewComments: [...rows(script[1]), ...extraReviewComments],
+      trustedActors: new Set(["pr-hero", "dev"]),
+      writers: new Map([["dev", true]]),
+      verdictAt: VERDICT,
+    });
+  }
+
+  // The stdin of the reply the driver POSTs, or undefined when it posts none.
+  async function driverReply(
+    script: ScriptEntry[],
+  ): Promise<string | undefined> {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-roundtrip-"));
+    try {
+      const bodyFile = path.join(dir, "body.md");
+      await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+      const { spawnFn, calls } = makeFakeGh(script);
+      await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      return calls.find(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
+      )?.stdin;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a finding posted on the reviewed head", async () => {
+    const script = carriedScript([], {
+      summaryHead: RUN_HEAD,
+      commentHead: RUN_HEAD,
+    });
+    expect(gateFor(script, RUN_HEAD)).toEqual({ blocking: 1, open: 1 });
+    const body = await driverReply(script);
+    expect(body).toBeDefined();
+    expect(
+      gateFor(script, RUN_HEAD, [
+        { id: 99, user: "dev", in_reply_to_id: 22, body, created_at: AFTER },
+      ]),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("a finding carried from an earlier review, never answered", async () => {
+    const script = carriedScript();
+    expect(gateFor(script, HEAD)).toEqual({ blocking: 1, open: 1 });
+    const body = await driverReply(script);
+    expect(body).toBeDefined();
+    expect(body).toContain(`head=${HEAD}`);
+    expect(
+      gateFor(script, HEAD, [
+        { id: 99, user: "dev", in_reply_to_id: 22, body, created_at: AFTER },
+      ]),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("a finding carried from an earlier review, already answered in that round", async () => {
+    const first = {
+      id: 23,
+      user: "dev",
+      in_reply_to_id: 22,
+      created_at: BEFORE,
+      body: `${triageMarker({ tag: "applied", headSha: RUN_HEAD, actor: "agent" })}\n\nfirst round`,
+    };
+    const script = carriedScript([first]);
+    expect(gateFor(script, HEAD)).toEqual({ blocking: 1, open: 1 });
+    const body = await driverReply(script);
+    expect(body).toBeDefined();
+    expect(body).toContain(`head=${HEAD}`);
+    expect(
+      gateFor(script, HEAD, [
+        { id: 99, user: "dev", in_reply_to_id: 22, body, created_at: AFTER },
+      ]),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("status tells the same story for the answered-earlier case", async () => {
+    const first = {
+      id: 23,
+      user: "dev",
+      in_reply_to_id: 22,
+      created_at: BEFORE,
+      body: `${triageMarker({ tag: "applied", headSha: RUN_HEAD, actor: "agent" })}\n\nfirst round`,
+    };
+    const script = carriedScript([first]);
+    const failingGate: CommitStatusFact = {
+      state: "failure",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: VERDICT,
+      description:
+        "crysk: 1 blocking finding(s) — fix and push, or /crysk override",
+      target_url: null,
+    };
+    const statusFor = (reviewComments: unknown[]) =>
+      buildPrStatus({
+        pr: 42,
+        head: HEAD,
+        nowMs: Date.parse(AFTER) + 60_000,
+        statuses: [failingGate],
+        issueComments: rows(script[0]),
+        reviewComments: [...rows(script[1]), ...reviewComments],
+      });
+
+    expect(statusFor([]).next_action).toBe("triage");
+    const body = await driverReply(script);
+    expect(body).toBeDefined();
+    expect(
+      statusFor([
+        { id: 99, user: "dev", in_reply_to_id: 22, body, created_at: AFTER },
+      ]).next_action,
+    ).toBe("fix");
   });
 });

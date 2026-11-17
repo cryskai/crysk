@@ -73,12 +73,13 @@ exactly two ways:
 attempt budget used up, `/crysk stop`, `once_per_pr`, a low-risk or below-threshold delta,
 `manual_only`) carries the last verdict. A carried red turns green, marked
 `fixes unverified`, on the next push when every blocking finding's newest reply, from your
-write-access account, is `applied` at the head it was posted on or a `dismissed` the adjudicator
-upheld. Nobody verifies those fixes, so `applied` must mean you fixed it and ran the tests. The
-gate reads the replies when the push arrives: **reply first, then push.** The exception: under the
-attempt budget used up or `manual_only`, no later push is reviewed on its own, so where the gate
-would turn green it holds the head `pending` instead ("crysk: waiting for a manual review"), and
-a maintainer decides between `/crysk review` and `/crysk override`.
+write-access account, is `applied` and answers the last review (it carries that review's head, as
+the driver writes it) or a `dismissed` the adjudicator upheld. Nobody verifies those fixes, so
+`applied` must mean you fixed it and ran the tests. The gate reads the replies when the push
+arrives: **reply first, then push.** The exception: under the attempt budget used up or
+`manual_only`, no later push is reviewed on its own, so where the gate would turn green it holds
+the head `pending` instead ("crysk: waiting for a manual review"), and a maintainer decides between
+`/crysk review` and `/crysk override`.
 
 **`/crysk override` is a maintainer's, and only for what answers cannot unlock.** Never post it,
 and never ask for it because the review budget ran out, except to answer a manual-review hold. Ask
@@ -183,9 +184,12 @@ done; exit 1
      2026-10-30 may also read "the automatic review budget for this PR is used up"; push the answered
      fixes instead, and the gate carries the verdict.) Check the forced-run bound below, comment
      `gh pr comment <n> --body "/crysk review"`, and immediately run step 0 with `--wait`.
-   - `triage`: a live blocking finding on this head has no triage reply at the head it was posted
-     on, or the gate is green and a finding posted on this head has no reply yet (advisory findings
-     need one too). Run the triage batch below (steps 1–6), which judges every finding, applies real fixes in the tree, posts all replies, and either pushes the fixes or triggers `recheck` before looping back to step 0 with `--wait`.
+   - `triage`: a live blocking finding on this head has no triage reply that answers this review (a
+     reply from an earlier review does not answer a finding that is still live), or the gate is green
+     and a finding posted on this head has no reply yet (advisory findings need one too). Run the
+     triage batch below (steps 1–6), which judges every finding, applies real fixes in the tree, posts
+     all replies, and either pushes the fixes or triggers `recheck` before looping back to step 0 with
+     `--wait`.
    - `fix`: a blocking finding is tagged `applied`, or a blocking finding has no comment thread
      (`comment_id` is null: a summary-only row, or one never posted inline). Commit and `git push` the fix, then immediately run step 0 with `--wait` so the next review verifies it. A thread-less finding cannot be answered with `triage reply`, so fix it or ask a maintainer for `/crysk override`.
    - `recheck`: blocking findings are answered `dismissed` (with no pending code fixes to push) and the CI adjudicator has not ruled on
@@ -241,9 +245,11 @@ current head:
    comment**. A leftover top-level issue comment with the same marker may still exist on
    an old PR (pre-W2); the driver still binds those by marker. A finding that appears
    only under `Comments Outside Diff` in the summary is not in this list — skip it.
-2. **Read the marker's `head=`.** This IS the budget unit — see "One adjudication per finding per
-   HEAD" below. If a triage reply already exists in this thread carrying the SAME head, skip it:
-   it is already answered for this code.
+2. **Read the reviewed head.** It is `report.head` in step 0's JSON: the head the summary was written
+   for. This IS the budget unit — see "One adjudication per finding per HEAD" below. If a triage
+   reply already exists in this thread carrying that head, skip it: this review is already
+   answered. A finding carried from an earlier review keeps that review's comment, so its own
+   marker shows an older `head=`, and a reply from that earlier round does not answer this one.
 3. **Judge the finding against the repository, then pick exactly one tag**: `applied`,
    `dismissed`, `deferred`, or `misclassified` (table below). The comment is a claim, not a
    task. You may reject it. Before touching code, replying, or applying fixes, evaluate whether the cluster of findings indicates a flawed integration or broken design (### C) rather than isolated defects — if so, halt the loop and report the diagnosis without posting replies or patching. When you confirm the defect is real, isolated, and in scope (`applied`), make the fix in the working tree now, sweep its class across the PR ("Fix the class, not the site" under `applied`), and run the relevant tests, before posting the `applied` reply; **do not `git push` until you have replied to every finding on this head** (step 6).
@@ -254,13 +260,14 @@ current head:
    file and run:
 
    ```bash
-   npx -y crysk@0.8.1 triage reply --pr <n> --from <run-dir> --finding F00N \
+   npx -y crysk@0.8.1 triage reply --pr <n> --finding R00N \
      --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
    ```
 
-   With no run directory on the machine (a CI review, a cloud agent), drop
-   `--from` and pass the `R###` id `crysk status --pr <n> --json` lists:
-   `triage reply --pr <n> --finding R00N ...`.
+   `R00N` is the finding's `id` in step 0's `findings[]`. It works for every posted finding,
+   including one carried from an earlier review. With the run directory on the machine (a local
+   review) you may pass `--from <run-dir> --finding F00N` instead, for a finding posted on this
+   head; for a carried finding the driver refuses and names the `R###` id to use.
 
    The driver resolves the parent from the posted `<!-- crysk-finding`
    marker (never a comment id, never the nearest line), prepends the triage
@@ -268,8 +275,8 @@ current head:
    transactionally in the canonical product store (`finding_triage` table in
    `~/.crysk/prhero.db`), and — when the parent is an inline review
    comment — resolves that review thread. If the driver says no posted marker
-   matches this `F00N`, the finding lives in the summary bucket (or was
-   never posted): stop. Do not fall back to `gh`. `applied` takes no
+   matches this `F00N`, follow its message: a carried finding is answered by the `R###` id it names.
+   If it names none, the finding lives in the summary bucket (or was never posted): stop. Do not fall back to `gh`. `applied` takes no
    `--verdict`. `dismissed` / `deferred` / `misclassified` require
    `--verdict` from the adjudicator. `--issue` is optional and only valid
    with `--tag deferred`.
@@ -305,12 +312,12 @@ adjudicator. When step 0 says `recheck`:
      now says `review`. Comment `/crysk review`, then run `npx -y crysk@0.8.1 status --pr <n> --wait --json`, and that review no longer counts the finding.
    - `rejected`: the finding stands. Re-read the adjudicator's evidence. Fix it, or, if you still hold
      it is wrong, ask a human (they may override). Do not re-post the same argument.
-   - `inconclusive`: the repository did not settle it either way. On the same head you cannot post
-     a stronger argument: the driver skips any second triage reply at a head that already has one
-     (`skip post: … already triaged at this head`), and the next recheck re-adjudicates your
+   - `inconclusive`: the repository did not settle it either way. On the same reviewed head you
+     cannot post a stronger argument: the driver skips a second triage reply to a review that already
+     has one (`skip post: … already triaged at this head`), and the next recheck re-adjudicates your
      original reply. Recheck once more; a second `inconclusive` on this head goes to a human. A
-     stronger argument needs a new head: after a push, reply `dismissed` again with the new
-     evidence, then recheck.
+     stronger argument needs a new review: after a push and its review, reply `dismissed` again with
+     the new evidence, then recheck.
    - No ruling at all after the run: the adjudicator step failed. Nothing was posted and the
      dismissal is still pending; recheck once more. A second recheck with no ruling goes to a
      human (see "Bound the forced runs" in step 0).
@@ -406,10 +413,11 @@ prose). The driver writes it on the marker; the escalation rule reads it back fr
 
 ## One adjudication per finding per HEAD
 
-This needs no new state. The finding's own marker already carries `head=<sha>`, so the bound is
-read directly off the posted comments — do not invent a separate tracking file or counter.
+This needs no new state. Each triage reply's marker carries the head of the review it answers
+(`report.head` when it was written), so the bound is read directly off the posted comments — do not
+invent a separate tracking file or counter.
 
-- Same head, already triaged → skip. Nothing changed, nothing to re-judge.
+- Same reviewed head, already triaged → skip. Nothing changed, nothing to re-judge.
 - Head changed AND the new commits touched this finding's lines → re-triage is legitimate; this is
   the one case that pays for another adjudicator run.
 - Head changed but did NOT touch those lines → the prior verdict stands; do not re-triage.
@@ -527,7 +535,7 @@ this PR. The engine typed it wrong, not the code.
   matching marker, stop.
 - `dismissed`, `deferred`, and `misclassified` without `--verdict` are malformed. `applied` WITH
   `--verdict` is equally malformed.
-- Never re-triage a finding whose head is unchanged since its last triage on this PR (the driver
+- Never re-triage a finding whose reviewed head is unchanged since its last triage on this PR (the driver
   skips a same-head re-post).
 - Never post `/crysk review` or `/crysk recheck` past the bound in step 0: count the ones already
   on the head (never from memory), six at most, and hand a repeated failure to a human sooner.

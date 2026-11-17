@@ -1378,6 +1378,9 @@ driver reads the finding off the pull request:
 crysk triage reply --pr <n> --finding R001 --tag applied --body-file reasoning.md
 ```
 
+A reply's marker carries the head of the review it answers (the summary's head), so a finding
+carried from an earlier review is answered with the same command after each review.
+
 A plain reply in the finding's thread that starts with `applied`, from someone with write access,
 also counts as `applied` for the gate. `dismissed`, `deferred` and `misclassified` need the driver.
 
@@ -1471,7 +1474,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   ],
   "unresolved_blocking": 1,
   "next_action": "triage",
-  "reason": "1 live blocking finding(s) on this head have no triage reply at the head they were posted on; triage them first."
+  "reason": "1 live blocking finding(s) on this head have no triage reply that answers this review; triage them first."
 }
 ```
 
@@ -1500,7 +1503,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
 | `review` | No `crysk` (or `pr-hero`) status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
 | `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. A green over answered findings no review verified (`crysk: N answered finding(s), fixes unverified`) is `done` too, and its reason says so. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. A finding that lives only in the summary comment (outside the diff, `comment_id: null`) has no thread a reply could land in, so it is never owed, but the reason counts it ("N finding(s) live only in the summary comment … read them there before merging"). |
-| `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
+| `triage` | The gate is red and a live blocking finding on this head has no triage reply that answers this review (a reply from an earlier review of a carried finding does not). Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
 | `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. When the red is carried (a review rule skipped the head), no review will run: the gate reads the replies on that push instead, and turns green marked unverified, or, under a used-up budget or `manual_only`, holds the head for a manual review. |
 | `recheck` | The gate is red and a live blocking inline finding is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |

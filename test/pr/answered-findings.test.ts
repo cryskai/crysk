@@ -10,6 +10,7 @@ import {
 import { findingMarker } from "#pr/preflight";
 import { renderStateBlock, stateFinding } from "#rereview/state";
 import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
+import { replyAnswersReview } from "#triage/reply";
 import { type TriageTag, triageMarker } from "#triage/triage";
 
 const REVIEWED = "1".repeat(40);
@@ -504,4 +505,160 @@ describe("answeredBlockingFindings: plain applied replies", () => {
       ]),
     ).toEqual([AUTHOR]);
   });
+});
+
+describe("answeredBlockingFindings — a reply stamped with the reviewed head", () => {
+  // The finding is carried from an older head; its comment keeps that head.
+  const carried = [finding(10, 10, CLAIM_A, OLD)];
+  const summaryRows = [{ id: "R001", loc: "src/a.ts:10", claim: CLAIM_A }];
+  const carriedRead = (
+    reviewComments: AnswerReviewComment[],
+    options: {
+      writers?: Record<string, boolean | null>;
+      verdictAt?: string | null;
+    } = {},
+  ) =>
+    read({
+      issueComments: [{ id: 1, user: BOT, body: summary(summaryRows) }],
+      reviewComments: [...carried, ...reviewComments],
+      ...options,
+    });
+
+  test("an applied reply stamped with the reviewed head answers a carried finding", () => {
+    expect(
+      carriedRead([reply(11, 10, "applied", { head: REVIEWED, at: BEFORE })]),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("with no time at all it still answers", () => {
+    expect(
+      carriedRead([reply(11, 10, "applied", { head: REVIEWED })], {
+        verdictAt: null,
+      }),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("a dismissal stamped with the reviewed head and upheld by CI answers it", () => {
+    expect(
+      carriedRead([
+        reply(11, 10, "dismissed", { head: REVIEWED }),
+        ruling(12, 10, 11, "upheld"),
+      ]),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("a dismissal stamped with the reviewed head and not ruled on stays open", () => {
+    expect(
+      carriedRead([reply(11, 10, "dismissed", { head: REVIEWED })]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a reply stamped with a head that is neither the posted nor the reviewed one stays open", () => {
+    expect(
+      carriedRead([
+        reply(11, 10, "applied", { head: "3".repeat(40), at: AFTER }),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an earlier-round reply followed by a reviewed-head reply: the newer one answers", () => {
+    expect(
+      carriedRead([
+        reply(11, 10, "applied", { head: OLD, at: BEFORE }),
+        reply(12, 10, "applied", { head: REVIEWED, at: AFTER }),
+      ]),
+    ).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("a reader's reply stamped with the reviewed head does not answer", () => {
+    expect(
+      carriedRead(
+        [reply(11, 10, "applied", { head: REVIEWED, user: STRANGER })],
+        { writers: { [AUTHOR]: true, [STRANGER]: false } },
+      ),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an applied reply in another finding's thread does not answer it", () => {
+    expect(
+      read({
+        reviewComments: [
+          finding(10, 10, CLAIM_A, OLD),
+          finding(20, 40, CLAIM_B, OLD),
+          reply(21, 20, "applied", { head: REVIEWED }),
+        ],
+      }),
+    ).toEqual({ blocking: 2, open: 1 });
+  });
+
+  test("a deferred reply stamped with the reviewed head stays open", () => {
+    expect(
+      carriedRead([reply(11, 10, "deferred", { head: REVIEWED })]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an applied reply followed by a newer unruled dismissal stays open", () => {
+    expect(
+      carriedRead([
+        reply(11, 10, "applied", { head: REVIEWED }),
+        reply(12, 10, "dismissed", { head: REVIEWED }),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a reply from a login whose permission was never read fails the whole read", () => {
+    expect(
+      carriedRead(
+        [reply(11, 10, "applied", { head: REVIEWED, user: STRANGER })],
+        { writers: { [AUTHOR]: true } },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("answeredBlockingFindings agrees with replyAnswersReview", () => {
+  const HEADS: Record<string, string> = {
+    [REVIEWED]: "REVIEWED",
+    [OLD]: "OLD",
+    ["3".repeat(40)]: "OTHER",
+  };
+  const POSTED_HEADS = [REVIEWED, OLD];
+  const REPLY_HEADS = [REVIEWED, OLD, "3".repeat(40)];
+  const REPLY_TIMES: (string | undefined)[] = [BEFORE, AFTER, undefined];
+  const timeLabel = (at: string | undefined) =>
+    at === BEFORE ? "BEFORE" : at === AFTER ? "AFTER" : "no-time";
+
+  for (const postedHead of POSTED_HEADS) {
+    for (const replyHead of REPLY_HEADS) {
+      for (const at of REPLY_TIMES) {
+        const name = `posted=${HEADS[postedHead]} reply=${HEADS[replyHead]} at=${timeLabel(at)}`;
+        test(name, () => {
+          const result = read({
+            issueComments: [
+              {
+                id: 1,
+                user: BOT,
+                body: summary([
+                  { id: "R001", loc: "src/a.ts:10", claim: CLAIM_A },
+                ]),
+              },
+            ],
+            reviewComments: [
+              finding(10, 10, CLAIM_A, postedHead),
+              reply(11, 10, "applied", { head: replyHead, at }),
+            ],
+          });
+          expect(result?.open === 0).toBe(
+            replyAnswersReview({
+              replyHead,
+              replyCreatedAt: at,
+              findingHead: postedHead,
+              reviewedHead: REVIEWED,
+              verdictAt: Date.parse(VERDICT_AT),
+            }),
+          );
+        });
+      }
+    }
+  }
 });
