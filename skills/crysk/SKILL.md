@@ -25,7 +25,7 @@ This skill holds the mental model and the traps, not the reference. Before actin
 - `crysk --help` — the installed version's real commands and flags.
 - The docs on GitHub (they are not shipped in the npm package): [README](https://github.com/cryskai/crysk/blob/main/README.md), [configuration.md](https://github.com/cryskai/crysk/blob/main/docs/configuration.md).
 
-If Crysk is not on `PATH`, run every command as `npx -y crysk@0.7.0 <command>` (Node is enough). An install from before the rename (the package used to be `pr-hero`) still answers to `pr-hero`; either command is the same program.
+If Crysk is not on `PATH`, run every command as `npx -y crysk@0.8.0 <command>` (Node is enough). An install from before the rename (the package used to be `pr-hero`) still answers to `pr-hero`; either command is the same program.
 
 ## Mental Model
 
