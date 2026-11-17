@@ -44,6 +44,7 @@ import {
   type CliOptions,
   isCiEnvironment,
   type NumstatFile,
+  resolveMaterialityGate,
 } from "#review/preflight";
 import type { ParsedAgent, PromptSetIdentity } from "#review/prompt-set";
 import { buildCliRoutePlan, isBundledAgentsDir } from "#review/route-preflight";
@@ -229,6 +230,11 @@ export async function resolvePrPromptSetAndBudget(params: {
     models: params.config.models,
     summary: params.summary,
     profile: params.profile,
+    // The judge step joins the run when the gate is on (plan.ts), so the plan
+    // that decides how the run bills must have it too (#551 R002). On, whatever
+    // a re-review later skips: counting a judge that may not run is the
+    // conservative side.
+    materialityEnabled: resolveMaterialityGate(params.config),
   });
   const claudeEnv = params.claudeRun?.env ?? process.env;
   const authFilePresent = existsSync(resolveOpenCodeAuthPath());

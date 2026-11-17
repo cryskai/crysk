@@ -293,6 +293,40 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     expect(step2.ciRoleBilling?.get("summary")).toBe(false);
   });
 
+  // #551 R002: with the materiality gate on the run has a judge step, so the
+  // billing plan must have it too; on a Claude API key the judge bills one, and
+  // a map without it could read all-false and let API spend past the limits.
+  test("S17: with the materiality gate on, the judge is a role and bills the Claude API key", async () => {
+    const repo = path.join(dir, "repo");
+    mkdirSync(path.join(dir, "home", ".crysk"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "home", ".crysk", "config.json"),
+      JSON.stringify({ materiality_gate: true }),
+    );
+    const { options } = parseArgs(["review", "--pr", "1", "--ci"]);
+    const { loaded, config, summary, profile } = await loadRunConfig({
+      root: repo,
+      home: path.join(dir, "home"),
+      configFlag: undefined,
+      options,
+    });
+    const step2 = await resolvePrPromptSetAndBudget({
+      options,
+      loaded,
+      config,
+      summary,
+      profile,
+      isCi: true,
+      operatorRoot: repo,
+      claudeRun: resolveRunClaudeCredential({
+        credentials: undefined,
+        env: { ANTHROPIC_API_KEY: "sk-test" },
+        loginPresent: false,
+      }),
+    });
+    expect(step2.ciRoleBilling?.get("judge")).toBe(true);
+  });
+
   test("S5: both Claude credentials, credentials.claude [api_key, subscription]: the key makes the run metered", async () => {
     const step2 = await step2With(["api_key", "subscription"]);
     expect(step2.ciBillingMode).toBe("metered");
