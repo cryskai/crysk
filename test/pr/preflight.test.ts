@@ -1289,7 +1289,7 @@ describe("blockingCommitStatusRequest", () => {
       state: "failure",
       context: COMMIT_STATUS_CONTEXT,
       description:
-        "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
+        "crysk: 2 blocking finding(s) — fix and push, or /crysk override",
       targetUrl: gateTargetUrl,
     });
     expect(request.description.length).toBeLessThanOrEqual(
@@ -1299,7 +1299,7 @@ describe("blockingCommitStatusRequest", () => {
 });
 
 describe("skipCommitStatusRequest (S4 size and budget skips)", () => {
-  test("a size skip is failure and says the review was skipped and /pr-hero review reviews it anyway", () => {
+  test("a size skip is failure and says the review was skipped and /crysk review reviews it anyway", () => {
     const request = skipCommitStatusRequest({
       kind: "size",
       targetUrl: gateTargetUrl,
@@ -1309,7 +1309,7 @@ describe("skipCommitStatusRequest (S4 size and budget skips)", () => {
     expect(request.context).toBe(COMMIT_STATUS_CONTEXT);
     expect(request.description).toContain("skipped");
     expect(request.description).toContain("size gate");
-    expect(request.description).toContain("/pr-hero review reviews it anyway");
+    expect(request.description).toContain("/crysk review reviews it anyway");
     expect(request.description.length).toBeLessThanOrEqual(
       COMMIT_STATUS_DESCRIPTION_MAX,
     );
@@ -1324,7 +1324,7 @@ describe("skipCommitStatusRequest (S4 size and budget skips)", () => {
     expect(request.state).toBe("failure");
     expect(request.description).toContain("skipped");
     expect(request.description).toContain("CI budget");
-    expect(request.description).toContain("/pr-hero review reviews it anyway");
+    expect(request.description).toContain("/crysk review reviews it anyway");
     expect(request.description.length).toBeLessThanOrEqual(
       COMMIT_STATUS_DESCRIPTION_MAX,
     );
@@ -1544,7 +1544,7 @@ describe("one gate over two names (crysk and the legacy pr-hero)", () => {
       expect(text.length).toBeLessThanOrEqual(COMMIT_STATUS_DESCRIPTION_MAX);
     }
     expect(texts[1]).toBe(
-      "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      "crysk: 2 blocking finding(s) — fix and push, or /crysk override",
     );
   });
 });
@@ -1758,7 +1758,7 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
 
   test("the exact partial text names N of M, the failed set, and the retry", () => {
     expect(partialReviewDescription(1, 4, "938084")).toBe(
-      "crysk: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it",
+      "crysk: review partial (1 of 4 hunters failed, set 938084) — /crysk review retries it",
     );
   });
 
@@ -1830,14 +1830,14 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
 describe("partialReviewAgainDescription — a repeated partial review (W3-PARTIAL S1)", () => {
   test("the repeat text names the counts and the unlock", () => {
     expect(partialReviewAgainDescription(1, 4)).toBe(
-      "crysk: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override",
+      "crysk: review partial again (1 of 4 hunters failed) — fix the failing route or /crysk override",
     );
   });
 
   test("three-digit counts stay within the 140-character status description limit", () => {
     const text = partialReviewAgainDescription(999, 999);
     expect(text).toBe(
-      "crysk: review partial again (999 of 999 hunters failed) — fix the failing route or /pr-hero override",
+      "crysk: review partial again (999 of 999 hunters failed) — fix the failing route or /crysk override",
     );
     expect(text.length).toBeLessThanOrEqual(140);
   });
@@ -1845,14 +1845,14 @@ describe("partialReviewAgainDescription — a repeated partial review (W3-PARTIA
   test("the set key fits: the longest realistic counts with a key stay within 140 characters (W4-R363 S1)", () => {
     const text = partialReviewAgainDescription(12, 12, "938084");
     expect(text).toBe(
-      "crysk: review partial again (12 of 12 hunters failed, set 938084) — fix the failing route or /pr-hero override",
+      "crysk: review partial again (12 of 12 hunters failed, set 938084) — fix the failing route or /crysk override",
     );
     expect(text.length).toBeLessThanOrEqual(140);
   });
 
   test("the first partial text stays byte-identical (S3)", () => {
     expect(partialReviewDescription(1, 4)).toBe(
-      "crysk: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+      "crysk: review partial (1 of 4 hunters failed) — /crysk review retries it",
     );
   });
 });

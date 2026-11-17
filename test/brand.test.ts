@@ -9,7 +9,6 @@ import {
   isLegacyStatusContext,
   isStatusContext,
   LOCAL_STATUS_CONTEXT,
-  legacyCommand,
   MARKER_BRAND_PATTERN,
   matchMarkerPrefix,
   readBrandEnv,
@@ -126,16 +125,25 @@ describe("comment markers read both names", () => {
   });
 });
 
-describe("PR commands accept both names", () => {
+// The legacy `/pr-hero` spelling stopped being a command on 2026-11-17: only `/crysk` is accepted.
+describe("PR commands accept only the /crysk name", () => {
   test("isCommand matches the written form exactly after trimming", () => {
     expect(isCommand("/crysk review", "/crysk review")).toBe(true);
     expect(isCommand("  /crysk review\n", "/crysk review")).toBe(true);
   });
 
-  test("isCommand also matches the legacy /pr-hero form", () => {
-    expect(isCommand("/pr-hero review --full", "/crysk review --full")).toBe(
-      true,
-    );
+  test("the legacy /pr-hero form is no longer a command", () => {
+    for (const command of [
+      "/crysk review",
+      "/crysk review --full",
+      "/crysk recheck",
+      "/crysk override",
+      "/crysk stop",
+    ]) {
+      const legacy = command.replace("/crysk", "/pr-hero");
+      expect(isCommand(legacy, command)).toBe(false);
+      expect(startsWithCommand(`${legacy} please`, command)).toBe(false);
+    }
   });
 
   test("isCommand is not loose: no extra words, case, or mixed names", () => {
@@ -151,11 +159,11 @@ describe("PR commands accept both names", () => {
     }
   });
 
-  test("startsWithCommand matches either name at the start of the trimmed text", () => {
+  test("startsWithCommand matches the command at the start of the trimmed text", () => {
     expect(startsWithCommand("/crysk review please", "/crysk review")).toBe(
       true,
     );
-    expect(startsWithCommand(" /pr-hero review please", "/crysk review")).toBe(
+    expect(startsWithCommand(" /crysk review please", "/crysk review")).toBe(
       true,
     );
     expect(startsWithCommand("please /crysk review", "/crysk review")).toBe(
@@ -163,27 +171,17 @@ describe("PR commands accept both names", () => {
     );
   });
 
-  test("a command that is not written in the new form is a bug", () => {
+  test("a command that is not written in the /crysk form is a bug", () => {
     expect(() => isCommand("/pr-hero review", "/pr-hero review")).toThrow(
       "not a crysk command",
     );
   });
 });
 
-describe("command hints name a spelling every workflow accepts", () => {
-  test("legacyCommand is the /pr-hero form", () => {
-    expect(legacyCommand("/crysk review --full")).toBe(
-      "/pr-hero review --full",
-    );
-  });
-
-  test("commandHint names both forms, quoted or plain", () => {
-    expect(commandHint("/crysk recheck")).toBe(
-      "`/crysk recheck` (or `/pr-hero recheck` on a workflow set up before the rename)",
-    );
-    expect(commandHint("/crysk recheck", "")).toBe(
-      "/crysk recheck (or /pr-hero recheck on a workflow set up before the rename)",
-    );
+describe("command hints name the one command", () => {
+  test("commandHint names the /crysk form, quoted or plain", () => {
+    expect(commandHint("/crysk recheck")).toBe("`/crysk recheck`");
+    expect(commandHint("/crysk recheck", "")).toBe("/crysk recheck");
   });
 });
 

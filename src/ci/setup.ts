@@ -405,24 +405,19 @@ export function generateCiWorkflowTemplate(
 
 `
     : "";
-  // One clause per command and per name, new name first: an Actions expression
-  // has no regex, so the legacy /pr-hero forms are listed beside /crysk ones.
+  // One clause per command form: an Actions expression has no regex.
   const commandBodies = [
     REVIEW_COMMAND,
     RECHECK_COMMAND,
     OVERRIDE_COMMAND,
   ].flatMap(commandForms);
-  const newNamesFirst = [
-    ...commandBodies.filter((c) => c.startsWith("/crysk")),
-    ...commandBodies.filter((c) => !c.startsWith("/crysk")),
-  ];
-  const ifCommentClauses = newNamesFirst
+  const ifCommentClauses = commandBodies
     .map(
       (c) =>
         `(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '${c}'))`,
     )
     .join(" ||\n      ");
-  const groupCommentClauses = newNamesFirst
+  const groupCommentClauses = commandBodies
     .map(
       (c) =>
         `(startsWith(github.event.comment.body, '${c}') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))`,
@@ -451,8 +446,7 @@ export function generateCiWorkflowTemplate(
 # no cost, and records who did it. A comment that is exactly
 # \`/crysk recheck\` reviews the head and asks the CI adjudicator to rule on
 # pending dismissals of blocking findings. The action parses the comment and
-# refuses a commenter without write access. The older \`/pr-hero ...\` forms
-# of these commands still work for one version.
+# refuses a commenter without write access.
 name: Crysk Review
 
 on:
@@ -491,8 +485,7 @@ jobs:
     # fork's head.
     #
     # A comment starts the job only when it BEGINS with \`/crysk review\`,
-    # \`/crysk recheck\` or \`/crysk override\` (or the older \`/pr-hero\` forms
-    # of the three). The action then requires an exact match after
+    # \`/crysk recheck\` or \`/crysk override\`. The action then requires an exact match after
     # trimming, so a near-miss such as "/crysk review please" starts a job the
     # action ends without reviewing or overriding.
     if: >-
@@ -512,7 +505,7 @@ jobs:
     #
     # GitHub keeps one PENDING run per group, and a newer run replaces it. So
     # a comment enters the pull request's group only when it starts with
-    # /crysk review, /crysk recheck or /crysk override (or the older /pr-hero forms), and GitHub associates its author
+    # /crysk review, /crysk recheck or /crysk override, and GitHub associates its author
     # with the repository as OWNER, MEMBER or COLLABORATOR; every other comment
     # gets its own group. Without that, anyone who can comment could replace a
     # maintainer's queued review with a run the action then refuses. The job

@@ -17,7 +17,6 @@ import type { LocalConfig } from "#review/preflight";
 import {
   findMarker,
   isCommand,
-  legacyCommand,
   MARKER_BRAND_PATTERN,
   MARKER_OPEN,
   matchMarkerPrefix,
@@ -801,7 +800,7 @@ export function ciReviewSkipDetail(
     case "stopped":
       // A status description has little room, so it names the one spelling
       // every workflow accepts during the rename.
-      return `a maintainer stopped automatic reviews; ${legacyCommand(REVIEW_COMMAND)} reviews this head`;
+      return `a maintainer stopped automatic reviews; ${REVIEW_COMMAND} reviews this head`;
   }
 }
 

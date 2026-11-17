@@ -210,7 +210,7 @@ describe("run: the scenarios against the fake repository", () => {
       "-R",
       SANDBOX_REPO,
       "--body",
-      "/pr-hero review",
+      "/crysk review",
     ]);
     // The comment's run is a list of issue_comment runs with no branch filter.
     const commentLists = h.ghCalls.filter(
@@ -967,7 +967,7 @@ describe("cleanup: a comment run the poll never sighted is still cancelled", () 
 // product's gate matrix (the minimum the scenarios rely on), so these prove the
 // runner's expectations and sequencing; the live scenarios prove the product.
 describe("run: the S4 gate verdicts against the fake repository", () => {
-  test("size-skip exits 0: an over-size PR is skipped with a failure status, and /pr-hero review reviews it", async () => {
+  test("size-skip exits 0: an over-size PR is skipped with a failure status, and /crysk review reviews it", async () => {
     const world = new FakeGithub({ ref: REF });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["size-skip"], OPTIONS)).toBe(0);
@@ -1058,7 +1058,7 @@ describe("run: the S4 gate verdicts against the fake repository", () => {
 // on phase 1 having posted a blocking finding to carry, so the scenario skips
 // that assertion, and says so, when the free model finds nothing blocking.
 describe("same-head-rereview: the status check after a re-run depends on phase 1", () => {
-  test("a blocking finding on phase 1 is still failure after /pr-hero review on the same head", async () => {
+  test("a blocking finding on phase 1 is still failure after /crysk review on the same head", async () => {
     const world = new FakeGithub({ ref: REF, blockingFindings: true });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["same-head-rereview"], OPTIONS)).toBe(0);

@@ -273,7 +273,7 @@ describe("classifyPath", () => {
       status: {
         state: "failure",
         description:
-          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
       },
     });
     expect(classifyPath(obs)).toBe("reviewed");
@@ -323,7 +323,7 @@ describe("classifyPath", () => {
       status: {
         state: "failure",
         description:
-          "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+          "pr-hero skipped the review: diff over the size gate. /crysk review reviews it anyway",
       },
     });
     expect(classifyPath(obs)).toBe("skipped:size");

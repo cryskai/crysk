@@ -1467,12 +1467,12 @@ describe("stopCommandsNewestFirst", () => {
   test("lists exact stop, review and recheck commands newest first", () => {
     expect(
       stopCommandsNewestFirst([
-        c("old", "/pr-hero stop"),
-        c("maint", "/pr-hero review --full"),
-        c("a", "  /pr-hero stop\n"),
-        c("b", "/pr-hero recheck"),
+        c("old", "/crysk stop"),
+        c("maint", "/crysk review --full"),
+        c("a", "  /crysk stop\n"),
+        c("b", "/crysk recheck"),
         c("x", "looks good"),
-        c("y", "/pr-hero override"),
+        c("y", "/crysk override"),
       ]),
     ).toEqual([
       { user: "b", kind: "lift" },
@@ -1485,7 +1485,7 @@ describe("stopCommandsNewestFirst", () => {
   test("lists the /crysk spellings too, mixed with the legacy ones", () => {
     expect(
       stopCommandsNewestFirst([
-        c("old", "/pr-hero stop"),
+        c("old", "/crysk stop"),
         c("maint", "/crysk review --full"),
         c("a", "  /crysk stop\n"),
         c("b", "/crysk recheck"),
@@ -1503,9 +1503,9 @@ describe("stopCommandsNewestFirst", () => {
     expect(
       stopCommandsNewestFirst([
         c("z", "/crysk stop please"),
-        c("a", "/pr-hero stop please"),
+        c("a", "/crysk stop please"),
         c("b", "/pr-hero  stop"),
-        c("", "/pr-hero stop"),
+        c("", "/crysk stop"),
       ]),
     ).toEqual([]);
   });

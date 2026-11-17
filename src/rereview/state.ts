@@ -511,7 +511,7 @@ export function assembleLive(input: {
 // matching is a 5-line window, so a different issue can sit there, and the
 // gate fails closed.
 // A real fix leaves the count when the re-review VERIFIES it gone, and
-// `/pr-hero override` covers a team that accepts the finding.
+// `/crysk override` covers a team that accepts the finding.
 // A self-asserted triage tag never leaves the count (S7). `misclassified`
 // lands as `re-tiered` (classifyPrior), and its tier is the author's claim,
 // not the pipeline's, so it is not evidence. A dismissal the adjudicator upheld

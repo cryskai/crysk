@@ -58,10 +58,10 @@ function gate(
 }
 
 const BLOCKING_DESCRIPTION = (n: number) =>
-  `pr-hero: ${n} blocking finding(s) — fix and push, or /pr-hero override`;
+  `pr-hero: ${n} blocking finding(s) — fix and push, or /crysk override`;
 const OVERRIDE_DESCRIPTION = `${OVERRIDE_DESCRIPTION_PREFIX}maintainer — no review on this head`;
 const SKIP_DESCRIPTION =
-  "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway";
+  "pr-hero skipped the review: diff over the size gate. /crysk review reviews it anyway";
 
 // One pr-hero summary comment, its state block carrying `rows` (the live findings).
 function summary(
@@ -187,7 +187,7 @@ describe("buildPrStatus: next_action, first match wins", () => {
         statuses: [
           gate(
             "pending",
-            "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override",
+            "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /crysk review or /crysk override",
             5,
           ),
         ],
@@ -1103,9 +1103,9 @@ function issueReply(options: {
 // `done` whatever the findings say.
 describe("buildPrStatus: a red partial review is run again (S6)", () => {
   const PARTIAL =
-    "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
+    "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /crysk review retries it";
   const PARTIAL_CARRIED =
-    "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /pr-hero review retries it";
+    "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /crysk review retries it";
 
   test("a red gate that is a partial review is review, naming the partial review and the retry", () => {
     const status = buildPrStatus(
@@ -1113,7 +1113,7 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
     );
     expect(status.next_action).toBe("review");
     expect(status.reason).toBe(
-      "The last review of this head was partial (some reviewers failed); run /crysk review (or /pr-hero review on a workflow set up before the rename), which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
+      "The last review of this head was partial (some reviewers failed); run /crysk review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
     );
   });
 
@@ -1127,13 +1127,13 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
   // W3-PARTIAL F004: a retry already failed the same way, so the repeat form asks for a route fix or an override, not review.
   test("the repeat form of the partial review asks for a fix or an override", () => {
     const REPEAT =
-      "pr-hero: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /pr-hero override";
+      "pr-hero: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /crysk override";
     const status = buildPrStatus(
       input({ statuses: [gate("failure", REPEAT)] }),
     );
     expect(status.next_action).toBe("override-or-fix");
     expect(status.reason).toBe(
-      "The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /crysk override (or /pr-hero override on a workflow set up before the rename).",
+      "The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /crysk override.",
     );
   });
 
@@ -1144,7 +1144,7 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
         statuses: [
           gate(
             "failure",
-            "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+            "pr-hero: review partial (1 of 4 hunters failed) — /crysk review retries it",
           ),
         ],
       }),
@@ -1175,7 +1175,7 @@ describe("buildPrStatus: a partial review of this head is run again", () => {
     );
     expect(status.next_action).toBe("review");
     expect(status.reason).toBe(
-      "The last review of this head was partial (some reviewers failed); run /crysk review (or /pr-hero review on a workflow set up before the rename).",
+      "The last review of this head was partial (some reviewers failed); run /crysk review.",
     );
   });
 
@@ -1778,9 +1778,9 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
 describe("buildPrStatus: a live blocking row with no comment thread", () => {
   const CLAIM_TWO = "a second claim that only the state block carries";
   const BUDGET_DESCRIPTION =
-    "pr-hero: review budget for this PR is used up — /pr-hero review reviews this head";
+    "pr-hero: review budget for this PR is used up — /crysk review reviews this head";
   const MANUAL_DESCRIPTION =
-    "pr-hero: review needs a manual trigger (ci_review_policy is manual_only) — /pr-hero review reviews this head";
+    "pr-hero: review needs a manual trigger (ci_review_policy is manual_only) — /crysk review reviews this head";
 
   test("(a) a state row with no comment behind a red gate is a finding with no thread, and it is fixed", () => {
     const status = buildPrStatus(
@@ -1813,7 +1813,7 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
     expect(status.unresolved_blocking).toBe(1);
     expect(status.next_action).toBe("fix");
     expect(status.reason).toBe(
-      "1 live blocking finding(s) (R001) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /crysk override (or /pr-hero override on a workflow set up before the rename).",
+      "1 live blocking finding(s) (R001) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /crysk override.",
     );
   });
 
@@ -1923,7 +1923,7 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
         statuses: [
           gate(
             "failure",
-            "pr-hero skipped the review: the diff is over the size gate — /pr-hero review reviews it anyway",
+            "pr-hero skipped the review: the diff is over the size gate — /crysk review reviews it anyway",
           ),
         ],
         issueComments: [
@@ -2086,7 +2086,7 @@ describe("shouldWaitPrStatus", () => {
     ).toBe(false);
   });
 
-  test("waits when a /pr-hero review or /pr-hero recheck comment is newer than gate.created_at and within startup grace", () => {
+  test("waits when a /crysk review or /crysk recheck comment is newer than gate.created_at and within startup grace", () => {
     const recentCommentIso = new Date(NOW - 10_000).toISOString();
     const status = buildPrStatus(
       input({
@@ -2097,7 +2097,7 @@ describe("shouldWaitPrStatus", () => {
       shouldWaitPrStatus({
         status,
         issueComments: [
-          { id: 10, body: "/pr-hero recheck", created_at: recentCommentIso },
+          { id: 10, body: "/crysk recheck", created_at: recentCommentIso },
         ],
         nowMs: NOW,
         elapsedMs: 0,
@@ -2109,7 +2109,7 @@ describe("shouldWaitPrStatus", () => {
         issueComments: [
           {
             id: 11,
-            body: "/pr-hero review --full",
+            body: "/crysk review --full",
             created_at: recentCommentIso,
           },
         ],
@@ -2158,7 +2158,7 @@ describe("shouldWaitPrStatus", () => {
       shouldWaitPrStatus({
         status,
         issueComments: [
-          { id: 10, body: "/pr-hero review", created_at: olderCommentIso },
+          { id: 10, body: "/crysk review", created_at: olderCommentIso },
         ],
         nowMs: NOW,
         elapsedMs: 0,
@@ -2173,7 +2173,7 @@ describe("shouldWaitPrStatus", () => {
       shouldWaitPrStatus({
         status: oldGateStatus,
         issueComments: [
-          { id: 12, body: "/pr-hero recheck", created_at: expiredCommentIso },
+          { id: 12, body: "/crysk recheck", created_at: expiredCommentIso },
         ],
         nowMs: NOW,
         elapsedMs: 0,
@@ -2294,11 +2294,11 @@ describe("buildPrStatus: the gate over two names", () => {
   test.each([
     [
       "crysk",
-      "crysk skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+      "crysk skipped the review: diff over the size gate. /crysk review reviews it anyway",
     ],
     [
       "pr-hero",
-      "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+      "pr-hero skipped the review: diff over the size gate. /crysk review reviews it anyway",
     ],
   ])("a red %s skip gate is override-or-fix", (context, text) => {
     const status = buildPrStatus(
@@ -2310,11 +2310,11 @@ describe("buildPrStatus: the gate over two names", () => {
   test.each([
     [
       "crysk",
-      "crysk: review budget for this PR is used up — /pr-hero review reviews this head",
+      "crysk: review budget for this PR is used up — /crysk review reviews this head",
     ],
     [
       "pr-hero",
-      "pr-hero: review budget for this PR is used up — /pr-hero review reviews this head",
+      "pr-hero: review budget for this PR is used up — /crysk review reviews this head",
     ],
   ])("a red %s budget gate asks for a review", (context, text) => {
     const status = buildPrStatus(
@@ -2365,7 +2365,7 @@ describe("buildPrStatus: a head a review rule skipped", () => {
   test.each([
     [
       "a carried red",
-      "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+      "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /crysk override",
       "Every live blocking finding is answered",
     ],
     [
@@ -2376,7 +2376,7 @@ describe("buildPrStatus: a head a review rule skipped", () => {
     // PR #442 F (advisory): a carried partial red is never unlocked by replies, so no unlock promise.
     [
       "a carried partial red",
-      "crysk: review partial (1 of 4 hunters failed) carried from 1111111 — /pr-hero review retries it",
+      "crysk: review partial (1 of 4 hunters failed) carried from 1111111 — /crysk review retries it",
       "the next review verifies it",
     ],
   ])(
@@ -2405,7 +2405,7 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         statuses: [
           gate(
             "failure",
-            "crysk: 2 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+            "crysk: 2 blocking finding(s) carried from 1111111 — fix and push, or /crysk override",
           ),
         ],
         reviewComments: [
@@ -2428,7 +2428,7 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         statuses: [
           gate(
             "failure",
-            "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+            "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /crysk override",
           ),
         ],
         reviewComments: [
@@ -2459,7 +2459,7 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         statuses: [
           gate(
             "failure",
-            "crysk: 2 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+            "crysk: 2 blocking finding(s) carried from 1111111 — fix and push, or /crysk override",
           ),
         ],
         reviewComments: [

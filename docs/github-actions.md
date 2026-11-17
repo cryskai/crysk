@@ -83,17 +83,14 @@ permissions:
 
 jobs:
   review:
-    # Same-repo pushes, and comments that start with `/crysk review`, `/crysk recheck` or `/crysk override` (the older `/pr-hero` spellings still work). Never reads secrets.
+    # Same-repo pushes, and comments that start with `/crysk review`, `/crysk recheck` or `/crysk override`. Never reads secrets.
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/crysk review')) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/crysk recheck')) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/crysk override')) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/crysk override'))
     concurrency:
-      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/crysk review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/crysk recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/crysk override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/crysk review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/crysk recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/crysk override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -175,7 +172,7 @@ model credential, the pull request number or head cannot be resolved, the commen
 cannot be verified, or an install step fails before Crysk starts, Crysk posts one `crysk`
 commit status (`error`) and one comment on the pull request. A review that starts and then fails also
 does, when the CLI reports an error or every review hunter fails; if the CLI takes the review's lock and then
-stops before it reports an outcome, Crysk posts the comment, and its `error` status on the head that lock is on, when that head's `crysk` status is still `pending` or cannot be read. A review cancelled mid-review sets `error` `CRYSK-CANCELLED: not reviewed — /pr-hero review reviews this head` on its head, so a cancelled gate never stays pending. The `pending` status names its run: in Actions it links to that run's attempt, so the status's link opens the Actions run, and a cancel settles only the pending that names its own run. A `pending` from an older pr-hero, with no run link, is matched by its creation time instead. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
+stops before it reports an outcome, Crysk posts the comment, and its `error` status on the head that lock is on, when that head's `crysk` status is still `pending` or cannot be read. A review cancelled mid-review sets `error` `CRYSK-CANCELLED: not reviewed — /crysk review reviews this head` on its head, so a cancelled gate never stays pending. The `pending` status names its run: in Actions it links to that run's attempt, so the status's link opens the Actions run, and a cancel settles only the pending that names its own run. A `pending` from an older pr-hero, with no run link, is matched by its creation time instead. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
 or unclassified) and the command that fixes it.
 A newer comment replaces the older one from the same author. Crysk removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/crysk review`
 comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or budget skip sets a `failure`
@@ -1153,13 +1150,13 @@ The table shows the status and the job exit for each case:
 
 | Cause | `gate` status | `advisory` status | Exit |
 |---|---|---|---|
-| Finished review with unresolved blocking findings (see below) | `failure`: `crysk: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0`, or `3` when a step also failed (the blocking count wins the status, not the exit) |
-| Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/crysk override`) | `failure`: `crysk: review partial (N of M hunters failed, set abc123) — /pr-hero review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `3` |
-| Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `crysk: review partial again (N of M hunters failed, set abc123) — fix the failing route or /pr-hero override` | `success` | `3` |
+| Finished review with unresolved blocking findings (see below) | `failure`: `crysk: N blocking finding(s) — fix and push, or /crysk override` | `success` | `0`, or `3` when a step also failed (the blocking count wins the status, not the exit) |
+| Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/crysk override`) | `failure`: `crysk: review partial (N of M hunters failed, set abc123) — /crysk review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `3` |
+| Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `crysk: review partial again (N of M hunters failed, set abc123) — fix the failing route or /crysk override` | `success` | `3` |
 | Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `1` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
-| Size or budget skip (`/crysk review` reviews it anyway) | `failure`: `crysk skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
-| Admission skip by any review rule: a low-risk or below-threshold delta, once per PR, a `/crysk stop`, the attempt budget used up (`ci_max_attempts`), or `manual_only` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; a carried blocking failure whose blocking findings are all answered becomes `success` `crysk: N answered finding(s), fixes unverified (<reason>); carried from <sha>` (see below); with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it`. Under the attempt budget used up or `manual_only`, either green is held instead: `pending` `crysk: waiting for a manual review (<reason>); carried from <sha> — /pr-hero review or /pr-hero override` (see below) | none | `0` |
+| Size or budget skip (`/crysk review` reviews it anyway) | `failure`: `crysk skipped the review: … /crysk review reviews it anyway` | none | `0` |
+| Admission skip by any review rule: a low-risk or below-threshold delta, once per PR, a `/crysk stop`, the attempt budget used up (`ci_max_attempts`), or `manual_only` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /crysk override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /crysk review retries it`; a carried blocking failure whose blocking findings are all answered becomes `success` `crysk: N answered finding(s), fixes unverified (<reason>); carried from <sha>` (see below); with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /crysk review reviews it`. Under the attempt budget used up or `manual_only`, either green is held instead: `pending` `crysk: waiting for a manual review (<reason>); carried from <sha> — /crysk review or /crysk override` (see below) | none | `0` |
 | Same head, already reviewed | none (that head's own status already exists) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
@@ -1212,7 +1209,7 @@ bug; that write can replace an override the run could not see. Advisory mode wri
 an automatic review, so a carried green would let code no review read merge: one measured pull request merged green
 over 11 commits no review saw. Where any other rule would write a green (a carried one, or answered findings
 unlocking a red), these two write `pending` `crysk: waiting for a manual review (<reason>); carried from <sha> —
-/pr-hero review or /pr-hero override`. A red still carries as a red. The hold is not a review in flight: no run
+/crysk review or /crysk override`. A red still carries as a red. The hold is not a review in flight: no run
 waits on it, the next skip follows it to the commit it names (so the walk's 20-commit cap restarts there instead of
 failing closed on a long held run), and `crysk status` answers `override-or-fix` on it, not
 `wait`. A `/crysk review` reviews the head (comment runs are outside the budget), and `/crysk override` merges it
@@ -1455,7 +1452,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   "schema": "pr-hero.status/v1",
   "pr": 12,
   "head": "<40-hex headRefOid>",
-  "gate": { "state": "failure", "description": "crysk: 1 blocking finding(s) — fix and push, or /pr-hero override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
+  "gate": { "state": "failure", "description": "crysk: 1 blocking finding(s) — fix and push, or /crysk override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
   "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null },
   "findings": [
     { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
@@ -1783,7 +1780,7 @@ Then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead. Its workflow is still named
+On a workflow set up before the rename, comment `/crysk review` instead. Its workflow is still named
 `pr-hero Review`. The artifact name comes from the action, so a run of this release uploads
 `crysk-run-<pr-number>-<head-sha>` and a run of an older action release `pr-hero-run-<pr-number>-<head-sha>`.
 
@@ -1816,7 +1813,7 @@ Then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 #### `oauth`
 
@@ -1836,7 +1833,7 @@ Then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 #### `opencode_api_key`
 
@@ -1858,7 +1855,7 @@ Then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 #### `opencode_oauth`
 
@@ -1887,7 +1884,7 @@ Then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 <a id="prh-model-unavailable"></a>
 
@@ -2271,7 +2268,7 @@ Wait, or raise the quota, then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 When every failed hunter ran out of quota (the Claude CLI reports an empty Anthropic credit balance, a spend limit and a subscription usage window this way), the run renders this code with the provider's own words in the sentence, so the commit status says which limit it was. These causes are not retried: a retry within minutes cannot succeed. The variants below pick the fix from the secret the hunters ran on. The provider's words come first in the sentence of every variant that quotes them, so the 140-character commit status keeps them (the reset time of a usage limit included) and the explanation after them is what gets clipped.
 
@@ -2297,7 +2294,7 @@ Then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 #### `subscription`
 
@@ -2313,7 +2310,7 @@ Re-run after the limit resets (the reset time is in the sentence above):
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 Or bill per token: set CRYSK_CLAUDE_API_KEY and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):
 
@@ -2337,7 +2334,7 @@ Wait for the limit to reset, or add credit or raise the quota on the provider ac
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 Or set a key from an account that has quota:
 
@@ -2361,7 +2358,7 @@ Re-run after the limit resets:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):
 
@@ -2405,7 +2402,7 @@ Ask for a new review once:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 If it repeats, report it.
 
@@ -2465,7 +2462,7 @@ Lower `max-changed-lines` in the workflow's `with:` block (or `max_changed_lines
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 <a id="prh-unclassified"></a>
 
@@ -2531,7 +2528,7 @@ Ask for a review of the current head:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/crysk review` instead.
 
 ## Troubleshooting
 

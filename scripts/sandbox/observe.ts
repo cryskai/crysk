@@ -421,7 +421,7 @@ export function classifyComment(
 // So on a comment-triggered phase it counts only when this run posted it: a
 // notice is created at or after the trigger (the same window the own-evidence
 // check uses). A notice an earlier run left behind is not this run's skip, and a
-// forced review of the same head (/pr-hero review after a size skip) decides
+// forced review of the same head (/crysk review after a size skip) decides
 // the path from its own report. A phase with no trigger has no window to test,
 // so every notice counts there, as it always has.
 // Exported for the override check: an override is this run's only when the run

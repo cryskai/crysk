@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The `/pr-hero` comment commands.** Only `/crysk review`, `/crysk review --full`, `/crysk recheck`,
+  `/crysk override` and `/crysk stop` start or steer a run now. A comment that starts with `/pr-hero` is
+  ignored like any other comment, the scaffolded workflow no longer lists the `/pr-hero` forms, and every
+  hint, commit status and skip comment names only the `/crysk` form (the status used to say
+  `/pr-hero override` while the comment said `/crysk override`).
+  **What to check:** (1) comment `/crysk …` instead of `/pr-hero …`; (2) a workflow set up before the rename
+  filters only `/pr-hero` in its `if:` and so starts on no command at all: re-scaffold it with
+  `npx -y crysk setup --ci` (it updates `pr-hero.yml` in place).
+
 - **The scout stage** (#545). The diff-only pre-hunter stage never earned its place and was off by default,
   so no review changes unless it asked for it. `--scout`, `--no-scout`, `--scout-model <model>`, the `scout`
   config key, the `models.scout` role and the action's `scout` input are still accepted and have no

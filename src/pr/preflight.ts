@@ -783,9 +783,9 @@ export function commitStatusRequest(input: {
 // S4, gate mode: a finished review with unresolved blocking findings. The count
 // is the gate's own (rereview/state.ts): this run's blocking survivors plus every
 // live blocking prior that a verifier verdict or a deletion did not clear. A
-// same-head `/pr-hero review` re-runs that same count, so it stays red. The
+// same-head `/crysk review` re-runs that same count, so it stays red. The
 // ways to green are a fix that the re-review verifies gone, or
-// `/pr-hero override`. A triage reply never lowers the count on its own (S7).
+// `/crysk override`. A triage reply never lowers the count on its own (S7).
 // Gate-only: the only caller is a gate-mode settle, which is always a `--ci` run.
 // The context defaults to LOCAL so a caller that forgets it cannot reach the
 // gate; the gate's callers pass COMMIT_STATUS_CONTEXT explicitly.
@@ -798,14 +798,14 @@ export function blockingCommitStatusRequest(input: {
     state: "failure",
     context: input.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
     description: clipStatusDescription(
-      `${STATUS_CONTEXT}: ${input.blockingCount} blocking finding(s) — fix and push, or /pr-hero override`,
+      `${STATUS_CONTEXT}: ${input.blockingCount} blocking finding(s) — fix and push, or /crysk override`,
     ),
     targetUrl: input.targetUrl,
   };
 }
 
 // S4, gate mode: a size or budget skip is red, so an unreviewed head cannot
-// read as a clean one. `/pr-hero review` force-runs the review past both
+// read as a clean one. `/crysk review` force-runs the review past both
 // gates, which is the unlock the description names.
 // Gate-only, like blockingCommitStatusRequest: the context defaults to LOCAL, and
 // the one production caller (the admission gate's publishCiSkip) passes the gate's context.
@@ -822,7 +822,7 @@ export function skipCommitStatusRequest(input: {
     state: "failure",
     context: input.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
     description: clipStatusDescription(
-      `${STATUS_CONTEXT} skipped the review: ${reason}. /pr-hero review reviews it anyway`,
+      `${STATUS_CONTEXT} skipped the review: ${reason}. /crysk review reviews it anyway`,
     ),
     targetUrl: input.targetUrl,
   };
@@ -907,7 +907,7 @@ function partialCountsSuffix(set: string | undefined): string {
 
 // S1, gate mode: a finished review where some hunters failed but not all, and no blocking
 // finding survived. The gate cannot call that green: a reviewer that never ran may have been
-// the one that would have blocked. `/pr-hero review` runs the head again, which is the unlock.
+// the one that would have blocked. `/crysk review` runs the head again, which is the unlock.
 // The variable parts are the failed count (N) and the hunters that ran (M).
 export function partialReviewDescription(
   failed: number,
@@ -915,7 +915,7 @@ export function partialReviewDescription(
   set?: string,
 ): string {
   return clipStatusDescription(
-    `${STATUS_CONTEXT}: review partial (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — /pr-hero review retries it`,
+    `${STATUS_CONTEXT}: review partial (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — /crysk review retries it`,
   );
 }
 
@@ -927,7 +927,7 @@ export function partialReviewAgainDescription(
   set?: string,
 ): string {
   return clipStatusDescription(
-    `${STATUS_CONTEXT}: review partial again (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — fix the failing route or /pr-hero override`,
+    `${STATUS_CONTEXT}: review partial again (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — fix the failing route or /crysk override`,
   );
 }
 
@@ -1042,7 +1042,7 @@ export function manualReviewHoldDescription(
   sha: string,
 ): string {
   return clipStatusDescription(
-    `${STATUS_CONTEXT}: waiting for a manual review (${label}); carried from ${sha.slice(0, 7)} — /pr-hero review or /pr-hero override`,
+    `${STATUS_CONTEXT}: waiting for a manual review (${label}); carried from ${sha.slice(0, 7)} — /crysk review or /crysk override`,
   );
 }
 

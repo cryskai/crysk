@@ -1173,7 +1173,7 @@ describe("Packaging & distribution configuration", () => {
 
     // ---------------------------------------------------------------------
     // The trigger step (odd/tasks/agent-first-ci.md, T1/S1): credential
-    // detection and the `/pr-hero review` comment command live in the
+    // detection and the `/crysk review` comment command live in the
     // action, so the calling workflow can be one short file.
     // ---------------------------------------------------------------------
 
@@ -1257,7 +1257,7 @@ describe("Packaging & distribution configuration", () => {
           event_name: "issue_comment",
           "event.issue.number": "21",
           "event.issue.pull_request.url": `https://api.github.com/repos/${REPOSITORY}/pulls/21`,
-          "event.comment.body": "/pr-hero review",
+          "event.comment.body": "/crysk review",
           "event.comment.user.login": "maintainer",
           "event.comment.id": "9001",
         },
@@ -1964,7 +1964,7 @@ describe("Packaging & distribution configuration", () => {
       expect(run.args).not.toContain("--force");
     });
 
-    test("a `/pr-hero review --full` comment from a writer passes --force and --full", async () => {
+    test("a `/crysk review --full` comment from a writer passes --force and --full", async () => {
       const gh: FakeGh = (args) => ({
         exitCode: 0,
         stdout: args[0] === "api" ? "write\n" : `${HEAD}\n`,
@@ -1977,7 +1977,7 @@ describe("Packaging & distribution configuration", () => {
           event_name: "issue_comment",
           "event.issue.number": "21",
           "event.issue.pull_request.url": `https://api.github.com/repos/${REPOSITORY}/pulls/21`,
-          "event.comment.body": "/pr-hero review --full",
+          "event.comment.body": "/crysk review --full",
           "event.comment.user.login": "maintainer",
         },
         gh,
@@ -2169,7 +2169,7 @@ describe("Packaging & distribution configuration", () => {
     });
   });
 
-  // The force workflow is retired: `/pr-hero review` on the pull request is
+  // The force workflow is retired: `/crysk review` on the pull request is
   // the forced run now, and crysk.yml listens for it. A committed or shipped
   // copy would be a second, drifting way to do the same thing, and nothing
   // generates it any more to keep it honest.
@@ -2396,7 +2396,7 @@ describe("/crysk recheck wiring", () => {
       const content = read(file);
       for (const [review, recheck] of [
         ["/crysk review", "/crysk recheck"],
-        ["/pr-hero review", "/pr-hero recheck"],
+        ["/crysk review", "/crysk recheck"],
       ] as const) {
         const reviewCount = content.split(clause(review)).length - 1;
         expect(reviewCount).toBeGreaterThan(0);

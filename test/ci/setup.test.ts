@@ -81,17 +81,10 @@ const own = () => generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
 // The exact job-level group and cancel rule. Spelled out in full because
 // every clause is load-bearing; see the template's own comments for why.
 const WRITER_ASSOCIATION = `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`;
-// T6 (S8): the group also admits `/pr-hero override` from the same associations, so
+// T6 (S8): the group also admits `/crysk override` from the same associations, so
 // an override queues behind an in-flight review and lands last.
-const GROUP_COMMANDS = [
-  "/crysk review",
-  "/crysk recheck",
-  "/crysk override",
-  "/pr-hero review",
-  "/pr-hero recheck",
-  "/pr-hero override",
-];
-// The new names come first; the legacy /pr-hero forms are still admitted for one version.
+const GROUP_COMMANDS = ["/crysk review", "/crysk recheck", "/crysk override"];
+// The legacy /pr-hero forms are no longer admitted (2026-11-17).
 const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || ${GROUP_COMMANDS.map((c) => `(startsWith(github.event.comment.body, '${c}') && ${WRITER_ASSOCIATION})`).join(" || ")}) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
 const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
 
@@ -113,7 +106,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     ]);
   });
 
-  // A `/pr-hero review` comment is how a person or an agent asks for a
+  // A `/crysk review` comment is how a person or an agent asks for a
   // review CI skipped. That used to be a second, dispatch-only workflow
   // (pr-hero-force.yml); one file now listens for both events, and the
   // action parses the comment and checks who wrote it.
@@ -129,7 +122,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   // so credential presence is the action's to detect, loudly, inside the
   // run. The `if` only routes events. Fork pull_request runs never receive
   // secrets, so they are skipped here; a maintainer's comment reviews them.
-  test("the review job skips fork pushes, starts only on a `/crysk` (or legacy `/pr-hero`) review, recheck or override comment, and never reads secrets", () => {
+  test("the review job skips fork pushes, starts only on a `/crysk` review, recheck or override comment (never the legacy `/pr-hero`), and never reads secrets", () => {
     const reviewIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
@@ -141,6 +134,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
         ).join(" || "),
     );
     expect(reviewIf).not.toContain("secrets.");
+    expect(reviewIf).not.toContain("/pr-hero");
   });
 
   // A workflow-level group keyed on `head_ref || ref` put every comment on
@@ -163,7 +157,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
 
   // GitHub keeps one PENDING run per group and a newer run replaces it, so
   // whoever can enter the pull request's group can cancel a maintainer's
-  // queued `/pr-hero review`. Only a comment from an associated author may;
+  // queued `/crysk review`. Only a comment from an associated author may;
   // the job `if:` stays association-free, so a writer GitHub reports under
   // another association still runs (the action checks the real permission),
   // in its own group.
@@ -177,7 +171,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       `(startsWith(github.event.comment.body, '/crysk review') && ${WRITER_ASSOCIATION})`,
     );
     expect(group).toContain(
-      `(startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION})`,
+      `(startsWith(github.event.comment.body, '/crysk review') && ${WRITER_ASSOCIATION})`,
     );
     expect(String(parsed.jobs.review?.if ?? "")).not.toContain(
       "author_association",
@@ -195,7 +189,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
           | undefined
       )?.group ?? "",
     );
-    for (const command of ["/crysk override", "/pr-hero override"]) {
+    for (const command of ["/crysk override", "/crysk override"]) {
       expect(group).toContain(
         `(startsWith(github.event.comment.body, '${command}') && ${WRITER_ASSOCIATION})`,
       );
@@ -212,7 +206,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
 
   // A copy-pasted docs workflow must admit the same comments the generator does. The
   // job `if:` is compared as parsed YAML, so the folded scalar's layout cannot hide a
-  // missing `/pr-hero override` clause.
+  // missing `/crysk override` clause.
   test("the docs' workflow snippet admits the same comments as the generator's job", () => {
     const docs = readFileSync(
       path.resolve(import.meta.dir, "../../docs/github-actions.md"),
@@ -226,7 +220,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const generatedIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
-    for (const command of ["/crysk override", "/pr-hero override"]) {
+    for (const command of ["/crysk override", "/crysk override"]) {
       expect(generatedIf).toContain(
         `startsWith(github.event.comment.body, '${command}')`,
       );
@@ -984,7 +978,7 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
 // learns how to force a review, and GitHub reads a comment-triggered workflow
 // from the DEFAULT branch. Committing the file to a feature branch and
 // commenting there starts nothing, silently, so the next steps must say where
-// the file has to land before `/pr-hero review` works.
+// the file has to land before `/crysk review` works.
 // The setup step's own exit path (odd/tasks/agent-first-ci.md, T2b / A1): a
 // malformed auth input is the user's configuration, so the step
 // leaves setup.json for the publisher. Spawned, like the empty-HOME test
@@ -2703,7 +2697,7 @@ describe("scaffold writes the gate mode explicitly (S4)", () => {
 describe("the scaffolded workflow accepts recheck beside review", () => {
   test.each([
     ["/crysk review", "/crysk recheck"],
-    ["/pr-hero review", "/pr-hero recheck"],
+    ["/crysk review", "/crysk recheck"],
   ])(
     "the if and concurrency clauses for %s are mirrored for %s",
     (review, recheck) => {
