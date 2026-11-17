@@ -161,6 +161,9 @@ interface CiSkipBudgetSummary {
   // Which platform limit was hit. The limits live in the Crysk dashboard
   // (Review > Limits); the summary names the limit, never a dollar figure.
   limit: PlatformLimitHit;
+  // The estimate compared was the API share of a mixed setup, not the whole
+  // estimate (S17).
+  apiShare?: true;
 }
 
 interface CiSkipExcludedSummary {
@@ -347,6 +350,13 @@ function skipBudgetLines(data: CiSkipBudgetSummary): string[] {
     `### ⚠️ Crysk Review Skipped — PR #${data.prNumber}`,
     "",
     `**Reason:** ${SKIP_BUDGET_REASON[data.limit]}`,
+    ...(data.apiShare === true
+      ? [
+          "",
+          "Only the part of the estimate that runs on an API key (its API " +
+            "share) was compared with the limit.",
+        ]
+      : []),
     "",
     "Crysk did not run to stay within the limits set in the Crysk dashboard " +
       "(Review > Limits).",

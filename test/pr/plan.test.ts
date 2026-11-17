@@ -127,6 +127,7 @@ describe("resolvePrPlanAndConfirm applies the platform limits", () => {
     expect(gate).toBeGreaterThan(-1);
     const call = body.slice(gate, body.indexOf("});", gate));
     expect(call).toMatch(/billingMode: params\.ciBillingMode/);
+    expect(call).toMatch(/roleBilling: params\.ciRoleBilling/);
     expect(call).toMatch(/limits: readPlatformLimits\(process\.env\)/);
     expect(call).toMatch(/force: params\.options\.force/);
   });

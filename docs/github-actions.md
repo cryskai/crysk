@@ -908,7 +908,7 @@ the platform's Review > Limits page), and prices every run from the usage facts 
 
 **What the engine still does with them.** At the token exchange the first connect step declares the `limits`
 capability (`X-Crysk-Capabilities: profile,limits`), and the platform answers with
-`{ "limits": { "review_usd"?, "month_left_usd"?, "estimate_usd"? } }`: the per-review limit in effect, what is
+`{ "limits": { "review_usd"?, "month_left_usd"?, "estimate_usd"?, "estimate_by_role_usd"? } }`: the per-review limit in effect, what is
 left of this organization's month limit after this calendar month's API spend (UTC), and the platform's
 estimate for this review. The field is absent when the dispatch was forced (`/crysk review`, a re-check) and
 for a platform that does not send it, and the connect step hands the validated numbers to the run step. The
@@ -919,6 +919,19 @@ over what is left of the month. The skip comment names the limit that was hit an
 setting; it prints no dollar figure. With no estimate and a month that still has money left the review runs:
 a model the platform cannot price is not capped per review. A run on a subscription, or on a free route, is
 never skipped for cost: only API spend counts toward the limits.
+
+**A review whose roles bill differently.** When the hunters run on a Claude subscription and the refuter,
+summary or consolidation on an API key, the whole estimate would count subscription roles against a dollar
+limit. The platform therefore also sends `"estimate_by_role_usd"` inside `limits`: the same estimate split per
+model role (`hunter.<specialty>`, `refuter`, `consolidate`, `summary`, `judge`; each value is a number of USD,
+rounded to 6 decimals). It is present only when the platform priced every line of the setup. When it is
+present and the run bills an API key on at least one role, the engine compares the **API share** with the
+per-review limit and with what is left of the month: the sum of the values for the roles it bills on an API
+key (a Claude role when the run's chosen Claude credential is an API key, an OpenCode role when its provider is
+bound to an API key, a role with a fallback on an API key included), plus every key it cannot map to one of
+its roles, which counts as API. Without the split the whole estimate is compared. The boundary is inclusive, a
+month used up still skips any run that bills an API key, and a run with no API-billed role is never skipped.
+The skip comment and the step summary say when the API share was compared; they print no dollar figure.
 
 How a run bills is decided by the run itself. A run uses one Claude credential, the first one in
 `credentials.claude` that is set (default `["subscription", "api_key"]`, see

@@ -203,6 +203,60 @@ describe("parsePlatformLimits", () => {
     );
   });
 
+  // platform-owned-cost S17 (T14): the estimate split per model role.
+  test("keeps the estimate split per role beside the estimate", () => {
+    const split = { "hunter.logic": 0.9, refuter: 0.2, summary: 0 };
+    expect(
+      parsePlatformLimits({
+        review_usd: 1,
+        estimate_usd: 1.1,
+        estimate_by_role_usd: split,
+      }),
+    ).toEqual({ reviewUsd: 1, estimateUsd: 1.1, estimateByRoleUsd: split });
+  });
+
+  test.each([
+    ["not an object", "refuter"],
+    ["an array", [0.2]],
+    ["empty", {}],
+    ["a negative value", { refuter: -0.1, summary: 0.1 }],
+    ["a non-finite value", { refuter: Number.POSITIVE_INFINITY }],
+    ["a non-number value", { refuter: "0.2" }],
+    ["an over-long key", { [`hunter.${"x".repeat(80)}`]: 0.2 }],
+    ["an empty key", { "": 0.2 }],
+  ])("a split that is %s is dropped and the rest is kept", (_, split) => {
+    expect(
+      parsePlatformLimits({
+        review_usd: 1,
+        estimate_usd: 2,
+        estimate_by_role_usd: split,
+      }),
+    ).toEqual({ reviewUsd: 1, estimateUsd: 2 });
+  });
+
+  test("one bad entry drops the whole split, so a missing role is never read as free", () => {
+    expect(
+      parsePlatformLimits({
+        estimate_usd: 2,
+        estimate_by_role_usd: { "hunter.logic": 0.9, refuter: -1 },
+      }),
+    ).toEqual({ estimateUsd: 2 });
+  });
+
+  test("the split survives the connect step and the run step's read", async () => {
+    const split = { "hunter.logic": 0.9, refuter: 0.2 };
+    const { outputs } = await connect({
+      ...SUCCESS,
+      limits: { review_usd: 1, estimate_usd: 1.1, estimate_by_role_usd: split },
+    });
+    const line = outputs.find((o) => o.startsWith("limits="));
+    expect(
+      readPlatformLimits({
+        CRYSK_PLATFORM_LIMITS: line?.slice("limits=".length).trim(),
+      }),
+    ).toEqual({ reviewUsd: 1, estimateUsd: 1.1, estimateByRoleUsd: split });
+  });
+
   test("empty or unparseable CRYSK_PLATFORM_LIMITS reads as no limits", () => {
     expect(readPlatformLimits({})).toBeUndefined();
     expect(readPlatformLimits({ CRYSK_PLATFORM_LIMITS: "" })).toBeUndefined();

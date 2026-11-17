@@ -95,7 +95,44 @@ import { OVERRIDE_COMMAND } from "./trigger";
 
 export type PlatformLimitsVerdict =
   | { allowed: true }
-  | { allowed: false; hit: PlatformLimitHit };
+  | {
+      allowed: false;
+      hit: PlatformLimitHit;
+      // Set when the comparison used the API share of the estimate (S17), not
+      // the whole of it; the skip notice says so.
+      apiShare?: true;
+    };
+
+// Which model roles the run bills on an API key (true) and which it does not
+// (false), resolved once from the run's routes (`modelRoleBilling`, ci/setup.ts).
+export type ModelRoleBilling = ReadonlyMap<string, boolean>;
+
+// The part of the estimate that runs on an API key (S17): the platform's split
+// summed over the roles the run bills on one, plus every key the run cannot map
+// to one of its roles (an unknown role may bill, so it counts). Undefined means
+// there is no usable split, and the whole estimate is compared: no split sent
+// or the run's routes unresolved (a run whose roles bill no API key never gets
+// here: evaluatePlatformLimits lets it run).
+// Rounded to the platform's 6 decimals so a sum of its parts sits on a limit
+// instead of a hair over it.
+function apiShareUsd(
+  limits: PlatformLimits,
+  roleBilling: ModelRoleBilling | undefined,
+): number | undefined {
+  const split = limits.estimateByRoleUsd;
+  if (split === undefined || roleBilling === undefined) return undefined;
+  if (!hasApiBilledRole(roleBilling)) return undefined;
+  let share = 0;
+  for (const [role, usd] of Object.entries(split)) {
+    if (roleBilling.get(role) !== false) share += usd;
+  }
+  return Math.round(share * 1e6) / 1e6;
+}
+
+// True when at least one resolved role bills an API key.
+function hasApiBilledRole(roleBilling: ModelRoleBilling): boolean {
+  return [...roleBilling.values()].some(Boolean);
+}
 
 // Inclusive boundary: an estimate exactly AT a limit passes, matching
 // size-gate.ts's own `>` (not `>=`) comparison against its limits.
@@ -106,13 +143,27 @@ export type PlatformLimitsVerdict =
 // run once it reports.
 //
 // A subscription or free route is never skipped: its runs draw on quota, and
-// only API spend counts toward the limits (L54, "counts": "api_only").
+// only API spend counts toward the limits (L54, "counts": "api_only"). In a run
+// whose roles bill differently, the estimate compared is the API share when the
+// platform split it per role (S17); without the split it is the whole estimate,
+// the conservative side.
 export function evaluatePlatformLimits(input: {
   billingMode: CiBillingMode;
   limits: PlatformLimits | undefined;
+  roleBilling?: ModelRoleBilling;
 }): PlatformLimitsVerdict {
   const { limits } = input;
   if (input.billingMode !== "metered" || limits === undefined) {
+    return { allowed: true };
+  }
+  // Metered by the Claude env alone (an API key present) while no resolved role
+  // routes to it: the run bills no API spend, so it is never skipped (#551 R001).
+  // No role map (routes unresolved) keeps the conservative whole-estimate path.
+  if (
+    input.roleBilling !== undefined &&
+    input.roleBilling.size > 0 &&
+    !hasApiBilledRole(input.roleBilling)
+  ) {
     return { allowed: true };
   }
   const { reviewUsd, monthLeftUsd, estimateUsd } = limits;
@@ -120,11 +171,14 @@ export function evaluatePlatformLimits(input: {
     return { allowed: false, hit: "month-used-up" };
   }
   if (estimateUsd === undefined) return { allowed: true };
-  if (reviewUsd !== undefined && estimateUsd > reviewUsd) {
-    return { allowed: false, hit: "review-limit" };
+  const share = apiShareUsd(limits, input.roleBilling);
+  const compared = share ?? estimateUsd;
+  const basis = share === undefined ? {} : { apiShare: true as const };
+  if (reviewUsd !== undefined && compared > reviewUsd) {
+    return { allowed: false, hit: "review-limit", ...basis };
   }
-  if (monthLeftUsd !== undefined && estimateUsd > monthLeftUsd) {
-    return { allowed: false, hit: "month-left" };
+  if (monthLeftUsd !== undefined && compared > monthLeftUsd) {
+    return { allowed: false, hit: "month-left", ...basis };
   }
   return { allowed: true };
 }
@@ -219,12 +273,19 @@ const LIMIT_SKIP_REASON: Record<PlatformLimitHit, string> = {
     "⚠️ The estimated cost of this review is more than what is left of this organization's monthly limit.",
 };
 
+// A mixed setup is compared on the part of the estimate that runs on an API
+// key; the notice says so, because the estimate the reader may know is larger.
+const API_SHARE_LINE =
+  "Only the part of the estimate that runs on an API key (its API share) " +
+  "was compared with the limit.";
+
 function buildBudgetSkipComment(data: SkipBudgetSummary): string {
   const lines = [
     SKIP_BUDGET_COMMENT_MARKER,
     "## Crysk review skipped",
     "",
     LIMIT_SKIP_REASON[data.limit],
+    ...(data.apiShare === true ? ["", API_SHARE_LINE] : []),
     "",
     "Crysk did not run to stay within the limits set in the Crysk dashboard " +
       "(Review > Limits). Raise the limit there to review later pushes.",
@@ -279,6 +340,8 @@ export interface CiLimitsGateSkipInput {
   isCi: boolean;
   billingMode: CiBillingMode;
   limits: PlatformLimits | undefined;
+  // The run's roles that bill an API key, for the estimate split (S17).
+  roleBilling?: ModelRoleBilling;
   prNumber: number;
 }
 
@@ -292,6 +355,7 @@ export function ciLimitsGateSkip(
     kind: "skipped-budget",
     prNumber: input.prNumber,
     limit: verdict.hit,
+    ...(verdict.apiShare === true ? { apiShare: true as const } : {}),
   };
   return { comment: buildBudgetSkipComment(summary), summary };
 }

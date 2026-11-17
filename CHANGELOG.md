@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A review whose roles bill differently is compared with the platform's dollar limits on its API share
+  only.** A setup with the hunters on a Claude subscription and the refuter, summary and consolidation on an
+  API key used to be compared on the platform's whole estimate, subscription roles included, so a $1
+  per-review limit skipped a review whose API share was about $0.03. The platform now sends
+  `estimate_by_role_usd` beside `estimate_usd` (the same estimate split per model role: `hunter.<specialty>`,
+  `refuter`, `consolidate`, `summary`, `judge`), and the engine compares the sum over the roles it bills on an
+  API key, plus any role key it cannot map to one of its roles, with the per-review limit and with what is
+  left of the month. Without the split (an older platform, a setup the platform cannot price in full) the whole
+  estimate is compared, as before. A run with no API-billed role is never skipped, and a month used up still
+  skips a run that bills an API key. The skip comment and the step summary say when the API share was
+  compared; they still print no dollar figure.
+  **What to check:** nothing to change; a mixed setup that used to skip under a low per-review limit now runs
+  when its API share fits. Release order: the platform's `estimate_by_role_usd` ships first (additive field).
 - **A plain `applied` reply now counts.** After the automatic reviews end, a carried red turns `pending` when
   every blocking finding is answered by someone with write access. Until now only a reply written by
   `crysk triage reply` (with its hidden marker) counted, so a team without the crysk-loop skill that answered

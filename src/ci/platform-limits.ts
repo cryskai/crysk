@@ -27,6 +27,11 @@ export interface PlatformLimits {
   // The platform's estimate for this review, its high side. Absent when the
   // platform cannot price the run.
   readonly estimateUsd?: number;
+  // `estimateUsd` split per model role (`hunter.logic`, `refuter`, ...): the
+  // platform's setup estimate priced line by line. Present only when the
+  // platform priced every line. It lets the engine compare the share of the
+  // estimate that runs on an API key instead of the whole of it (S17).
+  readonly estimateByRoleUsd?: Readonly<Record<string, number>>;
 }
 
 // Which limit a skip names (gates.ts, `evaluatePlatformLimits`): the month's
@@ -39,9 +44,35 @@ export const PLATFORM_LIMITS_CAPABILITY = "limits";
 const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
-// The `/runs/token` field, `{ review_usd?, month_left_usd?, estimate_usd? }`,
-// or undefined when it is absent or holds no usable number. `review_usd` must be
-// above 0 (the platform omits it when there is no limit); the other two may be 0.
+// Role keys are the engine's `models` keys (`hunter.<specialty>` at most 64
+// characters after the prefix); the cap keeps a hostile body small.
+const MAX_ROLE_KEY_LENGTH = 72;
+const MAX_ROLES = 32;
+
+// The split as sent, or undefined. One bad entry drops the whole field, never
+// the entry: a dropped role would read as free, and the engine's fallback for
+// no split (the whole estimate) is the conservative one.
+function parseEstimateByRole(
+  value: unknown,
+): Readonly<Record<string, number>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0 || entries.length > MAX_ROLES) return undefined;
+  for (const [role, usd] of entries) {
+    if (role.length === 0 || role.length > MAX_ROLE_KEY_LENGTH) {
+      return undefined;
+    }
+    if (!finite(usd) || usd < 0) return undefined;
+  }
+  return Object.fromEntries(entries) as Record<string, number>;
+}
+
+// The `/runs/token` field, `{ review_usd?, month_left_usd?, estimate_usd?,
+// estimate_by_role_usd? }`, or undefined when it is absent or holds no usable
+// number. `review_usd` must be above 0 (the platform omits it when there is no
+// limit); the other numbers may be 0.
 export function parsePlatformLimits(
   value: unknown,
 ): PlatformLimits | undefined {
@@ -52,21 +83,28 @@ export function parsePlatformLimits(
     review_usd: review,
     month_left_usd: monthLeft,
     estimate_usd: estimate,
+    estimate_by_role_usd: byRole,
   } = value as Record<string, unknown>;
+  // The split only means something beside the estimate it splits.
+  const split =
+    finite(estimate) && estimate >= 0 ? parseEstimateByRole(byRole) : undefined;
   const limits: {
     reviewUsd?: number;
     monthLeftUsd?: number;
     estimateUsd?: number;
+    estimateByRoleUsd?: Readonly<Record<string, number>>;
   } = {
     ...(finite(review) && review > 0 ? { reviewUsd: review } : {}),
     ...(finite(monthLeft) && monthLeft >= 0 ? { monthLeftUsd: monthLeft } : {}),
     ...(finite(estimate) && estimate >= 0 ? { estimateUsd: estimate } : {}),
+    ...(split === undefined ? {} : { estimateByRoleUsd: split }),
   };
   return Object.keys(limits).length === 0 ? undefined : limits;
 }
 
 // What the connect step writes to its `limits` output: one line of JSON in the
-// response's own field names, numbers only.
+// response's own field names, numbers only (the split is an object of numbers
+// keyed by role).
 export function serializePlatformLimits(limits: PlatformLimits): string {
   return JSON.stringify({
     ...(limits.reviewUsd === undefined ? {} : { review_usd: limits.reviewUsd }),
@@ -76,6 +114,9 @@ export function serializePlatformLimits(limits: PlatformLimits): string {
     ...(limits.estimateUsd === undefined
       ? {}
       : { estimate_usd: limits.estimateUsd }),
+    ...(limits.estimateByRoleUsd === undefined
+      ? {}
+      : { estimate_by_role_usd: limits.estimateByRoleUsd }),
   });
 }
 
