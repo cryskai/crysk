@@ -46,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   below it are ignored. Other words on that line, as in `/crysk review please`, still make it no command. The
   same rule reads `/crysk recheck`, `/crysk override` and `/crysk stop`.
 
+- **A skipped review no longer leaves its admission check in progress.** A skip (`/crysk stop`, an admission
+  rule) was recorded in two writes to the `crysk/ci-admission` check, reserved and then settled. When the second
+  write failed the check stayed "in progress" for good, the row counted as a spent attempt, and the log said
+  nothing. A skip is now recorded in one write, already settled, and a write to that check that fails is a
+  warning in the run's log.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed
