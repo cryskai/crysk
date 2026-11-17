@@ -858,6 +858,47 @@ describe("runTriageReplyCommand — a --from id whose finding was carried", () =
       await cleanup();
     }
   });
+
+  // WHY a reply is scripted: the rows hint reads the same writer lookup as the gate, and a
+  // reply that is not counted must not take the hint away with it.
+  test("the rows hint survives an existing triage reply", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    try {
+      const { spawnFn } = makeFakeGh([
+        ...carriedScript(
+          [
+            {
+              id: 23,
+              user: "dev",
+              in_reply_to_id: 22,
+              body: `${triageMarker({ tag: "applied", headSha: RUN_HEAD, actor: "agent" })}\n\nthis round`,
+            },
+          ],
+          { summaryHead: RUN_HEAD, commentHead: OLD_HEAD },
+        ),
+        permissionEntry("dev", { stdout: "write\n" }),
+      ]);
+      const error = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      const message = (error as Error).message;
+      expect(message).toContain("no posted");
+      expect(message).toContain("On this path:");
+      expect(message).toContain("R001");
+    } finally {
+      await cleanup();
+    }
+  });
 });
 
 describe("runTriageReplyCommand — anchor.patch is the anchoring diff", () => {

@@ -143,13 +143,12 @@ function ruling(
 }
 
 // The gate's status on the reviewed head: red, stating one blocking finding, created at the verdict time.
-function redGate() {
+function redGate(blocking = 1) {
   return {
     state: "failure",
     context: COMMIT_STATUS_CONTEXT,
     created_at: VERDICT_AT,
-    description:
-      "crysk: 1 blocking finding(s) — fix and push, or /crysk override",
+    description: `crysk: ${blocking} blocking finding(s) — fix and push, or /crysk override`,
     target_url: null,
   };
 }
@@ -159,6 +158,7 @@ function both(scenario: {
   reviewComments: AnswerReviewComment[];
   issueComments?: AnswerIssueComment[];
   writers?: Map<string, boolean>;
+  blocking?: number;
 }) {
   const issueComments = scenario.issueComments ?? [summaryComment()];
   const reviewComments = scenario.reviewComments;
@@ -181,7 +181,7 @@ function both(scenario: {
     pr: 12,
     head: REVIEWED,
     nowMs: NOW,
-    statuses: [redGate()],
+    statuses: [redGate(scenario.blocking)],
     issueComments,
     reviewComments,
     verdictAt: VERDICT_AT,
@@ -403,6 +403,142 @@ test("S15: row only: row reply applied@REVIEWED by WRITER (21), then newer row r
   });
   expect(gate).toEqual({ blocking: 1, open: 0 });
   expect(status.next_action).toBe("fix");
+  expectParity(gate, status.next_action);
+});
+
+test("S17: deferred@REVIEWED by WRITER (11), then applied@REVIEWED by READER (12)", () => {
+  const { gate, status } = both({
+    reviewComments: [
+      findingComment(),
+      inlineReply(11, "deferred", REVIEWED, LATE, WRITER),
+      inlineReply(12, "applied", REVIEWED, LATER, READER),
+    ],
+  });
+  expect(gate).toEqual({ blocking: 1, open: 1 });
+  expect(status.next_action).toBe("override-or-fix");
+  expect(findingOf(status)?.triage?.tag).toBe("deferred");
+  expectParity(gate, status.next_action);
+});
+
+// A plain comment: a reply whose whole body starts with the word applied, with no marker. Its
+// finding is the parent, so the marker is implied at the head that finding was posted on.
+function plainApplied(id: number, user: string): AnswerReviewComment {
+  return {
+    id,
+    user,
+    created_at: LATE,
+    body: "applied, the fix is in the parser now",
+    in_reply_to_id: FINDING_ID,
+  };
+}
+
+test("S18: the only reply is a plain applied by READER", () => {
+  const { gate, status } = both({
+    reviewComments: [findingComment(), plainApplied(11, READER)],
+  });
+  expect(gate).toEqual({ blocking: 1, open: 1 });
+  expect(status.next_action).toBe("triage");
+  expectParity(gate, status.next_action);
+});
+
+test("S18b: the only reply is a plain applied by WRITER", () => {
+  const { gate, status } = both({
+    reviewComments: [findingComment(), plainApplied(11, WRITER)],
+  });
+  expect(gate).toEqual({ blocking: 1, open: 0 });
+  expect(status.next_action).toBe("fix");
+  expectParity(gate, status.next_action);
+});
+
+test("S19: a reply by WRITER with a valid applied marker on its second line", () => {
+  const { gate, status } = both({
+    reviewComments: [
+      findingComment(),
+      {
+        id: 11,
+        user: WRITER,
+        created_at: LATE,
+        body: `note\n${triageMarker({ tag: "applied", headSha: REVIEWED, actor: "agent" })}\n\nreasoning`,
+        in_reply_to_id: FINDING_ID,
+      },
+    ],
+  });
+  expect(gate).toEqual({ blocking: 1, open: 1 });
+  expect(status.next_action).toBe("triage");
+  expectParity(gate, status.next_action);
+});
+
+test("S20: two blocking findings, the first applied by WRITER, the second applied by READER", () => {
+  const SECOND_CLAIM = "the retry budget is never reset after a success";
+  const SECOND_ID = 20;
+  const summary: AnswerIssueComment = {
+    id: 1,
+    user: BOT,
+    body: [
+      `<!-- pr-hero-report head=${REVIEWED} -->`,
+      "",
+      "### Summary",
+      "",
+      renderStateBlock(REVIEWED, [
+        stateFinding({
+          id: ROW,
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: ["src/a.ts:10"],
+          claim: CLAIM,
+        }),
+        stateFinding({
+          id: "R002",
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: ["src/a.ts:20"],
+          claim: SECOND_CLAIM,
+        }),
+      ]),
+    ].join("\n"),
+  };
+  const secondFinding: AnswerReviewComment = {
+    id: SECOND_ID,
+    user: BOT,
+    body: [
+      findingMarker({
+        path: "src/a.ts",
+        line: 20,
+        headSha: REVIEWED,
+        claim: SECOND_CLAIM,
+      }),
+      "",
+      "🔴 blocking · CRITICAL · introduced · reliability",
+      "",
+      "`src/a.ts:20`",
+      "",
+      SECOND_CLAIM,
+    ].join("\n"),
+    in_reply_to_id: null,
+    path: "src/a.ts",
+    line: 20,
+  };
+  const { gate, status } = both({
+    issueComments: [summary],
+    reviewComments: [
+      findingComment(),
+      secondFinding,
+      inlineReply(11, "applied", REVIEWED, LATE, WRITER),
+      {
+        id: 21,
+        user: READER,
+        created_at: LATE,
+        body: triageBody("applied", REVIEWED),
+        in_reply_to_id: SECOND_ID,
+      },
+    ],
+    blocking: 2,
+  });
+  expect(gate).toEqual({ blocking: 2, open: 1 });
+  expect(status.next_action).toBe("triage");
+  expect(status.reason).toContain("visitor");
   expectParity(gate, status.next_action);
 });
 

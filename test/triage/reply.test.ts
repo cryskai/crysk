@@ -426,6 +426,54 @@ describe("countedTriageReplies", () => {
     });
     expect(result).toEqual({ kept: [kept], uncounted: [] });
   });
+
+  // A stale reply is not an answer, so its author is never asked for a permission: an unread
+  // permission on it must not turn the whole read into null.
+  test("a stale reply is dropped before its author is asked", () => {
+    const stale = reply(2, "ghost", OTHER_HEAD, BEFORE);
+    const absent = countedTriageReplies({
+      comments: [stale],
+      writers: new Map(),
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(absent).not.toBeNull();
+    expect(absent?.kept).toEqual([]);
+    expect(absent?.uncounted).toEqual([]);
+
+    const unread = countedTriageReplies({
+      comments: [stale],
+      writers: new Map<string, boolean | null>([["ghost", null]]),
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(unread).not.toBeNull();
+    expect(unread?.kept).toEqual([]);
+    expect(unread?.uncounted).toEqual([]);
+  });
+
+  // WHY the boundary is exact: a reply made at the verdict's own instant was not written after the
+  // verdict, so the review that wrote the verdict could not have seen it.
+  test("a reply created at the verdict's own instant is stale, one second later is kept", () => {
+    const VERDICT_ISO = "2026-11-10T12:00:00Z";
+    const atVerdict = reply(2, WRITER_LOGIN, OTHER_HEAD, VERDICT_ISO);
+    const droppedAtVerdict = countedTriageReplies({
+      comments: [atVerdict],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: Date.parse(VERDICT_ISO),
+    });
+    expect(droppedAtVerdict).toEqual({ kept: [], uncounted: [] });
+
+    const later = reply(3, WRITER_LOGIN, OTHER_HEAD, "2026-11-10T12:00:01Z");
+    const keptLater = countedTriageReplies({
+      comments: [later],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: Date.parse(VERDICT_ISO),
+    });
+    expect(keptLater).toEqual({ kept: [later], uncounted: [] });
+  });
 });
 
 describe("replyHeadAnswers", () => {

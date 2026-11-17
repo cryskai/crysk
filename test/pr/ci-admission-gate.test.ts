@@ -41,6 +41,7 @@ import {
 import {
   evaluateCiAdmissionGate,
   isCiConfigError,
+  lookUpReplyWriters,
   recordCiConfigErrorSkip,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
@@ -2247,5 +2248,77 @@ describe("evaluateCiAdmissionGate — /crysk stop", () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.recorded).toEqual([STOP_REASON]);
+  });
+});
+
+// A fake gh whose permission endpoint answers the scripted responses in order, one per ask.
+function scriptedPermissionGh(
+  responses: ScriptEntry["response"][],
+  calls: string[][],
+): typeof Bun.spawn {
+  const encoder = new TextEncoder();
+  const queue = [...responses];
+  return ((argv: string[]) => {
+    calls.push(argv);
+    const scripted = queue.shift() ?? { stdout: "", exitCode: 0 };
+    const stream = (text: string) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (text) controller.enqueue(encoder.encode(text));
+          controller.close();
+        },
+      });
+    return {
+      stdout: stream(scripted.stdout ?? ""),
+      stderr: stream(scripted.stderr ?? ""),
+      exited: Promise.resolve(scripted.exitCode ?? 0),
+      kill() {},
+    };
+  }) as unknown as typeof Bun.spawn;
+}
+
+describe("lookUpReplyWriters — a permission that did not read is not remembered", () => {
+  const WORKTREE_ROOT = "/Users/juanma/Desktop/pr-hero-worktrees/status-gate";
+  test("an unread permission is asked again on the next call, and a read one is kept", async () => {
+    const head = "e".repeat(40);
+    const comments = [
+      {
+        id: 7,
+        user: "dev",
+        body: `${triageMarker({ tag: "applied", headSha: head, actor: "agent" })}\n\nreasoning`,
+      },
+    ];
+    const known = new Map<string, boolean>();
+    const calls: string[][] = [];
+    const spawnFn = scriptedPermissionGh(
+      [
+        { stderr: "HTTP 500", exitCode: 1 },
+        { stderr: "HTTP 500", exitCode: 1 },
+        { stdout: "write\n" },
+      ],
+      calls,
+    );
+
+    const first = await lookUpReplyWriters({
+      operatorRoot: WORKTREE_ROOT,
+      comments,
+      known,
+      spawnFn,
+      sleepFn: async () => {},
+    });
+    expect(first.get("dev")).toBeNull();
+    expect(known.has("dev")).toBe(false);
+    expect(calls).toHaveLength(2);
+
+    const second = await lookUpReplyWriters({
+      operatorRoot: WORKTREE_ROOT,
+      comments,
+      known,
+      spawnFn,
+      sleepFn: async () => {},
+    });
+    expect(second.get("dev")).toBe(true);
+    expect(known.get("dev")).toBe(true);
+    expect(calls).toHaveLength(3);
   });
 });

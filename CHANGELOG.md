@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   below it are ignored. Other words on that line, as in `/crysk review please`, still make it no command. The
   same rule reads `/crysk recheck`, `/crysk override` and `/crysk stop`.
 
+- **`crysk status` and the gate read the same replies.** The gate counts a triage reply only from a login with
+  write access and not older than the review's verdict, and lets the newest one decide. `crysk status` took any
+  author's newest reply, so it could say a fix was ready to push over a reply the gate ignores, and a later
+  reply from a login without write access overrode, in status only, a writer's answer. One filter now serves
+  both; `crysk status` asks GitHub for each reply author's permission, and a `triage` reason names the logins
+  whose replies do not count. `crysk triage reply` skips a second reply only when the newest counted one
+  already names this review. Under a green gate any author's reply still satisfies "every finding has a reply".
+
+- **A reply in an unrelated review thread is never read for a finding posted as a top-level comment.** On an old
+  pull request such a finding is an issue comment, and its id could coincide with a review thread's.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed
