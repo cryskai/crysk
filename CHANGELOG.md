@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-11-17
+## [0.8.1] - 2026-11-17
+
+### Fixed
+
+- **The npm package's `dist/` matches its release.** 0.8.0 was published with a `dist/` built from earlier code
+  and left-over files from older builds; its `src/`, `bin/`, skills and prompts were correct, and the `crysk`
+  command runs from `src/`, so only code importing the package through `require()` got the old build. `npm pack`
+  and `npm publish` now delete `dist/` and rebuild it (`prepack`). 0.8.0 is deprecated on npm; use 0.8.1.
+
+## [0.8.0] - 2026-11-17 (npm only, deprecated)
 
 ### Added
 
@@ -1176,8 +1185,9 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.0
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.1
+[0.8.0]: https://github.com/cryskai/crysk/compare/v0.7.0...cc6cdec9
 [0.7.0]: https://github.com/cryskai/crysk/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/cryskai/crysk/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/cryskai/crysk/compare/v0.5.1...v0.6.0
