@@ -66,7 +66,7 @@ import {
   fetchCommitStatuses,
   fetchPrComments,
   fetchPrReviewComments,
-  ghCollaboratorPermission,
+  ghCollaboratorPermissionRetried,
   ghCompareChangedFilesWithStatus,
   ghPrHeroWorkflowRunHeads,
   listAdmissionCheckRuns,
@@ -637,7 +637,7 @@ async function stoppedByMaintainer(
   for (const command of commands.slice(0, oldestStop + 1)) {
     let permission = permissions.get(command.user);
     if (!permissions.has(command.user)) {
-      permission = await stopAuthorPermission(
+      permission = await ghCollaboratorPermissionRetried(
         operatorRoot,
         command.user,
         spawnFn,
@@ -697,7 +697,7 @@ function answeredReader(input: {
       ...input.reviewComments,
       ...input.issueComments,
     ])) {
-      const permission = await stopAuthorPermission(
+      const permission = await ghCollaboratorPermissionRetried(
         input.operatorRoot,
         login,
         input.spawnFn,
@@ -721,27 +721,4 @@ function answeredReader(input: {
       platformActor: process.env.CRYSK_PLATFORM_ACTOR,
     });
   };
-}
-
-// Same bounds as the trigger's commenter lookup (lookupCommenterPermission):
-// one retry after a short wait, so a single API blip does not override a
-// maintainer's stop, and a timeout, so a hung gh call cannot stall admission.
-const STOP_PERMISSION_RETRY_DELAY_MS = 2_000;
-const STOP_PERMISSION_TIMEOUT_MS = 30_000;
-
-async function stopAuthorPermission(
-  operatorRoot: string,
-  login: string,
-  spawnFn: typeof Bun.spawn | undefined,
-  sleepFn: (ms: number) => Promise<void>,
-): Promise<string | null> {
-  const ask = () =>
-    ghCollaboratorPermission(operatorRoot, login, {
-      spawnFn,
-      timeoutMs: STOP_PERMISSION_TIMEOUT_MS,
-    });
-  const first = await ask();
-  if (first !== null) return first;
-  await sleepFn(STOP_PERMISSION_RETRY_DELAY_MS);
-  return ask();
 }

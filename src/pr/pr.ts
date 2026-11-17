@@ -1448,6 +1448,29 @@ export async function ghCollaboratorPermission(
   return permission === "" ? null : permission;
 }
 
+// One retry after a short wait, and a bound on each ask: a single API blip must not read as an
+// answer, and a hung gh call must not stall the caller. null means the permission did not read,
+// which no caller may take for "no access".
+const PERMISSION_RETRY_DELAY_MS = 2_000;
+const PERMISSION_TIMEOUT_MS = 30_000;
+
+export async function ghCollaboratorPermissionRetried(
+  operatorRoot: string,
+  login: string,
+  spawnFn: typeof Bun.spawn | undefined,
+  sleepFn: (ms: number) => Promise<void>,
+): Promise<string | null> {
+  const ask = () =>
+    ghCollaboratorPermission(operatorRoot, login, {
+      spawnFn,
+      timeoutMs: PERMISSION_TIMEOUT_MS,
+    });
+  const first = await ask();
+  if (first !== null) return first;
+  await sleepFn(PERMISSION_RETRY_DELAY_MS);
+  return ask();
+}
+
 const COMPLETED_WORKFLOW_CONCLUSIONS = new Set(["success", "failure"]);
 
 // Distinct head SHAs from completed pr-hero workflow runs on a branch.

@@ -7,7 +7,7 @@ import {
   fetchPostedFindingComments,
   fetchPrComments,
   fetchPrReviewComments,
-  ghCollaboratorPermission,
+  ghCollaboratorPermissionRetried,
   ghCurrentBranchPr,
   ghPrWebUrl,
   ghRepoNameWithOwner,
@@ -362,21 +362,39 @@ async function postedFindingFromRunDir(input: {
 // Whether one of these logins may answer a finding: the gate counts a triage reply only from a
 // login with write access (pr/answered-findings.ts trustedComments), so a marker-shaped comment
 // from anyone else is not an answer. Counting it would skip the real reply, and the finding would
-// stay open with no reply the gate reads and no way to post one. A lookup that does not read
-// counts as no access: a second comment is harmless, a skipped answer is not.
-async function someoneMayAnswer(
-  operatorRoot: string,
-  authors: readonly (string | undefined)[],
-  spawnFn: typeof Bun.spawn | undefined,
-): Promise<boolean> {
+// stay open with no reply the gate reads and no way to post one.
+// WHY a permission that does not read stops the command: both guesses are wrong. Taking it for
+// "no access" posts a duplicate of a real reply, and a second `dismissed` makes an earlier CI
+// ruling stop matching; taking it for "access" lets a forged marker block the real reply. Nothing
+// is posted and the message says to run it again.
+async function someoneMayAnswer(input: {
+  operatorRoot: string;
+  prNumber: number;
+  findingId: string;
+  authors: readonly (string | undefined)[];
+  spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
+}): Promise<boolean> {
   const logins = new Set(
-    authors.filter((login): login is string => login !== undefined),
+    input.authors.filter((login): login is string => login !== undefined),
   );
+  const unread: string[] = [];
   for (const login of logins) {
-    const permission = await ghCollaboratorPermission(operatorRoot, login, {
-      spawnFn,
-    });
+    const permission = await ghCollaboratorPermissionRetried(
+      input.operatorRoot,
+      login,
+      input.spawnFn,
+      input.sleepFn,
+    );
     if (permission === "admin" || permission === "write") return true;
+    if (permission === null) unread.push(login);
+  }
+  if (unread.length > 0) {
+    throw new CliError(
+      `${input.findingId} on PR #${input.prNumber} already has a triage reply for this review from ` +
+        `${unread.join(", ")}, and GitHub did not return whether that login may answer. ` +
+        "Nothing was posted: run the same command again",
+    );
   }
   return false;
 }
@@ -393,6 +411,8 @@ export async function runTriageReplyCommand(input: {
   issue?: number;
   dryRun: boolean;
   spawnFn?: typeof Bun.spawn;
+  // The wait between the two permission asks. Tests pass an immediate one.
+  sleepFn?: (ms: number) => Promise<void>;
 }): Promise<number> {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
   const runDir =
@@ -450,15 +470,18 @@ export async function runTriageReplyCommand(input: {
     const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
       spawnFn,
     });
-    already = await someoneMayAnswer(
+    already = await someoneMayAnswer({
       operatorRoot,
-      triageAuthorsAtHead({
+      prNumber,
+      findingId: input.findingId,
+      authors: triageAuthorsAtHead({
         parentId: replyTarget.parent.id,
         headSha,
         replies: reviewComments,
       }),
       spawnFn,
-    );
+      sleepFn: input.sleepFn ?? Bun.sleep,
+    });
   } else {
     // The row's replies are top-level comments, read with the summary, so no second fetch.
     if (issueComments === undefined) {
@@ -466,15 +489,18 @@ export async function runTriageReplyCommand(input: {
         "triage reply: a summary-row target carries the PR's comments",
       );
     }
-    already = await someoneMayAnswer(
+    already = await someoneMayAnswer({
       operatorRoot,
-      rowTriageAuthorsAtHead({
+      prNumber,
+      findingId: input.findingId,
+      authors: rowTriageAuthorsAtHead({
         rowId: replyTarget.rowId,
         headSha,
         comments: issueComments,
       }),
       spawnFn,
-    );
+      sleepFn: input.sleepFn ?? Bun.sleep,
+    });
   }
   const resolveDecision = decideThreadResolve({
     channel: replyTarget.kind === "row" ? "issue" : replyTarget.parent.channel,

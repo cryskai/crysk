@@ -1098,7 +1098,7 @@ describe("runTriageReplyCommand — without a run directory", () => {
     }
   });
 
-  test("a permission lookup that fails does not block the real reply", async () => {
+  test("a permission that does not read stops the command and posts nothing", async () => {
     const { bodyFile, cleanup } = await bodyOnly();
     try {
       const { spawnFn, calls } = makeFakeGh([
@@ -1112,6 +1112,53 @@ describe("runTriageReplyCommand — without a run directory", () => {
         ]),
         permissionEntry("dev", { stderr: "HTTP 500", exitCode: 1 }),
       ]);
+      await expect(
+        runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "applied",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+          sleepFn: async () => {},
+        }),
+      ).rejects.toThrow(
+        "GitHub did not return whether that login may answer. Nothing was posted",
+      );
+      expect(
+        calls.filter((call) => call.argv.includes("--method")),
+      ).toHaveLength(0);
+      expect(
+        calls.filter((call) =>
+          call.argv.join(" ").includes("collaborators/dev/permission"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a permission that reads on the second ask counts", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        ...carriedScript([
+          {
+            id: 23,
+            user: "dev",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+          },
+        ]),
+        {
+          match: ["collaborators/dev/permission"],
+          responses: [
+            { stderr: "HTTP 500", exitCode: 1 },
+            { stdout: "write\n" },
+          ],
+        },
+      ]);
       const exitCode = await runTriageReplyCommand({
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
@@ -1120,14 +1167,12 @@ describe("runTriageReplyCommand — without a run directory", () => {
         bodyFile,
         dryRun: false,
         spawnFn,
+        sleepFn: async () => {},
       });
       expect(exitCode).toBe(0);
-      const posts = calls.filter(
-        (call) =>
-          call.argv.includes("--method") &&
-          call.argv.join(" ").includes("pulls/42/comments"),
-      );
-      expect(posts).toHaveLength(1);
+      expect(
+        calls.filter((call) => call.argv.includes("--method")),
+      ).toHaveLength(0);
     } finally {
       await cleanup();
     }
@@ -1620,7 +1665,7 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
     }
   });
 
-  test("a permission lookup that fails does not block the real reply", async () => {
+  test("a permission that does not read stops the command and posts nothing", async () => {
     const { bodyFile, cleanup } = await bodyOnly();
     try {
       const { spawnFn, calls } = makeFakeGh([
@@ -1633,6 +1678,52 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
         ]),
         permissionEntry("dev", { stderr: "HTTP 500", exitCode: 1 }),
       ]);
+      await expect(
+        runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "applied",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+          sleepFn: async () => {},
+        }),
+      ).rejects.toThrow(
+        "GitHub did not return whether that login may answer. Nothing was posted",
+      );
+      expect(
+        calls.filter((call) => call.argv.includes("--method")),
+      ).toHaveLength(0);
+      expect(
+        calls.filter((call) =>
+          call.argv.join(" ").includes("collaborators/dev/permission"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a permission that reads on the second ask counts", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        ...rowScript([
+          {
+            id: 60,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nearlier`,
+          },
+        ]),
+        {
+          match: ["collaborators/dev/permission"],
+          responses: [
+            { stderr: "HTTP 500", exitCode: 1 },
+            { stdout: "write\n" },
+          ],
+        },
+      ]);
       const exitCode = await runTriageReplyCommand({
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
@@ -1641,9 +1732,12 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
         bodyFile,
         dryRun: false,
         spawnFn,
+        sleepFn: async () => {},
       });
       expect(exitCode).toBe(0);
-      expect(rowPosts(calls)).toHaveLength(1);
+      expect(
+        calls.filter((call) => call.argv.includes("--method")),
+      ).toHaveLength(0);
     } finally {
       await cleanup();
     }
