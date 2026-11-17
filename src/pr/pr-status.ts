@@ -282,11 +282,25 @@ function countedReplies(
 // The gate is crysk's own commit status on the head, read by its context alone (the legacy
 // pr-hero name counts as the same context), so a local run's crysk/local status never
 // answers for the gate.
+// A verdict time in ms, or null when it is unknown or does not parse.
+export function verdictAtMs(
+  verdictAt: string | null | undefined,
+): number | null {
+  if (verdictAt === undefined || verdictAt === null) return null;
+  const at = Date.parse(verdictAt);
+  return Number.isNaN(at) ? null : at;
+}
+
+// The head the review summary was written for: what a reply must name to answer the review.
+export function reviewedHeadOf(
+  issueComments: PrStatusComment[],
+): string | null {
+  return readSummary(issueComments).head;
+}
+
 // The caller's verdict time in ms, or null when it is unknown or does not parse.
 function verdictMs(input: PrStatusRead): number | null {
-  if (input.verdictAt === undefined || input.verdictAt === null) return null;
-  const at = Date.parse(input.verdictAt);
-  return Number.isNaN(at) ? null : at;
+  return verdictAtMs(input.verdictAt);
 }
 
 function readGate(input: PrStatusRead): PrStatusGate {

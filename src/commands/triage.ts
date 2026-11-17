@@ -3,11 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { assertRunMatchesPr } from "#ci/gates";
 import { resolveRepoRoot } from "#git/git";
-import { requireReplyWriters } from "#pr/ci-admission-gate";
 import {
   fetchPostedFindingComments,
-  fetchPrComments,
-  fetchPrReviewComments,
   ghCurrentBranchPr,
   ghPrWebUrl,
   ghRepoNameWithOwner,
@@ -16,7 +13,6 @@ import {
   postReviewCommentReply,
   resolveReviewThreadForComment,
 } from "#pr/pr";
-import { buildPrStatus } from "#pr/pr-status";
 import { findMarkedCommentId, resolveCurrentPrNumber } from "#pr/preflight";
 import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
@@ -25,8 +21,6 @@ import {
   decideThreadResolve,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
-  newestCountedRowReplyHead,
-  newestCountedThreadReplyHead,
 } from "#triage/reply";
 import {
   renderTriageReplyBody,
@@ -40,6 +34,7 @@ import { matchMarkerPrefix } from "../brand";
 import { CliError, CliUsageError } from "../errors";
 import { tryOriginRepoId } from "../home";
 import { prheroLayout } from "../home-preflight";
+import { readPrStatus } from "./status";
 
 // `crysk triage reply --pr <n> [--from <run-dir>] --finding <id> ...`: the
 // only triage verb. It posts one triage reply, records the verdict in the
@@ -137,32 +132,19 @@ async function postedFindingFromPr(
 ): Promise<{
   target: ReplyTarget;
   headSha: string;
-  issueComments: Awaited<ReturnType<typeof fetchPrComments>>;
-  reviewComments: Awaited<ReturnType<typeof fetchPrReviewComments>>;
-  writers: Map<string, boolean>;
+  already: boolean;
 }> {
-  const issueComments = await fetchPrComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
-  const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
-  const writers = await requireReplyWriters({
+  // The read `crysk status` makes, so the reply is decided on the replies the gate counts.
+  const read = await readPrStatus({
     operatorRoot,
-    comments: [...reviewComments, ...issueComments],
+    pr: prNumber,
+    nowMs: Date.now(),
     spawnFn,
     sleepFn,
+    memo: { writers: new Map() },
   });
-  const status = buildPrStatus({
-    pr: prNumber,
-    head: "",
-    nowMs: Date.now(),
-    statuses: [],
-    issueComments,
-    reviewComments,
-    writers,
-    adjudicatorTrust: { kind: "local" },
-  });
+  const status = read.status;
+  const issueComments = read.issueComments;
   const finding = status.findings.find((row) => row.id === findingId);
   if (finding === undefined) {
     throw new CliUsageError(
@@ -181,6 +163,9 @@ async function postedFindingFromPr(
         `${findingId} on PR #${prNumber} has no review head to answer under`,
       );
     }
+    // Only the newest reply the gate counts makes a second one a repeat: status's `triage` for this
+    // finding is that reply, read with the same verdict time and the same author rule as the gate.
+    const already = finding.triage !== null && finding.triage.head === headSha;
     return {
       target: {
         kind: "thread",
@@ -190,9 +175,7 @@ async function postedFindingFromPr(
         },
       },
       headSha,
-      issueComments,
-      reviewComments,
-      writers,
+      already,
     };
   }
   const summaryId = findMarkedCommentId(issueComments);
@@ -205,6 +188,9 @@ async function postedFindingFromPr(
       `${findingId} on PR #${prNumber} has no comment and the pull request has no review summary to answer it in`,
     );
   }
+  const headSha = status.report.head;
+  // A summary-row reply is answered by the newest counted reply that names the row, at this head.
+  const already = finding.triage !== null && finding.triage.head === headSha;
   return {
     target: {
       kind: "row",
@@ -213,10 +199,8 @@ async function postedFindingFromPr(
       path: finding.path,
       line: finding.line,
     },
-    headSha: status.report.head,
-    issueComments,
-    reviewComments,
-    writers,
+    headSha,
+    already,
   };
 }
 
@@ -246,33 +230,13 @@ async function carriedRowsHint(input: {
   sleepFn: (ms: number) => Promise<void>;
 }): Promise<string> {
   try {
-    const issueComments = await fetchPrComments(
-      input.operatorRoot,
-      input.prNumber,
-      {
-        spawnFn: input.spawnFn,
-      },
-    );
-    const reviewComments = await fetchPrReviewComments(
-      input.operatorRoot,
-      input.prNumber,
-      { spawnFn: input.spawnFn },
-    );
-    const writers = await requireReplyWriters({
+    const { status } = await readPrStatus({
       operatorRoot: input.operatorRoot,
-      comments: [...reviewComments, ...issueComments],
+      pr: input.prNumber,
+      nowMs: Date.now(),
       spawnFn: input.spawnFn,
       sleepFn: input.sleepFn,
-    });
-    const status = buildPrStatus({
-      pr: input.prNumber,
-      head: "",
-      nowMs: Date.now(),
-      statuses: [],
-      issueComments,
-      reviewComments,
-      writers,
-      adjudicatorTrust: { kind: "local" },
+      memo: { writers: new Map() },
     });
     const rows = status.findings
       .filter((row) => row.id !== null && row.path === input.findingPath)
@@ -297,6 +261,7 @@ async function postedFindingFromRunDir(input: {
   target: ReplyTarget;
   headSha: string;
   reasoning: string;
+  already: boolean;
 }> {
   const { operatorRoot, prNumber, runDir, spawnFn } = input;
   const findingsPath = path.join(runDir, "findings.json");
@@ -373,6 +338,21 @@ async function postedFindingFromRunDir(input: {
         `(ids ${match.ids.join(", ")}) — will not pick by proximity`,
     );
   }
+  // The same read `crysk status` makes: a repeat only when the newest reply the gate counts for this
+  // finding already answers this review.
+  const read = await readPrStatus({
+    operatorRoot,
+    pr: prNumber,
+    nowMs: Date.now(),
+    spawnFn,
+    sleepFn: input.sleepFn,
+    memo: { writers: new Map() },
+  });
+  const postedRow = read.status.findings.find(
+    (row) => row.comment_id === match.posted.id,
+  );
+  const already =
+    postedRow?.triage != null && postedRow.triage.head === doc.head_sha;
   return {
     target: {
       kind: "thread",
@@ -380,6 +360,7 @@ async function postedFindingFromRunDir(input: {
     },
     headSha: doc.head_sha,
     reasoning,
+    already,
   };
 }
 
@@ -423,11 +404,8 @@ export async function runTriageReplyCommand(input: {
             spawnFn,
             sleepFn: input.sleepFn ?? Bun.sleep,
           })),
-          issueComments: undefined,
-          reviewComments: undefined,
-          writers: undefined,
         };
-  const { target: replyTarget, headSha, reasoning, issueComments } = found;
+  const { target: replyTarget, headSha, reasoning, already } = found;
   const fields: TriageMarkerFields = {
     tag: input.tag,
     headSha,
@@ -453,40 +431,6 @@ export async function runTriageReplyCommand(input: {
     subject === undefined
       ? renderTriageReplyBody(fields, reasoning)
       : renderTriageReplyBody(fields, reasoning, subject);
-  // Only the newest reply the gate would count makes a second one a repeat (triage/reply.ts).
-  let already: boolean;
-  if (replyTarget.kind === "thread") {
-    const reviewComments =
-      found.reviewComments ??
-      (await fetchPrReviewComments(operatorRoot, prNumber, { spawnFn }));
-    const writers =
-      found.writers ??
-      (await requireReplyWriters({
-        operatorRoot,
-        comments: reviewComments,
-        spawnFn,
-        sleepFn: input.sleepFn ?? Bun.sleep,
-      }));
-    already =
-      newestCountedThreadReplyHead({
-        parentId: replyTarget.parent.id,
-        replies: reviewComments,
-        writers,
-      }) === headSha;
-  } else {
-    // The row's replies are top-level comments, read with the summary, so no second fetch.
-    if (issueComments === undefined || found.writers === undefined) {
-      throw new Error(
-        "triage reply: a summary-row target carries the PR's comments and their authors' permissions",
-      );
-    }
-    already =
-      newestCountedRowReplyHead({
-        rowId: replyTarget.rowId,
-        comments: issueComments,
-        writers: found.writers,
-      }) === headSha;
-  }
   const resolveDecision = decideThreadResolve({
     channel: replyTarget.kind === "row" ? "issue" : replyTarget.parent.channel,
     verdict: input.verdict,

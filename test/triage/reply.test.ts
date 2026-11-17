@@ -14,8 +14,6 @@ import {
   findingAnswered,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
-  newestCountedRowReplyHead,
-  newestCountedThreadReplyHead,
   replyAnswersReview,
   replyHeadAnswers,
 } from "#triage/reply";
@@ -571,115 +569,5 @@ describe("findingAnswered", () => {
     expect(
       findingAnswered(finding("applied", null, HEAD, OTHER_HEAD), HEAD),
     ).toBe(false);
-  });
-});
-
-describe("newestCountedThreadReplyHead", () => {
-  const thread = (
-    id: number,
-    user: string | undefined,
-    head: string,
-    parent = 7,
-  ) => ({
-    id,
-    user,
-    in_reply_to_id: parent,
-    body: triageMarker({ tag: "applied", headSha: head, actor: "agent" }),
-  });
-  const writers = new Map([
-    ["dev", true],
-    ["visitor", false],
-  ]);
-
-  test("the newest reply from a writer decides, not an older one at the same head", () => {
-    expect(
-      newestCountedThreadReplyHead({
-        parentId: 7,
-        replies: [thread(1, "dev", HEAD), thread(2, "dev", OTHER_HEAD)],
-        writers,
-      }),
-    ).toBe(OTHER_HEAD);
-  });
-
-  test("a newer reply from a login without write access is not counted", () => {
-    expect(
-      newestCountedThreadReplyHead({
-        parentId: 7,
-        replies: [thread(1, "dev", HEAD), thread(2, "visitor", OTHER_HEAD)],
-        writers,
-      }),
-    ).toBe(HEAD);
-  });
-
-  test("a reply in another thread or a row reply is not this thread's reply", () => {
-    expect(
-      newestCountedThreadReplyHead({
-        parentId: 7,
-        replies: [thread(1, "dev", HEAD, 8)],
-        writers,
-      }),
-    ).toBeNull();
-  });
-
-  test("a reply with no author is not counted", () => {
-    expect(
-      newestCountedThreadReplyHead({
-        parentId: 7,
-        replies: [thread(1, undefined, HEAD)],
-        writers,
-      }),
-    ).toBeNull();
-  });
-});
-
-describe("newestCountedRowReplyHead", () => {
-  const row = (
-    id: number,
-    user: string | undefined,
-    head: string,
-    rowId = "R001",
-  ) => ({
-    id,
-    user,
-    body: triageMarker({
-      tag: "applied",
-      headSha: head,
-      actor: "agent",
-      row: rowId,
-    }),
-  });
-  const writers = new Map([
-    ["dev", true],
-    ["visitor", false],
-  ]);
-
-  test("the newest reply from a writer that names the row decides", () => {
-    expect(
-      newestCountedRowReplyHead({
-        rowId: "R001",
-        comments: [row(1, "dev", HEAD), row(2, "dev", OTHER_HEAD)],
-        writers,
-      }),
-    ).toBe(OTHER_HEAD);
-  });
-
-  test("a newer reply from a login without write access is not counted", () => {
-    expect(
-      newestCountedRowReplyHead({
-        rowId: "R001",
-        comments: [row(1, "dev", HEAD), row(2, "visitor", OTHER_HEAD)],
-        writers,
-      }),
-    ).toBe(HEAD);
-  });
-
-  test("a reply that names another row is not counted", () => {
-    expect(
-      newestCountedRowReplyHead({
-        rowId: "R001",
-        comments: [row(1, "dev", HEAD, "R002")],
-        writers,
-      }),
-    ).toBeNull();
   });
 });

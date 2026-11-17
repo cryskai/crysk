@@ -3,7 +3,11 @@ import { parseFindingMarker } from "#pr/preflight";
 import { TIER_UNRECOVERABLE } from "#rereview/classify";
 import { CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { withPlainAppliedReplies } from "#triage/plain-reply";
-import { countedTriageReplies, findingAnswered } from "#triage/reply";
+import {
+  countedTriageReplies,
+  findingAnswered,
+  isStaleTriageReply,
+} from "#triage/reply";
 import { parseTriageMarker } from "#triage/triage";
 import { parsePrCommentMarker } from "#watch/preflight";
 
@@ -46,11 +50,23 @@ export function triageReplyAuthors(
     user: string;
     body: string;
     in_reply_to_id?: number | null;
+    created_at?: string;
   }[],
+  // When given, a reply the read will drop as stale is left out: nobody has to ask for the
+  // permission of an author whose reply cannot count.
+  cutoff?: { reviewedHead: string | null; verdictAt: number | null },
 ): string[] {
   const authors = new Set<string>();
   for (const comment of withPlainAppliedReplies(comments)) {
-    if (isTriageReply(comment.body)) authors.add(comment.user);
+    if (!isTriageReply(comment.body)) continue;
+    if (
+      cutoff !== undefined &&
+      cutoff.reviewedHead !== null &&
+      isStaleTriageReply(comment, cutoff.reviewedHead, cutoff.verdictAt)
+    ) {
+      continue;
+    }
+    authors.add(comment.user);
   }
   return [...authors];
 }

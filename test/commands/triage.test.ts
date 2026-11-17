@@ -201,6 +201,47 @@ function doc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {
 
 const RUN_HEAD = "c".repeat(40);
 
+// The PR view `crysk status` reads first. Its head is HEAD, the head the fixtures reply to.
+function prViewScript(): ScriptEntry {
+  return {
+    match: ["pr", "view", "42", "--json"],
+    response: {
+      stdout: JSON.stringify({
+        additions: 1,
+        baseRefName: "dev",
+        baseRefOid: "c".repeat(40),
+        changedFiles: 1,
+        deletions: 0,
+        headRefOid: HEAD,
+        mergeCommit: null,
+        number: 42,
+        state: "OPEN",
+        title: "t",
+      }),
+    },
+  };
+}
+
+// The commit statuses of HEAD that `crysk status` reads. Empty by default: the verdict time is unknown.
+function commitStatusScript(statuses: unknown[] = []): ScriptEntry {
+  return {
+    match: [`commits/${HEAD}/status`],
+    response: { stdout: statuses.length === 0 ? "" : ndjson(statuses) },
+  };
+}
+
+// The crysk red a skip or a review writes on a head, created at createdAt.
+function redGateStatus(createdAt: string): unknown {
+  return {
+    state: "failure",
+    context: COMMIT_STATUS_CONTEXT,
+    created_at: createdAt,
+    description:
+      "crysk: 1 blocking finding(s) — fix and push, or /crysk override",
+    target_url: null,
+  };
+}
+
 // The bare `triage --pr --from` verb was retired with comparison.json.
 // Its only supported subcommand is `triage reply`, and a
 // bare triage must fail as a usage error before any gh call is made.
@@ -281,6 +322,7 @@ async function writeReplyRunDir(input?: {
 function greptileCollisionScript(input?: {
   postLine?: number;
   path?: string;
+  statuses?: unknown[];
 }): ScriptEntry[] {
   const postLine = input?.postLine ?? 144;
   const findingPath = input?.path ?? F001_PATH;
@@ -360,6 +402,8 @@ function greptileCollisionScript(input?: {
     },
     // The reply author of the fixtures has write access.
     permissionEntry("dev", { stdout: "write\n" }),
+    prViewScript(),
+    commitStatusScript(input?.statuses),
   ];
 }
 
@@ -368,11 +412,15 @@ function greptileCollisionScript(input?: {
 // default), and extraReviewComments are further review comments on the PR.
 function carriedScript(
   extraReviewComments: unknown[] = [],
-  options: { summaryHead?: string; commentHead?: string } = {},
+  options: {
+    summaryHead?: string;
+    commentHead?: string;
+    statuses?: unknown[];
+  } = {},
 ): ScriptEntry[] {
   const summaryHead = options.summaryHead ?? HEAD;
   const commentHead = options.commentHead ?? RUN_HEAD;
-  const script = greptileCollisionScript();
+  const script = greptileCollisionScript({ statuses: options.statuses });
   const summaryBody = [
     `<!-- pr-hero-report head=${summaryHead} -->`,
     "",
@@ -548,6 +596,8 @@ describe("runTriageReplyCommand", () => {
         },
       },
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      prViewScript(),
+      commitStatusScript(),
     ];
   }
 
@@ -898,6 +948,97 @@ describe("runTriageReplyCommand — a --from id whose finding was carried", () =
     } finally {
       await cleanup();
     }
+  });
+});
+
+describe("runTriageReplyCommand — with a run directory, a reply already at the run's head", () => {
+  const AFTER = "2026-10-30T11:00:00Z";
+
+  // The run's finding is posted as comment 22 at RUN_HEAD (greptileCollisionScript). A reply from
+  // `login` at that head sits in its thread, and the permission lookup of that login answers `permission`.
+  function replyScript(login: string, permission: string): ScriptEntry[] {
+    const reply = {
+      id: 30,
+      user: login,
+      in_reply_to_id: 22,
+      created_at: AFTER,
+      path: F001_PATH,
+      line: 144,
+      original_line: 144,
+      body: `${triageMarker({ tag: "applied", headSha: RUN_HEAD, actor: "agent" })}\n\nfixed by resetting the latch\n`,
+    };
+    return greptileCollisionScript().map((entry) => {
+      if (entry.match[0] === "pulls/42/comments") {
+        const rows = (entry.response?.stdout ?? "")
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line));
+        return {
+          match: entry.match,
+          response: { stdout: ndjson([...rows, reply]) },
+        };
+      }
+      if (entry.match[0] === `collaborators/${login}/permission`) {
+        return permissionEntry(login, { stdout: `${permission}\n` });
+      }
+      return entry;
+    });
+  }
+
+  // Runs the reply from the run directory and returns the POSTs it made and what it logged.
+  async function replyFromRunDir(script: ScriptEntry[]): Promise<{
+    exitCode: number;
+    calls: RecordedCall[];
+    written: string;
+  }> {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    const written: string[] = [];
+    const spy = spyOn(process.stderr, "write").mockImplementation(
+      (chunk: string | Uint8Array) => {
+        written.push(String(chunk));
+        return true;
+      },
+    );
+    try {
+      const { spawnFn, calls } = makeFakeGh(script);
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      return { exitCode, calls, written: written.join("") };
+    } finally {
+      spy.mockRestore();
+      await cleanup();
+    }
+  }
+
+  const postsOf = (calls: RecordedCall[]) =>
+    calls.filter((call) => call.argv.includes("--method"));
+
+  test("with a run directory, a writer's reply at the run's head is a repeat", async () => {
+    // A writer (write permission) already answered this finding at the run's head: the driver skips.
+    const { exitCode, calls, written } = await replyFromRunDir(
+      replyScript("dev", "write"),
+    );
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(0);
+    expect(written).toContain("skip post");
+  });
+
+  test("with a run directory, a reply from a login without write access is not a repeat", async () => {
+    // The same reply by a read-only login does not count as an answer, so the driver posts once.
+    const { exitCode, calls, written } = await replyFromRunDir(
+      replyScript("dev", "read"),
+    );
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(1);
+    expect(written).not.toContain("skip post");
   });
 });
 
@@ -1262,20 +1403,25 @@ describe("runTriageReplyCommand — without a run directory", () => {
     try {
       const foreignHead = "e".repeat(40);
       const { spawnFn, calls } = makeFakeGh(
-        carriedScript([
-          {
-            id: 23,
-            user: "dev",
-            in_reply_to_id: 22,
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
-          },
-          {
-            id: 24,
-            user: "dev",
-            in_reply_to_id: 22,
-            body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent" })}\n\nlater`,
-          },
-        ]),
+        carriedScript(
+          [
+            {
+              id: 23,
+              user: "dev",
+              in_reply_to_id: 22,
+              created_at: "2026-10-30T11:00:00Z",
+              body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+            },
+            {
+              id: 24,
+              user: "dev",
+              in_reply_to_id: 22,
+              created_at: "2026-10-30T11:00:00Z",
+              body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent" })}\n\nlater`,
+            },
+          ],
+          { statuses: [redGateStatus("2026-10-30T10:00:00Z")] },
+        ),
       );
       const exitCode = await runTriageReplyCommand({
         operatorRoot: OPERATOR_ROOT,
@@ -1508,22 +1654,6 @@ describe("triage reply — the reply the driver posts is the one the gate counts
 
   test("an older reply at this head and a newer one at another head: the driver replies, then the gate and status agree", async () => {
     const foreignHead = "e".repeat(40);
-    const script = carriedScript([
-      {
-        id: 23,
-        user: "dev",
-        in_reply_to_id: 22,
-        created_at: AFTER,
-        body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
-      },
-      {
-        id: 24,
-        user: "dev",
-        in_reply_to_id: 22,
-        created_at: AFTER,
-        body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent" })}\n\nlater`,
-      },
-    ]);
     const failingGate: CommitStatusFact = {
       state: "failure",
       context: COMMIT_STATUS_CONTEXT,
@@ -1532,6 +1662,25 @@ describe("triage reply — the reply the driver posts is the one the gate counts
         "crysk: 1 blocking finding(s) — fix and push, or /crysk override",
       target_url: null,
     };
+    const script = carriedScript(
+      [
+        {
+          id: 23,
+          user: "dev",
+          in_reply_to_id: 22,
+          created_at: AFTER,
+          body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+        },
+        {
+          id: 24,
+          user: "dev",
+          in_reply_to_id: 22,
+          created_at: AFTER,
+          body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent" })}\n\nlater`,
+        },
+      ],
+      { statuses: [failingGate] },
+    );
     const statusFor = (reviewComments: unknown[]) =>
       buildPrStatus({
         pr: 42,
@@ -1603,6 +1752,7 @@ describe("triage reply — the reply the driver posts is the one the gate counts
 function rowScript(
   extraIssueComments: unknown[] = [],
   summaryHead = HEAD,
+  statuses: unknown[] = [],
 ): ScriptEntry[] {
   const summaryBody = [
     `<!-- pr-hero-report head=${summaryHead} -->`,
@@ -1623,7 +1773,7 @@ function rowScript(
       1,
     ),
   ].join("\n");
-  const script = greptileCollisionScript();
+  const script = greptileCollisionScript({ statuses });
   script[0] = {
     match: ["issues/42/comments", "--paginate"],
     response: {
@@ -1971,18 +2121,24 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
     try {
       const foreignHead = "e".repeat(40);
       const { spawnFn, calls } = makeFakeGh(
-        rowScript([
-          {
-            id: 60,
-            user: "dev",
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nthis round`,
-          },
-          {
-            id: 61,
-            user: "dev",
-            body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent", row: "R001" })}\n\nlater`,
-          },
-        ]),
+        rowScript(
+          [
+            {
+              id: 60,
+              user: "dev",
+              created_at: "2026-10-30T11:00:00Z",
+              body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nthis round`,
+            },
+            {
+              id: 61,
+              user: "dev",
+              created_at: "2026-10-30T11:00:00Z",
+              body: `${triageMarker({ tag: "applied", headSha: foreignHead, actor: "agent", row: "R001" })}\n\nlater`,
+            },
+          ],
+          HEAD,
+          [redGateStatus("2026-10-30T10:00:00Z")],
+        ),
       );
       const exitCode = await runTriageReplyCommand({
         operatorRoot: OPERATOR_ROOT,
@@ -2033,5 +2189,174 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
       spy.mockRestore();
       await cleanup();
     }
+  });
+});
+
+describe("runTriageReplyCommand — a finding posted as a top-level comment", () => {
+  const AFTER = "2026-10-30T11:00:00Z";
+  const issueFinding = {
+    id: 20,
+    user: "pr-hero",
+    body: `${findingMarker({ path: F001_PATH, line: 144, headSha: HEAD, claim: F001_CLAIM })}\n${F001_CLAIM}`,
+  };
+
+  // An old pull request: the finding is top-level comment 20, listed in the summary as an outside row.
+  function issueFindingScript(
+    issueReplies: unknown[] = [],
+    reviewComments: unknown[] = [],
+  ): ScriptEntry[] {
+    const summaryBody = [
+      `<!-- pr-hero-report head=${HEAD} -->`,
+      "",
+      renderStateBlock(
+        HEAD,
+        [
+          stateFinding({
+            id: "R001",
+            sev: "CRITICAL",
+            tier: "blocking",
+            channel: "outside",
+            locs: [`${F001_PATH}:144`],
+            claim: F001_CLAIM,
+          }),
+        ],
+        undefined,
+        1,
+      ),
+    ].join("\n");
+    return [
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            { id: 5, user: "pr-hero", body: summaryBody },
+            issueFinding,
+            ...issueReplies,
+          ]),
+        },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: { stdout: ndjson(reviewComments) },
+      },
+      {
+        match: ["repo", "view", "--json", "url"],
+        response: { stdout: "https://github.com/MusiveTech/musive\n" },
+      },
+      permissionEntry("dev", { stdout: "write\n" }),
+      prViewScript(),
+      commitStatusScript(),
+    ];
+  }
+
+  async function reply(script: ScriptEntry[]): Promise<{
+    exitCode: number;
+    calls: RecordedCall[];
+    written: string;
+  }> {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-top-"));
+    try {
+      const bodyFile = path.join(dir, "body.md");
+      await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+      const written: string[] = [];
+      const spy = spyOn(process.stderr, "write").mockImplementation(
+        (chunk: string | Uint8Array) => {
+          written.push(String(chunk));
+          return true;
+        },
+      );
+      try {
+        const { spawnFn, calls } = makeFakeGh(script);
+        const exitCode = await runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "applied",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+        });
+        return { exitCode, calls, written: written.join("") };
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  const postsOf = (calls: RecordedCall[]) =>
+    calls.filter((call) => call.argv.includes("--method"));
+
+  test("a writer's linked reply to this review is a repeat", async () => {
+    const linked = {
+      id: 30,
+      user: "dev",
+      created_at: AFTER,
+      body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nfixed\n\nIn reply to: https://github.com/MusiveTech/musive/pull/42#issuecomment-20\n`,
+    };
+    const { exitCode, calls, written } = await reply(
+      issueFindingScript([linked]),
+    );
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(0);
+    expect(written).toContain("skip post: R001 already triaged at this head");
+  });
+
+  test("a reply in a review thread whose root shares the id is not its reply", async () => {
+    const unrelatedRoot = {
+      id: 20,
+      user: "greptile-apps",
+      body: "an unrelated review comment",
+      path: F001_PATH,
+      line: 144,
+      original_line: 144,
+      in_reply_to_id: null,
+    };
+    const threadReply = {
+      id: 31,
+      user: "dev",
+      created_at: AFTER,
+      body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nfixed`,
+      path: F001_PATH,
+      line: 144,
+      original_line: 144,
+      in_reply_to_id: 20,
+    };
+    const { exitCode, calls } = await reply(
+      issueFindingScript([], [unrelatedRoot, threadReply]),
+    );
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(1);
+  });
+
+  test("a stale newer reply does not make the driver post again", async () => {
+    // The finding was posted on an older head and is carried; the review's verdict is written after
+    // both replies, so the newer one, at the older head, is stale.
+    const script = carriedScript(
+      [
+        {
+          id: 11,
+          user: "dev",
+          in_reply_to_id: 22,
+          created_at: "2026-10-30T10:30:00Z",
+          body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+        },
+        {
+          id: 12,
+          user: "dev",
+          in_reply_to_id: 22,
+          created_at: "2026-10-30T10:30:00Z",
+          body: `${triageMarker({ tag: "applied", headSha: OLD_HEAD, actor: "agent" })}\n\nolder`,
+        },
+      ],
+      {
+        commentHead: OLD_HEAD,
+        statuses: [redGateStatus("2026-10-30T12:00:00Z")],
+      },
+    );
+    const { exitCode, calls } = await reply(script);
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(0);
   });
 });

@@ -104,13 +104,6 @@ export function decideThreadResolve(input: {
   return "resolve";
 }
 
-export interface ReviewReplyRef {
-  in_reply_to_id: number | null;
-  body: string;
-  // The GitHub login that wrote the reply.
-  user?: string;
-}
-
 // Whether a triage reply answers the review of `reviewedHead`. A reply names the review it
 // answers, so one stamped with the reviewed head does. A reply stamped with the head its finding
 // was posted on comes from an older driver or a plain `applied` comment (triage/plain-reply.ts):
@@ -146,7 +139,7 @@ export function replyAnswersReview(input: {
 // live on the reviewed head through the summary's rows, so the review that wrote the verdict saw
 // its reply and kept it. A reply from before that verdict is the claim the review already
 // contradicted. A reply stamped with the reviewed head always answers that head's review.
-function isStaleReply(
+export function isStaleTriageReply(
   comment: { body: string; created_at?: string },
   reviewedHead: string,
   verdictAt: number | null,
@@ -186,7 +179,7 @@ export function countedTriageReplies<
     }
     if (
       input.reviewedHead !== null &&
-      isStaleReply(comment, input.reviewedHead, input.verdictAt)
+      isStaleTriageReply(comment, input.reviewedHead, input.verdictAt)
     ) {
       continue;
     }
@@ -233,50 +226,4 @@ export function findingAnswered(
     (triage.tag === "applied" ||
       (triage.tag === "dismissed" && finding.ci_verdict === "upheld"))
   );
-}
-
-// The head of the newest reply in this thread that the gate would count (from a login with write
-// access), or null. The driver skips a second reply only when that newest counted reply already
-// answers this review: an older one at this head is not the reply the gate reads.
-export function newestCountedThreadReplyHead(input: {
-  parentId: number;
-  replies: readonly (ReviewReplyRef & { id: number })[];
-  writers: ReadonlyMap<string, boolean>;
-}): string | null {
-  let newest: { id: number; head: string } | null = null;
-  for (const reply of input.replies) {
-    if (reply.in_reply_to_id !== input.parentId) continue;
-    const marker = parseTriageMarker(reply.body);
-    if (marker === null || marker.row !== undefined) continue;
-    if (reply.user === undefined || input.writers.get(reply.user) !== true) {
-      continue;
-    }
-    if (newest === null || reply.id > newest.id) {
-      newest = { id: reply.id, head: marker.headSha };
-    }
-  }
-  return newest?.head ?? null;
-}
-
-// The same for a finding with no comment: its replies are top-level comments that name its row.
-export function newestCountedRowReplyHead(input: {
-  rowId: string;
-  comments: readonly { id: number; body: string; user?: string }[];
-  writers: ReadonlyMap<string, boolean>;
-}): string | null {
-  let newest: { id: number; head: string } | null = null;
-  for (const comment of input.comments) {
-    const marker = parseTriageMarker(comment.body);
-    if (marker === null || marker.row !== input.rowId) continue;
-    if (
-      comment.user === undefined ||
-      input.writers.get(comment.user) !== true
-    ) {
-      continue;
-    }
-    if (newest === null || comment.id > newest.id) {
-      newest = { id: comment.id, head: marker.headSha };
-    }
-  }
-  return newest?.head ?? null;
 }

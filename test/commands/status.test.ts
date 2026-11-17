@@ -1106,6 +1106,38 @@ describe("runStatusCommand: the reply authors' permissions", () => {
     expect(written).toEqual([]);
   });
 
+  test("a stale reply from a login whose permission does not read does not fail the command", async () => {
+    // Older than the verdict on HEAD (happyScript's red gate), at an older head: the gate drops it.
+    const staleBy = {
+      ...replyBy("ghost", 42),
+      created_at: new Date(NOW - 10 * 60_000).toISOString(),
+      body: `${triageMarker({ tag: "applied", headSha: "d".repeat(40), actor: "agent" })}\n\nreasoning`,
+    };
+    const run = async (script: ScriptEntry[]) => {
+      const written: string[] = [];
+      const code = await runStatusCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 12,
+        json: true,
+        spawnFn: makeFakeGh(script).spawnFn,
+        nowMs: NOW,
+        sleepFn: async () => {},
+        out: (text) => written.push(text),
+      });
+      return { code, written };
+    };
+    const withStale = await run([
+      {
+        match: ["collaborators/ghost/permission"],
+        response: { stderr: "HTTP 500", exitCode: 1 },
+      },
+      ...withReplies([staleBy]),
+    ]);
+    const without = await run(withReplies([]));
+    expect(withStale.code).toBe(0);
+    expect(withStale.written).toEqual(without.written);
+  });
+
   test("the permission of a reply author is asked once across polls", async () => {
     const pending = {
       state: "pending",

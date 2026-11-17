@@ -71,6 +71,7 @@ import {
   ghPrHeroWorkflowRunHeads,
   listAdmissionCheckRuns,
 } from "#pr/pr";
+import { verdictAtMs } from "#pr/pr-status";
 import {
   type CiMode,
   type CommitStatusContext,
@@ -674,13 +675,16 @@ export async function lookUpReplyWriters(input: {
     user: string;
     body: string;
     in_reply_to_id?: number | null;
+    created_at?: string;
   }[];
   known?: Map<string, boolean>;
+  // The reviewed head and the verdict time (ms): a stale reply's author is not asked.
+  cutoff?: { reviewedHead: string | null; verdictAt: number | null };
   spawnFn: typeof Bun.spawn | undefined;
   sleepFn: (ms: number) => Promise<void>;
 }): Promise<Map<string, boolean | null>> {
   const writers = new Map<string, boolean | null>();
-  for (const login of triageReplyAuthors(input.comments)) {
+  for (const login of triageReplyAuthors(input.comments, input.cutoff)) {
     const cached = input.known?.get(login);
     if (cached !== undefined) {
       writers.set(login, cached);
@@ -752,6 +756,7 @@ function answeredReader(input: {
     const writers = await lookUpReplyWriters({
       operatorRoot: input.operatorRoot,
       comments: [...input.reviewComments, ...input.issueComments],
+      cutoff: { reviewedHead, verdictAt: verdictAtMs(verdictAt) },
       spawnFn: input.spawnFn,
       sleepFn: input.sleepFn,
     });

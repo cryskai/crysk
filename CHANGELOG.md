@@ -52,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later reply from a login without write access overrode, in status only, a writer's answer. One filter now
   serves both; `crysk status` asks GitHub for each reply author's permission, and a `triage` reason names the
   logins whose replies do not count. `crysk triage reply` skips a second reply only when the newest counted
-  one already names this review. Under a green gate any author's reply still satisfies "every finding has a
+  one already names this review, and it reads the pull request through the same read as `crysk status`, so a
+  finding posted as a top-level comment is no longer answered twice. Under a green gate any author's reply still satisfies "every finding has a
   reply". The review applies the rule too: it reads a triage reply, and queues a dismissal for the CI
   adjudicator, only from a login with write access.
 
