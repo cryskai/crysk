@@ -1,6 +1,6 @@
 ---
 name: crysk-release
-description: "Trigger: release, cut a release, publish a version, sacar release, bump version, tag vX.Y.Z, npm publish crysk. Step-by-step Crysk release: changelog audit, version bump in five files, release PR, dev to main, npm publish, tags, verification."
+description: "Trigger: release, cut a release, publish a version, sacar release, bump version, tag vX.Y.Z, npm publish crysk. Step-by-step Crysk release: changelog audit, version bump in six places (five files plus the skills' pinned npx version), release PR, dev to main, npm publish, tags, verification."
 license: MIT
 metadata:
   author: pr-hero
@@ -77,6 +77,7 @@ sed -i '' "s/VERSION=\"$PREV\"/VERSION=\"$V\"/" install.sh
 # scanner flags an unpinned `npx -y crysk` as critical.
 grep -rl "crysk@$PREV" skills/crysk skills/crysk-loop skills/crysk-pr skills/crysk-ci-setup | xargs sed -i '' "s/crysk@$PREV/crysk@$V/g"
 grep -rn "crysk@$PREV" skills/   # must print nothing
+bun test test/skills-pin.test.ts  # every npx crysk call in a shipped skill names $V
 grep -n "$PREV" package.json src/index.ts src/assets.ts src/updater.ts install.sh   # must print nothing
 grep -n "$V" package.json src/index.ts src/assets.ts src/updater.ts install.sh      # must print 5 lines
 ```
