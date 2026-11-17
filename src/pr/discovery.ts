@@ -68,17 +68,14 @@ import type { IgnoreFileReadResult } from "../ignore-read";
 // hunters run for a re-review is `skipDiscovery` — never a hardcoded
 // `case === "B"` special-case, which would defeat the fix by silently
 // skipping discovery for every case-B re-review regardless of whether this
-// particular one actually has nothing to discover. `agents`/`parityFires`
-// flow through unchanged to `selectActiveHunters` (#review/run), shared with
-// review()'s own copy.
+// particular one actually has nothing to discover. `agents` flows through
+// unchanged to `selectActiveHunters` (#review/run), shared with review()'s own
+// copy.
 export function discoveryHunters(params: {
   skipDiscovery: boolean;
   agents: readonly AgentSpec[];
-  parityFires: boolean;
 }): AgentSpec[] {
-  return params.skipDiscovery
-    ? []
-    : selectActiveHunters(params.agents, params.parityFires);
+  return params.skipDiscovery ? [] : selectActiveHunters(params.agents);
 }
 
 export interface PrDiscoveryGit {
@@ -138,11 +135,6 @@ export interface PrDiscoveryResult {
       }
     | undefined;
   diffStat: DiffStat;
-  // The whole PR range's stat, filtered by the same rules as `diffStat`
-  // (merge-base..head, no path restriction). Equal to `diffStat` when discovery
-  // read the whole range; the plan divides the two to price a narrowed run
-  // (cryskai/platform#12).
-  prDiffStat: DiffStat;
   sizeGate: SizeGateVerdict;
 }
 
@@ -432,18 +424,6 @@ export async function resolvePrDiscovery(params: {
     }));
   }
 
-  const prDiffStat =
-    discoveryIsPrRange && !skipDiscovery
-      ? diffStat
-      : (
-          await computeDiffStatAndSizeGate({
-            runGit: git.runGit,
-            range: `${diffFromSha}..${headSha}`,
-            pathArgs: [],
-            gateConfig,
-          })
-        ).diffStat;
-
   return {
     prepared,
     skipDiscovery,
@@ -457,7 +437,6 @@ export async function resolvePrDiscovery(params: {
     adjudicationQueue: adjudicationSubjects,
     phaseB,
     diffStat,
-    prDiffStat,
     sizeGate,
   };
 }

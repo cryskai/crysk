@@ -8,8 +8,8 @@
 // - a root span `invoke_workflow crysk.review` for the run;
 // - a child `invoke_agent <step>` per pipeline step;
 // - under it a `chat <model>` per attempt, carrying the model, provider, token
-//   usage (inclusive of cache and reasoning, as the conventions count it) and
-//   cost, so a backend sees each model call once;
+//   usage (inclusive of cache and reasoning, as the conventions count it),
+//   so a backend sees each model call once;
 // - under that an `execute_tool <tool>` per tool call the model made.
 // Engine facts ride as `crysk.*` attributes with snake_case keys. Every leaf of
 // each pipeline.json step lands on its step span (crysk.step.*), every leaf of
@@ -41,7 +41,7 @@ import {
   redactSessionDocument,
   redactSessionText,
 } from "../execution/claude-session-trace";
-import { metadataOnlyFinding } from "./platform-report";
+import { metadataOnlyFinding, stepRole } from "./platform-report";
 import {
   type ChatMessage,
   type Conversation,
@@ -482,8 +482,8 @@ function sumKnown(...values: unknown[]): number | undefined {
 }
 
 // The engine's usage leaves are disjoint; the conventions count input with its
-// cache and output with its reasoning. List cost follows the report step's
-// rule: a subscription's notional cost, a metered run's cash cost.
+// cache and output with its reasoning. No price is attached: the platform
+// prices the run from the usage facts.
 function writeUsage(attrs: Attributes, usage: Record<string, unknown>): void {
   const tokens = isRecord(usage.tokens) ? usage.tokens : {};
   attrs.number(
@@ -511,27 +511,7 @@ function writeUsage(attrs: Attributes, usage: Record<string, unknown>): void {
     tokens.inputCacheWrite,
   );
   attrs.number("gen_ai.usage.reasoning.output_tokens", tokens.outputReasoning);
-  const listCost =
-    usage.billingMode === "subscription"
-      ? num(usage.notionalCostUsd)
-      : usage.billingMode === "metered"
-        ? num(usage.cashCostUsd)
-        : undefined;
-  attrs.number("gen_ai.usage.cost", listCost);
   attrs.flatten("crysk.usage", usage);
-}
-
-function stepRole(pipeline: unknown, name: string): string {
-  const plan =
-    isRecord(pipeline) && isRecord(pipeline.route_plan)
-      ? pipeline.route_plan
-      : undefined;
-  const planned = Array.isArray(plan?.steps)
-    ? plan.steps.filter(isRecord).find((step) => step.stepKey === name)
-    : undefined;
-  const role = str(planned?.role);
-  if (role !== undefined) return role;
-  return name.split(/[-.]/)[0] ?? name;
 }
 
 function pipelineSteps(pipeline: unknown): Record<string, unknown>[] {
@@ -922,7 +902,12 @@ function build(
     attrs.text("gen_ai.operation.name", "invoke_agent");
     attrs.text("gen_ai.agent.name", step.name);
     attrs.text("crysk.step.role", stepRole(run.pipeline, step.name));
-    if (meta !== undefined) attrs.flatten("crysk.step", meta);
+    if (meta !== undefined) {
+      // `usage_facts` (one tuple per model request) travels in the run report to the
+      // platform; flattened here it would be hundreds of attributes per attempt.
+      const { usage_facts: _usageFacts, ...stepAttrs } = meta;
+      attrs.flatten("crysk.step", stepAttrs);
+    }
     attrs.text("crysk.step.name", step.name);
     attrs.text("crysk.model.effort", str(meta?.effort));
     const status = str(meta?.status);
@@ -1098,7 +1083,6 @@ function writeTurnUsage(attrs: Attributes, turn: Turn): void {
     turn.cacheWriteTokens,
   );
   attrs.number("gen_ai.usage.reasoning.output_tokens", turn.reasoningTokens);
-  attrs.number("gen_ai.usage.cost", turn.costUsd);
 }
 
 function toolSpan(

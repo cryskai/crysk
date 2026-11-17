@@ -384,3 +384,124 @@ describe("answeredBlockingFindings: what cannot unlock the gate", () => {
     ).toBeNull();
   });
 });
+
+// triage-without-skill S1: a team without the crysk-loop skill answers with a plain comment. A reply in the
+// finding's thread that starts with "applied", from a writer, counts as the marker `crysk triage reply` writes.
+function plain(
+  id: number,
+  parent: number,
+  body: string,
+  options: { user?: string; at?: string } = {},
+): AnswerReviewComment {
+  return {
+    id,
+    user: options.user ?? AUTHOR,
+    ...(options.at === undefined ? {} : { created_at: options.at }),
+    body,
+    in_reply_to_id: parent,
+  };
+}
+
+describe("answeredBlockingFindings: plain applied replies", () => {
+  test("plain replies starting with applied answer both findings", () => {
+    expect(
+      read({
+        reviewComments: [
+          ...TWO_FINDINGS,
+          plain(11, 10, "applied"),
+          plain(21, 20, "Applied: fixed in 1a2b3c4, the loop now stops."),
+        ],
+      }),
+    ).toEqual({ blocking: 2, open: 0 });
+  });
+
+  test("a plain reply that does not start with applied answers nothing", () => {
+    expect(
+      read({
+        reviewComments: [
+          ...TWO_FINDINGS,
+          plain(11, 10, "applied"),
+          plain(21, 20, "thanks, I think this is applied now"),
+        ],
+      }),
+    ).toEqual({ blocking: 2, open: 1 });
+  });
+
+  test("a word that only starts like applied answers nothing", () => {
+    expect(
+      read({
+        reviewComments: [
+          ...TWO_FINDINGS,
+          plain(11, 10, "applied"),
+          plain(21, 20, "appliedness is not a word"),
+        ],
+      }),
+    ).toEqual({ blocking: 2, open: 1 });
+  });
+
+  test("a plain applied from a login with no write access is ignored", () => {
+    expect(
+      read({
+        reviewComments: [
+          ...TWO_FINDINGS,
+          plain(11, 10, "applied"),
+          plain(21, 20, "applied", { user: STRANGER }),
+        ],
+        writers: { [AUTHOR]: true, [STRANGER]: false },
+      }),
+    ).toEqual({ blocking: 2, open: 1 });
+  });
+
+  test("a plain applied whose author's permission did not read fails closed", () => {
+    expect(
+      read({
+        reviewComments: [
+          ...TWO_FINDINGS,
+          plain(11, 10, "applied"),
+          plain(21, 20, "applied"),
+        ],
+        writers: {},
+      }),
+    ).toBeNull();
+  });
+
+  test("a plain applied newer than a deferred marker answers the finding", () => {
+    expect(
+      read({
+        reviewComments: [
+          ...TWO_FINDINGS,
+          reply(11, 10, "deferred"),
+          plain(12, 10, "applied"),
+          plain(21, 20, "applied"),
+        ],
+      }),
+    ).toEqual({ blocking: 2, open: 0 });
+  });
+
+  test("an older head's plain applied counts only after the carried verdict", () => {
+    const comments = (at: string) => [
+      finding(10, 10, CLAIM_A, OLD),
+      finding(20, 40, CLAIM_B),
+      plain(11, 10, "applied", { at }),
+      plain(21, 20, "applied"),
+    ];
+    expect(read({ reviewComments: comments(BEFORE) })).toEqual({
+      blocking: 2,
+      open: 1,
+    });
+    expect(read({ reviewComments: comments(AFTER) })).toEqual({
+      blocking: 2,
+      open: 0,
+    });
+  });
+
+  test("triageReplyAuthors lists a plain applied author, not a plain commenter", () => {
+    expect(
+      triageReplyAuthors([
+        ...TWO_FINDINGS,
+        plain(11, 10, "applied"),
+        plain(21, 20, "looks good", { user: STRANGER }),
+      ]),
+    ).toEqual([AUTHOR]);
+  });
+});

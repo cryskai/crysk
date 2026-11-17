@@ -105,7 +105,6 @@ describe("produceClaudeCapabilityReport", () => {
     expect(report.isolation.codegraphPolicy).toBe(false);
     expect(report.protocol.terminalProof).toBe(true);
     expect(report.protocol.boundedEvents).toBe(false);
-    expect(report.billing.pricingReady).toBe(true);
     expect(report.cancellation.deadlineMs).toBe(7500);
     expect(report.cancellation.conformance).toBe("passed");
     expect(report.issues.map((i) => i.code).sort()).toEqual([
@@ -283,45 +282,23 @@ describe("exactBindingCapabilityGate", () => {
       usage: { normalized: true },
       billing: {
         mode: "subscription",
-        pricingApplicability: "not_applicable",
-        tokenPricingAvailable: false,
-        cashCostAccountingValid: true,
+        modeKnown: true,
       },
       ...overrides,
     };
   }
 
-  test("subscription binding passes without token pricing when not applicable", () => {
+  test("subscription binding passes the exact gate", () => {
     expect(exactBindingCapabilityGate(greenBindingReport())).toEqual({
       ok: true,
     });
   });
 
-  test("metered binding fails when token pricing is required but unavailable", () => {
-    const decision = exactBindingCapabilityGate(
-      greenBindingReport({
-        billing: {
-          mode: "metered",
-          pricingApplicability: "required",
-          tokenPricingAvailable: false,
-          cashCostAccountingValid: false,
-        },
-      }),
-    );
-    expect(decision.ok).toBe(false);
-    expect(decision.reason).toContain("pricing_table_missing");
-  });
-
-  test("metered binding passes when token pricing is available", () => {
+  test("a metered binding with a known billing mode passes the gate", () => {
     expect(
       exactBindingCapabilityGate(
         greenBindingReport({
-          billing: {
-            mode: "metered",
-            pricingApplicability: "required",
-            tokenPricingAvailable: true,
-            cashCostAccountingValid: true,
-          },
+          billing: { mode: "metered", modeKnown: true },
         }),
       ).ok,
     ).toBe(true);
@@ -336,27 +313,21 @@ describe("exactBindingCapabilityGate", () => {
   });
 
   // Production-reachable since FOLLOW-UP-1: the producer
-  // (FrozenRuntimeBinding.capabilities()) derives cashCostAccountingValid
-  // from the ORIGINAL three-state legacy billing mode, so a legacy report
-  // with `mode: "unknown"` emits exactly this combination — narrowed to
-  // "subscription" with pricingApplicability "not_applicable" and
-  // cashCostAccountingValid false. The producer-path proof lives in
+  // (FrozenRuntimeBinding.capabilities()) derives `modeKnown` from the
+  // ORIGINAL three-state legacy billing mode, so a legacy report with
+  // `mode: "unknown"` emits exactly this combination — narrowed to
+  // "subscription" with `modeKnown` false. The producer-path proof lives in
   // test/production-runtime.test.ts ("an unknown legacy billing mode blocks
   // the exact-binding gate through the real producer"); this one keeps the
   // gate's own contract honest for any producer.
-  test("subscription binding fails when cash-cost accounting is invalid", () => {
+  test("a binding whose billing mode is unknown fails the gate", () => {
     const decision = exactBindingCapabilityGate(
       greenBindingReport({
-        billing: {
-          mode: "subscription",
-          pricingApplicability: "not_applicable",
-          tokenPricingAvailable: false,
-          cashCostAccountingValid: false,
-        },
+        billing: { mode: "subscription", modeKnown: false },
       }),
     );
     expect(decision.ok).toBe(false);
-    expect(decision.reason).toContain("cash_cost_accounting_invalid");
+    expect(decision.reason).toContain("billing_mode_unknown");
   });
 });
 
@@ -391,9 +362,6 @@ describe("transport/producer parity (§11)", () => {
     expect(fromTransport.isolation.codegraphPolicy).toBe(
       fromProducer.isolation.codegraphPolicy,
     );
-    expect(fromTransport.billing.pricingReady).toBe(
-      fromProducer.billing.pricingReady,
-    );
     const producerCodes = new Set(fromProducer.issues.map((i) => i.code));
     for (const issue of fromTransport.issues) {
       expect(producerCodes.has(issue.code)).toBe(true);
@@ -408,23 +376,14 @@ describe("transport/producer parity (§11)", () => {
   // suite green while contradicting the static transport in every API-key
   // environment. Nothing else in this file asserts the constant's value at
   // all. These two tests close that hole.
-  test("billingMode is a deliberate static, and pricing readiness no longer holds it there", async () => {
+  test("billingMode is a deliberate static, and the exact binding owns the per-route answer", async () => {
     // Pinning the value, not endorsing it. CLAUDE_CAPABILITY_STATICS declares
     // "fields every claude-code route claims independent of host environment",
     // and for billing that claim is knowingly false: an ANTHROPIC_API_KEY user
     // is billed per token and is reported as a subscription anyway.
     //
-    // WHY IT IS STILL STATIC, and why the old reason is gone. This block used
-    // to argue that deriving the mode fails CLOSED: metered ->
-    // pricingApplicability "required" -> tokenPricingAvailable, which no
-    // disjunct could answer because every transport hardcoded
-    // `pricingReady: false` and the only other source was a bundled rate
-    // table keyed per model. #197 deleted that table and flipped the flag: the
-    // pricing gate now ANSWERS for a claude-code route, so a derived metered
-    // mode would no longer be refused for lack of pricing.
-    //
-    // What remained was scope, not safety, and #161 has now landed: deriving
-    // a real metered mode from the host environment is
+    // WHY IT IS STATIC. Deriving a real metered mode from the host
+    // environment is
     // `credentialKindForRoute`'s job (runner-authority.ts), not this
     // constant's. This backend-wide static still claims "subscription"
     // unconditionally on purpose — it is produced BEFORE any route (and
@@ -437,10 +396,6 @@ describe("transport/producer parity (§11)", () => {
     // (`FrozenRuntimeBinding.capabilities()`, production-runtime.ts), which
     // upgrades `effectiveBillingMode` from `credential.kind` — asserted
     // directly below, at the layer that actually owns the decision.
-    //
-    // Issue #156's CI budget ceiling deliberately does NOT read this field --
-    // see deriveCiBillingMode in src/ci/gates.ts, which answers the narrower
-    // "should CI impose a spend ceiling?" and reaches nothing but the ceiling.
     expect(CLAUDE_CAPABILITY_STATICS.billingMode).toBe("subscription");
 
     const withApiKey = await produceClaudeCapabilityReport({
@@ -448,9 +403,6 @@ describe("transport/producer parity (§11)", () => {
       env: { PATH: "/bin", ANTHROPIC_API_KEY: "sk-test" },
     });
     expect(withApiKey.billing.mode).toBe("subscription");
-    // Environment-independent, like every other CLAUDE_CAPABILITY_STATICS
-    // field: the CLI reports `total_cost_usd` whoever is paying.
-    expect(withApiKey.billing.pricingReady).toBe(true);
 
     // The new truth, pinned where the old defect used to be pinned: the
     // SAME env that leaves this backend-wide static at "subscription" is

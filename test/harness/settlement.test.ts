@@ -29,8 +29,6 @@ const USAGE: TransportOutcome["usage"] = {
   tokens: { inputUncached: 1 },
   completeness: "complete",
   billingMode: "subscription",
-  costSource: "provider",
-  cashCostUsd: 0,
 };
 
 function okOutcome(
@@ -81,7 +79,7 @@ function makeTransport(
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute,

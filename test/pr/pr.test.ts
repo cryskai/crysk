@@ -2333,7 +2333,7 @@ describe("fetchCommitStatusList: every page of the head's status list", () => {
     context: COMMIT_STATUS_CONTEXT,
     created_at: T_OLD,
     description:
-      "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
   };
 
   test("a verdict on page 2, behind 100 newer rows on page 1, is found", async () => {

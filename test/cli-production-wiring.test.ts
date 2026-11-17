@@ -525,7 +525,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
     });
   });
 
-  test("d1_11EvidenceFromExactBinding keeps subscription pricing non-blocking", () => {
+  test("d1_11EvidenceFromExactBinding reads sdk, credential and workspace evidence only", () => {
     const report: ExactBindingCapabilityReport = {
       routeKey: "k",
       backend: "claude-code",
@@ -550,12 +550,14 @@ describe("CLI production wiring (verify C1/C3)", () => {
       usage: { normalized: true },
       billing: {
         mode: "subscription",
-        pricingApplicability: "not_applicable",
-        tokenPricingAvailable: false,
-        cashCostAccountingValid: true,
+        modeKnown: true,
       },
     };
-    expect(d1_11EvidenceFromExactBinding(report).pricingReady).toBe(true);
+    expect(d1_11EvidenceFromExactBinding(report)).toEqual({
+      sdkAvailable: true,
+      credentialAuthority: true,
+      workspaceBroker: true,
+    });
   });
 
   // #133, revised by U4 (S9). Each OpenCode route runs on its own credential
@@ -751,19 +753,13 @@ describe("CLI production wiring (verify C1/C3)", () => {
     //
     // The fail-closed direction #133 chose is unchanged; it just moved to
     // where the unknown now actually lives. Admission no longer has an
-    // unknown to refuse, so the guarantee is carried by
-    // `settlementFromUsage`'s metered-zero rule: a metered attempt whose
-    // provider-reported cost is $0 while output tokens were produced settles
-    // UNRESOLVED and fences its bucket, instead of being recorded as free.
-    // #197 finished the move this note describes: the bundled tables are
-    // gone, so provider cost is not merely FIRST, it is the only source. The
-    // claude-code CLI answers for itself too now, from `total_cost_usd`
-    // (test/production-runtime.test.ts, "the claude-code CLI reports its own
-    // cost, so an unpriceable model there is admitted").
+    // unknown to refuse, so the guarantee is carried by the usage the engine
+    // reports: the platform prices it, and usage the engine cannot confirm
+    // fences the credential (`settlementFromUsage`).
     //
-    // No `now` seam is needed anywhere any more: a reported cost does not
-    // expire, so no arm in this file or in production-runtime's can turn red
-    // on a calendar date.
+    // No `now` seam is needed anywhere any more: nothing here expires, so no
+    // arm in this file or in production-runtime's can turn red on a calendar
+    // date.
     test("a metered route no bundled table covers is admitted on the transport's own provider cost", async () => {
       const admission = await admit(
         createResolvedRoutePlan([
@@ -773,10 +769,13 @@ describe("CLI production wiring (verify C1/C3)", () => {
       if ("error" in admission) {
         throw new Error(admission.error);
       }
-      // The readiness evidence the gate produced, not a re-derivation: the
-      // pricing prerequisite is met, and it can only have been met by the
-      // transport, since no bundled table carries this model on any clock.
-      expect(admission.evidence.get("opencode")?.pricingReady).toBe(true);
+      // The readiness evidence the gate produced, not a re-derivation: with no
+      // pricing prerequisite any more, a metered route admits on its credential
+      // and workspace evidence alone.
+      expect(admission.evidence.get("opencode")).toMatchObject({
+        credentialAuthority: true,
+        workspaceBroker: true,
+      });
     });
   });
 });

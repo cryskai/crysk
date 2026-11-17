@@ -36,7 +36,6 @@ describe("resolveEngineAssets", () => {
     for (const packagedPath of [
       assets.consolidatePromptPath,
       assets.materialityPromptPath,
-      assets.scoutPromptPath,
       assets.summarizerPromptPath,
       assets.verifierPromptPath,
       ...Object.values(assets.bundledAgentFiles),
@@ -44,15 +43,14 @@ describe("resolveEngineAssets", () => {
       expect(path.isAbsolute(packagedPath)).toBe(true);
     }
 
-    // Consolidate, materiality, scout, summarizer and verifier paths exist
+    // Consolidate, materiality, summarizer and verifier paths exist
     expect(existsSync(assets.consolidatePromptPath)).toBe(true);
     expect(existsSync(assets.materialityPromptPath)).toBe(true);
-    expect(existsSync(assets.scoutPromptPath)).toBe(true);
     expect(existsSync(assets.summarizerPromptPath)).toBe(true);
     expect(existsSync(assets.verifierPromptPath)).toBe(true);
 
     // Bundled agent files all exist on disk
-    expect(Object.keys(assets.bundledAgentFiles).length).toBe(6);
+    expect(Object.keys(assets.bundledAgentFiles).length).toBe(5);
     for (const [logicalName, filePath] of Object.entries(
       assets.bundledAgentFiles,
     )) {

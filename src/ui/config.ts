@@ -82,9 +82,9 @@ type ConfigRowKey = Exclude<keyof LocalConfig, "summary">;
 // "a wrong answer with a plausible face".
 const UNSET = "(unset)";
 // A layer DID name the key and named it empty. Distinct from UNSET on
-// purpose: `"parity_trigger_paths": []` is a repo deliberately disarming the
-// parity hunter, and it is the fact §3.2's parser change exists to keep
-// distinguishable from silence.
+// purpose: `"suspicion_priors": []` is a repo deliberately naming no priors,
+// and it is the fact §3.2's parser change exists to keep distinguishable from
+// silence.
 const EMPTY = "(empty)";
 
 function cell(value: string | undefined, source: ConfigSource): ConfigCell {
@@ -158,10 +158,6 @@ export function configRows(
   const cells: Record<ConfigRowKey, ConfigCell> = {
     agents_dir: cell(effective.agents_dir, sources.agents_dir),
     default_base: cell(effective.default_base, sources.default_base),
-    parity_trigger_paths: listCell(
-      effective.parity_trigger_paths,
-      sources.parity_trigger_paths,
-    ),
     suspicion_priors: priorsCell(
       effective.suspicion_priors,
       sources.suspicion_priors,
@@ -185,7 +181,6 @@ export function configRows(
       effective.max_changed_files?.toString(),
       sources.max_changed_files,
     ),
-    scout: cell(effective.scout?.toString(), sources.scout),
     materiality_gate: cell(
       effective.materiality_gate?.toString(),
       sources.materiality_gate,

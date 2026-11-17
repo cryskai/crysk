@@ -1,17 +1,16 @@
-// PR mode's plan-and-confirm stage (ROADMAP B1): the real (non-dry-run) plan
-// card, its two possible early exits (the CI budget gate, a declined
+// PR mode's plan-and-confirm stage (ROADMAP B1): the CI platform-limits gate,
+// the real (non-dry-run) plan card, its early exit (a declined
 // interactive confirm), and the "committed to spending" commit-status hold
 // that follows a successful confirm. Relocated out of reviewPr()
 // (src/pr/review-pr.ts): identifiers moved onto explicit parameters, control
 // flow and WHY comments unchanged.
 //
-// `parityFires` / `activeHunters` / `hunterCount` stay computed in
+// `activeHunters` / `hunterCount` stay computed in
 // reviewPr() itself: `activeHunters` is derived via `discoveryHunters`
 // (src/pr/discovery.ts, invariant 1 — behavior-tested in
 // test/pr/discovery.test.ts, not pinned as literal source) and is read only
 // by reviewPr()'s own progress renderer, never by this stage. Only
-// `hunterCount` (and `parityFires`, for the plan card's `resolved` field)
-// actually cross into this function.
+// `hunterCount` actually crosses into this function.
 //
 // A discriminated union, not a flat result-plus-sentinel: the two early-exit
 // branches (`exitCode: number`) genuinely have no route plan, runner
@@ -20,15 +19,16 @@
 // fabricating values nothing produced. Same intent as
 // CiAdmissionGateResult's `exitCode: number | undefined` sentinel
 // (src/pr/ci-admission-gate.ts), expressed so the type checker enforces it.
+
 import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
-import { planCiBudgetSkip } from "#ci/gates";
-import { actionsRunUrl } from "#ci/outcome";
-import { readPlatformEstimate, runCostEstimate } from "#ci/platform-estimate";
 import {
-  countFreeRouteSteps,
-  type FreeRouteBilling,
-} from "#model/free-discovery";
-import { planRoutes, type ResolvedRoutePlan } from "#model/routing";
+  type CiBillingMode,
+  type ModelRoleBilling,
+  planCiLimitsSkip,
+} from "#ci/gates";
+import { actionsRunUrl } from "#ci/outcome";
+import { readPlatformLimits } from "#ci/platform-limits";
+import type { ResolvedRoutePlan } from "#model/routing";
 import {
   type CiAdmissionLedgerState,
   publishCiSkip,
@@ -52,7 +52,7 @@ import {
   resolveMaxVerificationSteps,
 } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
-import { type DiffStat, estimateCost } from "#review/report";
+import type { DiffStat } from "#review/report";
 import { isBundledAgentsDir } from "#review/route-preflight";
 import {
   enforceCapabilityGate,
@@ -86,11 +86,7 @@ export type PrPlanAndConfirmResult =
       productionAdmission: ProductionAdmissionContext | undefined;
       runnerAuthority: RunnerAuthorityResolution;
       maxVerificationSteps: number;
-      estimate: ReturnType<typeof estimateCost>;
       statusTargetUrl: string | undefined;
-      // W3-FOOTER: the count the plan card priced by, handed on so the end-of-run
-      // footer names a free route the same way the card did.
-      freeRoute: FreeRouteBilling | undefined;
     };
 
 // The pending's target_url (SB3 follow-up): in GitHub Actions it is this run's attempt, so the
@@ -115,8 +111,6 @@ export async function resolvePrPlanAndConfirm(params: {
   diffFromSha: string;
   diffPath: string;
   diffStat: DiffStat;
-  // The whole PR range's stat under the same filters (discovery's prDiffStat).
-  prDiffStat: DiffStat;
   droppedPaths: string[];
   sizeGate: SizeGateVerdict;
   sizeGateConfirmed: boolean;
@@ -135,15 +129,15 @@ export async function resolvePrPlanAndConfirm(params: {
   // The context this run's statuses post on: pr-hero only for an explicit --ci
   // run, pr-hero/local otherwise (resolveCiPosture). Passed down, never re-derived.
   statusContext: CommitStatusContext;
-  ciBudgetCeiling: { budgetUsd: number | undefined };
+  // The run's credential class (resolvePrPromptSetAndBudget), resolved once.
+  ciBillingMode: CiBillingMode;
+  // Which model roles bill an API key (resolvePrPromptSetAndBudget), resolved
+  // once beside the billing mode.
+  ciRoleBilling: ModelRoleBilling | undefined;
   // S5: the run's Claude credential, chosen once at run start (reviewPr).
   claudeRun: RunClaudeCredential;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
-  hunterCount: number;
-  // Hunters a full review of the whole PR runs (fullReviewHunterCount).
-  fullHunterCount: number;
-  parityFires: boolean;
   verifyQueue: ReturnType<typeof buildPhaseBQueue>["queued"];
   prepared: PreparedDiscovery;
 }): Promise<PrPlanAndConfirmResult> {
@@ -152,82 +146,31 @@ export async function resolvePrPlanAndConfirm(params: {
     params.verifyQueue.length,
     maxVerificationSteps,
   );
-  // cryskai/platform#12: in a platform run the platform's estimate, priced from
-  // the setup's models and its recent reviews, replaces the band, which prices
-  // every model as Claude. The platform prices the whole pull request, so a run
-  // that covers less of it (a re-review whose discovery reads only the commits
-  // or paths since the last review, or one that hunts nothing new) scales it by
-  // the share of a full review it does, which the band measures
-  // (runCostEstimate). Without a platform estimate (standalone, or nothing
-  // priceable) the band decides.
-  const platformEstimate = params.isCi
-    ? readPlatformEstimate(process.env)
-    : undefined;
-  const band = estimateCost(
-    params.diffStat,
-    params.hunterCount,
-    params.summary.enabled && !params.skipDiscovery,
-    params.options.scout && !params.skipDiscovery,
-    queuedVerification,
-    !params.skipDiscovery,
-  );
-  // discoveryPaths is null only when the hunters read the full PR range.
-  const narrowed =
-    params.skipDiscovery || params.prepared.discoveryPaths !== null;
-  const estimate = runCostEstimate(
-    platformEstimate,
-    band,
-    narrowed && platformEstimate !== undefined
-      ? estimateCost(
-          params.prDiffStat,
-          params.fullHunterCount,
-          params.summary.enabled,
-          params.options.scout,
-          queuedVerification,
-          true,
-        )
-      : undefined,
-  );
-  // 7b(CI) — the budget gate, immediately after the estimate it reads and
-  // BEFORE the plan card/confirm/"committed to spending" commit-status
-  // block below: spec 3.1 ("Review MUST halt before agent spawning") is
-  // satisfied at any point before runPipeline, and this is the earliest
-  // point the REAL (parity-narrowed) estimate exists — the same one the
-  // plan card is about to show, so the skip comment's number and the
-  // (unrendered) plan's number can never have disagreed. `estimate.high`,
-  // not `.low`: report.ts's own doctrine (~97-98) is that every recorded
-  // overrun was an UNDER-estimate, so the generous side is the cheap one
-  // to be wrong on. `force` is passed through: a `/pr-hero review` comment
-  // sets `--force`, and that one run clears this ceiling the same way it
-  // clears the size gate and admission. The interactive cost-band prompt
-  // is a different question and still requires `--yes` on its own.
-  // Unlike the size gate, this runs AFTER
-  // createPrRunDir (step 6), so a budget skip can leave a near-empty run
-  // dir behind — the tidiness rationale that placement protects against
-  // (the watcher's attempt counter) does not apply to an ephemeral CI
-  // runner, and restructuring the cost estimate earlier is out of Phase
-  // 3's scope.
-  // `ciBudgetCeiling.budgetUsd`, not `options.budgetUsd`: since issue #156
-  // an unset `--budget-usd` is a POLICY, not an absent number. It resolves
-  // to no ceiling on a subscription route (where `estimate.high` is a token
-  // figure and the cash cost is $0.00, so gating on it refused work over an
-  // overrun that cannot happen) and to the default ceiling on a metered one.
-  // `undefined` here still means the gate does not run — the announcement
-  // for that already fired at the resolution site above.
-  if (params.isCi && params.ciBudgetCeiling.budgetUsd !== undefined) {
-    const budgetPlan = planCiBudgetSkip({
+  // The platform limits gate (platform-owned-cost L55), BEFORE the route is
+  // resolved and anything is spawned: spec 3.1 ("Review MUST halt before agent
+  // spawning") holds at any point before runPipeline. The engine keeps one
+  // comparison, because only it knows whether this run bills an API key
+  // (`ciBillingMode`): see `evaluatePlatformLimits`. `force` is passed through:
+  // a `/crysk review` comment sets `--force`, and that one run clears the limits
+  // the same way it clears the size gate and admission (the platform also sends
+  // none for a forced dispatch). The interactive confirm is a different question
+  // and still requires `--yes` on its own.
+  if (params.isCi) {
+    const limitsPlan = planCiLimitsSkip({
       isCi: params.isCi,
-      estimatedCostUsd: estimate.high,
-      budgetUsd: params.ciBudgetCeiling.budgetUsd,
+      billingMode: params.ciBillingMode,
+      ...(params.ciRoleBilling === undefined
+        ? {}
+        : { roleBilling: params.ciRoleBilling }),
+      limits: readPlatformLimits(process.env),
       prNumber: params.prNumber,
       force: params.options.force,
       ciMode: params.ciMode,
-      platformConnected: process.env.CRYSK_PLATFORM_CONNECTED === "true",
     });
-    if (budgetPlan !== null) {
+    if (limitsPlan !== null) {
       await settleCiGateSkip(
         params.ciAdmissionLedger,
-        "estimated cost exceeds the configured CI budget ceiling",
+        "the platform's dollar limits were reached",
       );
       const exitCode = await publishCiSkip({
         operatorRoot: params.operatorRoot,
@@ -235,9 +178,9 @@ export async function resolvePrPlanAndConfirm(params: {
         post: params.options.post === true,
         isCi: params.isCi,
         stepSummaryFlag: params.options.stepSummary,
-        plan: budgetPlan,
+        plan: limitsPlan,
         noticeMessage:
-          "crysk review skipped — estimated cost exceeds the configured CI budget ceiling",
+          "crysk review skipped — the Crysk platform's dollar limits were reached",
         ciMode: params.ciMode,
         headSha: params.headSha,
       });
@@ -255,7 +198,6 @@ export async function resolvePrPlanAndConfirm(params: {
     profile: params.profile,
     summary: params.summary,
     summarizerEnabled: params.summary.enabled && !params.skipDiscovery,
-    scoutEnabled: params.options.scout && !params.skipDiscovery,
     consolidateEnabled: !params.skipDiscovery,
     // Mirrors pipelineMaterialityInput in review-pr.ts: no judge step on a
     // re-review that hunts nothing new.
@@ -268,19 +210,6 @@ export async function resolvePrPlanAndConfirm(params: {
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
-  // Read off the admission above, which already decided every free verdict:
-  // this adds no probe. Absent without routing, so the band stays.
-  const freeRoute =
-    routePlan === undefined || productionAdmission === undefined
-      ? undefined
-      : await countFreeRouteSteps({
-          steps: planRoutes(routePlan),
-          probe: productionAdmission.freeModelProbe,
-          // The CRYSK_OPENCODE_* names admission bound each route's kind with,
-          // so the card counts free exactly the routes admission probed (U3).
-          openCodeSecretNames:
-            productionAdmission.authorityOptions.openCodeSecretNames,
-        });
   const runnerAuthority = await resolveRunnerAuthority({
     workspaceRoot: params.worktreePath,
     env: params.claudeRun.env,
@@ -308,8 +237,6 @@ export async function resolvePrPlanAndConfirm(params: {
     spec: params.spec,
     config: params.config,
     summary: params.summary,
-    estimate,
-    hunterCount: params.hunterCount,
     sizeGate: params.sizeGate,
     droppedPaths: params.droppedPaths,
     configProvenance: configProvenanceOf(params.loaded, params.agentsDirSource),
@@ -317,7 +244,6 @@ export async function resolvePrPlanAndConfirm(params: {
       baseSha: params.baseSha,
       diffFromSha: params.diffFromSha,
       diffPath: params.diffPath,
-      parityFires: params.parityFires,
     },
     ...(params.sizeGateConfirmed ? { sizeGateConfirmed: true } : {}),
     ...(queuedVerification > 0
@@ -334,7 +260,6 @@ export async function resolvePrPlanAndConfirm(params: {
           },
         }),
     ...(routePlan === undefined ? {} : { routePlan }),
-    ...(freeRoute === undefined ? {} : { freeRoute }),
   };
   for (const line of renderPrPlan(planContext, styleEnabled())) log(line);
   // What this run will actually publish. `options` is never mutated: the plan
@@ -342,12 +267,8 @@ export async function resolvePrPlanAndConfirm(params: {
   // itself follows the answer given here.
   let postEnabled = params.options.post ?? false;
   if (!params.options.yes) {
-    const choice = await confirm(
-      estimate.low,
-      estimate.high,
-      params.options.post ?? false,
-      () => prPlanDetails(planContext, styleEnabled()),
-      freeRoute,
+    const choice = await confirm(params.options.post ?? false, () =>
+      prPlanDetails(planContext, styleEnabled()),
     );
     if (choice.kind === "cancel") {
       log("aborted; nothing was spent.");
@@ -419,8 +340,6 @@ export async function resolvePrPlanAndConfirm(params: {
     productionAdmission,
     runnerAuthority,
     maxVerificationSteps,
-    estimate,
     statusTargetUrl,
-    freeRoute,
   };
 }

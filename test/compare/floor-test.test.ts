@@ -1,26 +1,21 @@
-// M6's primary instrument, tested before it scores anything (ROADMAP-DOORDASH
-// M6, `docs/scout-design.md` §3.11). Pure in → pure out; no spawns, no network.
+// The floor test, tested before it scores anything (`docs/research/scout-design.md`
+// §3.11). Pure in → pure out; no spawns, no network.
 //
 // The drift guard at the bottom is the load-bearing one: §2.4septies exists
-// because M6 reading the WRONG coordinates would have scored three of its eight
-// corpus cases as misses by both arms and read that as evidence about the
-// scout. A canonical markdown table plus a hand-transcribed JSON is exactly the
+// because reading the WRONG coordinates would have scored three of its eight
+// corpus cases as misses in every run. A canonical markdown table plus a hand-transcribed JSON is exactly the
 // shape that drifts, so the transcription is re-derived here instead of
 // trusted.
 
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import {
-  armOfRun,
   type FloorCase,
   FloorCaseError,
   parseFloorCases,
-  renderCleanTable,
   renderFloorTable,
   scoreRun,
-  scoutFailed,
-  tallyArm,
-  tallyCleanPrs,
+  tallyRuns,
 } from "#compare/floor-test";
 import type { Finding, FindingsDocument } from "#review/findings";
 
@@ -95,7 +90,7 @@ describe("parseFloorCases", () => {
 
   // The failure §2.4septies's 2026-08-18 note records: a display path matches
   // nothing, because normalizePath refuses basename matching on purpose.
-  test("a bare filename is refused, because it would score as a miss by both arms", () => {
+  test("a bare filename is refused, because it would score as a miss in every run", () => {
     expect(() =>
       parseFloorCases(
         JSON.stringify({ cases: [{ ...floorCase(), path: "m4aRemux.ts" }] }),
@@ -135,38 +130,6 @@ describe("parseFloorCases", () => {
         }),
       ),
     ).toThrow(/before start_line/);
-  });
-});
-
-describe("armOfRun", () => {
-  test("reads the arm off pipeline.json's scout row, not a directory name", () => {
-    expect(armOfRun({ scout: { enabled: true, status: "ok" } })).toBe("scout");
-    expect(armOfRun({ scout: { enabled: false, status: "skipped" } })).toBe(
-      "control",
-    );
-  });
-
-  test("an artifact that cannot say is null, never 'control'", () => {
-    // A pre-M5 run has no scout key at all. Counting it as the arm it happens
-    // to resemble would put runs from a different engine build inside an arm.
-    expect(armOfRun({ pr: 5, steps: [] })).toBeNull();
-    expect(armOfRun(null)).toBeNull();
-    expect(armOfRun("nonsense")).toBeNull();
-    expect(armOfRun({ scout: { status: "ok" } })).toBeNull();
-  });
-});
-
-describe("scoutFailed — §3.6's exclusion rule", () => {
-  test("a scout-arm run whose scout failed is excluded, not counted", () => {
-    expect(scoutFailed({ scout: { enabled: true, status: "failed" } })).toBe(
-      true,
-    );
-    expect(scoutFailed({ scout: { enabled: true, status: "ok" } })).toBe(false);
-    // A control run cannot be a failed scout run — it never had one.
-    expect(scoutFailed({ scout: { enabled: false, status: "skipped" } })).toBe(
-      false,
-    );
-    expect(scoutFailed({ pr: 5 })).toBe(false);
   });
 });
 
@@ -232,7 +195,7 @@ describe("scoreRun — the gate", () => {
   });
 });
 
-describe("tallyArm", () => {
+describe("tallyRuns", () => {
   const cases = [floorCase(), floorCase({ id: 2, pr: 1719 })];
   const scored = (hit: boolean, caseId: number) => ({
     case_id: caseId,
@@ -244,13 +207,10 @@ describe("tallyArm", () => {
   });
 
   test("counts hits per case over replicates, and both readings of 'hit'", () => {
-    const tally = tallyArm(
-      "scout",
+    const tally = tallyRuns(
       [
-        { arm: "scout", scores: [scored(true, 1), scored(false, 2)] },
-        { arm: "scout", scores: [scored(true, 1), scored(true, 2)] },
-        // Another arm's runs must not leak in.
-        { arm: "control", scores: [scored(true, 1), scored(true, 2)] },
+        { scores: [scored(true, 1), scored(false, 2)] },
+        { scores: [scored(true, 1), scored(true, 2)] },
       ],
       cases,
     );
@@ -267,11 +227,7 @@ describe("tallyArm", () => {
   test("a case nobody ran stays visible with zero replicates", () => {
     // Dropping it would turn an incomplete session into a clean-looking
     // result — the one failure mode a floor test must not have.
-    const tally = tallyArm(
-      "scout",
-      [{ arm: "scout", scores: [scored(true, 1)] }],
-      cases,
-    );
+    const tally = tallyRuns([{ scores: [scored(true, 1)] }], cases);
     expect(tally.total).toBe(2);
     expect(tally.cases[1]).toMatchObject({ case_id: 2, replicates: 0, hit: 0 });
     expect(tally.casesHitEvery).toBe(1);
@@ -284,12 +240,10 @@ describe("renderFloorTable", () => {
     floorCase({ id: 2, pr: 1719, start_line: 296, end_line: 296 }),
   ];
 
-  test("renders both arms, marks an unrun case, and carries C10's caveat", () => {
-    const scout = tallyArm(
-      "scout",
+  test("marks an unrun case and carries C10's caveat", () => {
+    const tally = tallyRuns(
       [
         {
-          arm: "scout",
           scores: [
             {
               case_id: 1,
@@ -304,29 +258,24 @@ describe("renderFloorTable", () => {
       ],
       cases,
     );
-    const control = tallyArm("control", [], cases);
-    const lines = renderFloorTable(cases, scout, control);
+    const lines = renderFloorTable(cases, tally);
     const text = lines.join("\n");
 
-    expect(text).toContain("| 1 | 1717 | miss | not run | 1/1 |");
+    expect(text).toContain("| 1 | 1717 | miss | 1/1 |");
     expect(text).toContain(
       "`packages/app/components/PaywallUpgrade/index.tsx:119`",
     );
-    expect(text).toContain("| 2 | 1719 | miss | not run | not run |");
-    expect(text).toContain("scout:   1/2 cases hit");
-    expect(text).toContain("control: 0/2 cases hit");
+    expect(text).toContain("| 2 | 1719 | miss | not run |");
+    expect(text).toContain("1/2 cases hit");
     // The blind spot travels WITH the numbers: a table this compact is exactly
     // the kind that gets screenshotted away from its caveat.
-    expect(text).toContain("can see a defect BOTH arms missed");
-    expect(text).toContain("cannot distinguish `adopt` from `opt-in`");
+    expect(text).toContain("cannot see a defect every run missed");
   });
 
   test("a found-but-refuted case shows the gap rather than hiding it", () => {
-    const scout = tallyArm(
-      "scout",
+    const tally = tallyRuns(
       [
         {
-          arm: "scout",
           scores: [
             {
               case_id: 1,
@@ -341,86 +290,20 @@ describe("renderFloorTable", () => {
       ],
       cases,
     );
-    expect(
-      renderFloorTable(cases, scout, tallyArm("control", [], cases))[2],
-    ).toContain("0/1 (found 1)");
+    expect(renderFloorTable(cases, tally)[2]).toContain("0/1 (found 1)");
   });
 
   test("a multi-line site keeps its range", () => {
     const ranged = [floorCase({ start_line: 140, end_line: 142 })];
-    const empty = tallyArm("scout", [], ranged);
-    expect(renderFloorTable(ranged, empty, empty).join("\n")).toContain(
-      ":140-142`",
-    );
+    expect(
+      renderFloorTable(ranged, tallyRuns([], ranged)).join("\n"),
+    ).toContain(":140-142`");
   });
 
   test("no ANSI bytes — this table is written to a file and read in a diff", () => {
-    const empty = tallyArm("scout", [], cases);
-    expect(renderFloorTable(cases, empty, empty).join("\n")).not.toContain(
-      "\x1b",
-    );
-  });
-});
-
-describe("the clean pair", () => {
-  const run = (
-    arm: "scout" | "control",
-    findings: number,
-    corroborated: number,
-    rootCauses?: number,
-  ) => ({
-    arm,
-    pr: 1720,
-    findings,
-    corroborated,
-    ...(rootCauses === undefined ? {} : { rootCauses }),
-  });
-
-  test("splits by arm and keeps every replicate", () => {
-    const [tally] = tallyCleanPrs(
-      [
-        run("control", 2, 1, 1),
-        run("control", 3, 1, 2),
-        run("scout", 5, 2, 3),
-        { ...run("scout", 9, 9, 9), pr: 999 },
-      ],
-      [1720],
-    );
-    expect(tally?.control.findings).toEqual([2, 3]);
-    expect(tally?.scout.findings).toEqual([5]);
-    // Another PR's runs must not leak in.
-    expect(tally?.scout.runs).toBe(1);
-  });
-
-  test("renders per replicate, never a mean", () => {
-    // §1.3 measured six of eight same-head replicate pairs MOVING, by as much
-    // as the whole effect the scout is expected to produce — a mean over two
-    // runs would hide exactly the variance that decides readability.
-    const text = renderCleanTable(
-      tallyCleanPrs([run("control", 2, 1, 1), run("control", 7, 3, 2)], [1720]),
-    ).join("\n");
-    expect(text).toContain(
-      "| 1720 | 2 (1 corr, 1 cause) · 7 (3 corr, 2 causes) | not run |",
-    );
-    expect(text).not.toContain("mean");
-    // The caveat travels with the number: these PRs were never triaged.
-    expect(text).toContain("not a claim that these PRs are defect-free");
-  });
-
-  test("a run with no root-cause block says nothing rather than zero", () => {
-    // Absent is not zero: a run predating the clusterer has no opinion, and
-    // printing 0 causes beside 4 findings would invent a precision collapse.
-    const text = renderCleanTable(
-      tallyCleanPrs([run("scout", 4, 2)], [1720]),
-    ).join("\n");
-    expect(text).toContain("4 (2 corr)");
-    expect(text).not.toContain("0 causes");
-  });
-
-  test("a PR nobody ran is visible, not dropped", () => {
-    const text = renderCleanTable(tallyCleanPrs([], [1720, 1721])).join("\n");
-    expect(text).toContain("| 1720 | not run | not run |");
-    expect(text).toContain("| 1721 | not run | not run |");
+    expect(
+      renderFloorTable(cases, tallyRuns([], cases)).join("\n"),
+    ).not.toContain("\x1b");
   });
 });
 
@@ -486,7 +369,7 @@ describe("docs/benchmarks/m6-floor-cases.json matches §2.4septies", () => {
 });
 
 describe("d3 benchmark scorer hooks", () => {
-  test("offline scorer reports cash per unique TP and excludes invalid runs", async () => {
+  test("offline scorer excludes invalid runs from the promotion metrics", async () => {
     const { scoreBenchmarkRuns, validateBenchmarkPlan } = await import(
       "../../src/diversity/benchmark"
     );
@@ -514,8 +397,6 @@ describe("d3 benchmark scorer hooks", () => {
           treatmentCompleted: true,
           blindingIntact: true,
           interleavingIntact: true,
-          cashCostUsd: 9,
-          notionalCostUsd: 8,
           uniqueTruePositives: 3,
           recall: 1,
           cleanPrRestraint: 0,
@@ -531,8 +412,6 @@ describe("d3 benchmark scorer hooks", () => {
           treatmentCompleted: true,
           blindingIntact: true,
           interleavingIntact: true,
-          cashCostUsd: 4,
-          notionalCostUsd: 2,
           uniqueTruePositives: 2,
           recall: 0.5,
           cleanPrRestraint: 1,
@@ -542,7 +421,8 @@ describe("d3 benchmark scorer hooks", () => {
       plan,
     );
     expect(report.invalidRuns).toBe(1);
-    expect(report.cashCostPerUniqueTp).toBe(2);
+    expect(report.validRuns).toBe(1);
+    expect(report.recall).toBe(0.5);
     expect(report.blindSpots).toBe(1);
   });
 });

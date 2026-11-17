@@ -24,6 +24,10 @@ import {
   ACTIVE_CHILD_PROCS,
   type SpawnedProcess,
 } from "../execution/spawned-process";
+import {
+  claudeUsageCounts,
+  type ModelUsageCounts,
+} from "../execution/usage-facts";
 import type { NormalizedUsage } from "../execution/usage-normalized";
 import {
   envBillsMetered,
@@ -73,78 +77,45 @@ function hashPromptFile(promptPath: string): string {
   return createHash("sha256").update(readFileSync(promptPath)).digest("hex");
 }
 
-// #177, 2026-09-02. WHICH basis this attempt's money is filed on, decided from
-// the env the CHILD is spawned with — the one fact that separates a
-// subscription run (quota, nothing charged) from an API-key run (a real
-// per-token invoice).
+// #177, 2026-09-02. WHICH credential class this attempt's usage is filed
+// under, decided from the env the CHILD is spawned with — the one fact that
+// separates a subscription run (quota) from an API-key run (a per-token
+// credential).
 //
 // #173 applied the subscription rule STATICALLY here and was right about its
 // reasoning and wrong about its premise. Its premise was
 // `credentialKindForRoute` (runner-authority.ts), which returns
 // `claude_subscription_oauth` for this backend UNCONDITIONALLY without ever
 // reading the environment — so it cannot distinguish the two, and taking it as
-// proof made every API-key user's real spend render as "at list price, not
-// charged". Worse, §8 makes budget enforcement cash-only, so that user's spend
-// ceiling read $0 and effectively stopped existing. Under-reporting, shipped by
-// the change that set out to stop it.
+// proof made every API-key user's usage file as subscription. Under-reporting,
+// shipped by the change that set out to stop it.
 //
 // The fix is deliberately NARROW: it does not derive `credentialKindForRoute`,
-// and it does not touch route admission. See the guard on `envBillsMetered`.
-// #197 removed the REASON that guard used to give — a metered claude-code
-// route is no longer refused for lack of pricing, because `pricingReady` is
-// now `true` for this transport — but not the guard: which credential a route
-// runs on is `credentialKindForRoute`'s single decision (#161), and
-// deriving it from the env HERE would fork it. This only decides how an
-// attempt that already ran gets FILED.
+// and it does not touch route admission. See the guard on `envBillsMetered`:
+// which credential a route runs on is `credentialKindForRoute`'s single
+// decision (#161), and deriving it from the env HERE would fork it. This only
+// decides how an attempt that already ran gets FILED.
 //
-// What each arm claims:
-//   * metered  — `costSource: "provider"` because the CLI's own figure is what
-//     the API bills at (its per-model `costBasis` is `"list"`, and on a
-//     per-token key list price IS the charge). This restores #173's cash
-//     filing for this credential; `billingMode` is a truthful UPGRADE over the
-//     pre-#173 shape, which said "subscription" on every route.
-//   * subscription — #173's rule, unchanged: nothing is charged, so the list
-//     figure is notional and `costSource` is `"subscription"` (not "provider":
-//     it is not what the provider charged; not "versioned_rate_table": we
-//     computed nothing).
-//
-// Returned as ONE object rather than two reads so `noSpawnUsage` and the two
-// parse arms cannot drift: `sumNormalizedUsage` collapses `billingMode` AND
-// `costSource` to "unknown" the moment two attempts of one step disagree, and
-// this transport retries.
-function claudeCliCostBasis(
+// Returned from ONE function so `noSpawnUsage` and the two parse arms cannot
+// drift: `sumNormalizedUsage` collapses `billingMode` to "unknown" the moment
+// two attempts of one step disagree, and this transport retries.
+function claudeCliBillingMode(
   env: Readonly<Record<string, string | undefined>>,
-): {
-  readonly billingMode: NormalizedUsage["billingMode"];
-  readonly costSource: NormalizedUsage["costSource"];
-} {
-  return envBillsMetered(env)
-    ? { billingMode: "metered", costSource: "provider" }
-    : { billingMode: "subscription", costSource: "subscription" };
+): NormalizedUsage["billingMode"] {
+  return envBillsMetered(env) ? "metered" : "subscription";
 }
 
 // A denial before spawn, or a PGID proof failure that refuses to signal a
-// child we never trust, is genuine zero cost — no attempt reached the
-// provider, so nothing was spent. This is deliberately NOT
-// `normalizeUnavailableUsage`: "unavailable" means an attempt ran and its
-// cost is unknown, which would misfile a $0 refusal as an unresolved spend
-// once PR5's spend ledger reads completeness.
+// child we never trust, used nothing — no attempt reached the provider. This
+// is deliberately NOT `normalizeUnavailableUsage`: "unavailable" means an
+// attempt ran and its usage is unknown, which would misfile a refusal as an
+// unresolved spend once the spend ledger reads completeness.
 //
-// #173, 2026-09-02: `costSource` was `"provider"` here, which was never true
-// — no provider was contacted. It has to match the parse arms below for a
-// second, mechanical reason: an unclassified failure legacy-classifies as
-// "format" (step-runner.ts `classifyFailure`), which has a retry, so a denied
-// attempt 1 can be summed with a spawned attempt 2 — and `sumNormalizedUsage`
-// collapses `costSource` to "unknown" whenever two attempts disagree. Leaving
-// this one behind would have erased the run's cost basis on exactly the retry
-// path this transport already supports.
-//
-// #177, 2026-09-02: that obligation is now owed on TWO bases, so the basis is
-// no longer written out here — `claudeCliCostBasis` is the single source both
-// this function and the parse arms consume. Only `cashCostUsd: 0` stays local,
-// and it is a genuine zero on either basis: no attempt reached the provider.
-// With `tokens: {}` it also cannot trip the metered-zero rule
-// (`settlementFromUsage`), which needs output tokens to fire.
+// It has to carry the same billing mode as the parse arms below, for a
+// mechanical reason: an unclassified failure legacy-classifies as "format"
+// (step-runner.ts `classifyFailure`), which has a retry, so a denied attempt 1
+// can be summed with a spawned attempt 2 — and `sumNormalizedUsage` collapses
+// `billingMode` to "unknown" whenever two attempts disagree.
 function noSpawnUsage(
   wallMs: number,
   env: Readonly<Record<string, string | undefined>>,
@@ -153,13 +124,11 @@ function noSpawnUsage(
     wallMs,
     tokens: {},
     completeness: "complete",
-    ...claudeCliCostBasis(env),
-    cashCostUsd: 0,
+    billingMode: claudeCliBillingMode(env),
   };
 }
 
 interface RawClaudeCliResult {
-  readonly total_cost_usd?: number;
   // #299. Read through `toolInvocationsFromCliResult`, never directly: the
   // type is `unknown` because the only trustworthy shape is an integer >= 1.
   readonly num_turns?: unknown;
@@ -170,27 +139,28 @@ interface RawClaudeCliResult {
     readonly cache_read_input_tokens?: number;
   };
   // #175 half 2. The CLI reports, per model it actually ran, an entry keyed
-  // on the exact snapshot. Only the two identity fields are declared:
-  // `canonicalModel` (the family) and the key itself.
-  //
-  // The real block also carries `costUSD`, `costBasis` and token counts. They
-  // are deliberately NOT read here. Cost already has ONE parse site
-  // (`normalizeClaudeCliUsage`, from `total_cost_usd`) and one filing
-  // decision; a second reader of a second cost field is exactly how two
-  // numbers for one attempt start disagreeing.
-  //
-  // #173 closed the `costBasis: "list"` problem this comment used to defer,
-  // and closed it WITHOUT reading the field. `costBasis` is in the response,
-  // but the FILING decision follows the credential's billing mode rather than
-  // the response's label: `normalizeClaudeCliUsage` files `total_cost_usd` as
-  // notional on the strength of the route being a subscription, which is true
-  // whatever any per-model entry says. Parsing `costBasis` per model would add
-  // the second cost reader this paragraph exists to refuse. What is still unread and still
-  // wanted is the per-model SPLIT (#173 records it): one `--model sonnet`
-  // invocation ran two models, so a single route-level cost is an incomplete
-  // provenance claim in the same way a single `modelSnapshot` is.
+  // on the exact snapshot. Read here: the two identity fields
+  // (`canonicalModel` and the key itself, `observedModelsFromCliResult`) and,
+  // since platform-owned-cost T6, the token counts (`modelUsageFromCliResult`).
+  // The CLI's per-model cost fields are never read: the engine reports usage
+  // facts and the platform prices them. One `--model sonnet` invocation can
+  // run two models, which is why the counts are per model.
   readonly modelUsage?: Readonly<
-    Record<string, { readonly canonicalModel?: unknown } | null | undefined>
+    Record<
+      string,
+      | {
+          readonly canonicalModel?: unknown;
+          readonly inputTokens?: unknown;
+          readonly outputTokens?: unknown;
+          readonly cacheReadInputTokens?: unknown;
+          readonly cacheCreationInputTokens?: unknown;
+          readonly cacheCreationEphemeral1hInputTokens?: unknown;
+          readonly cacheCreationEphemeral5mInputTokens?: unknown;
+          readonly thinkingTokens?: unknown;
+        }
+      | null
+      | undefined
+    >
   >;
 }
 
@@ -201,7 +171,7 @@ interface RawClaudeCliResult {
 // key, and an EMPTY `modelUsage` all answer `undefined`. An empty array would
 // assert "we looked and nothing ran", which is a claim about the provider we
 // have no basis for — the same distinction `normalizeUnavailableUsage` draws
-// between an unknown cost and a zero one.
+// between unknown usage and a zero one.
 //
 // Parsed separately from `normalizeClaudeCliUsage` rather than folded into
 // it: that function's contract is the §8 numeric shape, and its every branch
@@ -242,6 +212,66 @@ function observedModelsFromCliResult(
   return observed.length === 0 ? undefined : observed;
 }
 
+// platform-owned-cost T6: the token counts of the same `modelUsage` block, per
+// model, split into the platform's disjoint leaves (thinking out of output, the
+// one-hour write out of the total write). The same absence rule as above: no
+// parse, no block, or no usable entry answers `undefined`.
+//
+// The model is the provider's id, as the session transcript's `message.model`
+// spells it, so the two can be joined: the CLI marks a context-window variant on
+// its own model names with a bracketed suffix (`requestedModel:
+// "claude-opus-5[1m]"` beside `message.model: "claude-opus-5"` in a real
+// session), which names no provider model. A key carrying one is filed under the
+// id without it, and entries that meet there are summed, so a summary key can
+// never miss its transcript requests and count them twice as a remainder.
+const CLI_MODEL_VARIANT = /\[[^\]]*\]$/;
+
+function modelUsageFromCliResult(
+  rawStdout: string,
+): readonly ModelUsageCounts[] | undefined {
+  let parsed: RawClaudeCliResult;
+  try {
+    parsed = JSON.parse(rawStdout);
+  } catch {
+    return undefined;
+  }
+  const raw = parsed?.modelUsage;
+  if (raw === undefined || raw === null || typeof raw !== "object") {
+    return undefined;
+  }
+  const models = new Map<string, number[]>();
+  for (const [key, entry] of Object.entries(raw)) {
+    const model = key.replace(CLI_MODEL_VARIANT, "");
+    if (
+      model.trim().length === 0 ||
+      entry === null ||
+      typeof entry !== "object"
+    ) {
+      continue;
+    }
+    const counts = claudeUsageCounts({
+      uncached: entry.inputTokens,
+      cacheRead: entry.cacheReadInputTokens,
+      cacheWriteTotal: entry.cacheCreationInputTokens,
+      cacheWrite1h: entry.cacheCreationEphemeral1hInputTokens,
+      cacheWrite5m: entry.cacheCreationEphemeral5mInputTokens,
+      output: entry.outputTokens,
+      thinking: entry.thinkingTokens,
+    });
+    const sum = models.get(model) ?? [0, 0, 0, 0, 0, 0];
+    counts.forEach((n, i) => {
+      sum[i] = (sum[i] ?? 0) + n;
+    });
+    models.set(model, sum);
+  }
+  return models.size === 0
+    ? undefined
+    : [...models].map(([model, counts]) => ({
+        model,
+        counts: counts as unknown as ModelUsageCounts["counts"],
+      }));
+}
+
 // #299 (2026-10-01): how many tool calls the model made, as far as the CLI's
 // result lets us say. `num_turns` counts ASSISTANT turns, and every turn after
 // the first begins from tool results, so `num_turns - 1` is a LOWER BOUND on
@@ -271,35 +301,6 @@ function toolInvocationsFromCliResult(rawStdout: string): number | undefined {
     : undefined;
 }
 
-// #173 (§8, docs/multi-runtime-model-diversity-design.md:462): "Subscription
-// OAuth may truthfully report `cashCostUsd: 0`; optional catalog cost is
-// `notionalCostUsd` and never mixed with cash." This is the one site that
-// applies that rule for this transport.
-//
-// #177, 2026-09-02: it is applied per-credential, NOT statically. #173 applied
-// it statically on the strength of `credentialKindForRoute`
-// (runner-authority.ts) returning `claude_subscription_oauth` for this backend
-// unconditionally — and "unconditionally" is the whole problem: that function
-// never reads the environment, so it says subscription for an
-// ANTHROPIC_API_KEY route that is spending real per-token money. The branch is
-// therefore neither unreachable nor untestable, and `claudeCliCostBasis` above
-// is what decides it, from the env this transport spawns the child with.
-//
-// The figure itself is list-basis, verified live 2026-09-02 rather than
-// inferred: the CLI's `modelUsage` block labels each model's `costUSD` with
-// `"costBasis": "list"`, and `total_cost_usd` is their sum. On a subscription
-// nothing is charged, so filing it as cash recorded spend that never happened.
-// On a per-token key, list price IS the charge, so cash is exactly where it
-// belongs — and `notionalCostUsd` stays absent rather than duplicating it,
-// because the same figure in both fields would report one attempt's tokens as
-// real spend AND as an untaken list price.
-//
-// Note the two fields answer to different things. `notionalCostUsd` follows
-// the provider: absent when the CLI reported no total, because inventing 0
-// there would claim the attempt consumed nothing. `cashCostUsd` follows the
-// CREDENTIAL: it is 0 on the subscription arm because the subscription charges
-// nothing, whatever the CLI said.
-//
 // §8: `--output-format json`'s usage block is already disjoint-additive —
 // input_tokens (uncached), cache_read_input_tokens, and
 // cache_creation_input_tokens sum to total input (verified against the real
@@ -307,50 +308,26 @@ function toolInvocationsFromCliResult(rawStdout: string): number | undefined {
 // leaves are read straight across rather than split from a total via
 // `normalizeInclusiveUsage`. Corrupted stdout, and valid JSON carrying no
 // `usage` block at all (a safety-blocked or otherwise usage-less response),
-// both yield `normalizeUnavailableUsage` — never a fabricated zero leaf, the
-// exact "$0 on parse failure" collapse this slice exists to kill.
+// both yield `normalizeUnavailableUsage` — never a fabricated zero leaf.
+//
+// The credential class (`billingMode`) is filed per attempt from the env the
+// child ran with (`claudeCliBillingMode`); the CLI's own cost figure is not
+// read — the platform prices a run from the tokens and models reported here.
 function normalizeClaudeCliUsage(
   rawStdout: string,
   wallMs: number,
   env: Readonly<Record<string, string | undefined>>,
 ): NormalizedUsage {
-  const basis = claudeCliCostBasis(env);
-  // The two cost fields decided TOGETHER, so no future editor can move cash
-  // without moving notional. `total_cost_usd` lands in exactly ONE of them —
-  // as CASH when a per-token credential is paying for it, as NOTIONAL when a
-  // subscription is — and never in both: the same figure in both fields would
-  // report one attempt's tokens as spend AND as an untaken list price.
-  //
-  // Absence stays absence on either arm. A CLI that reported no
-  // `total_cost_usd` gives a subscription no list figure to record, and gives
-  // a metered route no answer to "how much real money was this?" — so the
-  // metered arm leaves cash undefined and `settlementFromUsage` calls the
-  // attempt unresolved, rather than settling a fabricated $0. That is the
-  // same "$0 on parse failure" collapse §8 exists to kill, one door over.
-  //
-  // `cashCostUsd` on the subscription arm is the one unconditional value: it
-  // is 0 because the subscription charges nothing, whatever the CLI said.
-  const costFor = (
-    total: number | undefined,
-  ): { cashCostUsd?: number; notionalCostUsd?: number } =>
-    basis.billingMode === "metered"
-      ? { cashCostUsd: total }
-      : { cashCostUsd: 0, notionalCostUsd: total };
+  const billingMode = claudeCliBillingMode(env);
   let parsed: RawClaudeCliResult;
   try {
     parsed = JSON.parse(rawStdout);
   } catch {
-    return normalizeUnavailableUsage({
-      wallMs,
-      billingMode: basis.billingMode,
-    });
+    return normalizeUnavailableUsage({ wallMs, billingMode });
   }
   const raw = parsed.usage;
   if (raw === undefined) {
-    return normalizeUnavailableUsage({
-      wallMs,
-      billingMode: basis.billingMode,
-    });
+    return normalizeUnavailableUsage({ wallMs, billingMode });
   }
   const leafValues = [
     raw.input_tokens,
@@ -367,8 +344,7 @@ function normalizeClaudeCliUsage(
     return normalizePartialUsage({
       wallMs,
       providerReportedTotal,
-      ...basis,
-      ...costFor(parsed.total_cost_usd),
+      billingMode,
     });
   }
   const inputUncached = leafValues[0] as number;
@@ -389,8 +365,7 @@ function normalizeClaudeCliUsage(
       providerReportedTotal: inputKnown + outputVisible,
     },
     completeness: "complete",
-    ...basis,
-    ...costFor(parsed.total_cost_usd),
+    billingMode,
   };
 }
 
@@ -482,7 +457,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
     modelSnapshot: "sonnet",
   };
   get billingMode(): NormalizedUsage["billingMode"] {
-    return claudeCliCostBasis(process.env).billingMode;
+    return claudeCliBillingMode(process.env);
   }
   private readonly spawnFn: typeof Bun.spawn;
   private readonly getPgid: (pid: number) => number | undefined;
@@ -535,9 +510,8 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
   // contractual here, not probed: every execute() request must carry an
   // IsolationProjection (credentialProjectionId + syntheticHome) or admission
   // denies it. Unproven features are claimed false with a
-  // non-blocking issue, never assumed green: no bounded event sink is wired
-  // yet, no dedicated codegraph policy is enforced, and no pricing table
-  // exists — hence status "degraded", not "ready".
+  // yet and no dedicated codegraph policy is enforced — hence status
+  // "degraded", not "ready".
   async capabilities(
     input?: ClaudeCliCapabilitiesInput,
   ): Promise<ProviderCapabilityReport> {
@@ -564,71 +538,29 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
         conformance: CLAUDE_CAPABILITY_STATICS.cancellationConformance,
       },
       billing: {
+        // The backend-wide report is a STATIC claim made at admission, before
+        // any spawn and before any route (and so any credential) resolves.
+        // The per-route credential class lives on the exact binding
+        // (`FrozenRuntimeBinding.capabilities()`, production-runtime.ts),
+        // which upgrades this mode through `credentialKindBillsMetered`.
+        // That is #161's rule: `credentialKindForRoute` (runner-authority.ts)
+        // derives `provider_api_token` — a metered kind — for a claude-code
+        // route whose environment carries ANTHROPIC_API_KEY or
+        // ANTHROPIC_AUTH_TOKEN AND that has no credential broker projecting
+        // for it, because with no broker nothing strips the key before the
+        // child sees it (the common case on Linux/CI, which has no Keychain
+        // to project from). A route with a broker whose projection SUCCEEDS
+        // stays subscription whatever its env carries. A degraded projection
+        // is #279's known exception: admission cannot see that a projection
+        // failed and fell back to the unstripped env, so that route keeps
+        // saying subscription while the key reaches the child. That
+        // ADMISSION-time answer is deliberately left that way: the fix lives
+        // downstream, in `StepExecutionHarness.run` (harness.ts), which
+        // re-applies `envBillsMetered` to this SAME child env this module
+        // stamps `billingMode: "metered"` from, and opens a spend-ledger
+        // reservation for that one attempt so it is settled or fenced exactly
+        // like a metered route.
         mode: CLAUDE_CAPABILITY_STATICS.billingMode,
-        // #197. WHAT THIS FLAG ASSERTS, which is narrower than it reads.
-        // `pricingReady` lives inside `capabilities()`, built from
-        // CLAUDE_CAPABILITY_STATICS — a STATIC claim made at admission,
-        // before any spawn. No cost figure exists at the moment it is asked,
-        // for any transport, so it cannot be answering "is this attempt's
-        // cost a provider invoice?". It answers "will this transport tell you
-        // what the attempt cost?", and this one will: the CLI reports
-        // `total_cost_usd`, which #177 files as cash on a metered credential
-        // and as notional on a subscription.
-        //
-        // That is why the list-vs-invoice objection this comment used to
-        // carry does not survive. It rejected the CLI's figure for being a
-        // LIST computation (`costBasis: "list"`) while the alternative it
-        // preferred — the bundled `config/models/*-pricing.json` — was a
-        // hand-transcribed snapshot of the same published list prices. The
-        // choice was never invoice-over-list; it was OUR list price over the
-        // CLI's, on a ground that convicted our own. The tables are gone
-        // (#197); the CLI's figure tracks the tool the user already upgrades.
-        //
-        // THIS DELIBERATELY WIDENS ADMISSION, and that is the intent rather
-        // than a side effect to discover later. `tokenPricingAvailable`
-        // (production-runtime.ts) is now this flag and nothing else, so a
-        // metered claude-code route that the old gate refused for a missing
-        // or expired table is admitted and runs on the cost the CLI reports.
-        // #161 landed on top of this: `credentialKindForRoute`
-        // (runner-authority.ts) now derives `provider_api_token` — a metered
-        // kind — for a claude-code route whose environment carries
-        // ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN AND that has no
-        // credential broker projecting for it (no broker means nothing
-        // strips the key before the child sees it — the common case being
-        // Linux/CI, which has no Keychain to project from). A route that
-        // DOES have a broker attached, and whose projection SUCCEEDS, stays
-        // subscription regardless of what its env carries, because a
-        // successful projection strips the key before spawn — so a
-        // claude-code route CAN resolve metered today, not just in the
-        // gate's hypothetical, but only when nothing is about to project a
-        // credential for it. A degraded projection is #279's known
-        // exception: `credentialKindForRoute` still cannot see that a
-        // broker's projection failed and fell back to the unstripped env, so
-        // that one route keeps saying subscription while the key actually
-        // reaches and pays for the child — this ADMISSION-time answer is
-        // deliberately left that way (#279, fixed 2026-09-24, option 2: the
-        // fix lives downstream, in `StepExecutionHarness.run`, harness.ts,
-        // which re-applies `envBillsMetered` to this SAME child env this
-        // module stamps `billingMode: "metered"` from, and opens a
-        // spend-ledger reservation for that one attempt so it is settled or
-        // fenced exactly like a metered route). `pricingReady: true` here is what
-        // makes a metered route ADMITTED rather than refused for lack of
-        // pricing; #161 is what makes the route exist in the first place.
-        // This BACKEND-WIDE report still claims `mode: "subscription"`
-        // unconditionally — it is produced before any route resolves and has
-        // no per-route credential to read — and it is the EXACT binding
-        // (`FrozenRuntimeBinding.capabilities()`, production-runtime.ts) that
-        // upgrades to the real per-route mode via
-        // `credentialKindBillsMetered(credential.kind)`.
-        //
-        // The one gap this opens is settled, not hand-waved: `total_cost_usd`
-        // is OPTIONAL on `RawClaudeCliResult`, so a metered attempt can
-        // complete with no figure. It settles `unresolved` with no
-        // `knownUsd` rather than a fabricated $0 (`costFor` above,
-        // `settlementFromUsage` in spend-limiter.ts), pinned by "a metered
-        // run reporting no cash figure at all" in
-        // test/conformance/claude-cli-transport.test.ts.
-        pricingReady: true,
       },
       ...(input !== undefined
         ? {
@@ -960,6 +892,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
         request.isolation.env,
       );
       const observedModels = observedModelsFromCliResult(stdout);
+      const modelUsage = modelUsageFromCliResult(stdout);
       const toolInvocations = toolInvocationsFromCliResult(stdout);
 
       let stderrTail = stderr.slice(-4096);
@@ -1035,6 +968,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
         usage,
         stderrTail,
         ...(observedModels === undefined ? {} : { observedModels }),
+        ...(modelUsage === undefined ? {} : { modelUsage }),
         ...(toolInvocations === undefined ? {} : { toolInvocations }),
         ...(exitCode !== undefined ? { exitCode } : {}),
       };

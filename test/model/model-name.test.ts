@@ -172,7 +172,6 @@ describe("roles (S1)", () => {
     for (const role of [
       "default",
       "consolidate",
-      "scout",
       "judge",
       "refuter",
       "summary",
@@ -220,8 +219,8 @@ describe("parseModelList: list rules", () => {
   });
 
   test("an empty list is refused", () => {
-    expect(() => parseModelList([], "models.scout")).toThrow(
-      "models.scout must list at least one model",
+    expect(() => parseModelList([], "models.judge")).toThrow(
+      "models.judge must list at least one model",
     );
   });
 
@@ -280,7 +279,7 @@ describe("parseModelsConfig: the models object", () => {
     expect(() =>
       parseModelsConfig({ summarizer: ["claude:haiku-latest"] }),
     ).toThrow(
-      'models has an unknown role "summarizer": roles are default, hunter.<key>, consolidate, scout, judge, refuter, summary',
+      'models has an unknown role "summarizer": roles are default, hunter.<key>, consolidate, judge, refuter, summary',
     );
   });
 

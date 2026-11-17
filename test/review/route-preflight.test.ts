@@ -38,7 +38,7 @@ describe("pipelineMaterialityInput (odd/tasks/materiality-gate.md S2)", () => {
 describe("buildCliRoutePlan: the materiality judge key (S14)", () => {
   const params = {
     spec: defaultReviewSpec(),
-    options: { model: "opus", scout: false } as CliOptions,
+    options: { model: "opus" } as CliOptions,
     agentFiles: new Map(),
     bundledAgents: false,
     summary: { enabled: false },
@@ -108,7 +108,7 @@ describe("the bundled-agents flag on the production plan (model-profiles S3)", (
       expect(bundled).toBe(source === "default");
       const plan = await buildCliRoutePlan({
         spec,
-        options: { scout: false } as CliOptions,
+        options: {} as CliOptions,
         agentFiles: haiku,
         bundledAgents: bundled,
         profile: FALLBACK_PROFILE,

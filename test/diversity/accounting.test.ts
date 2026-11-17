@@ -4,7 +4,6 @@ import {
   appendObservation,
   emptyDiversityLedger,
   retainPartialFailureEvidence,
-  summarizeDiversityAccounting,
 } from "../../src/diversity/accounting";
 import type { FindingObservation } from "../../src/diversity/clustering";
 import { normalizeInclusiveUsage } from "../../src/execution/usage-normalized";
@@ -14,9 +13,6 @@ const usage = normalizeInclusiveUsage({
   inputTotal: 100,
   outputTotal: 50,
   billingMode: "metered",
-  costSource: "provider",
-  cashCostUsd: 0.2,
-  notionalCostUsd: 0.15,
 });
 
 const observation = (): FindingObservation => ({
@@ -43,7 +39,7 @@ const observation = (): FindingObservation => ({
 });
 
 describe("diversity accounting", () => {
-  test("counts retries, failures, and successes in numerator cash/notional", () => {
+  test("counts retries, failures, and successes per attempt", () => {
     let ledger = emptyDiversityLedger();
     ledger = appendAttempt(ledger, {
       attemptId: "a1",
@@ -71,11 +67,11 @@ describe("diversity accounting", () => {
       legId: "leg-1",
       armId: "arm",
     });
-    const totals = summarizeDiversityAccounting(ledger);
-    expect(totals.attemptCount).toBe(2);
-    expect(totals.failureCount).toBe(1);
-    expect(totals.cashCostUsd).toBeCloseTo(0.4);
-    expect(totals.notionalCostUsd).toBeCloseTo(0.3);
+    expect(ledger.attempts).toHaveLength(2);
+    expect(ledger.failures).toHaveLength(1);
+    expect(ledger.observations).toHaveLength(1);
+    // The retry's usage is kept per attempt, tokens only.
+    expect(ledger.attempts[1]?.usage.tokens.totalKnown).toBe(150);
     expect(retainPartialFailureEvidence(ledger)).toBe(true);
   });
 });

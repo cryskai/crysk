@@ -11,11 +11,7 @@ import type { DraftFinding, HunterDraft, RefuterResult } from "#review/drafts";
 import { type PipelineInput, runPipeline } from "#review/pipeline";
 import { defaultReviewSpec, validateReviewSpec } from "#review/spec";
 import type { StepResult, StepRunner, StepSpec } from "#review/step-runner";
-import {
-  appendAttempt,
-  type DiversityAttemptRecord,
-  emptyDiversityLedger,
-} from "../../src/diversity/accounting";
+import { emptyDiversityLedger } from "../../src/diversity/accounting";
 import {
   DiversityAdmissionError,
   DiversityCapabilityError,
@@ -24,11 +20,9 @@ import {
 import { buildDiversityPlan } from "../../src/diversity/identity";
 import {
   assertDiversityLegRoutes,
-  assertDiversitySpendUnderCap,
   prepareDiversityExecution,
   recordDiversityHunterResult,
 } from "../../src/diversity/pipeline-integration";
-import { normalizeInclusiveUsage } from "../../src/execution/usage-normalized";
 import type { SessionUsage } from "../../src/usage";
 
 function usage(): SessionUsage {
@@ -37,7 +31,6 @@ function usage(): SessionUsage {
     tokens_in: 100,
     tokens_out: 10,
     tokens_total: 110,
-    cost_usd_est: 0.01,
   };
 }
 
@@ -161,7 +154,6 @@ async function makeInput(): Promise<PipelineInput> {
         enabled: true,
         armId: "m6-diversity",
         maxLegs: 3,
-        cashCapUsd: 25,
       },
       agents: [
         {
@@ -295,7 +287,6 @@ describe("pipeline diversity integration", () => {
         enabled: true,
         armId: "arm",
         maxLegs: 2,
-        cashCapUsd: 10,
       },
       agents: [
         {
@@ -340,7 +331,6 @@ describe("pipeline diversity integration", () => {
             enabled: true,
             armId: "arm",
             maxLegs: 2,
-            cashCapUsd: 10,
           },
           agents: [
             {
@@ -358,58 +348,12 @@ describe("pipeline diversity integration", () => {
     ).toThrow(DiversityTargetError);
   });
 
-  test("assertDiversitySpendUnderCap rejects projected spend above cash cap", () => {
-    const spec = validateReviewSpec({
-      multiModelDiversity: {
-        enabled: true,
-        armId: "arm",
-        maxLegs: 2,
-        cashCapUsd: 1,
-      },
-      agents: [
-        {
-          key: "reliability",
-          file: "deep-review-reliability.md",
-          role: "hunter",
-          models: ["sonnet"],
-        },
-        { key: "refuter", file: "review-refuter.md", role: "refuter" },
-      ],
-    });
-    const plan = buildDiversityPlan({ spec, c2SchemaVersion: "1.1.0" });
-    const leg = plan.legs[0];
-    if (!leg) throw new Error("missing leg");
-    const attempt: DiversityAttemptRecord = {
-      attemptId: `${leg.legId}-a1`,
-      legId: leg.legId,
-      armId: plan.armId,
-      specialty: "reliability",
-      replicate: 1,
-      attempt: 1,
-      status: "completed",
-      usage: normalizeInclusiveUsage({
-        wallMs: 1,
-        inputTotal: 1,
-        outputTotal: 1,
-        billingMode: "unknown",
-        costSource: "unknown",
-        cashCostUsd: 2,
-        notionalCostUsd: 2,
-      }),
-    };
-    const ledger = appendAttempt(emptyDiversityLedger(), attempt);
-    expect(() => assertDiversitySpendUnderCap(plan, ledger)).toThrow(
-      DiversityAdmissionError,
-    );
-  });
-
   test("recordDiversityHunterResult stamps executed route provenance on observations", () => {
     const spec = validateReviewSpec({
       multiModelDiversity: {
         enabled: true,
         armId: "arm",
         maxLegs: 1,
-        cashCapUsd: 10,
       },
       agents: [
         {
@@ -533,7 +477,6 @@ describe("pipeline diversity integration", () => {
             enabled: true,
             armId: "arm",
             maxLegs: 2,
-            cashCapUsd: 10,
           },
           agents: [
             {
@@ -565,7 +508,6 @@ describe("diversity leg identity follows the executed route", () => {
         enabled: true,
         armId: "arm",
         maxLegs: 2,
-        cashCapUsd: 10,
       },
       agents: [
         {

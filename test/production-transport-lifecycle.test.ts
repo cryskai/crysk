@@ -103,7 +103,6 @@ const COMPLETE_EVIDENCE: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 async function writeClaudeFixture(
@@ -201,7 +200,7 @@ function createRecordingTransport(
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async (request: TransportRequest): Promise<TransportOutcome> => {
@@ -215,8 +214,6 @@ function createRecordingTransport(
           tokens: { totalKnown: 1 },
           completeness: "complete",
           billingMode: "subscription",
-          costSource: "provider",
-          cashCostUsd: 0,
         },
         stderrTail: "",
       };
@@ -468,8 +465,6 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
                 tokens: {},
                 completeness: "complete" as const,
                 billingMode: "subscription" as const,
-                costSource: "provider" as const,
-                cashCostUsd: 0,
               },
               stderrTail: "",
             }),
@@ -554,8 +549,6 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
                 tokens: {},
                 completeness: "complete" as const,
                 billingMode: "subscription" as const,
-                costSource: "provider" as const,
-                cashCostUsd: 0,
               },
               stderrTail: "",
             }),
@@ -1097,7 +1090,6 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
         ],
         binaryPath: opencodeFixture.canonicalPath,
         spendLedger: ledger,
-        reservedUsdPerAttempt: 0.01,
         spawnFn: (() => ({})) as unknown as typeof Bun.spawn,
       });
 
@@ -1144,7 +1136,6 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
         ],
         binaryPath: opencodeFixture.canonicalPath,
         spendLedger: ledger,
-        reservedUsdPerAttempt: 0.01,
         spawnFn: (() => ({})) as unknown as typeof Bun.spawn,
       });
 
@@ -1297,8 +1288,6 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
               tokens: {},
               completeness: "complete",
               billingMode: "subscription",
-              costSource: "provider",
-              cashCostUsd: 0,
             },
             stderrTail: "",
           };
@@ -1432,8 +1421,6 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
               tokens: {},
               completeness: "complete",
               billingMode: "subscription",
-              costSource: "provider",
-              cashCostUsd: 0,
             },
             stderrTail: "",
           };
@@ -1721,8 +1708,6 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
                 tokens: {},
                 completeness: "complete",
                 billingMode: "subscription",
-                costSource: "provider",
-                cashCostUsd: 0,
               },
               stderrTail: "ECONNRESET",
             };
@@ -1736,8 +1721,6 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
               tokens: {},
               completeness: "complete",
               billingMode: "subscription",
-              costSource: "provider",
-              cashCostUsd: 0,
             },
             stderrTail: "",
           };
@@ -2595,7 +2578,7 @@ describe("Task 5.1 RED U5 BE3a/b: generic facts, isolation safeguards, and concu
           usageMode: "snapshot",
         },
         cancellation: { deadlineMs: 5000, conformance: "passed" },
-        billing: { mode: "subscription", pricingReady: true },
+        billing: { mode: "subscription" },
       }),
       execute: async () => {
         throw new Error("Should never be called");
@@ -2658,7 +2641,7 @@ describe("Task 5.1 RED U5 BE3a/b: generic facts, isolation safeguards, and concu
           usageMode: "snapshot",
         },
         cancellation: { deadlineMs: 5000, conformance: "passed" },
-        billing: { mode: "subscription", pricingReady: true },
+        billing: { mode: "subscription" },
       }),
       execute: async (req) => {
         requests.push(req);
@@ -2671,7 +2654,6 @@ describe("Task 5.1 RED U5 BE3a/b: generic facts, isolation safeguards, and concu
             tokens: { inputKnown: 10, outputKnown: 5, totalKnown: 15 },
             completeness: "complete",
             billingMode: "subscription",
-            costSource: "subscription",
           },
           stderrTail: "",
         };
@@ -2733,7 +2715,7 @@ describe("Task 5.1 RED U5 BE3a/b: generic facts, isolation safeguards, and concu
           usageMode: "snapshot",
         },
         cancellation: { deadlineMs: 5000, conformance: "passed" },
-        billing: { mode: "subscription", pricingReady: true },
+        billing: { mode: "subscription" },
       }),
       execute: async () => {
         throw new Error("Should not execute with mismatched provider");

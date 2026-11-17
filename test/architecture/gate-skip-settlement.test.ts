@@ -1,4 +1,4 @@
-// #326: the size gate and the budget gate must settle their ledger row as
+// #326: the size gate and the platform limits gate must settle their ledger row as
 // `"gate-skipped"` through settleCiGateSkip, never as `"skipped"`. The helper's
 // own behavior is tested in test/pr/ci-admission-gate.test.ts. What can regress
 // silently is the call site: reverting it to settleCiAdmissionLedger(..., "skipped", ...)
@@ -54,8 +54,8 @@ const GATE_SKIP_SITES = [
   },
   {
     file: "pr/plan.ts",
-    planner: "planCiBudgetSkip",
-    gate: "budget gate",
+    planner: "planCiLimitsSkip",
+    gate: "platform limits gate",
   },
 ] as const;
 

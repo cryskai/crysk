@@ -16,16 +16,12 @@ import path from "node:path";
 import { ciForceReviewDispatch } from "#ci/force-comment";
 import {
   assertRunMatchesPr,
-  budgetDisabledWarningMessage,
-  budgetUnlimitedNoticeMessage,
-  CI_DEFAULT_METERED_BUDGET_USD,
   type CiGateSkipPlan,
   ciGateSkipOutputs,
   deriveCiBillingMode,
-  planCiBudgetSkip,
+  planCiLimitsSkip,
   planCiReview,
   planCiSizeSkip,
-  resolveCiBudgetCeiling,
   SKIP_BUDGET_COMMENT_MARKER,
   SKIP_SIZE_COMMENT_MARKER,
   shouldPublishCiReview,
@@ -38,7 +34,11 @@ import {
   withCiWorkflowGroup,
 } from "#ci/reporter";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
-import { isCiEnvironment, parseArgs } from "#review/preflight";
+import {
+  isCiEnvironment,
+  parseArgs,
+  removedFlagWarnings,
+} from "#review/preflight";
 import type { SizeGateVerdict } from "#review/size-gate";
 import { CliUsageError } from "../../src/errors";
 
@@ -74,7 +74,6 @@ const TELEMETRY: Telemetry = {
   tokens_in: 10,
   tokens_out: 10,
   tokens_total: 20,
-  cost_usd_est: 1,
 };
 
 function doc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {
@@ -134,7 +133,7 @@ describe("isCiEnvironment", () => {
 });
 
 // ---------------------------------------------------------------------------
-// parseArgs — --ci / --budget-usd / --step-summary / --no-step-summary
+// parseArgs — --ci / --step-summary / --no-step-summary, and the retired --budget-usd
 // ---------------------------------------------------------------------------
 
 describe("parseArgs — --ci", () => {
@@ -157,53 +156,60 @@ describe("parseArgs — --ci", () => {
   });
 });
 
-describe("parseArgs — --budget-usd", () => {
-  test("parses a float", () => {
+// platform-owned-cost T7 (S7): `--budget-usd` is retired. It stays accepted
+// anywhere, whatever its value, has no effect, and says so once.
+describe("parseArgs — --budget-usd (retired)", () => {
+  const base = parseArgs(["review", "--pr", "5", "--ci"]).options;
+
+  test.each([
+    ["a float", "7.5"],
+    ["zero", "0"],
+    ["a negative number", "-1"],
+    ["a non-number", "lots"],
+  ])("accepts %s, with no effect on any other option", (_, value) => {
     const { options } = parseArgs([
       "review",
       "--pr",
       "5",
       "--ci",
       "--budget-usd",
-      "7.5",
+      value,
     ]);
-    expect(options.budgetUsd).toBe(7.5);
+    expect(options.removedFlags).toEqual(["--budget-usd"]);
+    expect({ ...options, removedFlags: undefined }).toEqual({
+      ...base,
+      removedFlags: undefined,
+    });
+    expect("budgetUsd" in options).toBe(false);
   });
 
-  test("accepts 0 (disables the ceiling, per size-gate's convention)", () => {
+  test("is accepted without --ci too: nothing is dropped silently any more, it is announced", () => {
+    const { options } = parseArgs(["review", "--pr", "5", "--budget-usd", "5"]);
+    expect(options.removedFlags).toEqual(["--budget-usd"]);
+  });
+
+  test("produces exactly one warning, however often it is given", () => {
     const { options } = parseArgs([
       "review",
       "--pr",
       "5",
       "--ci",
       "--budget-usd",
-      "0",
-    ]);
-    expect(options.budgetUsd).toBe(0);
-  });
-
-  test("accepts a negative number (also disables the ceiling)", () => {
-    const { options } = parseArgs([
-      "review",
-      "--pr",
       "5",
-      "--ci",
       "--budget-usd",
-      "-1",
+      "6",
     ]);
-    expect(options.budgetUsd).toBe(-1);
+    expect(removedFlagWarnings(options)).toEqual([
+      "--budget-usd is ignored: dollar limits moved to the Crysk platform (Review > Limits in the dashboard)",
+    ]);
   });
 
-  test("a non-numeric value fails loud", () => {
-    expect(() =>
-      parseArgs(["review", "--pr", "5", "--ci", "--budget-usd", "lots"]),
-    ).toThrow(/--budget-usd/);
-  });
-
-  test("--budget-usd without --ci is a silently dropped intention — rejected", () => {
-    expect(() =>
-      parseArgs(["review", "--pr", "5", "--budget-usd", "5"]),
-    ).toThrow(/--ci/);
+  test("the scout flags keep their own warning beside it", () => {
+    const { options } = parseArgs(["review", "--scout", "--budget-usd", "5"]);
+    expect(removedFlagWarnings(options)).toEqual([
+      "--scout is ignored: the scout stage was removed",
+      "--budget-usd is ignored: dollar limits moved to the Crysk platform (Review > Limits in the dashboard)",
+    ]);
   });
 });
 
@@ -286,56 +292,32 @@ describe("parseArgs — --step-summary / --no-step-summary", () => {
 });
 
 // ---------------------------------------------------------------------------
-// budgetDisabledWarningMessage — spec 3.1: a silent disable is
-// indistinguishable from a passing gate, so a <= 0 ceiling MUST warn.
-// ---------------------------------------------------------------------------
-
-describe("budgetDisabledWarningMessage", () => {
-  test("undefined (flag never given) warns nothing — nothing was disabled", () => {
-    expect(budgetDisabledWarningMessage(undefined)).toBeNull();
-  });
-
-  test("a positive ceiling warns nothing — the gate is active", () => {
-    expect(budgetDisabledWarningMessage(10)).toBeNull();
-  });
-
-  test("0 warns — the ceiling is disabled", () => {
-    expect(budgetDisabledWarningMessage(0)).not.toBeNull();
-    expect(budgetDisabledWarningMessage(0)).toContain("disabled");
-  });
-
-  test("a negative value warns too", () => {
-    expect(budgetDisabledWarningMessage(-5)).not.toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // ciGateSkipOutputs — spec 1.1's $GITHUB_OUTPUT contract for a skip.
 // ---------------------------------------------------------------------------
 
 describe("ciGateSkipOutputs", () => {
-  test("skipped-size: cost_usd_est is 0 — no estimate exists yet, the gate fired before it", () => {
-    const outputs: CiOutputs = ciGateSkipOutputs("skipped-size", 0);
+  test("skipped-size: zero counts, no run dir, and no cost field (the engine reports no dollars)", () => {
+    const outputs: CiOutputs = ciGateSkipOutputs("skipped-size");
     expect(outputs).toEqual({
       status: "skipped-size",
       findings_count: 0,
       blocking_count: 0,
       advisory_count: 0,
-      cost_usd_est: 0,
       run_dir: "",
     });
   });
 
-  test("skipped-budget: cost_usd_est carries the estimate that tripped the gate", () => {
-    const outputs = ciGateSkipOutputs("skipped-budget", 12.5);
+  test("skipped-budget keeps today's status, with the same zero counts", () => {
+    const outputs = ciGateSkipOutputs("skipped-budget");
     expect(outputs.status).toBe("skipped-budget");
-    expect(outputs.cost_usd_est).toBe(12.5);
+    expect(outputs.findings_count).toBe(0);
     expect(outputs.run_dir).toBe("");
+    expect("cost_usd_est" in outputs).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// planCiSizeSkip / planCiBudgetSkip — the ONE pure call reviewPr's shell
+// planCiSizeSkip / planCiLimitsSkip — the ONE pure call reviewPr's shell
 // makes for a gate skip: everything it needs (comment, marker, summary
 // markdown, outputs) built from the SAME numbers, so the PR comment and the
 // step summary can never independently drift.
@@ -424,181 +406,84 @@ describe("planCiSizeSkip", () => {
       findings_count: 0,
       blocking_count: 0,
       advisory_count: 0,
-      cost_usd_est: 0,
       run_dir: "",
     });
   });
 });
 
-describe("planCiBudgetSkip", () => {
-  test("null when within budget", () => {
-    expect(
-      planCiBudgetSkip({
-        isCi: true,
-        ciMode: "advisory",
-        estimatedCostUsd: 8,
-        budgetUsd: 10,
-        prNumber: 56,
-        force: false,
-      }),
-    ).toBeNull();
-  });
-
-  test("null when the ceiling is disabled (<= 0)", () => {
-    expect(
-      planCiBudgetSkip({
-        isCi: true,
-        ciMode: "advisory",
-        estimatedCostUsd: 999,
-        budgetUsd: 0,
-        prNumber: 56,
-        force: false,
-      }),
-    ).toBeNull();
-  });
-
-  test("builds the full plan: comment, marker, summary markdown, and outputs carrying the estimate that tripped it", () => {
-    const plan = planCiBudgetSkip({
-      isCi: true,
-      ciMode: "advisory",
-      estimatedCostUsd: 12.5,
-      budgetUsd: 10,
-      prNumber: 56,
-      force: false,
-    });
-    expect(plan).not.toBeNull();
-    if (plan === null) throw new Error("unreachable");
-    expect(plan.markerPrefix).toBe(SKIP_BUDGET_COMMENT_MARKER);
-    expect(plan.comment.startsWith(SKIP_BUDGET_COMMENT_MARKER)).toBe(true);
-    expect(plan.comment).toContain("Comment `/crysk review`");
-    expect(plan.comment).toContain(ciForceReviewDispatch(56));
-    expect(plan.summaryMarkdown).toContain("PR #56");
-    expect(plan.outputs.status).toBe("skipped-budget");
-    // The plan card and the skip comment must show the SAME number (ci-gates
-    // header doctrine) — estimatedCostUsd here is estimate.high, per
-    // report.ts's own documented under-estimate bias (see report.ts ~97-98).
-    expect(plan.outputs.cost_usd_est).toBe(12.5);
-  });
-
-  test("force clears the ceiling — the CI comment override runs this one anyway", () => {
-    expect(
-      planCiBudgetSkip({
-        isCi: true,
-        ciMode: "advisory",
-        estimatedCostUsd: 999,
-        budgetUsd: 10,
-        prNumber: 56,
-        force: true,
-      }),
-    ).toBeNull();
-  });
-});
-
 // ---------------------------------------------------------------------------
-// The CI budget gate's route-aware resolution (issue #156). The gate compared
-// `estimate.high` — a token-derived figure — against a real-dollar ceiling.
-// On a subscription route the real cash cost is $0.00, so a $10 default
-// refused work for an overrun that could not happen, and a skipped review is
-// indistinguishable from a clean one on the checks page (ci/setup.ts:50-63).
-//
-// These compose the same three pure functions cli.ts's gate composes, in the
-// same order, so a wiring change that drops one has to break a test here.
+// The CI limits gate by billing mode (issue #156 route policy, L55 limits).
+// The platform's limits skip only a run that bills an API key: how the run
+// bills is the engine's own `deriveCiBillingMode`, which the platform cannot
+// see. These compose the same two pure functions the shell composes
+// (src/pr/plan.ts), so a wiring change that drops one has to break a test here.
 // ---------------------------------------------------------------------------
 
-function budgetGateFor(input: {
+function limitsGateFor(input: {
   env: Record<string, string | undefined>;
-  configured: number | undefined;
-  estimatedCostUsd: number;
+  limits: Parameters<typeof planCiLimitsSkip>[0]["limits"];
+  force?: boolean;
 }): CiGateSkipPlan | null {
-  const ceiling = resolveCiBudgetCeiling({
-    configured: input.configured,
-    billingMode: deriveCiBillingMode(input.env),
-  });
-  if (ceiling.budgetUsd === undefined) return null;
-  return planCiBudgetSkip({
+  return planCiLimitsSkip({
     isCi: true,
     ciMode: "advisory",
-    estimatedCostUsd: input.estimatedCostUsd,
-    budgetUsd: ceiling.budgetUsd,
+    billingMode: deriveCiBillingMode(input.env),
+    limits: input.limits,
     prNumber: 156,
-    force: false,
+    force: input.force ?? false,
   });
 }
 
-describe("CI budget gate resolution by billing mode", () => {
-  test("subscription route, no configured budget: no gate runs at any estimate", () => {
-    expect(
-      budgetGateFor({
-        env: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test" },
-        configured: undefined,
-        estimatedCostUsd: 999,
-      }),
-    ).toBeNull();
+describe("CI limits gate by billing mode", () => {
+  const over = { reviewUsd: 12, estimateUsd: 25 };
+
+  test("subscription route: never skipped, at any estimate or with the month used up", () => {
+    const env = { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test" };
+    expect(limitsGateFor({ env, limits: over })).toBeNull();
+    expect(limitsGateFor({ env, limits: { monthLeftUsd: 0 } })).toBeNull();
   });
 
-  test("subscription route with no ceiling announces itself — a silent no-gate is the failure this repo has already paid for", () => {
-    const ceiling = resolveCiBudgetCeiling({
-      configured: undefined,
-      billingMode: deriveCiBillingMode({
-        CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test",
-      }),
-    });
-    expect(budgetUnlimitedNoticeMessage(ceiling)).not.toBeNull();
-    // and the <= 0 warning stays silent: nothing was disabled here.
-    expect(budgetDisabledWarningMessage(ceiling.budgetUsd)).toBeNull();
-  });
-
-  test("metered route, no configured budget: the default ceiling applies", () => {
-    const plan = budgetGateFor({
+  test("metered route over the per-review limit: skipped, naming the limit and the dashboard", () => {
+    const plan = limitsGateFor({
       env: { ANTHROPIC_API_KEY: "sk-test" },
-      configured: undefined,
-      estimatedCostUsd: CI_DEFAULT_METERED_BUDGET_USD + 2.5,
+      limits: over,
     });
     expect(plan).not.toBeNull();
     if (plan === null) throw new Error("unreachable");
     expect(plan.outputs.status).toBe("skipped-budget");
-    expect(plan.comment).toContain(
-      `$${CI_DEFAULT_METERED_BUDGET_USD.toFixed(2)}`,
-    );
+    expect(plan.comment.startsWith(SKIP_BUDGET_COMMENT_MARKER)).toBe(true);
+    expect(plan.comment).toContain("per-review limit");
+    expect(plan.comment).toContain("Review > Limits");
   });
 
-  test("metered route, no configured budget, estimate under the default: no skip", () => {
+  test("metered route within the limits, or with no limits at all: runs", () => {
+    const env = { ANTHROPIC_API_KEY: "sk-test" };
     expect(
-      budgetGateFor({
+      limitsGateFor({ env, limits: { reviewUsd: 12, estimateUsd: 11 } }),
+    ).toBeNull();
+    expect(limitsGateFor({ env, limits: undefined })).toBeNull();
+  });
+
+  test("an OpenCode route bound to an API key counts as metered", () => {
+    const plan = planCiLimitsSkip({
+      isCi: true,
+      ciMode: "advisory",
+      billingMode: deriveCiBillingMode({}, { openCodeBillsMetered: true }),
+      limits: { monthLeftUsd: 0 },
+      prNumber: 156,
+      force: false,
+    });
+    expect(plan?.outputs.status).toBe("skipped-budget");
+  });
+
+  test("`/crysk review` (force) is never skipped", () => {
+    expect(
+      limitsGateFor({
         env: { ANTHROPIC_API_KEY: "sk-test" },
-        configured: undefined,
-        estimatedCostUsd: CI_DEFAULT_METERED_BUDGET_USD - 1,
+        limits: { monthLeftUsd: 0, reviewUsd: 1, estimateUsd: 99 },
+        force: true,
       }),
     ).toBeNull();
-  });
-
-  test("an explicit ceiling wins on a subscription route", () => {
-    const plan = budgetGateFor({
-      env: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test" },
-      configured: 5,
-      estimatedCostUsd: 6,
-    });
-    expect(plan).not.toBeNull();
-    if (plan === null) throw new Error("unreachable");
-    expect(plan.comment).toContain("$5.00");
-  });
-
-  test("an explicit ceiling wins on a metered route, including an explicit disable", () => {
-    expect(
-      budgetGateFor({
-        env: { ANTHROPIC_API_KEY: "sk-test" },
-        configured: 0,
-        estimatedCostUsd: 999,
-      }),
-    ).toBeNull();
-    const plan = budgetGateFor({
-      env: { ANTHROPIC_API_KEY: "sk-test" },
-      configured: 20,
-      estimatedCostUsd: 25,
-    });
-    expect(plan).not.toBeNull();
-    if (plan === null) throw new Error("unreachable");
-    expect(plan.comment).toContain("$20.00");
   });
 });
 
@@ -618,7 +503,6 @@ describe("planCiReview", () => {
       prNumber: 5,
       headSha: "a".repeat(40),
       findings,
-      costUsdEst: 3.2,
       wallMs: 90_000,
       model: "sonnet",
       runDir: "/tmp/run",
@@ -630,7 +514,6 @@ describe("planCiReview", () => {
     expect(plan.outputs.findings_count).toBe(2);
     expect(plan.outputs.blocking_count).toBe(1);
     expect(plan.outputs.advisory_count).toBe(1);
-    expect(plan.outputs.cost_usd_est).toBe(3.2);
     expect(plan.outputs.run_dir).toBe("/tmp/run");
   });
 
@@ -639,7 +522,6 @@ describe("planCiReview", () => {
       prNumber: 5,
       headSha: "a".repeat(40),
       findings: [],
-      costUsdEst: 1.1,
       wallMs: 30_000,
       model: "sonnet",
       runDir: "/tmp/run",
@@ -820,7 +702,7 @@ describe("reportFatalCiError — spec 1.1's fatal `error` status, finally wired"
       expect(written).toContain("findings_count=0\n");
       expect(written).toContain("blocking_count=0\n");
       expect(written).toContain("advisory_count=0\n");
-      expect(written).toContain("cost_usd_est=0.00\n");
+      expect(written).not.toContain("cost_usd_est");
       expect(written).toContain("run_dir=\n");
     } finally {
       await rm(dir, { recursive: true, force: true });

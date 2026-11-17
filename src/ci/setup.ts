@@ -76,6 +76,11 @@ import {
   parseModelsConfig,
 } from "#model/model-name";
 import { MODEL_PROFILES, profileModels } from "#model/profiles";
+import {
+  agentModelRole,
+  agentStepKey,
+  type ResolvedRoutePlan,
+} from "#model/routing";
 import { parseGlobalConfig, parseLocalConfig } from "#review/preflight";
 import { commandForms } from "../brand";
 import {
@@ -114,43 +119,19 @@ export const LEGACY_CI_WORKFLOW_RELATIVE_PATH = LEGACY_WORKFLOW_RELATIVE_PATH;
 // PR that changes it.
 export interface CiWorkflowTemplateOptions {
   actionRef?: string;
-  // Repo-local override for the action's own `budget-usd` default. Omitted
-  // means "say nothing and inherit the action's default", which is what every
-  // scaffolded repo gets: raising a stranger's spend ceiling from a template
-  // they did not choose is not ours to do.
+  // Repo-local override for the action's own `max-changed-lines` default.
+  // Omitted means "say nothing and inherit the route-derived limit" (none on a
+  // subscription, 4000 on a metered key; resolveCiSizeLimits), which every
+  // scaffolded repo gets and decides for itself.
   //
-  // Since issue #156 that inherited default is a POLICY, not a number:
-  // action.yml's `budget-usd` default is empty, and the CLI resolves the
-  // ceiling from the route's billing mode (ci/gates.ts's
-  // `resolveCiBudgetCeiling`) — no ceiling on a Claude subscription, a default
-  // ceiling on a metered ANTHROPIC_API_KEY route. Inheriting is therefore
-  // strictly better than it was: a scaffolded repo now gets a ceiling exactly
-  // when a ceiling means something.
-  //
-  // NOTHING sets this today, this repo included — see OWN_CI_WORKFLOW_OPTIONS
-  // for why the one override that existed went away. The knob stays because a
-  // repo that genuinely wants a fixed ceiling on a subscription route needs a
-  // way to say so, and that is the only thing an explicit value now means.
-  budgetUsd?: string;
-  // Repo-local override for the action's own `max-changed-lines` default, and
-  // omitted for the same reason as `budgetUsd`: a scaffolded repo inherits
-  // the route-derived limit (none on a subscription, 4000 on a metered key;
-  // resolveCiSizeLimits) and decides for itself. THIS repo raises it because its
-  // own slices routinely land near the line — D1-10c was skipped at 1023,
-  // twenty-three lines over, and a skipped review is indistinguishable from a
-  // clean one to anyone reading the checks.
+  // THIS repo raises it because its own slices routinely land near the line:
+  // D1-10c was skipped at 1023, twenty-three lines over, and a skipped review is
+  // indistinguishable from a clean one to anyone reading the checks.
   //
   // Raising it costs little and risks little HERE. It is a COST gate, never a
   // quality one — the size<->quality question is unmeasured in this project
   // (`scripts/scope-probe.ts`), so this number is not a claim that pr-hero
   // reviews a 1500-line diff as well as a 300-line one.
-  //
-  // Since issue #156 it is also the ONLY gate bounding a self-review's scope
-  // here, which is what the number has to be read against: this comment used
-  // to lean on `budget-usd` as "the real spend ceiling, which still refuses
-  // the work outright". On this repo's subscription route it never was — it
-  // gated `estimate.high`, a token-derived figure, against $0.00 of real
-  // cash.
   maxChangedLines?: string;
   // The files half of the size gate, emitted right after the lines input.
   maxChangedFiles?: string;
@@ -189,17 +170,7 @@ export const DEFAULT_CI_ACTION_REF = "cryskai/crysk@v0";
 // leave the committed workflow and the tests disagreeing about what "ours"
 // means. Nothing a scaffolded repo receives passes through here.
 //
-// `budgetUsd` is "0": the explicit, loud DISABLE, not a ceiling. History:
-// it used to be "15.00", because a self-review's diff grows against the base
-// every time a finding is answered, so an iterating PR walked toward the
-// ceiling exactly when the check mattered most. Issue #156 dropped it on the
-// promise that the route's billing mode would apply no ceiling on this repo's
-// Claude subscription. That promise did not hold here: the route resolved as
-// metered, and #326 (and earlier PRs) skipped at the $10 metered default on
-// an `estimate.high` that is not this route's cash cost. A subscription has
-// no dollar cost to cap, so this repo opts out explicitly; fixing the
-// billing-mode resolution itself is a separate issue. `maxChangedLines`
-// stays: that gate is real on any route.
+// `maxChangedLines` stays: that gate is real on any route.
 //
 // `cryskSecrets` names the Claude pair (U5): the action stops a run that passes the
 // removed inputs, so this repo's own review passes CRYSK_* secrets. The repository
@@ -207,7 +178,6 @@ export const DEFAULT_CI_ACTION_REF = "cryskai/crysk@v0";
 export const OWN_CI_WORKFLOW_OPTIONS: CiWorkflowTemplateOptions = {
   actionRef: "./",
   maxChangedLines: "5000",
-  budgetUsd: "0",
   mode: "gate",
   forceEngineFromPr: true,
   cryskSecrets: ["CRYSK_CLAUDE_OAUTH_TOKEN", "CRYSK_CLAUDE_API_KEY"],
@@ -294,12 +264,6 @@ export function generateCiWorkflowTemplate(
 ): string {
   const actionRef = options.actionRef ?? DEFAULT_CI_ACTION_REF;
   const pinEngine = options.forceEngineFromPr === true;
-  const budgetLine =
-    options.budgetUsd === undefined
-      ? ""
-      : `\n          budget-usd: ${options.budgetUsd}`;
-  // Emitted before `budget-usd` to mirror action.yml's own declaration order,
-  // so the generated file reads in the same sequence as the inputs it sets.
   const sizeGateLine =
     options.maxChangedLines === undefined
       ? ""
@@ -405,24 +369,19 @@ export function generateCiWorkflowTemplate(
 
 `
     : "";
-  // One clause per command and per name, new name first: an Actions expression
-  // has no regex, so the legacy /pr-hero forms are listed beside /crysk ones.
+  // One clause per command form: an Actions expression has no regex.
   const commandBodies = [
     REVIEW_COMMAND,
     RECHECK_COMMAND,
     OVERRIDE_COMMAND,
   ].flatMap(commandForms);
-  const newNamesFirst = [
-    ...commandBodies.filter((c) => c.startsWith("/crysk")),
-    ...commandBodies.filter((c) => !c.startsWith("/crysk")),
-  ];
-  const ifCommentClauses = newNamesFirst
+  const ifCommentClauses = commandBodies
     .map(
       (c) =>
         `(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '${c}'))`,
     )
     .join(" ||\n      ");
-  const groupCommentClauses = newNamesFirst
+  const groupCommentClauses = commandBodies
     .map(
       (c) =>
         `(startsWith(github.event.comment.body, '${c}') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))`,
@@ -451,8 +410,7 @@ export function generateCiWorkflowTemplate(
 # no cost, and records who did it. A comment that is exactly
 # \`/crysk recheck\` reviews the head and asks the CI adjudicator to rule on
 # pending dismissals of blocking findings. The action parses the comment and
-# refuses a commenter without write access. The older \`/pr-hero ...\` forms
-# of these commands still work for one version.
+# refuses a commenter without write access.
 name: Crysk Review
 
 on:
@@ -491,8 +449,7 @@ jobs:
     # fork's head.
     #
     # A comment starts the job only when it BEGINS with \`/crysk review\`,
-    # \`/crysk recheck\` or \`/crysk override\` (or the older \`/pr-hero\` forms
-    # of the three). The action then requires an exact match after
+    # \`/crysk recheck\` or \`/crysk override\`. The action then requires an exact match after
     # trimming, so a near-miss such as "/crysk review please" starts a job the
     # action ends without reviewing or overriding.
     if: >-
@@ -512,7 +469,7 @@ jobs:
     #
     # GitHub keeps one PENDING run per group, and a newer run replaces it. So
     # a comment enters the pull request's group only when it starts with
-    # /crysk review, /crysk recheck or /crysk override (or the older /pr-hero forms), and GitHub associates its author
+    # /crysk review, /crysk recheck or /crysk override, and GitHub associates its author
     # with the repository as OWNER, MEMBER or COLLABORATOR; every other comment
     # gets its own group. Without that, anyone who can comment could replace a
     # maintainer's queued review with a run the action then refuses. The job
@@ -562,7 +519,7 @@ ${gateStep}      - name: Checkout${checkoutGate}
         uses: ${actionRef}
         with:
           github-token: \${{ secrets.GITHUB_TOKEN }}
-${credentialWithLines(options)}${sizeGateLine}${filesGateLine}${budgetLine}${modeLine}
+${credentialWithLines(options)}${sizeGateLine}${filesGateLine}${modeLine}
 `;
 }
 
@@ -573,7 +530,7 @@ export interface RunCiSetupOptions {
   // What the person chose in setup --ci; absent keeps the template's defaults.
   template?: Pick<
     CiWorkflowTemplateOptions,
-    "mode" | "budgetUsd" | "maxChangedLines" | "maxChangedFiles"
+    "mode" | "maxChangedLines" | "maxChangedFiles"
   >;
 }
 
@@ -894,10 +851,10 @@ export function openCodeProvidersOfPerson(person: {
 // resolved routes, any step or fallback, binds an API key, by the same rule the
 // run binds it with (credentialKindForRoute over the secret manifest's names, the
 // provider literal without one). `providers` comes from the run's own route plan,
-// so every source routing reads counts (`models`, `--model`, `--scout-model`, a
+// so every source routing reads counts (`models`, `--model`, a
 // spec model, a prompt's frontmatter, the engine's defaults). Undefined means the
 // routes could not be resolved here: the auth file decides, the old rule, which
-// keeps the ceiling. The file alone is not enough otherwise: it also exists for a
+// keeps the route metered. The file alone is not enough otherwise: it also exists for a
 // ChatGPT subscription, after an earlier run on a runner whose HOME persists, or
 // from a local `opencode auth login`. And no file means no credential for a
 // per-token route, as before: a free `opencode/*` model stays unmetered.
@@ -918,6 +875,79 @@ export function openCodeRoutesBillMetered(input: {
         input.openCodeSecretNames,
       ) === "provider_api_token",
   );
+}
+
+// The key modelRoleBilling records a plan step under when no `models` key covers
+// it. Not a role name the platform sends, so it never adds to the API share.
+const UNMAPPED_STEP = "(unmapped step)";
+
+// Which of the run's model roles bill an API key (S17), keyed like the engine's
+// `models` config (`hunter.<specialty>`, `refuter`, `summary`, `consolidate`,
+// `judge`). A role is the route its step resolved to, so what `models.default`
+// covers is already in it. A role bills an API key when any route it can take,
+// a fallback included, does: a Claude route when the run's chosen Claude
+// credential is an API key, an OpenCode route by the rule the run binds it
+// with (openCodeRoutesBillMetered). The platform prices each role and the
+// limits gate sums the ones that bill here, because only the engine knows how a
+// run is billed. Undefined when the plan could not be built: the gate then
+// compares the whole estimate.
+export function modelRoleBilling(input: {
+  plan: ResolvedRoutePlan | undefined;
+  agents: readonly {
+    readonly key: string;
+    readonly role: string;
+    readonly specialty?: string;
+  }[];
+  // The run's chosen Claude credential env (claudeRun.env).
+  claudeEnv: Readonly<Record<string, string | undefined>>;
+  authFilePresent: boolean;
+  openCodeSecretNames: readonly string[] | undefined;
+}): ReadonlyMap<string, boolean> | undefined {
+  if (input.plan === undefined) return undefined;
+  const routeBills = (route: { backend: string; provider: string }) =>
+    route.backend === "claude-code"
+      ? credentialKindForRoute(
+          "claude-code",
+          route.provider,
+          input.claudeEnv,
+        ) === "provider_api_token"
+      : openCodeRoutesBillMetered({
+          providers: [route.provider],
+          authFilePresent: input.authFilePresent,
+          openCodeSecretNames: input.openCodeSecretNames,
+        });
+  const billing = new Map<string, boolean>();
+  const add = (
+    role: string,
+    routes: readonly { backend: string; provider: string }[],
+  ) => {
+    billing.set(role, (billing.get(role) ?? false) || routes.some(routeBills));
+  };
+  for (const step of input.plan.steps) {
+    const routes = [step, ...(step.fallbacks ?? [])].map((s) => s.route);
+    // A step no `models` key covers still spends: recorded under a key the
+    // platform never sends, so an API-billed one keeps the run API-billed (the
+    // gate's no-API-role shortcut cannot fire) without adding to the share.
+    add(stepModelRole(step.stepKey, input.agents) ?? UNMAPPED_STEP, routes);
+  }
+  // The materiality judge is counted only when it is in the plan (the gate on,
+  // its `materiality` step above): an idle judge bills nothing, and counting its
+  // Claude route would mark a run whose roles are all on a subscription as
+  // API-billed through an unused Claude key (#551 R001). A `judge` key the
+  // platform still sends then has no role here and counts as API.
+  return billing;
+}
+
+// The `models` key a plan step reads, or undefined for a step no key covers.
+function stepModelRole(
+  stepKey: string,
+  agents: readonly { key: string; role: string; specialty?: string }[],
+): string | undefined {
+  if (stepKey === "summarizer") return "summary";
+  if (stepKey === "consolidate") return "consolidate";
+  if (stepKey === "materiality") return "judge";
+  const agent = agents.find((a) => agentStepKey(a) === stepKey);
+  return agent === undefined ? undefined : agentModelRole(agent);
 }
 
 interface OpenCodeAuthAssembly {

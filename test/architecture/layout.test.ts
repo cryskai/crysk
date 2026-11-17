@@ -68,7 +68,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "override",
       "platform",
       "platform-config",
-      "platform-estimate",
+      "platform-limits",
       "platform-report",
       "platform-trace",
       "publish",
@@ -112,7 +112,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "triage",
-    files: ["adjudication", "reply", "triage"],
+    files: ["adjudication", "plain-reply", "reply", "triage"],
   },
   {
     domain: "watch",
@@ -162,7 +162,6 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "root-cause",
       "route-preflight",
       "run",
-      "scout",
       "size-gate",
       "spec",
       "step-runner",

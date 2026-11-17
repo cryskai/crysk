@@ -55,7 +55,6 @@ function baseDoc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {
       tokens_in: 100,
       tokens_out: 50,
       tokens_total: 150,
-      cost_usd_est: 0.42,
     },
     findings: [baseFinding(), baseFinding({ id: "F002", tier: "advisory" })],
     debug: { refuted: [] },
@@ -69,7 +68,6 @@ const PER_AGENT: Record<string, PerAgentUsage> = {
     duration_ms: 4000,
     tokens_in: 70,
     tokens_out: 30,
-    cost_usd_est: 0.3,
     attempts: 1,
     status: "ok",
   },
@@ -121,7 +119,8 @@ describe("projectRunRow", () => {
     expect(projected.run.generated_at).toBe("2026-08-15T12:00:00.000Z");
     expect(projected.run.wall_ms).toBe(5000);
     expect(projected.run.tokens_total).toBe(150);
-    expect(projected.run.cost_usd_est).toBe(0.42);
+    expect(projected.run).not.toHaveProperty("cost_usd_est");
+    expect(projected.agents[0]).not.toHaveProperty("cost_usd_est");
     // One blocking (F001) + one advisory (F002) finding, per baseDoc.
     expect(projected.run.blocking).toBe(1);
     expect(projected.run.advisory).toBe(1);
@@ -132,7 +131,6 @@ describe("projectRunRow", () => {
         duration_ms: 4000,
         tokens_in: 70,
         tokens_out: 30,
-        cost_usd_est: 0.3,
         attempts: 1,
         status: "ok",
       },
@@ -207,7 +205,6 @@ function baseRunRow(overrides: Partial<RunRow> = {}): RunRow {
     tokens_in: 100,
     tokens_out: 50,
     tokens_total: 150,
-    cost_usd_est: 0.42,
     blocking: 1,
     advisory: 0,
     ...overrides,
@@ -221,7 +218,6 @@ describe("renderUsage", () => {
       baseRunRow({
         pr: 42,
         run_dir: "/runs/pr-42-1",
-        cost_usd_est: 0.08,
         tokens_total: 90,
         blocking: 0,
         advisory: 2,
@@ -237,26 +233,30 @@ describe("renderUsage", () => {
     // Totals footer: a real sum over the two rows, not a hardcoded value —
     // proves the function actually reduced over its input.
     expect(joined).toContain("2 run(s)");
-    expect(joined).toContain("$0.50");
     expect(joined).toContain("240");
   });
 
   test("triangulation: a different row set produces different totals", () => {
-    const rows: RunRow[] = [
-      baseRunRow({ cost_usd_est: 1.5, tokens_total: 500 }),
-    ];
+    const rows: RunRow[] = [baseRunRow({ tokens_total: 500 })];
     const lines = renderUsage(rows, { styles: false });
     const joined = lines.join("\n");
     expect(joined).toContain("1 run(s)");
-    expect(joined).toContain("$1.50");
     expect(joined).toContain("500");
   });
 
-  test("zero rows still renders a header and a $0.00 totals footer, no crash", () => {
+  test("prints no cost column and no dollar figure", () => {
+    const joined = renderUsage([baseRunRow(), baseRunRow({ pr: 7 })], {
+      styles: false,
+    }).join("\n");
+    expect(joined).not.toContain("$");
+    expect(joined).not.toContain("cost");
+  });
+
+  test("zero rows still renders a header and a totals footer, no crash", () => {
     const lines = renderUsage([], { styles: false });
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.join("\n")).toContain("0 run(s)");
-    expect(lines.join("\n")).toContain("$0.00");
+    expect(lines.join("\n")).toContain("0 tokens");
   });
 
   test("styles disabled: no line contains an ANSI escape byte", () => {

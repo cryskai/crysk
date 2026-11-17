@@ -85,13 +85,9 @@ describe("pr-hero config names the layer behind every value", () => {
     // default — neither file named it. §5 row 12's "a key absent from both
     // files", and the whole reason §3.2 stopped the parser materialising the
     // two arrays.
-    expect(rowFor(lines, "parity_trigger_paths")).toBe(
-      "parity_trigger_paths default (unset)",
-    );
     expect(rowFor(lines, "suspicion_priors")).toBe(
       "suspicion_priors default (unset)",
     );
-    expect(rowFor(lines, "scout")).toBe("scout default (unset)");
     expect(rowFor(lines, "post")).toBe("post default (unset)");
     expect(rowFor(lines, "materiality_gate")).toBe(
       "materiality_gate default (unset)",
@@ -110,14 +106,8 @@ describe("pr-hero config names the layer behind every value", () => {
     ).toBe("materiality_gate capped false ← narrowed by the global ceiling");
   });
 
-  test("scout and post display capped marker when global ceiling narrows repo setting", () => {
-    const lines = render(
-      { scout: false, post: false },
-      { scout: true, post: true },
-    );
-    expect(rowFor(lines, "scout")).toBe(
-      "scout capped false ← narrowed by the global ceiling",
-    );
+  test("post displays the capped marker when the global ceiling narrows the repo setting", () => {
+    const lines = render({ post: false }, { post: true });
     expect(rowFor(lines, "post")).toBe(
       "post capped false ← narrowed by the global ceiling",
     );
@@ -139,18 +129,18 @@ describe("pr-hero config names the layer behind every value", () => {
   });
 
   test("an explicitly empty list is not the same row as an unset one", () => {
-    // The distinction §3.2's parser change bought: `"parity_trigger_paths":
-    // []` is a repo deliberately disarming the parity hunter, and printing it
-    // as `(unset)` would hide a decision someone made on purpose.
+    // The distinction §3.2's parser change bought: `"suspicion_priors": []`
+    // is a repo deliberately naming no priors, and printing it as `(unset)`
+    // would hide a decision someone made on purpose.
+    const empty = render(undefined, { suspicion_priors: [] });
+    expect(rowFor(empty, "suspicion_priors")).toBe(
+      "suspicion_priors repo (empty)",
+    );
     const lines = render(undefined, {
-      parity_trigger_paths: [],
       suspicion_priors: [
         { path: "src/pipeline.ts", weight: "high", reason: "" },
       ],
     });
-    expect(rowFor(lines, "parity_trigger_paths")).toBe(
-      "parity_trigger_paths repo (empty)",
-    );
     expect(rowFor(lines, "suspicion_priors")).toBe(
       "suspicion_priors repo src/pipeline.ts (high)",
     );

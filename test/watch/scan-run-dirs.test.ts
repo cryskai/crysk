@@ -31,7 +31,6 @@ function findingsDoc(overrides: Record<string, unknown> = {}) {
       tokens_in: 100,
       tokens_out: 50,
       tokens_total: 150,
-      cost_usd_est: 0.5,
     },
     findings: [],
     debug: { refuted: [] },

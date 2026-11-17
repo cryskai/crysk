@@ -72,6 +72,7 @@ import {
   HELP_TEXT,
   parseArgs,
   preflightAgentsDir,
+  removedFlagWarnings,
   resolveAgentsDir,
 } from "#review/preflight";
 import { CliError, CliUsageError } from "./errors";
@@ -80,7 +81,6 @@ export { createRunDir, preflightAgentsDir, resolveAgentsDir };
 
 import {
   type ProductionRoutePlanResult,
-  pipelineScoutInput,
   pipelineSummarizerInput,
   resolveProductionRoutePlanAtConfirm,
   resolveRoutePlanAtConfirm,
@@ -88,7 +88,6 @@ import {
 
 export {
   type ProductionRoutePlanResult,
-  pipelineScoutInput,
   pipelineSummarizerInput,
   resolveProductionRoutePlanAtConfirm,
   resolveRoutePlanAtConfirm,
@@ -100,7 +99,6 @@ import { gcCommand } from "#store/gc";
 import {
   type ConfigProvenance,
   configProvenanceOf,
-  dryRunHunterCount,
   type PlanContext,
   type PrPlanContext,
   planDetails,
@@ -112,7 +110,6 @@ import {
 export {
   type ConfigProvenance,
   configProvenanceOf,
-  dryRunHunterCount,
   type PlanContext,
   type PrPlanContext,
   planDetails,
@@ -166,7 +163,6 @@ export async function main(argv: string[]): Promise<number> {
       repo: ".",
       head: DEFAULT_HEAD_REF,
       hopBudget: DEFAULT_HOP_BUDGET,
-      scout: false,
       full: false,
       dryRun: false,
       yes: false,
@@ -192,6 +188,11 @@ export async function main(argv: string[]): Promise<number> {
     log(`error: ${(error as Error).message}`);
     await reportFatalCiErrorIfInJobStep(error);
     return 2;
+  }
+  // Flags of the removed scout stage are accepted and do nothing; each says so
+  // once, whatever the command, before anything runs.
+  for (const line of removedFlagWarnings(parsed.options)) {
+    log(`warning: ${line}`);
   }
   if (parsed.command === "help") {
     log(HELP_TEXT);

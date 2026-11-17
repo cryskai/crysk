@@ -37,8 +37,8 @@ export type CredentialKind =
   // <provider> --verbose --refresh`). Authenticates with NOTHING — no OAuth
   // record, no API token — so it is refused at credential projection without
   // a kind of its own. Not metered (`credentialKindBillsMetered` is false),
-  // so pricing is not_applicable and usage stamps subscription (truthful
-  // zero). Additive: every consumer compares with ===/!== or passes through.
+  // so usage stamps subscription (truthful zero). Additive: every consumer
+  // compares with ===/!== or passes through.
   | "provider_free";
 
 export type ExecutableDenialCode = "executable_not_approved";
@@ -344,7 +344,6 @@ export interface ProviderCapabilityReport {
   };
   readonly billing: {
     mode: "subscription" | "metered" | "unknown";
-    pricingReady: boolean;
   };
   readonly rateLimitBucketId?: string;
   readonly issues: readonly {
@@ -649,21 +648,6 @@ export async function produceClaudeCapabilityReport(
     },
     billing: {
       mode: CLAUDE_CAPABILITY_STATICS.billingMode,
-      // #197. The old `false` reasoned about a model id: this is a
-      // BACKEND-wide report produced before any route resolves, and
-      // `tokenPricingAvailableFor` needed a provider AND a model to answer.
-      // That function and the tables behind it are deleted, and the flag it
-      // fed never meant what the comment assumed — `pricingReady` asserts
-      // "will this transport tell you what the attempt cost?", which is a
-      // backend-wide fact needing no model. The claude-code CLI reports
-      // `total_cost_usd`, so the honest answer here is `true`.
-      //
-      // Kept IDENTICAL to ClaudeCodeCliTransport.capabilities() on purpose:
-      // "the transport contradicts the producer in no environment"
-      // (test/model/provider-capabilities.test.ts) is a structural guard, and a
-      // producer disagreeing with the transport that actually runs the route
-      // is the drift it exists to catch.
-      pricingReady: true,
     },
     issues,
   };
@@ -706,9 +690,8 @@ function gateDecisionFromIssues(
   };
 }
 
-// Exact-binding gate (§11 production runtime): subscription routes may pass
-// without token pricing when pricingApplicability is not_applicable; metered
-// routes require tokenPricingAvailable before spend.
+// Exact-binding gate (§11 production runtime): an unresolved binary, a failed
+// auth probe, an unavailable SDK or an unknown billing mode refuse the route.
 export function exactBindingCapabilityIssues(
   report: ExactBindingCapabilityReport,
 ): readonly { code: string; message: string; blocking: boolean }[] {
@@ -737,46 +720,24 @@ export function exactBindingCapabilityIssues(
       blocking: true,
     });
   }
-  if (
-    report.billing.pricingApplicability === "required" &&
-    !report.billing.tokenPricingAvailable
-  ) {
-    issues.push({
-      code: "pricing_table_missing",
-      message: `token pricing required but unavailable for binding ${label}`,
-      blocking: true,
-    });
-  }
   // WHY: this is the enforcement point for the design's "billingMode:
   // 'unknown' is a blocking preflight result"
   // (docs/multi-runtime-model-diversity-design.md:461). The legacy
   // ProviderCapabilityReport has three billing modes and the exact contract
   // has two, so FrozenRuntimeBinding.capabilities() narrows `unknown` into
-  // "subscription"; that leaves pricingApplicability at "not_applicable", so
-  // the pricing_table_missing gate above structurally CANNOT catch an
-  // unknown-billing route. The producer therefore derives
-  // cashCostAccountingValid from the THREE-STATE effective mode (#133's
-  // `effectiveBillingMode`, which is the transport's own mode for every kind
-  // except `provider_api_token`) and reports false for `unknown`, and this
-  // branch is what turns that fact into a refusal. It is reachable through
-  // the real producer (see test/production-runtime.test.ts "an unknown legacy
-  // billing mode blocks the exact-binding gate through the real producer"),
-  // and it also holds the pricingApplicability/cashCostAccountingValid field
-  // independence (src/execution/contracts.ts:235-237) for any future
-  // producer.
-  //
-  // #133 does not weaken this: the effective mode only ever replaces
-  // `unknown` with `metered`, and a metered route without pricing is caught
-  // by pricing_table_missing above instead. Nothing reaches "subscription"
-  // that did not already, so `unknown` still ends in a blocking refusal on
-  // one branch or the other.
-  if (
-    report.billing.pricingApplicability !== "required" &&
-    !report.billing.cashCostAccountingValid
-  ) {
+  // "subscription"; the producer therefore derives `modeKnown` from the
+  // THREE-STATE effective mode (#133's `effectiveBillingMode`, which is the
+  // transport's own mode for every kind except `provider_api_token`) and
+  // reports false for `unknown`, and this branch is what turns that fact into
+  // a refusal. It is reachable through the real producer (see
+  // test/production-runtime.test.ts "an unknown legacy billing mode blocks the
+  // exact-binding gate through the real producer"). The platform prices a run
+  // by the credential class the engine reports, so a route whose class cannot
+  // be named is refused before it runs.
+  if (!report.billing.modeKnown) {
     issues.push({
-      code: "cash_cost_accounting_invalid",
-      message: `cash-cost accounting is not valid for binding ${label}`,
+      code: "billing_mode_unknown",
+      message: `billing mode is unknown for binding ${label}`,
       blocking: true,
     });
   }

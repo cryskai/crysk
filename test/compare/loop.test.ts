@@ -15,7 +15,7 @@ import {
 
 const CLEAN = "review posted";
 const BLOCKING =
-  "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override";
+  "crysk: 2 blocking finding(s) — fix and push, or /crysk override";
 
 function status(
   createdAt: string,
@@ -106,7 +106,7 @@ describe("prLoop", () => {
         status(
           "2026-10-20T10:05:00Z",
           "failure",
-          "crysk: review budget for this PR is used up — /pr-hero review reviews this head",
+          "crysk: review budget for this PR is used up — /crysk review reviews this head",
         ),
       ]),
     );
@@ -133,7 +133,7 @@ describe("prLoop", () => {
         status(
           "2026-10-20T10:30:00Z",
           "pending",
-          "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override",
+          "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /crysk review or /crysk override",
         ),
       ]),
     );
@@ -217,7 +217,7 @@ describe("prLoop", () => {
         status(
           "2026-10-20T10:30:00Z",
           "failure",
-          "crysk: review budget for this PR is used up — /pr-hero review reviews this head",
+          "crysk: review budget for this PR is used up — /crysk review reviews this head",
         ),
       ]),
     );

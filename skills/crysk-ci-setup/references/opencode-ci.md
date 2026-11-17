@@ -21,7 +21,7 @@ Unset `CRYSK_MODELS` = Claude-only CI.
 
 ## Fastest path: `crysk ci init`
 
-If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk ci init` (or `setup --ci`) prints every `gh secret set` / `gh variable set` command for it: the Claude secret, one `CRYSK_OPENCODE_<P>_API_KEY` per provider (plus the `_OAUTH` line for openai), `CRYSK_MODELS`, `CRYSK_CREDENTIALS` and `CRYSK_OPENCODE_PROVIDERS`. It never runs them. It refuses, writing nothing, when the models name more than 5 OpenCode providers. Run the commands the human agrees to; `gh secret set` asks for each value, so it never appears in the chat.
+If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk@0.8.0 ci init` (or `setup --ci`) prints every `gh secret set` / `gh variable set` command for it: the Claude secret, one `CRYSK_OPENCODE_<P>_API_KEY` per provider (plus the `_OAUTH` line for openai), `CRYSK_MODELS`, `CRYSK_CREDENTIALS` and `CRYSK_OPENCODE_PROVIDERS`. It never runs them. It refuses, writing nothing, when the models name more than 5 OpenCode providers. Run the commands the human agrees to; `gh secret set` asks for each value, so it never appears in the chat.
 
 ## Models per role
 
@@ -30,9 +30,9 @@ If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk ci
 | Role | Steps |
 |---|---|
 | `default` | every role not listed (not the judge) |
-| `hunter.<key>` | one hunter: `logic`, `parity`, `reliability`, `resilience`, `security` |
+| `hunter.<key>` | one hunter: `logic`, `reliability`, `resilience`, `security` |
 | `refuter` | refuter, re-review verifier, CI adjudicator |
-| `consolidate`, `scout`, `summary` | those steps |
+| `consolidate`, `summary` | those steps |
 | `judge` | materiality judge: only `claude:sonnet-latest` or `claude:opus-latest`, never `default` |
 
 Model names: `claude:sonnet-latest` / `opus-latest` / `haiku-latest` / `fable-latest` (newest), a full `claude:claude-…` id (pinned), or `opencode:<provider>/<model>`. There is no `modelSnapshot`, `gateway` or alias mapping any more: the provider's model id is part of the name. Confirm the id with `opencode models <provider>`; do not guess `deepseek-chat` if the CLI lists `deepseek-v4-flash` / `deepseek-v4-pro`. An entry may be `{"model": "...", "effort": "..."}`; on OpenCode the effort must be one of the model's variants (`opencode models <provider> --verbose`), or the review stops before spending.
@@ -53,7 +53,7 @@ Every step runs on DeepSeek. Without a Claude secret, keep `materiality_gate` of
 gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash", "claude:sonnet-latest"], "refuter": ["claude:opus-latest"], "summary": ["claude:haiku-latest"]}'
 ```
 
-Keep `CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY`) beside the DeepSeek secret. The OpenCode auth file still applies the metered ceiling.
+Keep `CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY`) beside the DeepSeek secret. The OpenCode auth file makes the run count as metered, so the platform's dollar limits (dashboard, Review > Limits) can skip it.
 
 ### Two OpenCode providers
 
@@ -89,7 +89,7 @@ models: ${{ vars.CRYSK_MODELS }}
 credentials: ${{ vars.CRYSK_CREDENTIALS }}
 ```
 
-Copy it from `assets/workflow.yml` or re-scaffold with `npx -y crysk ci init --force`; never write it from memory. An unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped.
+Copy it from `assets/workflow.yml` or re-scaffold with `npx -y crysk@0.8.0 ci init --force`; never write it from memory. An unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped.
 
 The Action installs OpenCode CLI **1.18.30** in its **own** step when the setup step built an OpenCode auth file **or** the models in effect name `opencode:`. Never `latest`. Claude-only skips that install.
 
@@ -103,4 +103,4 @@ The Action installs OpenCode CLI **1.18.30** in its **own** step when the setup 
 
 ## After setting DATA
 
-Open a **same-repo** PR (fork pushes skip). In the review job's log, the setup step prints one notice per OpenCode provider naming the secret it used, and the spend notices show metered when the OpenCode auth file is present.
+Open a **same-repo** PR (fork pushes skip). In the review job's log, the setup step prints one notice per OpenCode provider naming the secret it used. A run that bills an API key is the one the platform's dollar limits can skip; what it cost is in the platform dashboard.

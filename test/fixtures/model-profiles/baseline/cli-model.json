@@ -76,43 +76,6 @@
       ]
     },
     {
-      "name": "hunter-parity",
-      "backend": "claude-code",
-      "provider": "anthropic",
-      "model": "haiku",
-      "modelSnapshot": "haiku",
-      "modelVariant": null,
-      "effort": "xhigh",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "70fbc4e084532d0d8d8f2e1d0b5e192551e5cb2a05381c5063351731916a8ee6",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": "haiku",
-      "argv": [
-        "claude",
-        "-p",
-        "--append-system-prompt-file",
-        "<RUN>/steps/hunter-parity.system.md",
-        "--output-format",
-        "json",
-        "--mcp-config",
-        "<RUN>/mcp.json",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "Read,Grep,Glob,mcp__codegraph__codegraph_explore",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        "haiku",
-        "--effort",
-        "xhigh",
-        "--exclude-dynamic-system-prompt-sections"
-      ]
-    },
-    {
       "name": "hunter-reliability",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -298,43 +261,6 @@
       ]
     },
     {
-      "name": "scout",
-      "backend": "claude-code",
-      "provider": "anthropic",
-      "model": "haiku",
-      "modelSnapshot": "haiku",
-      "modelVariant": null,
-      "effort": "high",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": [],
-      "systemPromptSha256": "edb1abfb7d72950040871e8d7968175a73dfd9cc6788bef97fe9e8f15df8e6a2",
-      "promptSha256": "6974b38cf091f0f7311d65af77fa11189dd8ce140332cd9f8a916de8c9aaa5f7",
-      "cliModel": "haiku",
-      "argv": [
-        "claude",
-        "-p",
-        "--append-system-prompt-file",
-        "<RUN>/steps/scout.system.md",
-        "--output-format",
-        "json",
-        "--mcp-config",
-        "<RUN>/mcp.json",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        "haiku",
-        "--effort",
-        "high",
-        "--exclude-dynamic-system-prompt-sections"
-      ]
-    },
-    {
       "name": "summarizer",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -373,7 +299,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "c5d22490496c1985ffcc1af28c6d77ecbf07a94ac62c14bd7c25fbdd2e1cf0c4",
+    "routeFingerprint": "91a299182d1f8d7143b4229946b66f34164fd9a7084f0aac129c935632568d0a",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -432,20 +358,6 @@
         "fallbacks": null
       },
       {
-        "stepKey": "hunter-parity",
-        "role": "hunter",
-        "logicalIdentity": "claude:haiku-latest",
-        "routeFingerprint": "2cfba1ffffbaac16153dcfce6e898a1e88263d6e703911fbf3423a3d20d9687c",
-        "effort": null,
-        "route": {
-          "backend": "claude-code",
-          "provider": "anthropic",
-          "modelFamily": "haiku",
-          "modelSnapshot": "haiku"
-        },
-        "fallbacks": null
-      },
-      {
         "stepKey": "refuter",
         "role": "refuter",
         "logicalIdentity": "claude:haiku-latest",
@@ -462,20 +374,6 @@
       {
         "stepKey": "summarizer",
         "role": "summarizer",
-        "logicalIdentity": "claude:haiku-latest",
-        "routeFingerprint": "2cfba1ffffbaac16153dcfce6e898a1e88263d6e703911fbf3423a3d20d9687c",
-        "effort": null,
-        "route": {
-          "backend": "claude-code",
-          "provider": "anthropic",
-          "modelFamily": "haiku",
-          "modelSnapshot": "haiku"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "scout",
-        "role": "scout",
         "logicalIdentity": "claude:haiku-latest",
         "routeFingerprint": "2cfba1ffffbaac16153dcfce6e898a1e88263d6e703911fbf3423a3d20d9687c",
         "effort": null,
@@ -533,13 +431,6 @@
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
     },
     {
-      "name": "hunter-parity",
-      "model": "haiku",
-      "effort": "xhigh",
-      "effort_applied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
       "name": "hunter-reliability",
       "model": "haiku",
       "effort": "xhigh",
@@ -573,13 +464,6 @@
       "effort": "high",
       "effort_applied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "scout",
-      "model": "haiku",
-      "effort": "high",
-      "effort_applied": true,
-      "tools": []
     },
     {
       "name": "summarizer",

@@ -12,7 +12,7 @@ import { redactDiagnostic } from "../../src/security/redact";
 
 const ANNOTATIONS = [
   "[pr-hero] credential projection unavailable (missing_subscription_record); child runs with operator environment",
-  "[pr-hero] ambient credential bills metered — this attempt reserves against the spend ledger and fences its bucket if the cost cannot be confirmed",
+  "[pr-hero] ambient credential bills metered — this attempt reserves against the spend ledger and fences its bucket if its usage cannot be confirmed",
   "[pr-hero] credential projection destroy failed",
 ];
 

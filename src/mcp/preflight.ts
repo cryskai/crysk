@@ -57,7 +57,7 @@ const MCP_TOOLS: McpToolDefinition[] = [
   {
     name: "crysk_get_run",
     description:
-      "Retrieve full telemetry, timing, summary score, and cost breakdown of a single review run.",
+      "Retrieve full telemetry, timing, summary score, and token usage of a single review run.",
     inputSchema: {
       type: "object",
       properties: {
@@ -118,7 +118,7 @@ const MCP_TOOLS: McpToolDefinition[] = [
   {
     name: "crysk_get_usage",
     description:
-      "Retrieve aggregated token usage, cost breakdown, and run counts (global or scoped to a repository).",
+      "Retrieve aggregated token usage and run counts (global or scoped to a repository).",
     inputSchema: {
       type: "object",
       properties: {

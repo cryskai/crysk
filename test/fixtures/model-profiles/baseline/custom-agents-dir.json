@@ -76,43 +76,6 @@
       ]
     },
     {
-      "name": "hunter-parity",
-      "backend": "claude-code",
-      "provider": "anthropic",
-      "model": "opus",
-      "modelSnapshot": "opus",
-      "modelVariant": null,
-      "effort": "low",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "70fbc4e084532d0d8d8f2e1d0b5e192551e5cb2a05381c5063351731916a8ee6",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": "opus",
-      "argv": [
-        "claude",
-        "-p",
-        "--append-system-prompt-file",
-        "<RUN>/steps/hunter-parity.system.md",
-        "--output-format",
-        "json",
-        "--mcp-config",
-        "<RUN>/mcp.json",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "Read,Grep,Glob,mcp__codegraph__codegraph_explore",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        "opus",
-        "--effort",
-        "low",
-        "--exclude-dynamic-system-prompt-sections"
-      ]
-    },
-    {
       "name": "hunter-reliability",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -298,43 +261,6 @@
       ]
     },
     {
-      "name": "scout",
-      "backend": "claude-code",
-      "provider": "anthropic",
-      "model": "sonnet",
-      "modelSnapshot": "sonnet",
-      "modelVariant": null,
-      "effort": "high",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": [],
-      "systemPromptSha256": "edb1abfb7d72950040871e8d7968175a73dfd9cc6788bef97fe9e8f15df8e6a2",
-      "promptSha256": "6974b38cf091f0f7311d65af77fa11189dd8ce140332cd9f8a916de8c9aaa5f7",
-      "cliModel": "sonnet",
-      "argv": [
-        "claude",
-        "-p",
-        "--append-system-prompt-file",
-        "<RUN>/steps/scout.system.md",
-        "--output-format",
-        "json",
-        "--mcp-config",
-        "<RUN>/mcp.json",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        "sonnet",
-        "--effort",
-        "high",
-        "--exclude-dynamic-system-prompt-sections"
-      ]
-    },
-    {
       "name": "summarizer",
       "backend": "claude-code",
       "provider": "anthropic",
@@ -373,7 +299,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "8ff5ce220f49c44dd7fb3769967722ca0bbc4855db56fc14f7806e1a9674fbe9",
+    "routeFingerprint": "c1cee7a99ddf06782261b9240d47f41ab73d3c24c998bf9d70f9b0e0e069e742",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -432,20 +358,6 @@
         "fallbacks": null
       },
       {
-        "stepKey": "hunter-parity",
-        "role": "hunter",
-        "logicalIdentity": "claude:opus-latest",
-        "routeFingerprint": "0e4a03866558e58a15f46141062da8eed9751443f745918bc3f90bf30f6c28f8",
-        "effort": null,
-        "route": {
-          "backend": "claude-code",
-          "provider": "anthropic",
-          "modelFamily": "opus",
-          "modelSnapshot": "opus"
-        },
-        "fallbacks": null
-      },
-      {
         "stepKey": "refuter",
         "role": "refuter",
         "logicalIdentity": "claude:sonnet-latest",
@@ -470,20 +382,6 @@
           "provider": "anthropic",
           "modelFamily": "haiku",
           "modelSnapshot": "haiku"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "scout",
-        "role": "scout",
-        "logicalIdentity": "claude:sonnet-latest",
-        "routeFingerprint": "1da1f1d92fb6d22f05c7a5ec7079206963c519ed79ede80d92ce4200059854d5",
-        "effort": null,
-        "route": {
-          "backend": "claude-code",
-          "provider": "anthropic",
-          "modelFamily": "sonnet",
-          "modelSnapshot": "sonnet"
         },
         "fallbacks": null
       },
@@ -533,13 +431,6 @@
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
     },
     {
-      "name": "hunter-parity",
-      "model": "opus",
-      "effort": "low",
-      "effort_applied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
       "name": "hunter-reliability",
       "model": "haiku",
       "effort": "xhigh",
@@ -573,13 +464,6 @@
       "effort": "medium",
       "effort_applied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "scout",
-      "model": "sonnet",
-      "effort": "high",
-      "effort_applied": true,
-      "tools": []
     },
     {
       "name": "summarizer",

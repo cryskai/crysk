@@ -43,13 +43,13 @@ import {
   parseNumstatFiles,
   preflightAgentsDir,
   REVIEW_MD_TEMPLATE,
+  removedFlagWarnings,
   resolveAgentsDir,
   resolveAgentsDirSetting,
   resolveMaterialityGate,
   resolveMaxConcurrentSteps,
   resolveMaxVerificationSteps,
   resolvePost,
-  resolveScout,
   resolveSharedPrefix,
   resolveSummary,
   runDirCandidate,
@@ -154,8 +154,8 @@ describe("parseArgs", () => {
 
   // Both exist so a tree you cannot add a file to is still reviewable: an
   // in-tree-only gotchas file dirties the checkout (which the clean-tree gate
-  // then rightly refuses), and an in-tree-only config silently disables the
-  // conditional parity hunter, which looks exactly like parity finding nothing.
+  // then rightly refuses), and an in-tree-only config silently drops the
+  // repo's settings, which looks exactly like a repo with none.
   test("gotchas and config can be supplied from outside the repo", () => {
     const { options } = parseArgs([
       "review",
@@ -235,15 +235,67 @@ describe("parseArgs", () => {
     expect(resolveSharedPrefix({ sharedPrefix: false })).toBe(false);
   });
 
-  test("the scout is tri-state: undefined by default, true with --scout, false with --no-scout", () => {
-    expect(parseArgs(["review"]).options.scout).toBeUndefined();
-    expect(parseArgs(["review", "--scout"]).options.scout).toBe(true);
-    expect(parseArgs(["review", "--no-scout"]).options.scout).toBe(false);
-    expect(parseArgs(["review", "--scout"]).options.scoutModel).toBeUndefined();
+  test("the flags of the removed scout are accepted, recorded once each, and change nothing else", () => {
+    const base = parseArgs(["review"]).options;
+    expect(base.removedFlags).toBeUndefined();
+    expect(parseArgs(["review", "--scout"]).options.removedFlags).toEqual([
+      "--scout",
+    ]);
+    expect(parseArgs(["review", "--no-scout"]).options.removedFlags).toEqual([
+      "--no-scout",
+    ]);
+    const all = parseArgs([
+      "review",
+      "--scout",
+      "--scout-model",
+      "haiku",
+      "--no-scout",
+      "--scout",
+    ]).options;
+    expect(all.removedFlags).toEqual([
+      "--scout",
+      "--scout-model",
+      "--no-scout",
+    ]);
+    expect({ ...all, removedFlags: undefined }).toEqual({
+      ...base,
+      removedFlags: undefined,
+    });
+    expect(removedFlagWarnings(all)).toEqual([
+      "--scout is ignored: the scout stage was removed",
+      "--scout-model is ignored: the scout stage was removed",
+      "--no-scout is ignored: the scout stage was removed",
+    ]);
+    expect(removedFlagWarnings(base)).toEqual([]);
+  });
+
+  // platform-owned-cost S7: `--billing` only chose whether `setup --ci` wrote a
+  // budget, so it retires with `--budget-usd`: accepted for any value, on any
+  // command, no effect, one warning.
+  test("--billing is accepted with any value, changes nothing else and warns once", () => {
+    const base = parseArgs(["setup", "--ci", "--level", "balanced"]).options;
+    const withBilling = parseArgs([
+      "setup",
+      "--ci",
+      "--level",
+      "balanced",
+      "--billing",
+      "api",
+      "--billing",
+      "free",
+    ]).options;
+    expect(withBilling.removedFlags).toEqual(["--billing"]);
+    expect({ ...withBilling, removedFlags: undefined }).toEqual({
+      ...base,
+      removedFlags: undefined,
+    });
+    expect("billing" in withBilling).toBe(false);
+    expect(removedFlagWarnings(withBilling)).toEqual([
+      "--billing is ignored: dollar limits moved to the Crysk platform, so setup no longer asks how the review is paid",
+    ]);
     expect(
-      parseArgs(["review", "--scout", "--scout-model", "haiku"]).options
-        .scoutModel,
-    ).toBe("haiku");
+      parseArgs(["review", "--billing", "x"]).options.removedFlags,
+    ).toEqual(["--billing"]);
   });
 
   test("post is tri-state: undefined by default, true with --post, false with --no-post", () => {
@@ -317,32 +369,17 @@ describe("parseArgs", () => {
     expect(HELP_TEXT).toContain("--adjudicate        with --pr --ci:");
   });
 
-  test("--scout-model without --scout is a loud no-op, not a quiet one", () => {
-    expect(() => parseArgs(["review", "--scout-model", "haiku"])).toThrow(
-      "requires --scout",
-    );
+  test("--scout-model without --scout is accepted like the rest of the removed flags", () => {
+    expect(
+      parseArgs(["review", "--scout-model", "haiku"]).options.removedFlags,
+    ).toEqual(["--scout-model"]);
   });
 
-  test("the scout flags belong to review and nothing else", () => {
-    // The watcher spawns `review --pr <n> --yes` and never learns these
-    // exist; a scout flag on any other verb is an operator believing they
-    // changed a run they did not.
-    expect(() => parseArgs(["watch", "--once", "--scout"])).toThrow(
-      "only apply to the review command",
-    );
-    expect(() =>
-      parseArgs(["status", "--scout", "--scout-model", "haiku"]),
-    ).toThrow("only apply to the review command");
-  });
-
-  test("the config file admits scout and post boolean keys", () => {
+  test("the config file admits the post boolean key, and still admits the removed scout key", () => {
+    expect(parseLocalConfig('{"post": false}')).toEqual({ post: false });
     expect(parseLocalConfig('{"scout": true, "post": false}')).toEqual({
-      scout: true,
       post: false,
     });
-    expect(() => parseLocalConfig('{"scout":{"enabled":true}}')).toThrow(
-      "scout must be a boolean",
-    );
   });
 
   test("the config file admits materiality_gate as an optional boolean", () => {
@@ -361,8 +398,8 @@ describe("parseArgs", () => {
     ).toBe(".crysk/config.json materiality_gate must be a boolean");
     // The neighbouring boolean key still parses beside it.
     expect(
-      parseLocalConfig('{"scout": true, "materiality_gate": false}'),
-    ).toEqual({ scout: true, materiality_gate: false });
+      parseLocalConfig('{"post": true, "materiality_gate": false}'),
+    ).toEqual({ post: true, materiality_gate: false });
   });
 
   test("the config file admits post_min_severity and rejects other values", () => {
@@ -940,7 +977,6 @@ describe("assertBasenameOnly", () => {
 describe("agentsDirProblems", () => {
   const CLEAN_SET = [
     "deep-review-logic.md",
-    "deep-review-parity.md",
     "deep-review-reliability.md",
     "deep-review-resilience.md",
     "deep-review-security.md",
@@ -954,21 +990,21 @@ describe("agentsDirProblems", () => {
   test("a file the spec names but the dir lacks is reported", () => {
     const problems = agentsDirProblems(
       CLEAN_SET,
-      CLEAN_SET.filter((f) => f !== "deep-review-parity.md"),
+      CLEAN_SET.filter((f) => f !== "deep-review-logic.md"),
     );
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("deep-review-parity.md");
+    expect(problems[0]).toContain("deep-review-logic.md");
   });
 
   // THE check: a spec that omits a file the dir carries silently drops that
   // hunter, and nothing downstream notices.
   test("an unreferenced agent file in the dir is reported", () => {
-    const specWithoutParity = CLEAN_SET.filter(
-      (f) => f !== "deep-review-parity.md",
+    const specWithoutLogic = CLEAN_SET.filter(
+      (f) => f !== "deep-review-logic.md",
     );
-    const problems = agentsDirProblems(specWithoutParity, CLEAN_SET);
+    const problems = agentsDirProblems(specWithoutLogic, CLEAN_SET);
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("deep-review-parity.md");
+    expect(problems[0]).toContain("deep-review-logic.md");
     expect(problems[0]).toContain("would never run");
   });
 
@@ -1007,10 +1043,10 @@ describe("agentsDirProblems", () => {
   test("a missing file with no history keeps the plain message", () => {
     const problems = agentsDirProblems(
       CLEAN_SET,
-      CLEAN_SET.filter((f) => f !== "deep-review-parity.md"),
+      CLEAN_SET.filter((f) => f !== "deep-review-logic.md"),
     );
     expect(problems).toEqual([
-      'the spec references "deep-review-parity.md" but the dir does not have it',
+      'the spec references "deep-review-logic.md" but the dir does not have it',
     ]);
   });
 
@@ -1044,10 +1080,11 @@ describe("localReviewSpec", () => {
       "resilience",
       "logic",
       "security",
-      "parity",
       "refuter",
     ]);
-    expect(spec.agents.find((a) => a.key === "parity")?.trigger).toBe("input");
+    // No conditional hunter: the parity hunter left the product (the lab's
+    // defaultReviewSpec keeps it).
+    expect(spec.agents.some((a) => a.trigger !== undefined)).toBe(false);
     expect(spec.agents.filter((a) => a.role === "refuter")).toHaveLength(1);
   });
 
@@ -1080,12 +1117,6 @@ describe("localReviewSpec", () => {
           file: "deep-review-security.md",
           role: "hunter",
         },
-        {
-          key: "parity",
-          file: "deep-review-parity.md",
-          role: "hunter",
-          trigger: "input",
-        },
         { key: "refuter", file: "review-refuter.md", role: "refuter" },
       ],
     });
@@ -1107,7 +1138,6 @@ describe("localReviewSpec", () => {
       "resilience",
       "logic",
       "security",
-      "parity",
       "reliability-b",
       "refuter",
     ]);
@@ -1130,7 +1160,6 @@ describe("localReviewSpec", () => {
       "resilience",
       "logic",
       "security",
-      "parity",
       "reliability-b",
       "resilience-b",
       "refuter",
@@ -1225,22 +1254,20 @@ describe("parseLocalConfig", () => {
     expect(parseLocalConfig('{"default_base":"dev"}')).toEqual({
       default_base: "dev",
     });
-    expect(parseLocalConfig('{"parity_trigger_paths":[]}')).toEqual({
-      parity_trigger_paths: [],
+    expect(parseLocalConfig('{"suspicion_priors":[]}')).toEqual({
+      suspicion_priors: [],
     });
   });
 
   test("reads a full config", () => {
     const config = parseLocalConfig(
       JSON.stringify({
-        parity_trigger_paths: ["**/Auth*"],
         suspicion_priors: [
           { path: "src/a.ts", weight: "high", reason: "touched" },
           { path: "src/b.ts", weight: 3, reason: "hot" },
         ],
       }),
     );
-    expect(config.parity_trigger_paths).toEqual(["**/Auth*"]);
     expect(config.suspicion_priors).toHaveLength(2);
   });
 
@@ -1273,15 +1300,12 @@ describe("parseLocalConfig", () => {
     );
   });
 
-  // A typo'd key read as "no triggers" is exactly how the parity hunter stops
-  // firing without anyone noticing.
+  // A typo'd key read as "no priors" is exactly how a setting stops applying
+  // without anyone noticing.
   test("malformed shapes throw instead of degrading silently", () => {
     expect(() => parseLocalConfig("not json")).toThrow(CliUsageError);
     expect(() => parseLocalConfig("[]")).toThrow(CliUsageError);
-    expect(() =>
-      parseLocalConfig('{"parity_trigger_paths": "**/Auth*"}'),
-    ).toThrow(CliUsageError);
-    expect(() => parseLocalConfig('{"parity_trigger_paths": [""]}')).toThrow(
+    expect(() => parseLocalConfig('{"suspicion_priors": "**/Auth*"}')).toThrow(
       CliUsageError,
     );
     expect(() => parseLocalConfig('{"suspicion_priors": [{}]}')).toThrow(
@@ -1399,15 +1423,7 @@ describe("parseLocalConfig", () => {
   });
 });
 
-describe("resolveScout & resolvePost", () => {
-  test("resolveScout precedence: CLI flag > Merged Config > Default false", () => {
-    expect(resolveScout({ scout: true }, { scout: false })).toBe(true);
-    expect(resolveScout({ scout: false }, { scout: true })).toBe(false);
-    expect(resolveScout({}, { scout: true })).toBe(true);
-    expect(resolveScout({}, { scout: false })).toBe(false);
-    expect(resolveScout({}, {})).toBe(false);
-  });
-
+describe("resolvePost", () => {
   test("resolvePost precedence: CLI flag > Merged Config > Default false", () => {
     expect(resolvePost({ post: true }, { post: false })).toBe(true);
     expect(resolvePost({ post: false }, { post: true })).toBe(false);
@@ -1454,10 +1470,8 @@ const PRE_C5_LOCAL_KEYS = [
   "max_changed_lines",
   "max_concurrent_steps",
   "max_verification_steps",
-  "parity_trigger_paths",
   "post",
   "post_min_severity",
-  "scout",
   "summary",
   "suspicion_priors",
 ];
@@ -1471,7 +1485,6 @@ describe("CONFIG_DIRECTION", () => {
     const populated: Required<LocalConfig> = {
       agents_dir: "/tmp/agents",
       default_base: "dev",
-      parity_trigger_paths: ["**/Auth*"],
       suspicion_priors: [{ path: "a.ts", weight: "high", reason: "hot" }],
       summary: { enabled: false },
       models: { default: ["claude:sonnet-latest"] },
@@ -1481,7 +1494,6 @@ describe("CONFIG_DIRECTION", () => {
       max_concurrent_steps: 4,
       max_changed_lines: 1500,
       max_changed_files: 150,
-      scout: false,
       materiality_gate: false,
       post: false,
       post_min_severity: "warning",
@@ -1514,7 +1526,6 @@ describe("CONFIG_DIRECTION", () => {
     expect(CONFIG_DIRECTION).toEqual({
       agents_dir: "person",
       default_base: "repo",
-      parity_trigger_paths: "repo",
       suspicion_priors: "repo",
       summary: "capped",
       models: "person",
@@ -1524,7 +1535,6 @@ describe("CONFIG_DIRECTION", () => {
       max_concurrent_steps: "capped",
       max_changed_lines: "capped",
       max_changed_files: "capped",
-      scout: "capped",
       materiality_gate: "capped",
       post: "capped",
       post_min_severity: "person",
@@ -1542,13 +1552,12 @@ describe("CONFIG_DIRECTION", () => {
 });
 
 describe("parseGlobalConfig", () => {
-  // One case per `repo` key, so the table covers all three. The message is
+  // One case per `repo` key, so the table covers both. The message is
   // templated over the OFFENDING key: a fixed example would send two operators
   // out of three looking for the wrong line.
   test("rejects a repo key and names the repo file", () => {
     const cases: [string, unknown][] = [
       ["default_base", "dev"],
-      ["parity_trigger_paths", ["**/Auth*"]],
       ["suspicion_priors", []],
     ];
     for (const [key, value] of cases) {
@@ -1569,7 +1578,6 @@ describe("parseGlobalConfig", () => {
       models: { default: ["claude:sonnet-latest"] },
       credentials: { claude: ["api_key"] },
       max_verification_steps: 2,
-      scout: false,
       materiality_gate: false,
       post: true,
     };
@@ -1609,7 +1617,6 @@ describe("parseGlobalConfig", () => {
         '{"max_verification_steps": -1}',
         "max_verification_steps must be a non-negative integer",
       ],
-      ['{"scout": "yes"}', "scout must be a boolean"],
       ['{"post": 1}', "post must be a boolean"],
       ['{"materiality_gate": 1}', "materiality_gate must be a boolean"],
     ];
@@ -1638,11 +1645,9 @@ describe("parseLocalConfig admits the same keys it does today", () => {
     const full = {
       agents_dir: "/tmp/agents",
       default_base: "dev",
-      parity_trigger_paths: ["**/Auth*"],
       suspicion_priors: [{ path: "a.ts", weight: 3, reason: "hot" }],
       summary: { enabled: false },
       max_verification_steps: 3,
-      scout: true,
       post: false,
     };
     expect(parseLocalConfig(JSON.stringify(full))).toEqual(full);
@@ -1792,9 +1797,9 @@ describe("mergeConfig", () => {
     expect(enabled(undefined, undefined).effective.summary).toBeUndefined();
   });
 
-  test("scout, post and materiality_gate are folded with boolean AND (capped)", () => {
+  test("post and materiality_gate are folded with boolean AND (capped)", () => {
     const mergeBool = (
-      key: "scout" | "post" | "materiality_gate",
+      key: "post" | "materiality_gate",
       global?: boolean,
       repo?: boolean,
     ) =>
@@ -1803,7 +1808,7 @@ describe("mergeConfig", () => {
         repo === undefined ? {} : layer({ [key]: repo }),
       );
 
-    for (const key of ["scout", "post", "materiality_gate"] as const) {
+    for (const key of ["post", "materiality_gate"] as const) {
       // Both true -> repo true
       const tt = mergeBool(key, true, true);
       expect(tt.effective[key]).toBe(true);
@@ -1888,27 +1893,28 @@ describe("mergeConfig", () => {
   // value that could never apply anywhere else.
   test("a repo key is never taken from a global layer", () => {
     const merged = mergeConfig(
-      { default_base: "main", parity_trigger_paths: ["**/Global*"] },
+      {
+        default_base: "main",
+        suspicion_priors: [{ path: "g.ts", weight: "high", reason: "global" }],
+      },
       { default_base: "dev" },
     );
     expect(merged.effective.default_base).toBe("dev");
     expect(merged.sources.default_base).toBe("repo");
-    expect(merged.effective.parity_trigger_paths).toEqual([]);
-    expect(merged.sources.parity_trigger_paths).toBe("default");
+    expect(merged.effective.suspicion_priors).toEqual([]);
+    expect(merged.sources.suspicion_priors).toBe("default");
   });
 
   test("arrays and the summary block are replaced, never deep-merged", () => {
     const merged = mergeConfig(
       { summary: { enabled: true } },
       {
-        parity_trigger_paths: ["**/Auth*"],
         suspicion_priors: [{ path: "a.ts", weight: "high", reason: "hot" }],
         summary: {},
       },
     );
-    expect(merged.effective.parity_trigger_paths).toEqual(["**/Auth*"]);
-    expect(merged.sources.parity_trigger_paths).toBe("repo");
     expect(merged.effective.suspicion_priors).toHaveLength(1);
+    expect(merged.sources.suspicion_priors).toBe("repo");
     // The block is descended into per field, so the global's `enabled`
     // survives a repo block that names nothing.
     expect(merged.effective.summary).toEqual({ enabled: true });
@@ -1924,7 +1930,6 @@ describe("mergeConfig", () => {
     expect(nothing.sources).toEqual({
       agents_dir: "default",
       default_base: "default",
-      parity_trigger_paths: "default",
       suspicion_priors: "default",
       summary: { enabled: "default" },
       models: "default",
@@ -1934,7 +1939,6 @@ describe("mergeConfig", () => {
       max_concurrent_steps: "default",
       max_changed_lines: "default",
       max_changed_files: "default",
-      scout: "default",
       materiality_gate: "default",
       post: "default",
       post_min_severity: "default",
@@ -1959,10 +1963,10 @@ describe("mergeConfig", () => {
         JSON.stringify({ default_base: "dev", suspicion_priors: [] }),
       ),
     );
-    expect(present.sources.parity_trigger_paths).toBe("default");
+    expect(present.sources.agents_dir).toBe("default");
     expect(present.sources.suspicion_priors).toBe("repo");
     expect(present.sources.default_base).toBe("repo");
-    expect(present.effective.parity_trigger_paths).toEqual([]);
+    expect(present.effective.agents_dir).toBeUndefined();
   });
 
   // O-5's pure half: with no global layer the effective config is exactly what
@@ -1971,7 +1975,6 @@ describe("mergeConfig", () => {
     const raw = JSON.stringify({
       agents_dir: "/Users/juanma/Desktop/deep-review/agents/clean",
       default_base: "dev",
-      parity_trigger_paths: [],
       suspicion_priors: [],
       summary: { enabled: false },
     });
@@ -1982,7 +1985,6 @@ describe("mergeConfig", () => {
     expect(effective).toEqual({
       agents_dir: "/Users/juanma/Desktop/deep-review/agents/clean",
       default_base: "dev",
-      parity_trigger_paths: [],
       suspicion_priors: [],
       summary: { enabled: false },
     });
@@ -2007,7 +2009,6 @@ describe("initConfigTemplate", () => {
       agents_dir: "/Users/x/Desktop/deep-review/agents/clean",
       default_base: "dev",
       summary: { enabled: true },
-      parity_trigger_paths: [],
       suspicion_priors: [],
     });
     expect(raw.endsWith("\n")).toBe(true);
@@ -2050,10 +2051,9 @@ describe("initConfigTemplate", () => {
     expect(parseLocalConfig(raw)).toEqual({
       // `default_base` SURVIVES: it is a `repo` key (D4), parseGlobalConfig
       // rejects it by name, and a scaffold without it would leave the repo
-      // with no base ref at all. The two array keys are `repo` for the same
+      // with no base ref at all. The array key is `repo` for the same
       // reason.
       default_base: "dev",
-      parity_trigger_paths: [],
       suspicion_priors: [],
     });
     // Not `"summary": {}` — an empty block parses fine and configures
@@ -2086,7 +2086,6 @@ describe("initConfigTemplate", () => {
           agents_dir: "/seed/agents",
           default_base: "dev",
           summary: { enabled: true },
-          parity_trigger_paths: [],
           suspicion_priors: [],
         },
         null,

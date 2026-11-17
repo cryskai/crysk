@@ -316,7 +316,6 @@ const USAGE: NormalizedUsage = {
   tokens: {},
   completeness: "unavailable",
   billingMode: "subscription",
-  costSource: "unknown",
 };
 
 describe("#126 classifyFailure reads the witness alone", () => {

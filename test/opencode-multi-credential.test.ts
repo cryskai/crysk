@@ -248,7 +248,6 @@ function ok(): TransportOutcome {
       tokens: { totalKnown: 1 },
       completeness: "complete",
       billingMode: "subscription",
-      costSource: "subscription",
     },
     stderrTail: "",
   };
@@ -294,7 +293,7 @@ function scriptedRegistry(script: Script): {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 200, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     });
     const transport: ProviderTransport & { dispose(): Promise<void> } = {
@@ -747,7 +746,7 @@ describe("U4: what a single-provider plan keeps", () => {
             usageMode: "snapshot",
           },
           cancellation: { deadlineMs: 200, conformance: "passed" },
-          billing: { mode: "subscription", pricingReady: true },
+          billing: { mode: "subscription" },
           issues: [],
         }),
         execute: async (request) => {

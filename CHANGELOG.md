@@ -7,6 +7,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-17
+
+### Added
+
+- **Per-request usage facts for the Crysk platform** (#548). A connected run reports, per step and attempt, the
+  tokens of every request (uncached, cache read, cache write with its lifetime, output, reasoning), the exact
+  model and provider, and whether it billed an API key, a subscription or a free route. The platform prices
+  them itself, so cost counts on every route, subscription included, shown apart from API spend.
+
+### Fixed
+
+- **A review whose roles bill differently is compared with the platform's dollar limits on its API share
+  only.** A setup with the hunters on a Claude subscription and the refuter, summary and consolidation on an
+  API key used to be compared on the platform's whole estimate, subscription roles included, so a $1
+  per-review limit skipped a review whose API share was about $0.03. The platform now sends
+  `estimate_by_role_usd` beside `estimate_usd` (the same estimate split per model role: `hunter.<specialty>`,
+  `refuter`, `consolidate`, `summary`, `judge`), and the engine compares the sum over the roles it bills on an
+  API key, plus any role key it cannot map to one of its roles, with the per-review limit and with what is
+  left of the month. Without the split (an older platform, a setup the platform cannot price in full) the whole
+  estimate is compared, as before. A run with no API-billed role is never skipped, and a month used up still
+  skips a run that bills an API key. The skip comment and the step summary say when the API share was
+  compared; they still print no dollar figure.
+  **What to check:** nothing to change; a mixed setup that used to skip under a low per-review limit now runs
+  when its API share fits. Release order: the platform's `estimate_by_role_usd` ships first (additive field).
+- **A plain `applied` reply now counts.** After the automatic reviews end, a carried red turns `pending` when
+  every blocking finding is answered by someone with write access. Until now only a reply written by
+  `crysk triage reply` (with its hidden marker) counted, so a team without the crysk-loop skill that answered
+  `applied` by hand stayed red with `N blocking carried`. A reply in the finding's thread whose text starts
+  with `applied` (any case) now counts as the same answer, at the head the finding was posted on; `crysk status`
+  and the re-review read it the same way. `dismissed`, `deferred` and `misclassified` still need
+  `crysk triage reply`, because they carry the adjudicator's verdict. The gate's comment says so.
+  **What to check:** a reply that starts with `applied` from someone with write access now answers its finding;
+  write anything else first (for example `not applied yet`) when the fix has not landed.
+- **`crysk triage reply` works with only the PR number and the finding id.** `--from <run-dir>` is now
+  optional. Without it, `--finding` takes the finding's stable `R###` id (the `id` that
+  `crysk status --pr <n> --json` lists) and the driver reads the finding and its head off the pull
+  request, so an agent in the cloud no longer downloads the review's run artifact first. With `--from`,
+  `--finding` still takes the run's `F###` id, as before. An id the PR does not carry is refused with
+  `PR #<n> has no posted finding <id>`. `crysk post` still requires `--from`.
+  **What to check:** nothing for an existing call; a call without `--from` must pass an `R###` id.
+- **The shipped skills pin the crysk version.** Every `npx -y crysk` call in the crysk, crysk-loop, crysk-pr
+  and crysk-ci-setup skills now names the release it ships with (`npx -y crysk@0.7.0`), and each release
+  bumps it. A skills scanner flagged the unpinned call as a critical risk, because npx runs whatever version
+  is published next. **What to check:** reinstall the skills (`npx -y crysk skills install`) to get the
+  pinned calls; a copy you edited keeps your version.
+
+### Removed
+
+- **The `/pr-hero` comment commands.** Only `/crysk review`, `/crysk review --full`, `/crysk recheck`,
+  `/crysk override` and `/crysk stop` start or steer a run now. A comment that starts with `/pr-hero` is
+  ignored like any other comment, the scaffolded workflow no longer lists the `/pr-hero` forms, and every
+  hint, commit status and skip comment names only the `/crysk` form (the status used to say
+  `/pr-hero override` while the comment said `/crysk override`).
+  **What to check:** (1) comment `/crysk …` instead of `/pr-hero …`; (2) a workflow set up before the rename
+  filters only `/pr-hero` in its `if:` and so starts on no command at all: re-scaffold it with
+  `npx -y crysk ci init --force` (it rewrites `pr-hero.yml` in place; without `--force` an existing file is
+  left alone).
+
+- **The scout stage** (#545). The diff-only pre-hunter stage never earned its place and was off by default,
+  so no review changes unless it asked for it. `--scout`, `--no-scout`, `--scout-model <model>`, the `scout`
+  config key, the `models.scout` role and the action's `scout` input are still accepted and have no
+  effect; each prints one warning that contains `is ignored: the scout stage was removed`.
+  `crysk config set scout ...` is refused with `scout was removed: the scout stage no longer exists`.
+  `pipeline.json` no longer has a `scout` key, and `scripts/m6.ts` and `scripts/scout-probe.ts` are gone.
+  **What to check:** (1) a workflow, a script or a config file that still sets any of the options above
+  keeps working and now logs the warning: remove the option to silence it; (2) a tool that reads
+  `pipeline.json` and expects its `scout` key must stop reading it.
+- **The parity hunter** (#546). The conditional hunter ran only when a repository declared
+  `parity_trigger_paths`, so a review that did not declare it does not change. The `parity_trigger_paths`
+  key (in the repo file or the person file), the `models.hunter.parity` role and a leftover
+  `deep-review-parity.md` in a custom `agents_dir` are still accepted and have no effect; each prints one
+  warning that contains `is ignored: the parity hunter was removed`. `crysk config set parity_trigger_paths ...`
+  is refused with `parity_trigger_paths was removed: the parity hunter no longer exists`. `crysk config`,
+  the plan card and the report no longer mention it. `parity_hunter_fired` stays in the findings envelope,
+  `pipeline.json` and the store, and is always `false`.
+  **What to check:** (1) a config file, a person profile or a custom prompt directory that still carries any
+  of the above keeps working and now logs the warning: remove the key, the role or the file to silence it;
+  (2) a tool that reads `parity_hunter_fired` still finds it, always `false`.
+- **Dollar figures and the dollar ceiling** (platform-owned-cost). The engine no longer computes, shows,
+  stores or decides on dollars; the Crysk platform prices every run from the usage the engine reports and
+  owns the limits. Gone: the cost band (plan card, `--dry-run`, the confirm line), the default `$12` ceiling
+  on an API key and the engine's own budget gate, cost in the result box, the CI step summary, the findings
+  telemetry (`cost_usd_est`, `cost_usd_est_is_floor`), `pipeline.json` and the `crysk usage` rows (the
+  local store stops writing its cost columns; existing rows keep theirs), the legacy platform report shape
+  (the report always carries `usage_facts` and no `cost_usd`, `list_cost_usd`, `billing` or `cost_is_floor`;
+  the `estimate` and `usage-facts` capabilities and `CRYSK_PLATFORM_ESTIMATE` go with it), and
+  `gen_ai.usage.cost` and the cash and notional cost attributes in the platform trace. The spend ledger keeps
+  its fence without an amount: an attempt on a metered credential whose usage the engine could not confirm
+  still fences that credential for the rest of the run. Its dollar rules (a metered attempt that reports
+  `$0` after producing output, a free route that reports a priced cost) are removed. The local store's API
+  (the one `crysk mcp` reads: runs, a single run and usage) no longer returns the legacy `cost_usd_est`
+  column (it is `0` on every new run, which would read as a free run), and the MCP run and usage tools no
+  longer advertise a cost breakdown; they report tokens.
+  **New:** the first connect step declares the `limits` capability. A platform that supports it answers with
+  `{ "limits": { "review_usd"?, "month_left_usd"?, "estimate_usd"? } }` (absent for a forced `/crysk review`),
+  and the run step applies one comparison: a run that bills an API key is skipped, with today's
+  `skipped-budget` status and skip comment (which now names the limit that was hit and the dashboard
+  setting, Review > Limits; the gate commit status reads `over a cost limit set in Crysk` where it used to
+  read `estimated cost over the CI budget`), when the month's limit is used up or the platform's estimate is over the
+  per-review limit or over what is left of the month. A subscription or free run is never skipped for cost,
+  and `/crysk review` still forces. With no estimate and a month with money left the review runs.
+  **Retired, still accepted, no effect, one warning each:** the `budget-usd` action input, the `--budget-usd`
+  flag and `--billing` (which only chose whether `setup --ci` wrote a budget); the warnings contain
+  `is ignored: dollar limits moved to the Crysk platform`. `setup --ci` no longer writes `budget-usd` and
+  drops it from a workflow it refreshes. The `cost-usd-est` action output stays declared and is always
+  empty (removed in a later release). The engine had no budget config key.
+  **What to check:** (1) a workflow that sets `budget-usd`, or a script that passes `--budget-usd` or
+  `--billing`, keeps working and logs the warning: remove it to silence it; (2) anything that reads
+  `cost-usd-est`, `telemetry.cost_usd_est` in `findings.json`, `cost_usd_est` in `pipeline.json` or
+  `usage.cost_usd_est` from `runPipeline` finds no figure any more; the platform's dashboards show the cost;
+  (3) a script that read `cost_usd_est` from the store API, or matched the old gate status text, reads the
+  new shape and wording. The README, `docs/github-actions.md`, `docs/configuration.md` and the `crysk`,
+  `crysk-ci-setup`, `crysk-loop` and `martian-bench` skills now describe this behaviour: `setup --ci` no
+  longer asks how CI pays or for a spend ceiling, and measured dollar figures (README "Cost and
+  expectations", benchmark bands) are kept as history only.
+  Release order: the platform's limits must be deployed before an engine with this change is released.
+
+### Security
+
+- The action's engine steps no longer read the checked-out repository's `bunfig.toml` or `.env`. Bun loads both from the working directory even for a script given by absolute path, and a `bunfig.toml` `preload` runs code, inside steps that receive the `crysk-secrets` input. Every `bun` call on an engine script now passes `--no-env-file --config=/dev/null`. This mattered wherever the checked-out code is not trusted, such as a `pull_request_target` workflow that checks out the pull request's head.
+
 ## [0.7.0] - 2026-11-16
 
 ### Added
@@ -1055,7 +1176,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/cryskai/crysk/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/cryskai/crysk/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/cryskai/crysk/compare/v0.5.1...v0.6.0

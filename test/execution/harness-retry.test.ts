@@ -26,8 +26,6 @@ const USAGE: NormalizedUsage = {
   tokens: { inputUncached: 1 },
   completeness: "complete",
   billingMode: "subscription",
-  costSource: "provider",
-  cashCostUsd: 0,
 };
 
 const CAPABILITIES: ProviderCapabilityReport = {
@@ -49,7 +47,7 @@ const CAPABILITIES: ProviderCapabilityReport = {
     usageMode: "snapshot",
   },
   cancellation: { deadlineMs: 7500, conformance: "passed" },
-  billing: { mode: "subscription", pricingReady: true },
+  billing: { mode: "subscription" },
   issues: [],
 };
 
@@ -611,13 +609,13 @@ describe("vacuous hunt is not a delivered draft (#214, #299)", () => {
     expect(await Bun.file(step.outPath).json()).toEqual({ findings: [] });
   });
 
-  test("scout tools:[] at zero invocations still delivers", async () => {
+  test("a tool-less step (tools:[]) at zero invocations still delivers", async () => {
     const dir = await tempDir();
     const { transport } = makeScriptedTransport([
       { ...okOutcome(), toolInvocations: 0 },
     ]);
     const step = await makeStep(dir, {
-      name: "scout",
+      name: "summarizer",
       tools: [],
     });
     const harness = new StepExecutionHarness({

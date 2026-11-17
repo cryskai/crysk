@@ -31,7 +31,6 @@ function plan(
     agents: AGENTS,
     frontmatterModel: (key) => FRONTMATTER[key],
     summarizer: { frontmatterModel: "haiku" },
-    scout: { defaultModel: "sonnet" },
     consolidate: { frontmatterModel: "sonnet", defaultModel: "sonnet" },
     materiality: true,
     ...over,
@@ -60,7 +59,6 @@ describe("zero config: every step keeps its prompt's model", () => {
       "hunter-parity": "claude --model sonnet",
       refuter: "claude --model opus",
       summarizer: "claude --model haiku",
-      scout: "claude --model sonnet",
       consolidate: "claude --model sonnet",
       materiality: "claude --model sonnet",
     });
@@ -98,25 +96,22 @@ describe("models by role (S1)", () => {
       "hunter-parity": "claude --model claude-sonnet-5-5",
       refuter: "claude --model opus",
       summarizer: "claude --model fable",
-      scout: "claude --model opus",
       consolidate: "claude --model opus",
       // The judge never inherits `default` (L6 item 5).
       materiality: "claude --model sonnet",
     });
   });
 
-  test("refuter, scout, consolidate and summary read their own roles", () => {
+  test("refuter, consolidate and summary read their own roles", () => {
     const p = plan({
       models: {
         refuter: ["claude:claude-opus-5-5"],
-        scout: ["claude:haiku-latest"],
         consolidate: ["opencode:deepseek/deepseek-chat"],
         summary: ["claude:sonnet-latest"],
       },
     });
     const w = wire(p);
     expect(w.refuter).toBe("claude --model claude-opus-5-5");
-    expect(w.scout).toBe("claude --model haiku");
     expect(w.consolidate).toBe("opencode deepseek/deepseek-chat");
     expect(w.summarizer).toBe("claude --model sonnet");
     // Hunters had no role and no default: their prompts decide.
@@ -172,7 +167,6 @@ describe("--model wins over models (L6 item 5)", () => {
     expect(w["hunter-logic"]).toBe("claude --model opus");
     expect(w.refuter).toBe("claude --model opus");
     expect(w.summarizer).toBe("claude --model opus");
-    expect(w.scout).toBe("claude --model opus");
     expect(w.materiality).toBe("claude --model sonnet");
   });
 
@@ -252,23 +246,5 @@ describe("the judge (L6 item 5)", () => {
     expect(
       wire(plan({ models: { default: ["claude:haiku-latest"] } })).materiality,
     ).toBe("claude --model sonnet");
-  });
-});
-
-describe("--model outranks --scout-model on the scout's route", () => {
-  // The scout step records `--model > --scout-model` (pipeline.ts runScout,
-  // resolveModel); the route the backend is sent must agree, or the CLI runs
-  // one model while the step reports another.
-  test("with both, the scout is sent --model", () => {
-    const p = plan({
-      cliModel: "opus",
-      scout: { model: "haiku", defaultModel: "sonnet" },
-    });
-    expect(wire(p).scout).toBe("claude --model opus");
-  });
-
-  test("--scout-model alone still routes the scout", () => {
-    const p = plan({ scout: { model: "haiku", defaultModel: "sonnet" } });
-    expect(wire(p).scout).toBe("claude --model haiku");
   });
 });

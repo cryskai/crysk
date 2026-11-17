@@ -31,7 +31,6 @@ import {
   enginePromptPath,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
-  pipelineScoutInput,
   pipelineSummarizerInput,
   pipelineVerifierInput,
   type RunPromptOptions,
@@ -65,7 +64,6 @@ const FIXTURE_PROFILE: ModelProfile = {
     refuter: { model: "claude:sonnet-latest", effort: "medium" },
     consolidate: { model: "claude:opus-latest", effort: "max" },
     summary: { model: "claude:sonnet-latest", effort: "medium" },
-    scout: { model: "claude:opus-latest", effort: "low" },
   },
 };
 
@@ -188,7 +186,6 @@ describe("agent files: the profile's set over default, file by file (S4)", () =>
 describe("engine-owned prompts: the profile's set over default (S4)", () => {
   const defaults: Record<string, string> = {
     "consolidate.md": assets.consolidatePromptPath,
-    "scout.md": assets.scoutPromptPath,
     "summarizer.md": assets.summarizerPromptPath,
     "materiality.md": assets.materialityPromptPath,
     "verifier.md": assets.verifierPromptPath,
@@ -218,9 +215,6 @@ describe("engine-owned prompts: the profile's set over default (S4)", () => {
         promptPath: path.join(FIXTURE_SET_DIR, "consolidate.md"),
         bundled: true,
       },
-    });
-    expect(pipelineScoutInput({ scout: true }, fixture)).toEqual({
-      scout: { promptPath: assets.scoutPromptPath, bundled: true },
     });
     expect(pipelineSummarizerInput({ enabled: true }, fixture)).toEqual({
       summarizer: { promptPath: assets.summarizerPromptPath, bundled: true },
@@ -270,7 +264,6 @@ function bundledInputs(
   return {
     bundledAgents: true,
     ...pipelineSummarizerInput({ enabled: true }, options),
-    ...pipelineScoutInput({ scout: true }, options),
     ...pipelineConsolidateInput(options),
     ...pipelineMaterialityInput({ materiality_gate: true }, options),
   };
@@ -321,7 +314,7 @@ describe("the pipeline over a profile's prompt set (S4, S3)", () => {
     const r = routing(baseline.pipelineSteps);
     expect(r.consolidate).toEqual(["opus", "max"]);
     expect(r.summarizer).toEqual(["sonnet", "medium"]);
-    expect(r.scout).toEqual(["opus", "low"]);
+    expect(r.scout).toBeUndefined();
   });
 
   test("a profile set's files run, its frontmatter does not route them, the rest fall back", async () => {
@@ -346,10 +339,9 @@ describe("the pipeline over a profile's prompt set (S4, S3)", () => {
     // Fallen back: byte-identical to the default set's.
     for (const name of [
       "hunter-logic",
-      "hunter-parity",
+      "hunter-security",
       "hunter-reliability",
       "hunter-resilience",
-      "scout",
       "summarizer",
       "materiality-F001",
     ]) {
@@ -362,12 +354,10 @@ describe("the pipeline over a profile's prompt set (S4, S3)", () => {
 });
 
 describe("buildCliRoutePlan: engine-owned prompts take the profile's seat (S3)", () => {
-  test("a fixture profile moves the summarizer, scout and consolidate routes", async () => {
+  test("a fixture profile moves the summarizer and consolidate routes", async () => {
     const plan = await buildCliRoutePlan({
       spec: localReviewSpec({}),
-      options: { scout: true } as Parameters<
-        typeof buildCliRoutePlan
-      >[0]["options"],
+      options: {} as Parameters<typeof buildCliRoutePlan>[0]["options"],
       agentFiles: new Map(),
       bundledAgents: true,
       summary: { enabled: true },
@@ -376,7 +366,7 @@ describe("buildCliRoutePlan: engine-owned prompts take the profile's seat (S3)",
     const identity = (key: string) =>
       plan.steps.find((s) => s.stepKey === key)?.logicalIdentity;
     expect(identity("summarizer")).toBe("claude:sonnet-latest");
-    expect(identity("scout")).toBe("claude:opus-latest");
+    expect(identity("scout")).toBeUndefined();
     expect(identity("consolidate")).toBe("claude:opus-latest");
   });
 });

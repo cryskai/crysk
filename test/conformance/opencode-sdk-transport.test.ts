@@ -473,14 +473,12 @@ describe("OpenCodeSdkTransport §4.2 line 195 usage aggregation mode", () => {
           mode: "snapshot",
           inputTokens: 10,
           outputTokens: 5,
-          costUsd: 0.1,
         },
         {
           kind: "usage",
           mode: "snapshot",
           inputTokens: 20,
           outputTokens: 8,
-          costUsd: 0.2,
         },
         { kind: "delta", text: "text" },
         { kind: "terminal", proof: completedProof("evt-usage-snap") },
@@ -500,7 +498,7 @@ describe("OpenCodeSdkTransport §4.2 line 195 usage aggregation mode", () => {
     expect(outcome.usage.tokens.inputUncached).toBe(20);
     expect(outcome.usage.tokens.outputVisible).toBe(8);
     expect(outcome.usage.tokens.totalKnown).toBe(28);
-    expect(outcome.usage.cashCostUsd).toBeCloseTo(0.2);
+    expect(outcome.usage.billingMode).toBe("subscription");
     const usageEvents = rig.sink.events.filter((e) => e.type === "usage");
     expect(usageEvents).toHaveLength(2);
   });
@@ -516,7 +514,6 @@ describe("OpenCodeSdkTransport §4.2 line 195 usage aggregation mode", () => {
           cacheReadTokens: 900,
           cacheWriteTokens: 40,
           reasoningTokens: 7,
-          costUsd: 0.1,
         },
         { kind: "delta", text: "text" },
         { kind: "terminal", proof: completedProof("evt-usage-cache") },
@@ -562,7 +559,6 @@ describe("OpenCodeSdkTransport §4.2 line 195 usage aggregation mode", () => {
             cacheReadTokens: 900,
             cacheWriteTokens: 40,
             reasoningTokens: 7,
-            costUsd: 0.1,
           },
         },
       ],
@@ -731,33 +727,14 @@ describe("OpenCodeSdkTransport capabilities honesty (§11/D1-09)", () => {
     expect(report.protocol.usageMode).toBe("none");
     expect(report.cancellation.deadlineMs).toBe(6500);
     expect(report.cancellation.conformance).toBe("passed");
-    expect(report.billing.mode).toBe("subscription");
-    // 2026-09-02: `true`, and this is not a weakened assertion — it asserted
-    // the wrong disjunct. The design's metered rule is "provider cost OR a
-    // versioned rate table", and this transport reports the FIRST: the SDK's
-    // `AssistantMessage.cost` is non-optional and the client reads it on
-    // every assistant message. The old `false` was reasoning about the rate
-    // table (which this transport genuinely cannot consult, having no model
-    // id in scope) and applying that conclusion to provider cost.
-    expect(report.billing.pricingReady).toBe(true);
+    expect(report.billing).toEqual({ mode: "subscription" });
     expect(report.issues.length).toBeGreaterThan(0);
-    // #197. `length > 0` could not see this list change, which is how the
-    // deleted bundled-table entry slipped through: it said "no bundled
-    // pricing table can be consulted here; ... the runtime binding prices per
-    // route when a table is needed", and no table exists to consult or to
-    // price from any more. A "missing table" issue standing beside
-    // `pricingReady: true` also reads as a contradiction wherever doctor
-    // renders it as a degraded row.
-    //
-    // Exactly ONE survives — the NOTIONAL one, a different fact from the cash
-    // cost above — and the assertion names the count because two entries
-    // sharing a code is precisely the shape that hid the stale one.
-    const pricingIssues = report.issues.filter(
-      (issue) => issue.code === "pricing_table_missing",
-    );
-    expect(pricingIssues).toHaveLength(1);
-    expect(pricingIssues[0]?.message).toContain("notional cost");
-    expect(pricingIssues[0]?.message).not.toContain("table");
+    // The issue list is exact: the engine prices nothing, so no pricing issue
+    // may appear beside the billing claim.
+    expect(report.issues.map((issue) => issue.code).sort()).toEqual([
+      "codegraph_policy_unenforced",
+      "usage_mode_client_reported",
+    ]);
     for (const issue of report.issues) expect(issue.blocking).toBe(false);
     expect(
       report.issues.some(
@@ -770,10 +747,9 @@ describe("OpenCodeSdkTransport capabilities honesty (§11/D1-09)", () => {
 // 2026-09-02. The usage records this transport emits used to hardcode
 // `billingMode: "subscription"`, which #133 made false: an OpenCode route on
 // any provider but `openai` runs on a `provider_api_token`, and that IS a
-// metered credential. A usage record disagreeing with the capability report
-// about how its own attempt bills is what lets the metered-zero rule in
-// `settlementFromUsage` be dodged — the rule reads `usage.billingMode`, so a
-// metered attempt wearing a subscription badge settles its $0 as truthful.
+// metered credential. The platform prices a run by the credential class on
+// its usage records, so a record disagreeing with the capability report about
+// how its own attempt bills would mis-file the run.
 describe("OpenCodeSdkTransport usage records carry the route's billing mode", () => {
   test("a metered transport stamps its usage records metered", async () => {
     const handle = makeClient({
@@ -783,7 +759,6 @@ describe("OpenCodeSdkTransport usage records carry the route's billing mode", ()
           mode: "snapshot",
           inputTokens: 10,
           outputTokens: 5,
-          costUsd: 0,
         },
         { kind: "terminal", proof: completedProof("evt-billing-metered") },
       ]),
@@ -800,7 +775,6 @@ describe("OpenCodeSdkTransport usage records carry the route's billing mode", ()
     const outcome = await pending;
 
     expect(outcome.usage.billingMode).toBe("metered");
-    expect(outcome.usage.cashCostUsd).toBe(0);
   });
 
   test("the default stays subscription, matching the factory's default route", async () => {
@@ -822,9 +796,8 @@ describe("OpenCodeSdkTransport usage records carry the route's billing mode", ()
   });
 
   test("a session that never reached the provider carries the same mode", async () => {
-    // `noSessionUsage`: a truthful $0 with no tokens at all. It must carry
-    // the route's real mode too — but it stays SETTLEABLE because the
-    // metered-zero rule gates on output tokens, not on the mode alone.
+    // `noSessionUsage`: no tokens at all. It must carry the route's real mode
+    // too — and it stays complete (nothing was used), so it never fences.
     const handle = makeClient({
       createError: new Error("connect ECONNREFUSED"),
     });
@@ -838,17 +811,14 @@ describe("OpenCodeSdkTransport usage records carry the route's billing mode", ()
     });
 
     expect(outcome.usage.billingMode).toBe("metered");
-    expect(outcome.usage.cashCostUsd).toBe(0);
     expect(outcome.usage.completeness).toBe("complete");
     expect(outcome.usage.tokens).toEqual({});
   });
 
   test("a free transport stamps its usage records free, incl. noSessionUsage", async () => {
     // #182 follow-up: the mode passes through generically — the factory
-    // stamps "free" for the provider_free kind, and both the priced path and
-    // the never-reached-provider path below carry it. `noSessionUsage` (cash
-    // 0 + empty tokens) stays settleable under the free-nonzero rule, which
-    // fires on cash > 0 alone.
+    // stamps "free" for the provider_free kind, and both the path that
+    // reported usage and the never-reached-provider path below carry it.
     const handle = makeClient({
       stream: streamOf([
         {
@@ -856,7 +826,6 @@ describe("OpenCodeSdkTransport usage records carry the route's billing mode", ()
           mode: "snapshot",
           inputTokens: 10,
           outputTokens: 5,
-          costUsd: 0,
         },
         { kind: "terminal", proof: completedProof("evt-billing-free") },
       ]),
@@ -873,7 +842,6 @@ describe("OpenCodeSdkTransport usage records carry the route's billing mode", ()
     const outcome = await pending;
 
     expect(outcome.usage.billingMode).toBe("free");
-    expect(outcome.usage.cashCostUsd).toBe(0);
 
     const refused = makeClient({
       createError: new Error("connect ECONNREFUSED"),
@@ -888,7 +856,6 @@ describe("OpenCodeSdkTransport usage records carry the route's billing mode", ()
     });
 
     expect(refusedOutcome.usage.billingMode).toBe("free");
-    expect(refusedOutcome.usage.cashCostUsd).toBe(0);
     expect(refusedOutcome.usage.completeness).toBe("complete");
     expect(refusedOutcome.usage.tokens).toEqual({});
   });
@@ -971,7 +938,6 @@ describe("OpenCodeSdkTransport failure surface", () => {
           tokens: {},
           completeness: "unavailable",
           billingMode: "unknown",
-          costSource: "unknown",
         },
         stderrTail: "something entirely opaque happened",
       }),
@@ -1403,8 +1369,6 @@ describe("OpenCodeSdkTransport classification witness (F003)", () => {
           tokens: { inputUncached: 1 },
           completeness: "complete" as const,
           billingMode: "subscription" as const,
-          costSource: "provider" as const,
-          cashCostUsd: 0,
         },
         stderrTail: "",
       }),
@@ -1424,8 +1388,6 @@ describe("OpenCodeSdkTransport classification witness (F003)", () => {
         tokens: { inputUncached: 1 },
         completeness: "complete" as const,
         billingMode: "subscription" as const,
-        costSource: "provider" as const,
-        cashCostUsd: 0,
       },
     };
     expect(
@@ -1456,8 +1418,6 @@ describe("OpenCodeSdkTransport classification witness (F003)", () => {
         tokens: { inputUncached: 1 },
         completeness: "complete" as const,
         billingMode: "subscription" as const,
-        costSource: "provider" as const,
-        cashCostUsd: 0,
       },
     };
 
@@ -1579,8 +1539,6 @@ describe("OpenCodeSdkTransport resolved tool map diagnostics (#122)", () => {
           tokens: { inputUncached: 1 },
           completeness: "complete",
           billingMode: "subscription",
-          costSource: "provider",
-          cashCostUsd: 0,
         },
         stderrTail: "",
         diagnosticsTail:

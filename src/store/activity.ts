@@ -347,7 +347,6 @@ export interface RunHistoryItem {
   blocking: number;
   advisory: number;
   wall_ms: number;
-  cost_usd_est: number;
   generated_at: string;
   pr?: number;
   repo_id?: string;
@@ -393,7 +392,7 @@ export async function queryRecentRuns(
 
     const rows = db
       .query(
-        `SELECT id, run_status, blocking, advisory, wall_ms, cost_usd_est, generated_at, pr, repo_id 
+        `SELECT id, run_status, blocking, advisory, wall_ms, generated_at, pr, repo_id 
          FROM runs 
          ORDER BY generated_at DESC 
          LIMIT ?`,

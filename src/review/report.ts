@@ -1,13 +1,11 @@
 // The human-facing half of local mode (ROADMAP B0): a pure renderer that
-// turns a findings document into the markdown a developer actually reads, and
-// a pure cost estimator that runs BEFORE the money is spent.
+// turns a findings document into the markdown a developer actually reads.
 //
 // Pure on purpose — no I/O, no git, no clock. The CLI owns every side effect,
 // so the report can be re-rendered from an artifact on disk months later and
 // come out byte-identical (the lab already replays old findings.json files;
 // a renderer that reached for `new Date()` would make that a lie).
 
-import type { PlatformEstimateBasis } from "#ci/platform-estimate";
 import { listPaths } from "#git/refs";
 import type { ResolvedRoutePlan, ResolvedStepRoute } from "#model/routing";
 import type { PostMinSeverity } from "#pr/post-floor";
@@ -51,133 +49,6 @@ export interface DiffStat {
   deletions: number;
 }
 
-export interface CostEstimate {
-  low: number;
-  high: number;
-  // Plain-language statement of how coarse this is, meant to be printed next
-  // to the numbers so nobody reads the band as a quote.
-  basis: string;
-  // Set when the range is the Crysk platform's estimate, not this band: what
-  // the platform priced it from (src/ci/platform-estimate.ts).
-  platform?: PlatformEstimateBasis;
-}
-
-// Per-hunter marginal cost, fitted to the measured runs (see BAND below).
-// Deliberately three transparent coefficients instead of a regression: with
-// this few calibration points anything fancier is false precision.
-//
-// The base is the load-bearing coefficient, recalibrated 2026-08-11 from
-// 0.5 to 1.2: a hunter's floor is reading the TREE and the prompt
-// machinery, nearly independent of a small diff. The proof was two PR-mode
-// runs of the same 7-file / +21 −8 tree billing $4.74 and $3.92 against a
-// $1.19–$2.39 band — both ~2x above the top, the exact under-estimate
-// failure this band exists to prevent.
-const USD_PER_AGENT_BASE = 1.2;
-const USD_PER_CHANGED_LINE = 0.00021;
-const USD_PER_FILE = 0.008;
-
-// Skewed on purpose. Every recorded overrun was an UNDER-estimate, never
-// over, so the upper arm is the wider one: a band that is too generous costs
-// a second of hesitation, a band that is too tight costs real money.
-const BAND_LOW = 0.65;
-const BAND_HIGH = 1.4;
-
-// WHY this function exists at all: the ROADMAP logs two cost overruns in a
-// row — "~$21" against an actual bill, and "~$34" against an actual $48.30 —
-// and both had the same cause. The estimate was carried over from the
-// PREVIOUS arm instead of being computed from the tree about to be reviewed.
-// So this estimates from the diff, and only from the diff.
-//
-// Calibration points, all measured on real runs of the current engine:
-//   - PR 1682's tree (7 files / +21 −8, 3 hunters + refuter) billed $4.74
-//     and $3.92 across two runs — the per-agent floor evidence;
-//   - a 45-file / +2775 −1237 tree with 5 hunters + refuter billed ~$14.78,
-//     and the same tree was recorded at ~$11/run elsewhere in the campaign;
-//   - the first B0 local run (5 files / +484, 4 hunters + refuter), $3.68.
-// A legacy "~$2.61 small tree" point from before PR mode existed was
-// RETIRED by the 1682 evidence: two same-engine runs of a comparable tree
-// both landed far above it, and a calibration point the instrument itself
-// contradicts is decoration. The ~$11 vs ~$14.78 spread on ONE tree is the
-// whole argument for returning a band: the same diff, the same agents, a
-// 34% swing. A point estimate here would be a fiction with a decimal point.
-//
-// The refuter is not a separate term: its cost rides in the coefficients,
-// because every calibration run had the refuter leg included and a
-// refuter's size tracks how much the hunters found, which tracks diff size.
-export function estimateCost(
-  diffStat: DiffStat,
-  hunterCount: number,
-  summarizerEnabled = false,
-  // ROADMAP-DOORDASH M5. Defaulted OFF so every existing caller keeps its
-  // band byte-identical, and so a caller that forgets it under-quotes
-  // nothing it did not already under-quote.
-  scoutEnabled = false,
-  // Item 7 O-5a. Default 0 so every existing caller keeps its band
-  // byte-identical. Priced as its own term (not folded into `agents`) so a
-  // 40-finding re-review of a 2-file delta is not billed as 40 hunters.
-  verificationSteps = 0,
-  // The post-refuter consolidation pass. LAST and defaulted OFF so every
-  // existing call shape compiles and keeps its band; the product paths pass
-  // true. One seat, the scout's rule: a claims-only sonnet call costs far
-  // less than a hunter, and over-quoting is the cheap direction to be wrong.
-  consolidateEnabled = false,
-): CostEstimate {
-  const files = Math.max(0, diffStat.files);
-  const lines =
-    Math.max(0, diffStat.insertions) + Math.max(0, diffStat.deletions);
-  // A validated ReviewSpec always carries at least one hunter, so a zero here
-  // means a caller asked hypothetically. Clamping keeps the band from
-  // collapsing to $0–$0, which would read as "this is free".
-  // The scout takes a full agent seat, the summarizer's precedent, and that
-  // deliberately OVER-quotes: it is diff-only, one attempt, and reads no tree,
-  // so its true cost is a fraction of a hunter's. Two reasons it gets the seat
-  // anyway. First, this band's own rule — every recorded overrun was an
-  // UNDER-estimate, so the generous direction is the cheap one to be wrong in.
-  // Second, the scout has NO calibration point of its own: M4 billed $37.00
-  // across six prompt versions, two probe defects and a reverted experiment,
-  // which is a milestone total and not a per-spawn cost. M6 records cost per
-  // arm; that is the number this coefficient gets recalibrated from, and until
-  // it exists an invented per-scout coefficient would be false precision.
-  const hunterSeats = Math.max(
-    0,
-    hunterCount +
-      (summarizerEnabled ? 1 : 0) +
-      (scoutEnabled ? 1 : 0) +
-      (consolidateEnabled ? 1 : 0),
-  );
-  const steps = Math.max(0, verificationSteps);
-  // A zero-hunter, zero-verify call still needs a band (the hypothetical
-  // floor). A skip-discovery re-review with N verify steps must NOT inherit
-  // that floor — that would bill a phantom hunter on top of verification.
-  const agents = hunterSeats === 0 && steps === 0 ? 1 : hunterSeats;
-  // Verification is its OWN term (item 7 O-5a), not folded into `agents`:
-  // a verify step reads one prior finding, not the whole tree, so multiplying
-  // it by changed-files would price a 40-finding re-review of a 2-file delta
-  // as if it were 40 hunters. The seat is the same per-agent floor — generous
-  // on purpose, same direction as the scout.
-  const mid =
-    agents *
-      (USD_PER_AGENT_BASE +
-        USD_PER_CHANGED_LINE * lines +
-        USD_PER_FILE * files) +
-    steps * USD_PER_AGENT_BASE;
-  return {
-    low: round2(mid * BAND_LOW),
-    high: round2(mid * BAND_HIGH),
-    basis:
-      "coarse band from measured runs (a 7-file / +21 −8 tree with 3 " +
-      "hunters + refuter, $3.92–$4.74 across two runs; a 45-file / " +
-      "+2775 −1237 tree with 5 hunters + refuter, ~$11–$14.78): a " +
-      "per-agent floor for hunters + refuter" +
-      `${summarizerEnabled ? " + summarizer" : ""}` +
-      `${scoutEnabled ? " + scout" : ""}` +
-      `${consolidateEnabled ? " + consolidation" : ""}` +
-      `${steps > 0 ? ` + ${steps} verification step(s)` : ""} ` +
-      "plus changed lines and files. An order-of-magnitude " +
-      "guide, not a quote — the same tree has billed 34% apart across runs.",
-  };
-}
-
 export interface ReportMeta {
   repo: string;
   base: string;
@@ -190,15 +61,6 @@ export interface ReportMeta {
   // Paths the exclusion filter dropped from the reviewed diff, if any. Stated
   // in the report because it is a mutation of the input, not a detail.
   excludedPaths?: string[];
-  // CASH, and only cash — §8's "Budget enforcement uses cash only". A Claude
-  // subscription route reports a truthful $0.00 here.
-  costUsd: number;
-  // #173 (§8: "Artifacts and reports show cash and notional totals
-  // separately"). The list-basis figure the run was NOT charged. Absent means
-  // no segment at all, never a `$0.00` one — a runner that reported no
-  // normalized usage has no list figure, and printing one it never produced
-  // is the fabrication the usage slice exists to prevent.
-  notionalUsd?: number;
   wallMs: number;
   // S4: the mode the commit status is set under, which the closing note names.
   // Absent means advisory: a local run, and any caller that never passes it,
@@ -1596,17 +1458,9 @@ export function blobUrl(
 
 function runLines(doc: FindingsDocument, meta: ReportMeta): string[] {
   const { files, insertions, deletions } = meta.diffStat;
-  // #173: cash first and unqualified, notional after it and never without its
-  // basis spelled out — §8 allows notional in a report "only when clearly
-  // labelled", and two bare dollar figures side by side is precisely the
-  // mixing it forbids.
-  const notional =
-    meta.notionalUsd === undefined
-      ? ""
-      : ` (${usd(meta.notionalUsd)} at list price, not charged)`;
   const lines = [
     `${files} file${files === 1 ? "" : "s"}, +${insertions} −${deletions}` +
-      ` · run ${doc.run_status} · ${usd(meta.costUsd)}${notional} · ${duration(meta.wallMs)}`,
+      ` · run ${doc.run_status} · ${duration(meta.wallMs)}`,
   ];
   const excluded = meta.excludedPaths ?? [];
   if (excluded.length > 0) {
@@ -1623,12 +1477,6 @@ function runLines(doc: FindingsDocument, meta: ReportMeta): string[] {
     lines.push("");
     lines.push(
       `Agents: ${rows.map((r) => `${r.key} ${r.status}`).join(" · ")}`,
-    );
-  }
-  if (!doc.parity_hunter_fired) {
-    lines.push("");
-    lines.push(
-      "The parity hunter did not fire: no changed path matched its trigger.",
     );
   }
   return lines;
@@ -1838,10 +1686,6 @@ function oneLine(text: string): string {
   return publishedText(text.replace(/\s+/g, " ").trim());
 }
 
-function usd(amount: number): string {
-  return `$${amount.toFixed(2)}`;
-}
-
 // Elapsed time as the compact `3m12s` the CLI's live progress prefixes onto
 // every event line. Floor, never round: 59.9s read as "60s" would tick the
 // minute early. Minutes deliberately never roll into hours — a review past
@@ -1862,10 +1706,6 @@ function duration(ms: number): string {
   return minutes === 0
     ? `${seconds}s`
     : `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 // A step's route as the plan card shows it: the model name it resolved to,

@@ -1,14 +1,13 @@
-// Bounded unattended spend (ROADMAP Pillar 3, GitHub Actions CI): the two
-// gates that must clear BEFORE a CI run spawns a single agent, and the pure
+// Bounded unattended spend (ROADMAP Pillar 3, GitHub Actions CI): the gates
+// that must clear BEFORE a CI run spawns a single agent, and the pure
 // CI-mode skip payloads those gates produce when they don't.
 //
 // Phase 3 additions (this module's scope now covers the whole CI-mode
-// policy layer, not just the two spend gates): `planCiSizeSkip`/
-// `planCiBudgetSkip` are the ONE call reviewPr's shell makes per gate —
+// policy layer, not just the spend gates): `planCiSizeSkip`/
+// `planCiLimitsSkip` are the ONE call reviewPr's shell makes per gate —
 // comment + marker + step-summary markdown + $GITHUB_OUTPUT, all from the
-// same numbers, so the shell has no decision left to make beyond "post it /
-// write it". `budgetDisabledWarningMessage` covers spec 3.1's disabled-
-// ceiling `::warning::` requirement. The exit-code contract (spec 2.1) lives
+// same inputs, so the shell has no decision left to make beyond "post it /
+// write it". The exit-code contract (spec 2.1) lives
 // in src/review/exit-code.ts, shared by every mode.
 //
 // This module does NOT reimplement the size gate — that gate (deterministic
@@ -20,8 +19,8 @@
 // there is nobody to prompt AND the run must still exit 0 with a courteous
 // PR notice (assistant posture — see proposal.md's Invariants). So this
 // module adds exactly that CI-mode handling on top of an already-computed
-// `SizeGateVerdict`, plus the budget gate's own threshold check (there is no
-// pre-existing budget gate to reuse).
+// `SizeGateVerdict`, plus the platform limits rule (the engine computes no
+// dollar figure; see `evaluatePlatformLimits`).
 //
 // Purity (project rule 1): every function here is a total function of its
 // arguments. No file I/O, no `process.env` sniffing, no `log()`, no network,
@@ -67,6 +66,7 @@ import { commandHint, MARKER_OPEN } from "../brand";
 import { CliUsageError } from "../errors";
 import { envBillsMetered } from "../execution/usage-normalized";
 import { ciForceReviewHintLine } from "./force-comment";
+import type { PlatformLimitHit, PlatformLimits } from "./platform-limits";
 import {
   type CiOutputs,
   type CiSummaryData,
@@ -83,56 +83,104 @@ import type { CiReviewPolicyMode } from "./review-policy";
 import type { DeltaRiskAssessment } from "./review-risk";
 import { OVERRIDE_COMMAND } from "./trigger";
 
-function usd(amount: number): string {
-  return `$${amount.toFixed(2)}`;
+// ---------------------------------------------------------------------------
+// Platform limits — platform-owned-cost L55. The platform owns the dollar
+// limits (settings, defaults, the month's spend) and sends them with its
+// estimate at the token exchange, nothing when the review was forced. The
+// engine keeps ONE comparison, because only it knows whether the run bills an
+// API key: skip when the run does and either the month's limit is used up, or
+// the platform's estimate is over the per-review limit or over what is left of
+// the month.
+// ---------------------------------------------------------------------------
+
+export type PlatformLimitsVerdict =
+  | { allowed: true }
+  | {
+      allowed: false;
+      hit: PlatformLimitHit;
+      // Set when the comparison used the API share of the estimate (S17), not
+      // the whole of it; the skip notice says so.
+      apiShare?: true;
+    };
+
+// Which model roles the run bills on an API key (true) and which it does not
+// (false), resolved once from the run's routes (`modelRoleBilling`, ci/setup.ts).
+export type ModelRoleBilling = ReadonlyMap<string, boolean>;
+
+// The part of the estimate that runs on an API key (S17): the platform's split
+// summed over the roles the run bills on one, plus every key the run cannot map
+// to one of its roles (an unknown role may bill, so it counts). Undefined means
+// there is no usable split, and the whole estimate is compared: no split sent
+// or the run's routes unresolved (a run whose roles bill no API key never gets
+// here: evaluatePlatformLimits lets it run).
+// Rounded to the platform's 6 decimals so a sum of its parts sits on a limit
+// instead of a hair over it.
+function apiShareUsd(
+  limits: PlatformLimits,
+  roleBilling: ModelRoleBilling | undefined,
+): number | undefined {
+  const split = limits.estimateByRoleUsd;
+  if (split === undefined || roleBilling === undefined) return undefined;
+  if (!hasApiBilledRole(roleBilling)) return undefined;
+  let share = 0;
+  for (const [role, usd] of Object.entries(split)) {
+    if (roleBilling.get(role) !== false) share += usd;
+  }
+  return Math.round(share * 1e6) / 1e6;
 }
 
-// ---------------------------------------------------------------------------
-// Budget gate — spec.md 3.1: "If estimated cost exceeds --budget-usd ...".
-// The one comparison this module owns outright (no pre-existing gate to
-// reuse, unlike size).
-// ---------------------------------------------------------------------------
-
-export interface BudgetGateVerdict {
-  allowed: boolean;
-  // Present only when `allowed` is false — mirrors SizeGateVerdict's own
-  // discriminated shape (size-gate.ts) in spirit, kept optional-on-a-flat-
-  // object here per the task's own stated signature rather than a second
-  // discriminated union for a single string field.
-  reason?: string;
+// True when at least one resolved role bills an API key.
+function hasApiBilledRole(roleBilling: ModelRoleBilling): boolean {
+  return [...roleBilling.values()].some(Boolean);
 }
 
-// Inclusive boundary: a cost exactly AT the ceiling is allowed, matching
+// Inclusive boundary: an estimate exactly AT a limit passes, matching
 // size-gate.ts's own `>` (not `>=`) comparison against its limits.
 //
-// A non-positive ceiling DISABLES the gate. That is not this module's
-// invention — size-gate.ts:20 already settled it for the sibling knobs
-// ("<= 0 disables the limit. Both knobs, independently."), and all three
-// ship side by side in one action.yml feeding one preflight, so `budget-usd:
-// 0` has to mean what `max-changed-lines: 0` means. The external convention
-// does cut the other way (a $0 spend cap elsewhere often means "spend
-// nothing"), which is why it is written down here rather than assumed.
+// No estimate and a month with money left: the review runs. That is a stated
+// limit of the design (a model the platform cannot price is not capped per
+// review), not an oversight; the platform's own month ledger still counts the
+// run once it reports.
 //
-// What settles it is that the failure modes are not symmetric. Read as "no
-// ceiling" when the operator meant "spend nothing", being wrong costs one
-// visible review, still bounded by the size gate running independently. Read
-// as "always skip" when the operator meant "no ceiling", being wrong makes
-// pr-hero go dark on every PR while each run still exits 0 green — the same
-// shape as a lint gate that checks nothing and passes, which this repo has
-// already paid for once (docs/research/scout-design.md:344). A disable is only safe
-// when it is loud, so the CI shell warns on a disabled ceiling.
-export function evaluateBudgetGate(
-  estimatedCostUsd: number,
-  budgetUsd: number,
-): BudgetGateVerdict {
-  if (budgetUsd <= 0) return { allowed: true };
-  if (estimatedCostUsd <= budgetUsd) return { allowed: true };
-  return {
-    allowed: false,
-    reason:
-      `estimated cost ${usd(estimatedCostUsd)} exceeds the ` +
-      `${usd(budgetUsd)} budget ceiling`,
-  };
+// A subscription or free route is never skipped: its runs draw on quota, and
+// only API spend counts toward the limits (L54, "counts": "api_only"). In a run
+// whose roles bill differently, the estimate compared is the API share when the
+// platform split it per role (S17); without the split it is the whole estimate,
+// the conservative side.
+export function evaluatePlatformLimits(input: {
+  billingMode: CiBillingMode;
+  limits: PlatformLimits | undefined;
+  roleBilling?: ModelRoleBilling;
+}): PlatformLimitsVerdict {
+  const { limits } = input;
+  if (input.billingMode !== "metered" || limits === undefined) {
+    return { allowed: true };
+  }
+  // Metered by the Claude env alone (an API key present) while no resolved role
+  // routes to it: the run bills no API spend, so it is never skipped (#551 R001).
+  // No role map (routes unresolved) keeps the conservative whole-estimate path.
+  if (
+    input.roleBilling !== undefined &&
+    input.roleBilling.size > 0 &&
+    !hasApiBilledRole(input.roleBilling)
+  ) {
+    return { allowed: true };
+  }
+  const { reviewUsd, monthLeftUsd, estimateUsd } = limits;
+  if (monthLeftUsd !== undefined && monthLeftUsd <= 0) {
+    return { allowed: false, hit: "month-used-up" };
+  }
+  if (estimateUsd === undefined) return { allowed: true };
+  const share = apiShareUsd(limits, input.roleBilling);
+  const compared = share ?? estimateUsd;
+  const basis = share === undefined ? {} : { apiShare: true as const };
+  if (reviewUsd !== undefined && compared > reviewUsd) {
+    return { allowed: false, hit: "review-limit", ...basis };
+  }
+  if (monthLeftUsd !== undefined && compared > monthLeftUsd) {
+    return { allowed: false, hit: "month-left", ...basis };
+  }
+  return { allowed: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,27 +262,35 @@ function buildSizeSkipComment(
   return `${lines.join("\n")}\n`;
 }
 
-// What a platform repository can do about a budget skip (cryskai/platform#12):
-// it has no `budget-usd` input to raise, and what a review costs is the model
-// setup chosen in the dashboard.
-const PLATFORM_BUDGET_SKIP_HINT =
-  "To change what reviews cost, change the model setup in the Crysk dashboard.";
+// What a platform repository can do about a limits skip: the limits are
+// dashboard settings (Review > Limits), not workflow inputs.
+const LIMIT_SKIP_REASON: Record<PlatformLimitHit, string> = {
+  "month-used-up":
+    "⚠️ This organization's monthly review limit is used up for this calendar month.",
+  "review-limit":
+    "⚠️ The estimated cost of this review is over the per-review limit.",
+  "month-left":
+    "⚠️ The estimated cost of this review is more than what is left of this organization's monthly limit.",
+};
+
+// A mixed setup is compared on the part of the estimate that runs on an API
+// key; the notice says so, because the estimate the reader may know is larger.
+const API_SHARE_LINE =
+  "Only the part of the estimate that runs on an API key (its API share) " +
+  "was compared with the limit.";
 
 function buildBudgetSkipComment(data: SkipBudgetSummary): string {
-  const platformConnected = data.platformConnected === true;
   const lines = [
     SKIP_BUDGET_COMMENT_MARKER,
     "## Crysk review skipped",
     "",
-    `⚠️ The estimated review cost (${usd(data.estimatedCostUsd)}) exceeds ` +
-      `the configured CI budget ceiling (${usd(data.budgetUsd)}).`,
+    LIMIT_SKIP_REASON[data.limit],
+    ...(data.apiShare === true ? ["", API_SHARE_LINE] : []),
     "",
-    platformConnected
-      ? PLATFORM_BUDGET_SKIP_HINT
-      : "Crysk did not run to stay within the configured `--budget-usd` " +
-        "ceiling.",
+    "Crysk did not run to stay within the limits set in the Crysk dashboard " +
+      "(Review > Limits). Raise the limit there to review later pushes.",
     "",
-    ciForceReviewHintLine(data.prNumber, platformConnected),
+    ciForceReviewHintLine(data.prNumber, true),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -280,62 +336,34 @@ export function ciSizeGateSkip(input: CiSizeGateSkipInput): CiGateSkip | null {
   };
 }
 
-export interface CiBudgetGateSkipInput {
+export interface CiLimitsGateSkipInput {
   isCi: boolean;
-  estimatedCostUsd: number;
-  budgetUsd: number;
+  billingMode: CiBillingMode;
+  limits: PlatformLimits | undefined;
+  // The run's roles that bill an API key, for the estimate split (S17).
+  roleBilling?: ModelRoleBilling;
   prNumber: number;
-  // The run came through the Crysk platform (CRYSK_PLATFORM_CONNECTED): the
-  // skip names only what applies to a platform repository.
-  platformConnected?: boolean;
 }
 
-export function ciBudgetGateSkip(
-  input: CiBudgetGateSkipInput,
+export function ciLimitsGateSkip(
+  input: CiLimitsGateSkipInput,
 ): CiGateSkip | null {
-  const verdict = evaluateBudgetGate(input.estimatedCostUsd, input.budgetUsd);
-  if (!input.isCi || verdict.allowed) return null;
+  if (!input.isCi) return null;
+  const verdict = evaluatePlatformLimits(input);
+  if (verdict.allowed) return null;
   const summary: SkipBudgetSummary = {
     kind: "skipped-budget",
     prNumber: input.prNumber,
-    estimatedCostUsd: input.estimatedCostUsd,
-    budgetUsd: input.budgetUsd,
-    ...(input.platformConnected === true ? { platformConnected: true } : {}),
+    limit: verdict.hit,
+    ...(verdict.apiShare === true ? { apiShare: true as const } : {}),
   };
   return { comment: buildBudgetSkipComment(summary), summary };
 }
 
 // ---------------------------------------------------------------------------
-// Disabled-ceiling warning — spec 3.1: "Because a silent disable is
-// indistinguishable from a passing gate, the CI shell MUST emit a
-// `::warning::` workflow command noting that the budget ceiling is
-// disabled." Only for an EXPLICIT <= 0 — `undefined` (the flag was never
-// given) means no ceiling was ever configured, so there is nothing to warn
-// about disabling. The shell wraps this message with
-// `formatWorkflowCommand("warning", ...)` (ci/reporter.ts); this module only
-// decides whether to and builds the text, never the annotation syntax.
-// ---------------------------------------------------------------------------
-
-export function budgetDisabledWarningMessage(
-  budgetUsd: number | undefined,
-): string | null {
-  if (budgetUsd === undefined || budgetUsd > 0) return null;
-  return (
-    "budget-usd ceiling is disabled (<= 0 was configured); estimated cost " +
-    "is unconstrained for this CI run. The size gate is resolved " +
-    "separately."
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Route-aware ceiling resolution (issue #156). The budget gate compares
-// `estimate.high` — a TOKEN-derived figure — against a real-dollar ceiling.
-// On a Claude subscription route the real cash cost of a run is $0.00, so the
-// shipped $10 default refused to do work over an overrun that cannot happen,
-// and a skipped review is indistinguishable from a clean one to anyone
-// reading the checks (this module's own doctrine, ~110-115; ci/setup.ts:50-63).
-// So: no ceiling by default on a subscription route, the default ceiling on a
-// metered one, and an explicit operator value honoured verbatim on either.
+// How the run bills (issue #156). The size gate's route-aware limits and the
+// platform limits gate both read it: a subscription route has no per-token
+// invoice, so the platform's dollar limits never skip it.
 // ---------------------------------------------------------------------------
 
 export type CiBillingMode = "subscription" | "metered";
@@ -425,73 +453,6 @@ export function deriveCiBillingMode(
     : "subscription";
 }
 
-// 12, raised from 10 when the default set gained its fourth always-on hunter.
-// The gate compares the estimate's UPPER bound with this ceiling, and the
-// estimate (review/report.ts) prices one seat per hunter. With the summarizer
-// on, that hunter lifted every upper bound by 20%: the smallest pull request
-// went from $8.53 to $10.24, so a ceiling of 10 skipped all of them. 12 admits
-// what 10 admitted before. With the summarizer off the rise is 25%, so a pull
-// request whose old upper bound sat between $9.60 and $10 is skipped now.
-// A workflow that WRITES `budget-usd: 10` carries an operator value and does
-// not move with this constant.
-export const CI_DEFAULT_METERED_BUDGET_USD = 12;
-
-export interface CiBudgetCeiling {
-  // `undefined` means NO ceiling — the gate does not run at all. Distinct from
-  // a `0` ceiling, which reaches `evaluateBudgetGate` and is allowed there by
-  // the `<= 0` convention; the two arrive by different routes and the shell
-  // announces them with different messages.
-  budgetUsd: number | undefined;
-  source: "operator" | "default-metered" | "unlimited-subscription";
-}
-
-// Total over the four cases. `source` exists so the caller can tell the two
-// no-ceiling outcomes apart without re-deriving why.
-//
-// An explicitly configured value is honoured verbatim on ANY route — that is
-// how an operator imposes a ceiling on a subscription (`budget-usd: 5`) or
-// removes one on a metered route (`budget-usd: 0`, which still reaches
-// `budgetDisabledWarningMessage`). The `configured !== undefined` test is what
-// keeps 0 and negatives on the operator branch: falling back to a truthiness
-// check would swallow the explicit disable and silently reimpose the default the
-// operator just removed.
-export function resolveCiBudgetCeiling(input: {
-  configured: number | undefined;
-  billingMode: CiBillingMode;
-}): CiBudgetCeiling {
-  if (input.configured !== undefined) {
-    return { budgetUsd: input.configured, source: "operator" };
-  }
-  if (input.billingMode === "metered") {
-    return {
-      budgetUsd: CI_DEFAULT_METERED_BUDGET_USD,
-      source: "default-metered",
-    };
-  }
-  return { budgetUsd: undefined, source: "unlimited-subscription" };
-}
-
-// The loudness half. `unlimited-subscription` produces no ceiling and would
-// otherwise be silent, which is the exact shape this module already refuses
-// for the `<= 0` case: a disable is only safe when it is loud.
-//
-// Kept SEPARATE from `budgetDisabledWarningMessage`, and separate in register
-// too — a NOTE, not a warning. The operator chose nothing wrong here; they
-// configured nothing and the policy resolved. Merging the two would tell
-// someone who never set `budget-usd` that they disabled something.
-export function budgetUnlimitedNoticeMessage(
-  ceiling: CiBudgetCeiling,
-): string | null {
-  if (ceiling.source !== "unlimited-subscription") return null;
-  return (
-    "no budget-usd ceiling was applied: this route has no per-token invoice " +
-    "credential (a Claude subscription or a free route), so a run draws on " +
-    "quota rather than a per-token invoice and the estimated cost is not a " +
-    "dollar figure to gate on. The size gate resolves from the route separately. " +
-    "Set `budget-usd: <n>` to impose a ceiling anyway."
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Route-aware size limits — the size gate's half of the #156 policy above.
 // The size gate is a COST and predictability gate (review/size-gate.ts's own
@@ -575,7 +536,7 @@ export function sizeGateUnlimitedNoticeMessage(
 
 // ---------------------------------------------------------------------------
 // CI skip plan — the ONE call reviewPr's shell makes per gate. Composes
-// ciSizeGateSkip/ciBudgetGateSkip's {comment, summary} with renderStepSummary
+// ciSizeGateSkip/ciLimitsGateSkip's {comment, summary} with renderStepSummary
 // (ci/reporter.ts) and the $GITHUB_OUTPUT contract into everything the shell
 // needs to publish, so the shell's own job is pure mechanical glue: post
 // `comment` under `markerPrefix` if `--post`, append `summaryMarkdown` if
@@ -596,11 +557,7 @@ export interface CiGateSkipPlan {
 }
 
 // Spec 1.1's $GITHUB_OUTPUT contract for a skip: no review ran, so every
-// finding count is 0 and there is no run dir. `estimatedCostUsd` is 0 for a
-// size skip (the gate fires before any cost estimate exists) and the
-// estimate that tripped the ceiling for a budget skip — the same number the
-// comment and summary already show (this module's own "same numbers"
-// doctrine, see the module header).
+// finding count is 0 and there is no run dir.
 export function ciGateSkipOutputs(
   status:
     | "skipped-size"
@@ -608,14 +565,12 @@ export function ciGateSkipOutputs(
     | "skipped-coverage"
     | "skipped-excluded"
     | "manual-required",
-  estimatedCostUsd: number,
 ): CiOutputs {
   return {
     status,
     findings_count: 0,
     blocking_count: 0,
     advisory_count: 0,
-    cost_usd_est: estimatedCostUsd,
     run_dir: "",
   };
 }
@@ -629,7 +584,7 @@ export function planCiSizeSkip(
     comment: skip.comment,
     markerPrefix: SKIP_SIZE_COMMENT_MARKER,
     summaryMarkdown: renderStepSummary(skip.summary, input.ciMode),
-    outputs: ciGateSkipOutputs("skipped-size", 0),
+    outputs: ciGateSkipOutputs("skipped-size"),
   };
 }
 
@@ -654,25 +609,25 @@ export function planCiExcludedSkip(input: {
       },
       input.ciMode,
     ),
-    outputs: ciGateSkipOutputs("skipped-excluded", 0),
+    outputs: ciGateSkipOutputs("skipped-excluded"),
   };
 }
 
-export function planCiBudgetSkip(
-  input: CiBudgetGateSkipInput & { force: boolean; ciMode: CiMode },
+export function planCiLimitsSkip(
+  input: CiLimitsGateSkipInput & { force: boolean; ciMode: CiMode },
 ): CiGateSkipPlan | null {
   // CI `--force` is the `/crysk review` comment. It answers "run this one
-  // anyway" for every CI skip, including the spend ceiling. Outside that
-  // explicit comment the ceiling still holds. Local `--force` never reaches
-  // here: the caller only invokes this plan when `isCi` is set.
+  // anyway" for every CI skip, including the platform limits. The platform
+  // also omits the limits for a forced dispatch. Local `--force` never
+  // reaches here: the caller only invokes this plan when `isCi` is set.
   if (input.force) return null;
-  const skip = ciBudgetGateSkip(input);
+  const skip = ciLimitsGateSkip(input);
   if (skip === null) return null;
   return {
     comment: skip.comment,
     markerPrefix: SKIP_BUDGET_COMMENT_MARKER,
     summaryMarkdown: renderStepSummary(skip.summary, input.ciMode),
-    outputs: ciGateSkipOutputs("skipped-budget", input.estimatedCostUsd),
+    outputs: ciGateSkipOutputs("skipped-budget"),
   };
 }
 
@@ -752,10 +707,12 @@ function buildManualRequiredComment(
     "",
     "What the gate does with the next pushes: no review reads them, so it never turns green on its own. " +
       "A red verdict stays red while a blocking finding is unanswered. A green verdict, or a red one whose " +
-      "blocking findings all have a reply from someone with write access (`applied`, or a `dismissed` the " +
-      "CI adjudicator upheld), waits as `pending` until a review verifies the head or " +
-      `${commandHint(OVERRIDE_COMMAND)} merges it unverified. Reply before you push: the gate reads the ` +
-      "replies when the push arrives.",
+      "blocking findings all have a reply from someone with write access, waits as `pending` until a review " +
+      "verifies the head or " +
+      `${commandHint(OVERRIDE_COMMAND)} merges it unverified. A reply counts when it is posted in the ` +
+      "finding's thread and starts with `applied` (a plain comment is enough), or when it is a `dismissed` " +
+      "the CI adjudicator upheld (`crysk triage reply`). Reply before you push: the gate reads the replies " +
+      "when the push arrives.",
     "",
     "The existing review comment still describes the last head Crysk reviewed.",
     "",
@@ -842,7 +799,7 @@ export function planCiReviewSkip(input: {
     ),
     markerPrefix: SKIP_COVERAGE_COMMENT_MARKER,
     summaryMarkdown: renderStepSummary(summary, input.ciMode),
-    outputs: ciGateSkipOutputs("skipped-coverage", 0),
+    outputs: ciGateSkipOutputs("skipped-coverage"),
   };
 }
 
@@ -875,7 +832,7 @@ export function planCiReviewManualRequired(input: {
     ),
     markerPrefix: MANUAL_REQUIRED_COMMENT_MARKER,
     summaryMarkdown: renderStepSummary(summary, input.ciMode),
-    outputs: ciGateSkipOutputs("manual-required", 0),
+    outputs: ciGateSkipOutputs("manual-required"),
   };
 }
 
@@ -898,7 +855,6 @@ export function planCiReview(input: {
   prNumber: number;
   headSha: string;
   findings: readonly Finding[];
-  costUsdEst: number;
   wallMs: number;
   model: string;
   repoWebUrl?: string;
@@ -914,7 +870,6 @@ export function planCiReview(input: {
     prNumber: input.prNumber,
     headSha: input.headSha,
     findings: input.findings,
-    costUsdEst: input.costUsdEst,
     wallMs: input.wallMs,
     model: input.model,
     ...(input.repoWebUrl === undefined ? {} : { repoWebUrl: input.repoWebUrl }),
@@ -927,7 +882,6 @@ export function planCiReview(input: {
       findings_count: input.findings.length,
       blocking_count: blockingCount,
       advisory_count: input.findings.length - blockingCount,
-      cost_usd_est: input.costUsdEst,
       run_dir: input.runDir,
     },
   };
@@ -960,7 +914,7 @@ export function shouldWriteCiOutputs(
 
 // Spec 2.1: step-summary writing is additionally gated on the tri-state
 // `--step-summary`/`--no-step-summary` flag (`stepSummary`), unset meaning
-// the shell's own default of on — mirroring `summary`/`scout`'s own
+// the shell's own default of on — mirroring `summary`'s own
 // unset-means-default convention (preflight.ts's CliOptions).
 export function shouldWriteStepSummary(
   isCi: boolean,

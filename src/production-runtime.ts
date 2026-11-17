@@ -382,16 +382,12 @@ class FrozenRuntimeBinding implements RuntimeBinding {
       !report.issues.some(
         (issue) => issue.code === "real_sdk_adapter_deferred_to_d1_11",
       );
-    // #133. ONE effective billing mode, computed once and fed to all THREE
-    // readers below (`pricingApplicable`, `billingMode`,
-    // `cashCostAccountingValid`). They used to read `report.billing.mode`
-    // independently, and that is precisely the trap: upgrading only
-    // `billingMode` would leave `pricingApplicability` at "not_applicable",
-    // the pricing gate would never fire, and a metered route would be
-    // admitted as priced-not-required — executing on real spend while
-    // reporting `cashCostUsd: 0`. Under-reporting is the failure this whole
-    // issue exists to prevent, so the correction has to be applied ONCE,
-    // upstream of every consumer, not per-expression.
+    // #133. ONE effective billing mode, computed once and fed to BOTH readers
+    // below (`billingMode`, `modeKnown`). They used to read
+    // `report.billing.mode` independently, and that is precisely the trap:
+    // upgrading only one would leave the other reporting a metered route as
+    // something it is not. The correction has to be applied ONCE, upstream of
+    // every consumer, not per-expression.
     //
     // The legacy backend-wide report cannot know this: it is produced before
     // any route resolves, so it cannot see the provider. The credential KIND
@@ -412,63 +408,23 @@ class FrozenRuntimeBinding implements RuntimeBinding {
       credentialKindBillsMetered(this.credential.kind)
         ? "metered"
         : report.billing.mode;
-    const pricingApplicable =
-      effectiveBillingMode === "metered" ? "required" : "not_applicable";
     // The legacy report carries THREE billing modes (subscription | metered |
     // unknown) and the exact contract carries two, so `unknown` narrows into
     // "subscription" here. WHY that narrowing is not a lie: it is sound ONLY
-    // because `cashCostAccountingValid` below reads the three-state
-    // `effectiveBillingMode` and independently blocks `unknown` — the design
-    // doc makes `billingMode: "unknown"` a blocking preflight result
-    // (docs/multi-runtime-model-diversity-design.md:461), and the pricing
-    // gate cannot enforce it because `unknown` is not `metered`, leaving
-    // pricingApplicability at "not_applicable". Delete or weaken the
-    // cash-cost derivation and this narrowing silently starts claiming that
-    // an unknown-billing route bills like a subscription.
+    // because `modeKnown` below reads the three-state `effectiveBillingMode`
+    // and independently blocks `unknown` — the design doc makes
+    // `billingMode: "unknown"` a blocking preflight result
+    // (docs/multi-runtime-model-diversity-design.md:461): the platform prices
+    // a run by the credential class the engine reports, and an unknown class
+    // cannot be reported. Delete or weaken that derivation and this narrowing
+    // silently starts claiming that an unknown-billing route bills like a
+    // subscription.
     //
     // #133 keeps that intact: the effective mode only ever REPLACES `unknown`
-    // with `metered`, and a metered route is caught by the pricing gate
-    // instead. Nothing reaches "subscription" that did not already.
+    // with `metered`. Nothing reaches "subscription" that did not already.
     const billingMode: ExactBindingCapabilityReport["billing"]["mode"] =
       effectiveBillingMode === "metered" ? "metered" : "subscription";
-    // #197. ONE source, and it is the transport's own claim. This used to be
-    // a disjunction — the transport's `pricingReady` OR a bundled per-model
-    // rate table selected by `this.route.provider` — and the table half is
-    // deleted, along with the loader, the 90-day freshness window and the
-    // `config/models/*-pricing.json` files behind it.
-    //
-    // WHY the table lost, given the design line (§8 line 461) names "provider
-    // cost or a versioned rate table": our table was a hand-transcribed
-    // snapshot of the same published LIST prices the transports report, and
-    // it aged on our release cadence rather than the tool's. It expired after
-    // 90 days and REFUSED the route it was meant to enable, it covered only
-    // what someone remembered to transcribe (the zai table priced 11 of the
-    // 16 models `opencode models` reports, five days after it landed), and a
-    // new model was absent until noticed. The transports report a live figure
-    // for whatever they actually ran.
-    //
-    // Both backends now answer for themselves: OpenCode reads a non-optional
-    // `cost` off every assistant message, and the Claude CLI reports
-    // `total_cost_usd` (#197 flipped that flag). A transport that reports NO
-    // cost is refused — which is the gate's whole purpose, unchanged: refuse
-    // to bill an unknown amount. What moved is where the unknown is answered.
-    // A missing figure is now caught at SETTLEMENT, where the answer is
-    // actually known (`settlementFromUsage`, spend-limiter.ts: complete usage
-    // with no cash cost settles `unresolved`, never 0), instead of being
-    // guessed at admission from a table that might be stale.
-    const tokenPricingAvailable = report.billing.pricingReady;
-    // Spec (same design line): subscription OAuth may truthfully report
-    // `cashCostUsd: 0`; metered routes require a cost source; unknown is
-    // blocking. Read off `tokenPricingAvailable` rather than the raw flag so
-    // the two cannot drift — a metered report claiming
-    // priced-but-not-accountable is self-contradictory and would strand the
-    // route in a gate that no longer has a reason to refuse it.
-    const cashCostAccountingValid =
-      effectiveBillingMode === "subscription"
-        ? true
-        : effectiveBillingMode === "metered"
-          ? tokenPricingAvailable
-          : false;
+    const modeKnown = effectiveBillingMode !== "unknown";
     return {
       routeKey: this.key,
       backend: this.route.backend,
@@ -513,9 +469,7 @@ class FrozenRuntimeBinding implements RuntimeBinding {
       usage: { normalized: true },
       billing: {
         mode: billingMode,
-        pricingApplicability: pricingApplicable,
-        tokenPricingAvailable,
-        cashCostAccountingValid,
+        modeKnown,
       },
     };
   }
@@ -548,9 +502,8 @@ class FrozenRuntimeBinding implements RuntimeBinding {
       // that supplies no registry — so the public `createProductionRuntime`,
       // which accepts an arbitrary `options.registry`, bypassed it entirely
       // and the factory silently fell back to "subscription" on a metered
-      // route. That stamp is what `settlementFromUsage`'s metered-zero rule
-      // keys on, so the fallback made the rule DEAD: an unaccountable
-      // provider $0 settled as a truthful cost instead of fencing the bucket.
+      // route. That stamp is the credential class the platform prices the run
+      // by, so the fallback filed a metered route's usage as subscription.
       // (`collectDoctorExactBindingReports` supplies its own kind-less
       // registry too, but it only ever calls `capabilities()` — no attempt,
       // so no usage record, so nothing there could observe the divergence.
@@ -647,7 +600,7 @@ function bindingBucketId(
 // this binding otherwise authenticates with — those are two different
 // credentials that happen to share one route. Fencing the subscription
 // bucket here would block the next NON-degraded subscription attempt on
-// this same route over dollars the OAuth credential never spent (and would
+// this same route over usage the OAuth credential never made (and would
 // widen the harness's own reservesSpend=false invariant: "a subscription
 // binding reserves nothing" — production-runtime.test.ts). Fencing this
 // mirrored bucket instead lands on the SAME identity a real metered
@@ -1038,9 +991,6 @@ export function d1_11EvidenceFromExactBinding(
     credentialAuthority:
       report.auth.projectionReady || report.auth.probe === "passed",
     workspaceBroker: report.isolation.workspaceReadBroker,
-    pricingReady:
-      report.billing.pricingApplicability !== "required" ||
-      report.billing.tokenPricingAvailable,
   };
 }
 
@@ -1185,7 +1135,7 @@ async function openCodeFreeVerdicts(
 // send, fallbacks included, is checked against the variants OpenCode lists for
 // that model before the run starts, and refused by name: an unknown variant,
 // a model with no variants, and a listing that could not be read all stop the
-// review here, before the cost confirmation. A plan sending no variant (no
+// review here, before the plan confirmation. A plan sending no variant (no
 // OpenCode entry sets an effort, D1) checks nothing and spawns nothing.
 //
 // The listing is `opencode models <provider> --verbose --refresh`, the same
@@ -1561,7 +1511,7 @@ export async function prepareProductionAdmissionContext(input: {
       return { error: credentialRefusal.message, credentialRefusal };
     }
   }
-  // S7: after the credential check, before the bindings and the cost
+  // S7: after the credential check, before the bindings and the plan
   // confirmation. The probe is built only when a route sends a variant, so a plan
   // without one spawns nothing new.
   const sendsVariant = planRoutes(input.plan).some(
@@ -1686,7 +1636,6 @@ export async function prepareProductionAdmissionContext(input: {
               credentialAuthority:
                 combined.credentialAuthority && next.credentialAuthority,
               workspaceBroker: combined.workspaceBroker && next.workspaceBroker,
-              pricingReady: combined.pricingReady && next.pricingReady,
             };
     }
     if (combined !== undefined) evidence.set("opencode", combined);
@@ -1962,49 +1911,47 @@ export class MultiProviderRunner implements StepRunner {
     // 2026-09-02. WHICH steps reserve into the run's ledger: metered ones
     // only, read off the report the gate above just admitted rather than
     // re-derived from `binding.credential.kind`. One derivation of one fact —
-    // the same `effectiveBillingMode` #133 computes once and feeds to all
-    // three billing readers — so the fact that decided admission is the fact
-    // that decides reservation.
+    // the same `effectiveBillingMode` #133 computes once and feeds to both
+    // billing readers — so the fact that decided admission is the fact that
+    // decides reservation.
     //
     // WHY not every step. The ledger's guarantee is "an unresolved bucket
     // blocks the next paid attempt", and `finalizeReservation` reaches it on
-    // more than the metered-zero rule: partial usage, unavailable usage (an
+    // usage the engine could not confirm: partial usage, unavailable usage (an
     // OpenCode attempt where no usage event ever arrived, and ANY backend's
     // harness watchdog timeout, which normalizes to unavailable), and an
     // attempt that comes back `cancelled`. Any one of those fences the bucket
     // for the rest of the ledger's life.
     //
-    // On a metered bucket that is exactly right and fail-closed: we do not
-    // know what we spent, so we stop spending. On a SUBSCRIPTION bucket it
-    // would refuse later steps over dollars that cannot be spent — and it
-    // would do so against a pipeline built to survive exactly this. Hunters
-    // run under `Promise.allSettled` and `runPipeline` tolerates a lost
-    // hunter (`hunterFailures`, failing the run only when ALL of them fail),
-    // so one hunter whose stdout would not parse would fence the credential
-    // and take the refuter down with it. That trades a degraded run for a
-    // dead one, buying nothing, on the one backend that demonstrably works
-    // today.
+    // On a metered bucket that is exactly right and fail-closed: the engine
+    // cannot report what the attempt used, so it stops using that credential.
+    // On a SUBSCRIPTION bucket it would refuse later steps over usage that
+    // cannot be charged — and it would do so against a pipeline built to
+    // survive exactly this. Hunters run under `Promise.allSettled` and
+    // `runPipeline` tolerates a lost hunter (`hunterFailures`, failing the run
+    // only when ALL of them fail), so one hunter whose stdout would not parse
+    // would fence the credential and take the refuter down with it. That
+    // trades a degraded run for a dead one, buying nothing, on the one backend
+    // that demonstrably works today.
     //
     // Same reasoning keeps `ClaudeCodeRunner` (step-runner.ts) ledger-free:
     // claude-code resolves to `claude_subscription_oauth` for every provider
-    // (`credentialKindForRoute`), so the metered-zero rule structurally cannot
-    // fire there. A ledger on that path is a state machine with no guarantee
-    // to enforce. The known limitation, deliberately not addressed here: a
-    // claude-code run under a real `ANTHROPIC_API_KEY` does spend money, but
-    // the engine models that backend as subscription on purpose — ci/gates.ts
-    // documents why deriving it instead is an ADMISSION hazard, and
-    // `resolveCiBudgetCeiling` is where that case is handled.
+    // (`credentialKindForRoute`). A ledger on that path is a state machine
+    // with no guarantee to enforce. The known limitation, deliberately not
+    // addressed here: a claude-code run under a real `ANTHROPIC_API_KEY` is
+    // billed per token, but the engine models that backend as subscription on
+    // purpose — ci/gates.ts documents why deriving it instead is an ADMISSION
+    // hazard.
     //
     // 2026-09-02, #177: one clause of that paragraph is no longer true and the
     // correction matters. Its usage RECORDS are no longer "truthfully
     // subscription" on every route — the Claude CLI transport now stamps
     // `metered` when the projected child env carries ANTHROPIC_API_KEY or
-    // ANTHROPIC_AUTH_TOKEN, so the run's real spend reaches `cashCostUsd`
-    // instead of being filed as an uncharged list price. This line is
-    // deliberately unchanged: it reads the CAPABILITY REPORT, not the usage
-    // record, so no reservation is opened, nothing is fenced, and no API-key
-    // route loses admission. The record is honest; the gate stays where #161
-    // must move it.
+    // ANTHROPIC_AUTH_TOKEN, so the platform sees that run as a per-token
+    // credential. This line is deliberately unchanged: it reads the CAPABILITY
+    // REPORT, not the usage record, so no reservation is opened, nothing is
+    // fenced, and no API-key route loses admission. The record is honest; the
+    // gate stays where #161 must move it.
     //
     // A claude-only run therefore records no reservations at all, and the
     // absent `reservations` key on those steps is the truthful signal — not a
@@ -2012,14 +1959,11 @@ export class MultiProviderRunner implements StepRunner {
     //
     // #182 follow-up: free OpenCode bindings reserve too — read off the
     // credential KIND, not the report (which still says subscription for free
-    // routes: capability `BillingMode` stays binary on purpose). Without a
-    // reservation `finalizeReservation` never runs, the free-nonzero rule
-    // (spend-limiter.ts) would be dead in production, and a flipped model
-    // would keep spending attempts instead of fencing the bucket and failing
-    // closed. A free step that stays free settles 0 and never fences, so the
-    // subscription reasoning above ("refusing later steps over dollars that
-    // cannot be spent") does not apply: only a priced flip, partial usage, or
-    // unavailable usage fences a free bucket.
+    // routes: capability `BillingMode` stays binary on purpose). A free route
+    // whose usage the engine could not confirm is not provably still free, so
+    // it fences the bucket like a metered one instead of spending further
+    // attempts on it. A free step whose usage is complete settles and never
+    // fences.
     const reservesSpend =
       capabilityReport.billing.mode === "metered" ||
       binding.credential.kind === "provider_free";
@@ -2060,12 +2004,6 @@ export class MultiProviderRunner implements StepRunner {
         // The bucket id is per provider+credential (`bindingBucketId`), so a
         // fence lands on the credential that could not account for its spend
         // and leaves every other route admissible.
-        //
-        // `reservedUsdPerAttempt` is deliberately left at the harness default
-        // of 0 rather than given an invented number: `reservedUsd` is
-        // RECORDED on the reservation and read by no gate anywhere — the
-        // fence keys on `fencedBuckets`, never on an amount — so a figure
-        // here would be a budget nobody has decided, dressed as one that was.
         //
         // #279: `spendLedger` is now handed to EVERY binding — see the WHY
         // just above `isolation` — with `reservesSpend` carrying the

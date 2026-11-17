@@ -614,7 +614,7 @@ describe("doctor tri-state evaluation", () => {
             usageMode: "snapshot",
           },
           cancellation: { deadlineMs: 7500, conformance: "passed" },
-          billing: { mode: "subscription", pricingReady: false },
+          billing: { mode: "subscription" },
           issues: [
             {
               code: "auth_failed",
@@ -671,11 +671,11 @@ describe("doctor tri-state evaluation", () => {
             usageMode: "snapshot",
           },
           cancellation: { deadlineMs: 7500, conformance: "passed" },
-          billing: { mode: "subscription", pricingReady: false },
+          billing: { mode: "subscription" },
           issues: [
             {
-              code: "pricing_table_missing",
-              message: "no per-model pricing table is bundled",
+              code: "bounded_events_sink_missing",
+              message: "no bounded event sink is wired",
               blocking: false,
             },
           ],
@@ -685,20 +685,10 @@ describe("doctor tri-state evaluation", () => {
       expect(report.overall).toBe("degraded");
       expect(report.exitCode).toBe(0);
       const providerCheck = report.checks.find(
-        (c) => c.name === "provider:pricing_table_missing",
+        (c) => c.name === "provider:bounded_events_sink_missing",
       );
       expect(providerCheck?.severity).toBe("degraded");
       expect(providerCheck?.hint).toBeDefined();
-      // #197. `toBeDefined()` passes on any text, which is how the hint kept
-      // claiming "Versioned pricing tables ship with the engine, one per
-      // provider, and each one's age is reported by its own pricing-catalog
-      // check" after both halves became false. The hint is still reachable
-      // (the OpenCode transport emits this code non-blocking, and
-      // pushProviderIssues attaches a hint to every non-blocking issue), so
-      // the fix was honest text rather than deletion — and this is what pins
-      // it.
-      expect(providerCheck?.hint).not.toContain("Versioned pricing tables");
-      expect(providerCheck?.hint).not.toContain("pricing-catalog");
     });
 
     test("a throwing producer fails loud as blocking", async () => {
@@ -872,12 +862,7 @@ describe("doctor tri-state evaluation", () => {
         usageMode: "snapshot",
       },
       usage: { normalized: true },
-      billing: {
-        mode: "subscription",
-        pricingApplicability: "not_applicable",
-        tokenPricingAvailable: false,
-        cashCostAccountingValid: true,
-      },
+      billing: { mode: "subscription", modeKnown: true },
       ...overrides,
     });
     const base = {
@@ -892,31 +877,24 @@ describe("doctor tri-state evaluation", () => {
       },
     };
 
-    test("subscription pricing is non-blocking; metered missing prices block", async () => {
+    test("a known billing mode is non-blocking; an unknown one blocks", async () => {
       const sub = await runDoctor({
         ...base,
         probeExactBindings: async () => [exact()],
       });
       expect(sub.exitCode).toBe(0);
       expect(
-        sub.checks.some((c) => c.name === "provider:pricing_table_missing"),
+        sub.checks.some((c) => c.name === "provider:billing_mode_unknown"),
       ).toBe(false);
-      const metered = await runDoctor({
+      const unknown = await runDoctor({
         ...base,
         probeExactBindings: async () => [
-          exact({
-            billing: {
-              mode: "metered",
-              pricingApplicability: "required",
-              tokenPricingAvailable: false,
-              cashCostAccountingValid: false,
-            },
-          }),
+          exact({ billing: { mode: "metered", modeKnown: false } }),
         ],
       });
-      expect(metered.overall).toBe("blocking");
+      expect(unknown.overall).toBe("blocking");
       expect(
-        metered.checks.find((c) => c.name === "provider:pricing_table_missing")
+        unknown.checks.find((c) => c.name === "provider:billing_mode_unknown")
           ?.severity,
       ).toBe("blocking");
     });
@@ -943,7 +921,7 @@ describe("doctor tri-state evaluation", () => {
             usageMode: "snapshot",
           },
           cancellation: { deadlineMs: 7500, conformance: "passed" },
-          billing: { mode: "subscription", pricingReady: true },
+          billing: { mode: "subscription" },
           issues: [],
         }),
         probeExactBindings: async () => [exact({ sdk: { available: false } })],
@@ -1096,7 +1074,6 @@ describe("doctor tri-state evaluation", () => {
       "deep-review-resilience.md": "/embedded/resilience-bbbb.md",
       "deep-review-logic.md": "/embedded/logic-ffff.md",
       "deep-review-security.md": "/embedded/security-gggg.md",
-      "deep-review-parity.md": "/embedded/parity-dddd.md",
       "review-refuter.md": "/embedded/refuter-eeee.md",
     };
     const compiledAssets = (files: Record<string, string>): EngineAssets => ({
@@ -1129,7 +1106,7 @@ describe("doctor tri-state evaluation", () => {
 
       const check = report.checks.find((c) => c.name === "agents_dir");
       expect(check?.severity).toBe("healthy");
-      expect(check?.message).toContain("6 prompts read");
+      expect(check?.message).toContain("5 prompts read");
     });
 
     test("a prompt that cannot be read is blocking, named by its logical file", async () => {
@@ -1158,14 +1135,14 @@ describe("doctor tri-state evaluation", () => {
         assets: compiledAssets(embedded),
         readFile: (p) => {
           if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
-          if (p === "/embedded/parity-dddd.md") return "   \n";
+          if (p === "/embedded/security-gggg.md") return "   \n";
           return "# a prompt body\n";
         },
       });
 
       const check = report.checks.find((c) => c.name === "agents_dir");
       expect(check?.severity).toBe("blocking");
-      expect(check?.message).toContain("deep-review-parity.md");
+      expect(check?.message).toContain("deep-review-security.md");
     });
 
     test("a manifest the build never embedded is blocking, not a crash", async () => {
@@ -1221,9 +1198,10 @@ describe("doctor tri-state evaluation", () => {
   });
 
   describe("PROVIDER_HINTS reachability", () => {
-    test("cash_cost_accounting_invalid has no hint entry (the issue is always blocking, so pushProviderIssues never attaches its hint)", () => {
+    test("billing_mode_unknown has no hint entry (the issue is always blocking, so pushProviderIssues never attaches its hint)", () => {
+      expect(Object.keys(PROVIDER_HINTS)).not.toContain("billing_mode_unknown");
       expect(Object.keys(PROVIDER_HINTS)).not.toContain(
-        "cash_cost_accounting_invalid",
+        "pricing_table_missing",
       );
     });
   });

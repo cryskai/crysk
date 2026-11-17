@@ -484,7 +484,7 @@ describe("recordUnsettledStatus", () => {
   const UNSETTLED = {
     state: "failure",
     description:
-      "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
   } as const;
 
   beforeEach(() => {

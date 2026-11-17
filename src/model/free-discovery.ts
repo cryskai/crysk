@@ -1,5 +1,3 @@
-import { credentialKindForRoute } from "../runner-authority";
-
 // #182: live free-model discovery. OpenCode free models (backend `opencode`,
 // provider `opencode`, e.g. `muse-spark-1.3-contributor-free`) authenticate
 // with NOTHING, but without a liveness check they are refused at credential
@@ -11,34 +9,21 @@ import { credentialKindForRoute } from "../runner-authority";
 // provider itself declares: exact model id present AND status active AND
 // input===0 AND output===0 AND cache.read===0 AND cache.write===0.
 //
-// WHY `--refresh`: a stale price is a CONFIDENT WRONG NUMBER, which is worse
-// than no price — the gate exists to refuse billing an unknown amount, and a
-// stale quote defeats it by making the unknown look known. That doctrine used
-// to live in src/pricing-catalog.ts, whose bundled rate tables #197 deleted
-// for failing it (they aged on our release cadence and then refused the very
-// routes they existed to price); it is restated here rather than pointed at,
-// because it is this function's reason and now has no other home. A cached
+// WHY `--refresh`: a stale price is a CONFIDENT WRONG ANSWER, which is worse
+// than no answer — a stale quote makes an unknown look known. A cached
 // all-zero cost that has since become metered would admit a paid run as free;
 // offline failure must refuse loudly downstream (fail closed →
 // provider_api_token), not silently pass.
 //
-// SCOPE NOTE (residual now guarded, #182 follow-up): between the probe and
-// the attempt the provider could flip a model from free to metered
-// (stale-cache window). The attempt then runs under an empty projection, and
-// the flip is observable at settlement — the transport accumulates
-// provider-reported cost per message (`cashCostUsd`, `costSource: "provider"`,
-// opencode-sdk.ts), stamped with the route's billing mode ("free",
-// transport-registry.ts). `settlementFromUsage`'s free-nonzero rule
-// (spend-limiter.ts) routes complete usage with cash > 0 on a free-declared
-// route to unresolved WITH reason `free_nonzero_cost` (carrying the provider's
-// stated figure), the spend ledger fences the bucket, and the harness fails
-// the attempt closed with no retry (re-probe is the remedy). Measured first:
-// a legitimate free attempt reports cash 0 (Step-0 probe, "Say OK" on
-// muse-spark-1.3-contributor-free), so the rule cannot misfire on list-price
-// reporting. Free usage with NO cash figure releases WITHOUT fencing
-// (harness.ts free-route fence scope) — no cash figure means no evidence of
-// billing. Cancelled/undefined-usage and non-free incomplete usage still
-// fence: no usage mode to exonerate them, so fail closed.
+// SCOPE NOTE (residual, #182 follow-up): between the probe and the attempt
+// the provider could flip a model from free to metered (stale-cache window).
+// The attempt then runs under an empty projection. The engine no longer reads
+// a price off the attempt: it reports the tokens, the models and the route's
+// credential class ("free"), and the platform prices them. What the engine
+// keeps is the credential fence: a free route is reserved in the spend ledger
+// like a metered one (production-runtime.ts), so usage it could not confirm
+// (partial, unavailable, cancelled) fences the bucket and no further attempt
+// runs on it; the remedy is a re-probe.
 
 export type FreeModelProbe = (
   provider: string,
@@ -262,58 +247,6 @@ export function createFreeModelProbe(options: {
     cache.set(key, verdict);
     return verdict;
   };
-}
-
-// The plan line's billing half: how many steps of an ADMITTED route plan the
-// free verdict covers. Reads only the verdicts admission already decided, so
-// it never spawns — `probe` is the memoised instance admission returned, and a
-// pair admission never probed would spawn here, which is why the gate below
-// is the same one admission applies (openCodeFreeVerdicts in
-// production-runtime.ts): credentialKindForRoute over the run's CRYSK_OPENCODE_*
-// names (U3), so only a route whose kind is an API token can be free. An OAuth
-// route (`openai` on its `_OAUTH` record, or on no names at all) never probes,
-// and a claude-code step has no free kind at all. A missing probe, or a
-// throwing one, counts as not free: an unknown price is never presented as free.
-export interface FreeRouteBilling {
-  readonly free: number;
-  readonly total: number;
-}
-
-export async function countFreeRouteSteps(input: {
-  readonly steps: readonly {
-    readonly route: {
-      readonly backend: string;
-      readonly provider: string;
-      readonly modelSnapshot: string;
-    };
-  }[];
-  readonly probe: FreeModelProbe | undefined;
-  // The names admission read from the setup step's manifest
-  // (productionAdmission.authorityOptions.openCodeSecretNames); absent outside CI.
-  readonly openCodeSecretNames?: readonly string[];
-}): Promise<FreeRouteBilling> {
-  const total = input.steps.length;
-  if (input.probe === undefined) return { free: 0, total };
-  const probe = input.probe;
-  const verdicts = await Promise.all(
-    input.steps.map(async ({ route }) => {
-      if (route.backend !== "opencode") return false;
-      const kind = credentialKindForRoute(
-        "opencode",
-        route.provider,
-        {},
-        false,
-        input.openCodeSecretNames,
-      );
-      if (kind !== "provider_api_token") return false;
-      try {
-        return await probe(route.provider, route.modelSnapshot);
-      } catch {
-        return false;
-      }
-    }),
-  );
-  return { free: verdicts.filter((free) => free).length, total };
 }
 
 // S7 (E-g, E2; odd/tasks/role-model-routing.md L34): the variants OpenCode

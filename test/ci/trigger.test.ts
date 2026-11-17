@@ -97,12 +97,12 @@ function dispatch(overrides: Partial<CiTriggerInput> = {}): CiTriggerInput {
 
 describe("decideCiTrigger — the comment commands", () => {
   test.each([
-    ["exact", "/pr-hero review"],
-    ["surrounding spaces", "   /pr-hero review  "],
-    ["surrounding newlines", "\n/pr-hero review\n"],
-    ["tab and CRLF", "\t/pr-hero review\r\n"],
+    ["exact", "/crysk review"],
+    ["surrounding spaces", "   /crysk review  "],
+    ["surrounding newlines", "\n/crysk review\n"],
+    ["tab and CRLF", "\t/crysk review\r\n"],
   ])(
-    "`/pr-hero review` (%s) reviews with force and without full",
+    "`/crysk review` (%s) reviews with force and without full",
     (_label, body) => {
       expect(decideCiTrigger(comment(body))).toEqual({
         kind: "review",
@@ -114,10 +114,10 @@ describe("decideCiTrigger — the comment commands", () => {
   );
 
   test.each([
-    ["exact", "/pr-hero review --full"],
-    ["surrounding whitespace", "  /pr-hero review --full\n"],
+    ["exact", "/crysk review --full"],
+    ["surrounding whitespace", "  /crysk review --full\n"],
   ])(
-    "`/pr-hero review --full` (%s) reviews with force and full",
+    "`/crysk review --full` (%s) reviews with force and full",
     (_label, body) => {
       expect(decideCiTrigger(comment(body))).toEqual({
         kind: "review",
@@ -129,15 +129,15 @@ describe("decideCiTrigger — the comment commands", () => {
   );
 
   test.each([
-    "/pr-hero review please",
-    "/pr-hero reviewing",
+    "/crysk review please",
+    "/crysk reviewing",
     "/PR-HERO review",
     "/pr-hero  review",
-    "/pr-hero review --full please",
-    "/pr-hero review --FULL",
-    "/pr-hero review --force",
-    "please /pr-hero review",
-    "/pr-hero review\nand then some",
+    "/crysk review --full please",
+    "/crysk review --FULL",
+    "/crysk review --force",
+    "please /crysk review",
+    "/crysk review\nand then some",
     "/pr-hero",
     "",
   ])("a near miss is ignored: %j", (body) => {
@@ -145,10 +145,21 @@ describe("decideCiTrigger — the comment commands", () => {
     expect(parseReviewCommand(body)).toBeUndefined();
   });
 
+  // The legacy spelling stopped being a command on 2026-11-17.
+  test.each([
+    "/pr-hero review",
+    "/pr-hero review --full",
+    "/pr-hero recheck",
+    "/pr-hero override",
+  ])("the legacy %j is ignored, never run", (body) => {
+    expect(decideCiTrigger(comment(body)).kind).toBe("ignore");
+    expect(parseReviewCommand(body)).toBeUndefined();
+  });
+
   test("an ignored comment's reason never echoes the comment body", () => {
     // The body is free text anyone can type, and the reason is printed as a
     // workflow command. Echoing it would hand the commenter the log.
-    const body = "/pr-hero review ::warning::INJECTED-MARKER";
+    const body = "/crysk review ::warning::INJECTED-MARKER";
     const decision = decideCiTrigger(comment(body));
     expect(decision.kind).toBe("ignore");
     expect(JSON.stringify(decision)).not.toContain("INJECTED-MARKER");
@@ -156,7 +167,7 @@ describe("decideCiTrigger — the comment commands", () => {
 
   test("a command on an issue that is not a pull request is ignored", () => {
     const decision = decideCiTrigger(
-      comment("/pr-hero review", { commentOnPullRequest: false }),
+      comment("/crysk review", { commentOnPullRequest: false }),
     );
     expect(decision.kind).toBe("ignore");
     expect((decision as { reason: string }).reason).toContain("pull request");
@@ -195,7 +206,7 @@ describe("decideCiTrigger — the /crysk commands", () => {
     "please /crysk review",
     "/crysk override --force",
     "/crysk recheck now",
-    "/crysk /pr-hero review",
+    "/crysk /crysk review",
   ])("a near miss is ignored: %j", (body) => {
     expect(decideCiTrigger(comment(body)).kind).toBe("ignore");
     expect(parseReviewCommand(body)).toBeUndefined();
@@ -203,11 +214,11 @@ describe("decideCiTrigger — the /crysk commands", () => {
 
   test.each([
     "/crysk review please",
-    "/pr-hero review please",
+    "/crysk review please",
     "/crysk override --force",
-    "/pr-hero override --force",
+    "/crysk override --force",
     "/crysk recheck now",
-    "/pr-hero recheck now",
+    "/crysk recheck now",
   ])("a near miss in either name is flagged, never run: %j", (body) => {
     expect(decideCiTrigger(comment(body))).toEqual({
       kind: "ignore",
@@ -227,7 +238,7 @@ describe("decideCiTrigger — the /crysk commands", () => {
   });
 
   // The retry hint tells the commenter what to type again: the spelling they used.
-  test.each(["/crysk override", "/pr-hero override"])(
+  test.each(["/crysk override", "/crysk override"])(
     "an unverifiable %s echoes the prefix the commenter typed",
     (body) => {
       const verdict = decideCiTrigger(
@@ -257,16 +268,16 @@ describe("decideCiTrigger — the /crysk commands", () => {
   });
 });
 
-// T6 (odd/tasks/agent-first-ci.md, S8): `/pr-hero override` is the human escape
+// T6 (odd/tasks/agent-first-ci.md, S8): `/crysk override` is the human escape
 // hatch. It spends nothing, so it never reaches the credential check, and it is
 // the only comment that records WHO acted (the actor), because the override must
 // name who unlocked the gate.
 describe("decideCiTrigger — the override command (S8)", () => {
   test.each([
-    ["exact", "/pr-hero override"],
-    ["surrounding spaces", "   /pr-hero override  "],
-    ["surrounding newlines", "\n/pr-hero override\n"],
-  ])("`/pr-hero override` (%s) overrides for a writer", (_label, body) => {
+    ["exact", "/crysk override"],
+    ["surrounding spaces", "   /crysk override  "],
+    ["surrounding newlines", "\n/crysk override\n"],
+  ])("`/crysk override` (%s) overrides for a writer", (_label, body) => {
     expect(decideCiTrigger(comment(body))).toEqual({
       kind: "override",
       actor: "maintainer",
@@ -276,7 +287,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   test("an admin may override", () => {
     expect(
       decideCiTrigger(
-        comment("/pr-hero override", {
+        comment("/crysk override", {
           commenterPermission: { kind: "resolved", permission: "admin" },
         }),
       ),
@@ -284,20 +295,20 @@ describe("decideCiTrigger — the override command (S8)", () => {
   });
 
   test.each([
-    "/pr-hero override please",
+    "/crysk override please",
     "/pr-hero overriding",
     "/PR-HERO override",
     "/pr-hero  override",
-    "/pr-hero override --force",
-    "please /pr-hero override",
-    "/pr-hero review override",
+    "/crysk override --force",
+    "please /crysk override",
+    "/crysk review override",
   ])("a near-miss %j is ignored, never an override", (body) => {
     expect(decideCiTrigger(comment(body)).kind).toBe("ignore");
   });
 
   test("a commenter with read access is denied, and the reason names the override command", () => {
     const verdict = decideCiTrigger(
-      comment("/pr-hero override", {
+      comment("/crysk override", {
         commenterPermission: { kind: "resolved", permission: "read" },
       }),
     );
@@ -310,14 +321,14 @@ describe("decideCiTrigger — the override command (S8)", () => {
   test("an override with no permission answer is denied, never run", () => {
     expect(
       decideCiTrigger(
-        comment("/pr-hero override", { commenterPermission: undefined }),
+        comment("/crysk override", { commenterPermission: undefined }),
       ),
     ).toMatchObject({ kind: "denied" });
   });
 
   test("an unverifiable permission lookup is unverifiable, never an override", () => {
     const verdict = decideCiTrigger(
-      comment("/pr-hero override", {
+      comment("/crysk override", {
         commenterPermission: {
           kind: "indeterminate",
           detail: "HTTP 503",
@@ -327,14 +338,14 @@ describe("decideCiTrigger — the override command (S8)", () => {
     );
     expect(verdict.kind).toBe("unverifiable");
     expect(verdict).toMatchObject({
-      reason: expect.stringContaining("`/pr-hero override`"),
+      reason: expect.stringContaining("`/crysk override`"),
     });
   });
 
   test("an override needs no credential: it spends nothing, so a repository with none can still unlock", () => {
     expect(
       decideCiTrigger(
-        comment("/pr-hero override", {
+        comment("/crysk override", {
           credentials: NO_CREDENTIALS,
           selfHostedRunner: false,
         }),
@@ -344,7 +355,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
 
   test("a login that is not a GitHub login is refused, and the refusal never echoes it", () => {
     const verdict = decideCiTrigger(
-      comment("/pr-hero override", {
+      comment("/crysk override", {
         commenterLogin: "evil\n::warning::HOSTILE",
       }),
     );
@@ -364,7 +375,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     ["a bot login of 91 characters in all", `${"a".repeat(86)}[bot]`],
   ])("%s is accepted as the override actor", (_label, login) => {
     expect(
-      decideCiTrigger(comment("/pr-hero override", { commenterLogin: login })),
+      decideCiTrigger(comment("/crysk override", { commenterLogin: login })),
     ).toEqual({ kind: "override", actor: login });
   });
 
@@ -377,7 +388,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     "%s is refused, so its override description cannot overflow",
     (_label, login) => {
       const verdict = decideCiTrigger(
-        comment("/pr-hero override", { commenterLogin: login }),
+        comment("/crysk override", { commenterLogin: login }),
       );
       expect(verdict.kind).toBe("denied");
       expect(JSON.stringify(verdict)).not.toContain(login);
@@ -395,7 +406,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     ["a trailing newline", "octo\n"],
   ])("a login with %s is refused", (_label, login) => {
     const verdict = decideCiTrigger(
-      comment("/pr-hero override", { commenterLogin: login }),
+      comment("/crysk override", { commenterLogin: login }),
     );
     expect(verdict.kind).toBe("denied");
     expect(JSON.stringify(verdict)).not.toContain(login);
@@ -405,7 +416,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   // time. The override would then land on a head its commenter never saw.
   test("an override on a re-run attempt is refused, and the first attempt proceeds", () => {
     expect(
-      decideCiTrigger(comment("/pr-hero override", { runAttempt: 2 })),
+      decideCiTrigger(comment("/crysk override", { runAttempt: 2 })),
     ).toMatchObject({
       kind: "denied",
       reason: expect.stringContaining(
@@ -413,9 +424,9 @@ describe("decideCiTrigger — the override command (S8)", () => {
       ),
     });
     expect(
-      decideCiTrigger(comment("/pr-hero override", { runAttempt: 1 })),
+      decideCiTrigger(comment("/crysk override", { runAttempt: 1 })),
     ).toEqual({ kind: "override", actor: "maintainer" });
-    expect(decideCiTrigger(comment("/pr-hero override"))).toEqual({
+    expect(decideCiTrigger(comment("/crysk override"))).toEqual({
       kind: "override",
       actor: "maintainer",
     });
@@ -423,7 +434,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
 
   test("the override record names its actor, and a review record never does", () => {
     const override = outcomeRun(
-      commentEnv("/pr-hero override"),
+      commentEnv("/crysk override"),
       scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
     );
     expect(override.exitCode).toBe(0);
@@ -440,7 +451,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     });
 
     const review = outcomeRun(
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       scriptedGh(ok("write"), ok(HEAD_SHA)),
     );
     expect(review.recordText).toBeDefined();
@@ -450,7 +461,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   test("an override whose head cannot be resolved still records its actor, with no head", () => {
     // A same-repository answer with no usable sha: the head is unknown, not the fork.
     const run = outcomeRun(
-      commentEnv("/pr-hero override"),
+      commentEnv("/crysk override"),
       scriptedGh(ok("write"), overrideHead("", false)),
     );
     expect(run.exitCode).toBe(0);
@@ -464,7 +475,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
 
   test("an override on a pull request that cannot be resolved takes the review's error path", () => {
     const run = outcomeRun(
-      commentEnv("/pr-hero override", { EVENT_ISSUE_NUMBER: "" }),
+      commentEnv("/crysk override", { EVENT_ISSUE_NUMBER: "" }),
       scriptedGh(ok("write"), ok(HEAD_SHA)),
     );
     expect(run.exitCode).toBe(1);
@@ -473,7 +484,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
 
   test("an override whose record cannot be written fails the job, never silently", () => {
     const run = runShell(
-      commentEnv("/pr-hero override", {
+      commentEnv("/crysk override", {
         CRYSK_OUTCOME_DIR: path.join(os.tmpdir(), "prhero-override-unwritable"),
       }),
       scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
@@ -486,7 +497,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
 
   test("an override re-run (attempt 2) sets nothing and looks up no head; attempt 1 records the override", () => {
     const rerun = outcomeRun(
-      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "2" }),
+      commentEnv("/crysk override", { GITHUB_RUN_ATTEMPT: "2" }),
       scriptedGh(ok("write"), ok(HEAD_SHA)),
     );
     expect(rerun.exitCode).toBe(0);
@@ -495,11 +506,11 @@ describe("decideCiTrigger — the override command (S8)", () => {
     expect(rerun.record).not.toHaveProperty("actor");
     expect(rerun.ghCalls.filter((args) => args[0] === "pr")).toEqual([]);
     expect(rerun.stdout).toContain(
-      "an override applies to the head at the time of the comment; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again",
+      "an override applies to the head at the time of the comment; comment `/crysk override` again",
     );
 
     const first = outcomeRun(
-      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "1" }),
+      commentEnv("/crysk override", { GITHUB_RUN_ATTEMPT: "1" }),
       scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
     );
     expect(first.exitCode).toBe(0);
@@ -513,7 +524,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   // retried once. A review only names an artifact with its head, so it is not.
   test("an override retries its head lookup once: a second answer is used", () => {
     let headCalls = 0;
-    const run = outcomeRun(commentEnv("/pr-hero override"), (args) => {
+    const run = outcomeRun(commentEnv("/crysk override"), (args) => {
       if (args[0] === "api") return ok("write");
       headCalls += 1;
       return headCalls === 1
@@ -533,7 +544,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   // The lookup also answers whether the pull request is from a fork, so a lookup
   // that fails twice cannot tell, and the override is refused rather than guessed.
   test("an override whose head lookup fails twice is refused, with no status", () => {
-    const run = outcomeRun(commentEnv("/pr-hero override"), (args) =>
+    const run = outcomeRun(commentEnv("/crysk override"), (args) =>
       args[0] === "api"
         ? ok("write")
         : { exitCode: 1, stdout: "", stderr: "gh: still failing" },
@@ -552,7 +563,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   // is not retried.
   test("an override on a fork pull request is refused: a notice, no status, and no actor recorded", () => {
     const run = outcomeRun(
-      commentEnv("/pr-hero override"),
+      commentEnv("/crysk override"),
       scriptedGh(ok("write"), overrideHead(HEAD_SHA, true)),
     );
     expect(run.exitCode).toBe(0);
@@ -576,7 +587,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
 
   test("an override on a same-repository pull request still overrides on the head it names", () => {
     const run = outcomeRun(
-      commentEnv("/pr-hero override"),
+      commentEnv("/crysk override"),
       scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
     );
     expect(run.exitCode).toBe(0);
@@ -604,7 +615,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   ])(
     "an override is refused when the lookup cannot tell a fork (%s)",
     (_label, answer) => {
-      const run = outcomeRun(commentEnv("/pr-hero override"), (args) =>
+      const run = outcomeRun(commentEnv("/crysk override"), (args) =>
         args[0] === "api" ? ok("write") : answer,
       );
       expect(run.exitCode).toBe(0);
@@ -618,7 +629,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   );
 
   test("a review of a fork pull request is not refused and keeps its bare-sha lookup", () => {
-    const run = outcomeRun(commentEnv("/pr-hero review"), (args) => {
+    const run = outcomeRun(commentEnv("/crysk review"), (args) => {
       if (args[0] === "api") return ok("write");
       // The fork answer is for the override's combined lookup only.
       return args.some((arg) => arg.includes("isCrossRepository"))
@@ -648,7 +659,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   });
 
   test("a review does not retry its head lookup", () => {
-    const run = outcomeRun(commentEnv("/pr-hero review"), (args) =>
+    const run = outcomeRun(commentEnv("/crysk review"), (args) =>
       args[0] === "api"
         ? ok("write")
         : { exitCode: 1, stdout: "", stderr: "gh: failing" },
@@ -725,7 +736,7 @@ describe("decideCiTrigger — commenter permission fails closed", () => {
   test.each(["admin", "write"])("`%s` may trigger a review", (permission) => {
     expect(
       decideCiTrigger(
-        comment("/pr-hero review", {
+        comment("/crysk review", {
           commenterPermission: { kind: "resolved", permission },
         }),
       ).kind,
@@ -736,7 +747,7 @@ describe("decideCiTrigger — commenter permission fails closed", () => {
     "`%s` is denied",
     (permission) => {
       const decision = decideCiTrigger(
-        comment("/pr-hero review", {
+        comment("/crysk review", {
           commenterPermission: { kind: "resolved", permission },
         }),
       );
@@ -756,7 +767,7 @@ describe("decideCiTrigger — commenter permission fails closed", () => {
     ],
   ])("a permission that was %s is denied", (_label, commenterPermission) => {
     expect(
-      decideCiTrigger(comment("/pr-hero review", { commenterPermission })).kind,
+      decideCiTrigger(comment("/crysk review", { commenterPermission })).kind,
     ).toBe("denied");
   });
 
@@ -764,7 +775,7 @@ describe("decideCiTrigger — commenter permission fails closed", () => {
   // there is a notice on a default-branch run, invisible on the pull
   // request, so a maintainer whose command met a GitHub outage saw nothing
   // and got no review. It stays fail-closed, but red and actionable.
-  test.each(["/pr-hero review", "/pr-hero review --full"])(
+  test.each(["/crysk review", "/crysk review --full"])(
     "an indeterminate lookup for `%s` is unverifiable and names the retry",
     (command) => {
       const decision = decideCiTrigger(
@@ -784,16 +795,16 @@ describe("decideCiTrigger — commenter permission fails closed", () => {
   );
 
   test("the permission is needed only for a real command on a pull request", () => {
-    expect(commenterPermissionNeeded(comment("/pr-hero review"))).toBe(true);
-    expect(commenterPermissionNeeded(comment("/pr-hero review --full"))).toBe(
+    expect(commenterPermissionNeeded(comment("/crysk review"))).toBe(true);
+    expect(commenterPermissionNeeded(comment("/crysk review --full"))).toBe(
       true,
     );
-    expect(commenterPermissionNeeded(comment("/pr-hero review please"))).toBe(
+    expect(commenterPermissionNeeded(comment("/crysk review please"))).toBe(
       false,
     );
     expect(
       commenterPermissionNeeded(
-        comment("/pr-hero review", { commentOnPullRequest: false }),
+        comment("/crysk review", { commentOnPullRequest: false }),
       ),
     ).toBe(false);
   });
@@ -803,12 +814,12 @@ describe("decideCiTrigger — precedence and credentials", () => {
   test.each<[string, CiTriggerInput, CiTriggerDecision["kind"]]>([
     [
       "a near-miss comment",
-      comment("/pr-hero reviewing", { credentials: NO_CREDENTIALS }),
+      comment("/crysk reviewing", { credentials: NO_CREDENTIALS }),
       "ignore",
     ],
     [
       "a command on a plain issue",
-      comment("/pr-hero review", {
+      comment("/crysk review", {
         commentOnPullRequest: false,
         credentials: NO_CREDENTIALS,
       }),
@@ -824,7 +835,7 @@ describe("decideCiTrigger — precedence and credentials", () => {
     ],
     [
       "a read-only commenter",
-      comment("/pr-hero review", {
+      comment("/crysk review", {
         commenterPermission: { kind: "resolved", permission: "read" },
         credentials: NO_CREDENTIALS,
       }),
@@ -832,7 +843,7 @@ describe("decideCiTrigger — precedence and credentials", () => {
     ],
     [
       "an unverifiable commenter",
-      comment("/pr-hero review", {
+      comment("/crysk review", {
         commenterPermission: { kind: "indeterminate", detail: "HTTP 502" },
         credentials: NO_CREDENTIALS,
       }),
@@ -905,7 +916,7 @@ describe("decideCiTrigger — the legacy force workflow still works", () => {
 
   test("a full input widens a plain comment command too", () => {
     expect(
-      decideCiTrigger(comment("/pr-hero review", { fullInput: true })),
+      decideCiTrigger(comment("/crysk review", { fullInput: true })),
     ).toEqual({
       kind: "review",
       force: true,
@@ -1133,12 +1144,12 @@ const overrideHead = (sha: string, crossRepository: boolean): GhResult =>
 
 // The notice a refused override prints, verbatim.
 const FORK_OVERRIDE_REFUSAL =
-  "An override is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) and merge it with your repository's own rules.";
+  "An override is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/crysk review` and merge it with your repository's own rules.";
 
 // The notice an override prints when the lookup could not say whether the pull request is
 // a fork. Distinct from the fork notice: a lookup that failed is not a proven fork.
 const UNKNOWN_FORK_OVERRIDE_REFUSAL =
-  "The override could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again.";
+  "The override could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk override` again.";
 
 // Runs the shell with CRYSK_OUTCOME_DIR pointed at a fresh directory that does
 // not exist yet (the trigger must create it), then reads trigger.json back.
@@ -1187,9 +1198,9 @@ describe("runCiTrigger — the shell", () => {
     expect(run.ghCalls).toEqual([]);
   });
 
-  test("`/pr-hero review --full` from a writer looks up the permission, then the head", () => {
+  test("`/crysk review --full` from a writer looks up the permission, then the head", () => {
     const run = runShell(
-      commentEnv("  /pr-hero review --full\n"),
+      commentEnv("  /crysk review --full\n"),
       scriptedGh(ok("write\n"), ok(`${OTHER_SHA}\n`)),
     );
     expect(run.exitCode).toBe(0);
@@ -1226,7 +1237,7 @@ describe("runCiTrigger — the shell", () => {
   });
 
   test("a near-miss comment is a notice, and its only gh call is the confused reaction (T2e)", () => {
-    const run = runShell(commentEnv("/pr-hero review please"));
+    const run = runShell(commentEnv("/crysk review please"));
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
     expect(run.stdout).toStartWith("::notice title=crysk::");
@@ -1244,7 +1255,7 @@ describe("runCiTrigger — the shell", () => {
     "%s from the permission lookup is a denied notice, exit 0",
     (_label, answer) => {
       const run = runShell(
-        commentEnv("/pr-hero review"),
+        commentEnv("/crysk review"),
         scriptedGh(answer, ok(HEAD_SHA)),
       );
       expect(run.exitCode).toBe(0);
@@ -1276,7 +1287,7 @@ describe("runCiTrigger — the shell", () => {
     "%s twice is an unverifiable error, exit 1, after exactly one retry",
     (_label, answer) => {
       const run = runShell(
-        commentEnv("/pr-hero review"),
+        commentEnv("/crysk review"),
         scriptedGh(answer, ok(HEAD_SHA)),
       );
       expect(run.exitCode).toBe(1);
@@ -1301,7 +1312,7 @@ describe("runCiTrigger — the shell", () => {
 
   test("a lookup that fails once and then answers `write` reviews", () => {
     let lookups = 0;
-    const run = runShell(commentEnv("/pr-hero review"), (args) => {
+    const run = runShell(commentEnv("/crysk review"), (args) => {
       if (args.includes("POST")) return ok("{}");
       if (args[0] !== "api") return ok(`${OTHER_SHA}\n`);
       lookups += 1;
@@ -1331,7 +1342,7 @@ describe("runCiTrigger — the shell", () => {
   });
 
   test("a gh that cannot even start is unverifiable and red, not a quiet denial", () => {
-    const run = runShell(commentEnv("/pr-hero review"), () => {
+    const run = runShell(commentEnv("/crysk review"), () => {
       throw new Error("spawn gh ENOENT");
     });
     expect(run.exitCode).toBe(1);
@@ -1350,7 +1361,7 @@ describe("runCiTrigger — the shell", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-hostile-"));
     try {
       const run = runShell(
-        commentEnv("/pr-hero review", {
+        commentEnv("/crysk review", {
           COMMENTER_LOGIN: "evil\n::warning::HOSTILE-LOGIN",
           CRYSK_OUTCOME_DIR: path.join(dir, "outcome"),
         }),
@@ -1420,7 +1431,7 @@ describe("runCiTrigger — the shell", () => {
 
   test("with no outcome dir, an unverifiable lookup names its cause and the gh detail", () => {
     const run = runShell(
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       scriptedGh(
         { exitCode: 1, stdout: "", stderr: "gh: Server Error (HTTP 500)" },
         ok(HEAD_SHA),
@@ -1524,12 +1535,12 @@ describe("runCiTrigger — the shell", () => {
   });
 
   test("trigger.json never holds a secret value, the comment body or gh's text", () => {
-    const hostile = "/pr-hero review ::error::HOSTILE-BODY";
+    const hostile = "/crysk review ::error::HOSTILE-BODY";
     const runs = [
       outcomeRun(baseEnv({ [STDIN_SECRETS]: "" })),
       outcomeRun(baseEnv()),
       outcomeRun(commentEnv(hostile)),
-      outcomeRun(commentEnv("/pr-hero review"), () => ({
+      outcomeRun(commentEnv("/crysk review"), () => ({
         exitCode: 1,
         stdout: "",
         stderr: "gh: Server Error (HTTP 502) HOSTILE-GH",
@@ -1545,20 +1556,20 @@ describe("runCiTrigger — the shell", () => {
   });
 
   test("no outcome ever prints a secret value or the comment body", () => {
-    const hostile = "/pr-hero review ::error::HOSTILE-BODY";
+    const hostile = "/crysk review ::error::HOSTILE-BODY";
     const runs = [
       runShell(baseEnv()),
       runShell(baseEnv({ [STDIN_SECRETS]: "" })),
       runShell(commentEnv(hostile)),
       runShell(
-        commentEnv("/pr-hero review"),
+        commentEnv("/crysk review"),
         scriptedGh(ok("read"), ok(HEAD_SHA)),
       ),
       runShell(
-        commentEnv("/pr-hero review"),
+        commentEnv("/crysk review"),
         scriptedGh(ok("write"), ok(HEAD_SHA)),
       ),
-      runShell(commentEnv("/pr-hero review"), () => ({
+      runShell(commentEnv("/crysk review"), () => ({
         exitCode: 1,
         stdout: "",
         stderr: "gh: Server Error (HTTP 502)",
@@ -1581,7 +1592,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     > = [
       ["review", baseEnv(), "review"],
       ["no-credentials", baseEnv({ [STDIN_SECRETS]: "" }), "no-credentials"],
-      ["ignore", commentEnv("/pr-hero review please"), "ignore"],
+      ["ignore", commentEnv("/crysk review please"), "ignore"],
     ];
     for (const [, env, decision] of cases) {
       const run = outcomeRun(env);
@@ -1598,7 +1609,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
 
   test("a denied commenter's record is written too", () => {
     const run = outcomeRun(
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       scriptedGh(ok("read"), ok(HEAD_SHA)),
     );
     expect(run.record?.decision).toBe("denied");
@@ -1671,21 +1682,21 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     expect(publish(baseEnv())).toBe("true");
     expect(publish(baseEnv({ [STDIN_SECRETS]: "" }))).toBe("true");
     expect(
-      publish(commentEnv("/pr-hero review"), () => {
+      publish(commentEnv("/crysk review"), () => {
         throw new Error("spawn gh ENOENT");
       }),
     ).toBe("true");
-    expect(publish(commentEnv("/pr-hero review please"))).toBe("false");
+    expect(publish(commentEnv("/crysk review please"))).toBe("false");
     expect(
       publish(
-        commentEnv("/pr-hero review"),
+        commentEnv("/crysk review"),
         scriptedGh(ok("read"), ok(HEAD_SHA)),
       ),
     ).toBe("false");
   });
 
   test("an unverifiable lookup records the HTTP status gh printed, as a github class", () => {
-    const run = outcomeRun(commentEnv("/pr-hero review"), () => ({
+    const run = outcomeRun(commentEnv("/crysk review"), () => ({
       exitCode: 1,
       stdout: "",
       stderr: "gh: Server Error (HTTP 503)",
@@ -1696,7 +1707,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
   });
 
   test("a 403 is a rate limit only when gh says so; otherwise it stays a permission reading", () => {
-    const limited = outcomeRun(commentEnv("/pr-hero review"), () => ({
+    const limited = outcomeRun(commentEnv("/crysk review"), () => ({
       exitCode: 1,
       stdout: "",
       stderr: "gh: API rate limit exceeded (HTTP 403)",
@@ -1706,7 +1717,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       status: 403,
       rateLimited: true,
     });
-    const refused = outcomeRun(commentEnv("/pr-hero review"), () => ({
+    const refused = outcomeRun(commentEnv("/crysk review"), () => ({
       exitCode: 1,
       stdout: "",
       stderr: "gh: Resource not accessible (HTTP 403)",
@@ -1716,7 +1727,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
   });
 
   test("an unverifiable lookup with no HTTP status records no class", () => {
-    const run = outcomeRun(commentEnv("/pr-hero review"), () => ({
+    const run = outcomeRun(commentEnv("/crysk review"), () => ({
       exitCode: -1,
       stdout: "",
       stderr: "spawn gh ENOENT",
@@ -1726,7 +1737,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
   });
 
   test("an unverifiable lookup's record names the step that failed, so the publisher can say which one", () => {
-    const run = outcomeRun(commentEnv("/pr-hero review"), () => ({
+    const run = outcomeRun(commentEnv("/crysk review"), () => ({
       exitCode: 1,
       stdout: "",
       stderr: "gh: Resource not accessible (HTTP 403)",
@@ -1951,7 +1962,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     ],
     [
       "an unverifiable permission",
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       (): GhResult => ({
         exitCode: 1,
         stdout: "",
@@ -2326,37 +2337,37 @@ describe("the reaction on the triggering comment (T2e)", () => {
     [
       "eyes",
       "an accepted review by a writer",
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
     ],
     [
       "eyes",
       "an accepted full review by an admin",
-      commentEnv("/pr-hero review --full"),
+      commentEnv("/crysk review --full"),
       routed(ok("admin\n"), ok(`${HEAD_SHA}\n`)),
     ],
     [
       "eyes",
       "an accepted override",
-      commentEnv("/pr-hero override"),
+      commentEnv("/crysk override"),
       routed(ok("write\n"), overrideHead(HEAD_SHA, false)),
     ],
     [
       "eyes",
       "an authorised review with no credential",
-      commentEnv("/pr-hero review", { [STDIN_SECRETS]: "" }),
+      commentEnv("/crysk review", { [STDIN_SECRETS]: "" }),
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
     ],
     [
       "-1",
       "a review by a read-only commenter",
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       routed(ok("read\n"), ok(`${HEAD_SHA}\n`)),
     ],
     [
       "-1",
       "a review by a commenter who is not a collaborator (404)",
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       routed(
         { exitCode: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" },
         ok(`${HEAD_SHA}\n`),
@@ -2365,25 +2376,25 @@ describe("the reaction on the triggering comment (T2e)", () => {
     [
       "-1",
       "an override on a fork",
-      commentEnv("/pr-hero override"),
+      commentEnv("/crysk override"),
       routed(ok("write\n"), overrideHead(HEAD_SHA, true)),
     ],
     [
       "-1",
       "an override the lookup cannot place",
-      commentEnv("/pr-hero override"),
+      commentEnv("/crysk override"),
       routed(ok("write\n"), ok(HEAD_SHA)),
     ],
     [
       "confused",
       "a near miss",
-      commentEnv("/pr-hero review please"),
+      commentEnv("/crysk review please"),
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
     ],
     [
       "eyes",
       "an accepted review on run attempt 1",
-      commentEnv("/pr-hero review", { GITHUB_RUN_ATTEMPT: "1" }),
+      commentEnv("/crysk review", { GITHUB_RUN_ATTEMPT: "1" }),
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
     ],
   ])(
@@ -2400,19 +2411,19 @@ describe("the reaction on the triggering comment (T2e)", () => {
   test.each<[string, string, Record<string, string>, Answer]>([
     [
       "an accepted review",
-      "/pr-hero review",
+      "/crysk review",
       { GITHUB_RUN_ATTEMPT: "2" },
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
     ],
     [
       "a refused review",
-      "/pr-hero review",
+      "/crysk review",
       { GITHUB_RUN_ATTEMPT: "2" },
       routed(ok("read\n"), ok(`${HEAD_SHA}\n`)),
     ],
     [
       "a near miss",
-      "/pr-hero review please",
+      "/crysk review please",
       { GITHUB_RUN_ATTEMPT: "2" },
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
     ],
@@ -2433,14 +2444,14 @@ describe("the reaction on the triggering comment (T2e)", () => {
 
   test("an override re-run (attempt 2) is refused with its notice, and makes no reaction call", () => {
     const run = runShell(
-      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "2" }),
+      commentEnv("/crysk override", { GITHUB_RUN_ATTEMPT: "2" }),
       routed(ok("write\n"), overrideHead(HEAD_SHA, false)),
     );
     expect(reactionCalls(run)).toEqual([]);
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
     expect(run.stdout).toContain(
-      "an override applies to the head at the time of the comment; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again",
+      "an override applies to the head at the time of the comment; comment `/crysk override` again",
     );
   });
 
@@ -2453,7 +2464,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
     ["padded digits", " 42 "],
   ])("%s gets no reaction, and the review still runs", (_label, id) => {
     const run = runShell(
-      commentEnv("/pr-hero review", { EVENT_COMMENT_ID: id }),
+      commentEnv("/crysk review", { EVENT_COMMENT_ID: id }),
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
     );
     expect(run.exitCode).toBe(0);
@@ -2462,7 +2473,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
   });
 
   test("an absent id gets no reaction", () => {
-    const env = commentEnv("/pr-hero review");
+    const env = commentEnv("/crysk review");
     delete env.EVENT_COMMENT_ID;
     const run = runShell(env, routed(ok("write\n"), ok(`${HEAD_SHA}\n`)));
     expect(reactionCalls(run)).toEqual([]);
@@ -2475,7 +2486,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
   });
 
   test("an unverifiable lookup gets no reaction: its error comment explains it", () => {
-    const run = runShell(commentEnv("/pr-hero review"), () => {
+    const run = runShell(commentEnv("/crysk review"), () => {
       throw new Error("spawn gh ENOENT");
     });
     expect(run.exitCode).toBe(1);
@@ -2484,7 +2495,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
 
   test("a failed reaction prints one warning, and the accepted review keeps its decision and exit", () => {
     const run = runShell(
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`), REACTION_FAILED),
     );
     expect(run.exitCode).toBe(0);
@@ -2498,7 +2509,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
 
   test("a failed reaction on a refused command keeps the refusal and its notice", () => {
     const run = runShell(
-      commentEnv("/pr-hero review"),
+      commentEnv("/crysk review"),
       routed(ok("read\n"), ok(`${HEAD_SHA}\n`), REACTION_FAILED),
     );
     expect(run.exitCode).toBe(0);
@@ -2509,7 +2520,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
 
   test("a failed reaction on a no-credentials comment keeps its red exit", () => {
     const run = runShell(
-      commentEnv("/pr-hero review", { [STDIN_SECRETS]: "" }),
+      commentEnv("/crysk review", { [STDIN_SECRETS]: "" }),
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`), REACTION_FAILED),
     );
     expect(run.exitCode).toBe(1);
@@ -2529,7 +2540,7 @@ describe("the no-credentials head lookup (T2e)", () => {
         : ok(`${HEAD_SHA}\n`);
     };
     const run = outcomeRun(
-      commentEnv("/pr-hero review", { [STDIN_SECRETS]: "" }),
+      commentEnv("/crysk review", { [STDIN_SECRETS]: "" }),
       answer,
     );
     expect(run.exitCode).toBe(1);
@@ -2550,7 +2561,7 @@ describe("the no-credentials head lookup (T2e)", () => {
       return { exitCode: 1, stdout: "", stderr: "gh: i/o timeout" };
     };
     const run = runShell(
-      commentEnv("/pr-hero review", { [STDIN_SECRETS]: "" }),
+      commentEnv("/crysk review", { [STDIN_SECRETS]: "" }),
       answer,
     );
     expect(run.exitCode).toBe(1);
@@ -2573,11 +2584,11 @@ describe("the no-credentials head lookup (T2e)", () => {
   });
 });
 
-// `/pr-hero recheck` is `/pr-hero review` plus the CI adjudicator: the same
+// `/crysk recheck` is `/crysk review` plus the CI adjudicator: the same
 // permission check, the same reaction and the same forced review of the head,
 // with `adjudicate` set. A fork is refused, because the adjudicator needs this
 // repository's checkout of the head.
-describe("decideCiTrigger — /pr-hero recheck", () => {
+describe("decideCiTrigger — /crysk recheck", () => {
   test("from a writer it reviews with force and adjudicate, like the review command", () => {
     expect(decideCiTrigger(comment(RECHECK_COMMAND))).toEqual({
       kind: "review",
@@ -2610,15 +2621,15 @@ describe("decideCiTrigger — /pr-hero recheck", () => {
 
   test("the permission is needed for the exact recheck command only", () => {
     expect(commenterPermissionNeeded(comment(RECHECK_COMMAND))).toBe(true);
-    expect(commenterPermissionNeeded(comment("/pr-hero recheck please"))).toBe(
+    expect(commenterPermissionNeeded(comment("/crysk recheck please"))).toBe(
       false,
     );
   });
 
   test.each([
-    "/pr-hero recheck please",
-    "/pr-hero recheck --full",
-    "/pr-hero rechecking",
+    "/crysk recheck please",
+    "/crysk recheck --full",
+    "/crysk rechecking",
   ])("a near miss is ignored and flagged: %j", (body) => {
     expect(decideCiTrigger(comment(body))).toEqual({
       kind: "ignore",
@@ -2627,8 +2638,8 @@ describe("decideCiTrigger — /pr-hero recheck", () => {
     });
   });
 
-  test("the rejection lists /pr-hero recheck among the valid commands", () => {
-    const decision = decideCiTrigger(comment("/pr-hero recheck please"));
+  test("the rejection lists /crysk recheck among the valid commands", () => {
+    const decision = decideCiTrigger(comment("/crysk recheck please"));
     expect((decision as { reason: string }).reason).toContain(RECHECK_COMMAND);
   });
 
@@ -2647,7 +2658,7 @@ describe("decideCiTrigger — /pr-hero recheck", () => {
   });
 });
 
-describe("runCiTrigger — /pr-hero recheck", () => {
+describe("runCiTrigger — /crysk recheck", () => {
   // The recheck looks the head up twice: the fork answer, then the bare sha a review reads.
   const recheckGh =
     (head: string) =>
@@ -3002,7 +3013,7 @@ describe("action.yml hands crysk-secrets to the trigger on stdin", () => {
       `\${{ inputs.crysk-secrets }}`,
     );
     expect(triggerStep?.run).toBe(
-      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin`,
+      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin`,
     );
   });
 

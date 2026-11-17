@@ -88,11 +88,9 @@ describe("wrapBlock", () => {
   });
 
   test("empty content leaves NO trace, not an empty tag pair", () => {
-    // Load-bearing for M6: a scout that found nothing must produce the control
-    // arm's byte-identical hunter prompt. An empty `<scout_leads …></…>` pair
-    // would differ from the unled prompt and confound every number the A/B
-    // produces.
-    expect(wrapBlock("scout_leads", "d0d0cafe", "")).toBe("");
+    // Load-bearing: an empty block must leave the prompt byte-identical to one
+    // without it. An empty `<priors …></…>` pair would differ.
+    expect(wrapBlock("priors", "d0d0cafe", "")).toBe("");
   });
 
   test("refuses content that carries the run's nonce", () => {

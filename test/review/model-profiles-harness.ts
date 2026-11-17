@@ -70,7 +70,6 @@ export const BASELINE_CASES: readonly BaselineCase[] = [
     name: "custom-agents-dir",
     customFrontmatter: {
       "deep-review-logic.md": { model: "haiku", effort: "medium" },
-      "deep-review-parity.md": { model: "opus", effort: "low" },
       "deep-review-reliability.md": { model: "haiku" },
       "deep-review-resilience.md": { model: "sonnet", effort: "max" },
       "review-refuter.md": { model: "sonnet", effort: "medium" },
@@ -126,7 +125,6 @@ const USAGE = {
   tokens_in: 1,
   tokens_out: 1,
   tokens_total: 2,
-  cost_usd_est: 0,
 };
 
 function ok(spec: StepSpec, output: unknown): StepResult {
@@ -229,9 +227,6 @@ class RecordingRunner implements StepRunner {
     if (spec.name === "summarizer") {
       return parsedOrFailed(spec, JSON.stringify({ summary: "a summary" }));
     }
-    if (spec.name === "scout") {
-      return parsedOrFailed(spec, JSON.stringify({ leads: [] }));
-    }
     if (spec.name.startsWith("materiality")) {
       return parsedOrFailed(
         spec,
@@ -266,7 +261,7 @@ function capableOpenCode(): ProviderTransport {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async () => {
@@ -280,7 +275,6 @@ const READY: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 // Rewrites `model:`/`effort:` lines of a prompt's frontmatter, dropping a
@@ -310,7 +304,6 @@ export async function captureBaseline(
     | "modelProfile"
     | "agentFiles"
     | "summarizer"
-    | "scout"
     | "consolidate"
     | "materiality"
   > = {},
@@ -352,13 +345,12 @@ export async function captureBaseline(
       outPath: path.join(runDir, "findings.json"),
       mcpConfigPath: path.join(runDir, "mcp.json"),
       hopBudget: 4,
-      // Parity is conditional: a trigger path makes it fire.
-      parityTriggerPaths: ["src/app.ts"],
+      // The product spec has no conditional hunter, so no trigger path is read.
+      parityTriggerPaths: [],
       suspicionPriors: [],
       boundaryNonce: NONCE,
       spec: localReviewSpec({}),
       summarizer: { promptPath: ROOT_PROMPT("summarizer.md") },
-      scout: { promptPath: ROOT_PROMPT("scout.md") },
       consolidate: { promptPath: ROOT_PROMPT("consolidate.md") },
       materiality: { promptPath: ROOT_PROMPT("materiality.md") },
       ...(c.model === undefined ? {} : { model: c.model }),

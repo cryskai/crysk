@@ -63,7 +63,6 @@ import { assembleLive, type GateRow } from "#rereview/state";
 import type { Finding, SkillOutput } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
-import { estimateCost } from "#review/report";
 import { CliError } from "../../src/errors";
 import { prheroLayout } from "../../src/home-preflight";
 import { zeroUsage } from "../../src/usage";
@@ -73,7 +72,6 @@ function baseOptions(over: Partial<CliOptions> = {}): CliOptions {
     repo: ".",
     head: "HEAD",
     hopBudget: 3,
-    scout: false,
     full: false,
     dryRun: false,
     yes: false,
@@ -138,7 +136,7 @@ function baseResult(
   return {
     skillOutput: over.skillOutput ?? baseSkillOutput(),
     perAgent: over.perAgent ?? {},
-    usage: { ...zeroUsage(), cost_usd_est: 0.42 },
+    usage: zeroUsage(),
     sessionFailed: over.sessionFailed ?? false,
     ...(over.noReviewerRan === undefined
       ? {}
@@ -265,7 +263,6 @@ describe("publishRunOutcome", () => {
       gitDirOwner: operatorRoot,
       worktreePath: operatorRoot,
       isCi: false,
-      estimate: estimateCost({ files: 1, insertions: 1, deletions: 0 }, 1),
       ciAdmissionLedger: null,
       onPosted,
       onBlockingCount: () => {},
@@ -305,9 +302,8 @@ describe("publishRunOutcome", () => {
     expect(error.message).toBe("internal: pipeline returned no result");
   });
 
-  // W3-FOOTER: the plan's free-route count travels into the footer, so a free
-  // run is not footed as a subscription run. Footer lines go to stderr.
-  test("a free route's notional row says so, carried from the plan's count", async () => {
+  // The PR result block goes to stderr: it names the run's artifacts and carries no money.
+  test("the result block keeps its rows and prints no dollar figure", async () => {
     const written: string[] = [];
     const spy = spyOn(process.stderr, "write").mockImplementation(
       (chunk: string | Uint8Array) => {
@@ -316,21 +312,15 @@ describe("publishRunOutcome", () => {
       },
     );
     try {
-      await publishRunOutcome(
-        baseInput({
-          result: {
-            ...baseResult(),
-            usageV2: { notionalCostUsd: 0.05 },
-          } as unknown as PipelineResult,
-          freeRoute: { free: 2, total: 2 },
-        }),
-      );
+      await publishRunOutcome(baseInput({ result: baseResult() }));
     } finally {
       spy.mockRestore();
     }
-    const footer = written.join("").replace(/\s+/g, " ");
-    expect(footer).toContain("not charged on a free route");
-    expect(footer).not.toContain("subscription");
+    const footer = written.join("");
+    expect(footer).toContain("run dir");
+    expect(footer).toContain("blocking");
+    expect(footer).not.toContain("$");
+    expect(footer).not.toContain("estimate");
   });
 
   // Task item 2 (first half): posting disabled is postFindingsIfEnabled's
@@ -609,7 +599,6 @@ describe("publishRunOutcome", () => {
         duration_ms: 0,
         tokens_in: 0,
         tokens_out: 0,
-        cost_usd_est: 0,
         attempts: 1,
         status: "failed",
         detail: "Anthropic API: Credit balance is too low (HTTP 400)",

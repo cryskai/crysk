@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { armOfRun, scoutFailed } from "#compare/floor-test";
 import {
   computeRouteFingerprint,
   createResolvedRoutePlan,
@@ -51,7 +50,6 @@ class RecordingStepRunner implements StepRunner {
     // Default ok response with empty findings
     const isRefuter = step.name.startsWith("refuter");
     const isSummarizer = step.name === "summarizer";
-    const isScout = step.name === "scout";
 
     let resultText = "{}";
     let output: unknown = { findings: [] };
@@ -78,9 +76,6 @@ class RecordingStepRunner implements StepRunner {
     } else if (isSummarizer) {
       resultText = JSON.stringify({ summary: "test summary" });
       output = { summary: "test summary" };
-    } else if (isScout) {
-      resultText = JSON.stringify({ leads: [] });
-      output = { leads: [] };
     } else {
       // Hunter
       resultText = JSON.stringify({
@@ -117,7 +112,6 @@ class RecordingStepRunner implements StepRunner {
         tokens_total: 100,
         tokens_in: 80,
         tokens_out: 20,
-        cost_usd_est: 0.001,
         wall_ms: 50,
       },
       stderrTail: "",
@@ -131,7 +125,6 @@ const READY_OPENCODE_EVIDENCE: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 // A registered, already-capable opencode transport. Overriding the backend
@@ -160,7 +153,7 @@ function createCapableOpenCodeTransport(): ProviderTransport {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async (_request: TransportRequest): Promise<TransportOutcome> => ({
@@ -172,8 +165,6 @@ function createCapableOpenCodeTransport(): ProviderTransport {
         tokens: { totalKnown: 1 },
         completeness: "complete",
         billingMode: "subscription",
-        costSource: "provider",
-        cashCostUsd: 0,
       },
       stderrTail: "",
     }),
@@ -574,9 +565,8 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
       );
       expect(attemptCount).toBe(1);
 
-      // floor-test armOfRun and scoutFailed
-      expect(armOfRun(parsed)).toBe("control");
-      expect(scoutFailed(parsed)).toBe(false);
+      // The removed stage leaves no trace in the artifact.
+      expect("scout" in (parsed as Record<string, unknown>)).toBe(false);
 
       // rereviewDeltaFromProvenance with mock rereview block
       const delta = rereviewDeltaFromProvenance(
@@ -676,7 +666,6 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
         head,
       ),
     ).toBe(1);
-    expect(armOfRun(mixed)).toBe("control");
   });
 
   // SUGGESTION-4: this used to build its "mixed-route artifact" as a
@@ -724,7 +713,7 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
           head,
         ),
       ).toBe(1);
-      expect(armOfRun(produced)).toBe("control");
+      expect("scout" in produced).toBe(false);
     } finally {
       await env.cleanup();
     }
@@ -736,7 +725,6 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
         enabled: true,
         armId: "arm",
         maxLegs: 3,
-        cashCapUsd: 10,
       },
       agents: [
         {
@@ -782,7 +770,6 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
           tokens_total: 10,
           tokens_in: 8,
           tokens_out: 2,
-          cost_usd_est: 0.001,
           wall_ms: 1,
         },
         attempts: 1,
@@ -838,7 +825,6 @@ describe("a pipeline whose hunters all fail with model_unavailable", () => {
             tokens_out: 0,
             tokens_total: 0,
             wall_ms: 1,
-            cost_usd_est: 0,
           },
           attempts: 1,
           stderrTail: "",
@@ -895,7 +881,6 @@ describe("a pipeline whose hunters all fail with a missing provider record", () 
             tokens_out: 0,
             tokens_total: 0,
             wall_ms: 1,
-            cost_usd_est: 0,
           },
           attempts: 1,
           stderrTail: "",
@@ -952,7 +937,6 @@ describe("a pipeline whose hunters all fail with a provider API error", () => {
             tokens_out: 0,
             tokens_total: 0,
             wall_ms: 1,
-            cost_usd_est: 0,
           },
           attempts: 1,
           stderrTail: "",

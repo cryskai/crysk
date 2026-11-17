@@ -28,7 +28,6 @@ import {
 } from "#review/pipeline";
 import { GOTCHAS_TEMPLATE, NO_REVIEW_INSTRUCTIONS } from "#review/preflight";
 import { writeMcpConfig } from "#review/run";
-import type { ScoutLead } from "#review/scout";
 import { defaultReviewSpec } from "#review/spec";
 import type { StepResult, StepRunner, StepSpec } from "#review/step-runner";
 import { startLineRenderer } from "#ui/progress";
@@ -121,7 +120,6 @@ function usage(overrides: Partial<SessionUsage> = {}): SessionUsage {
     tokens_in: 100,
     tokens_out: 10,
     tokens_total: 110,
-    cost_usd_est: 0.01,
     ...overrides,
   };
 }
@@ -970,7 +968,6 @@ describe("engine-owned summarizer", () => {
       tokens_in: 700,
       tokens_out: 80,
       tokens_total: 780,
-      cost_usd_est: 0.07,
     });
     const runner = new FakeStepRunner({
       ...HUNTERS_OK,
@@ -984,11 +981,9 @@ describe("engine-owned summarizer", () => {
       tokens_total: 780,
       tokens_in: 700,
       tokens_out: 80,
-      cost_usd_est: 0.07,
       status: "ok",
     });
     expect(result.usage.tokens_total).toBe(1_000);
-    expect(result.usage.cost_usd_est).toBeCloseTo(0.09);
   });
 
   test("the bundled prompt has exactly Read, Grep, Glob tools and a model", async () => {
@@ -1013,49 +1008,6 @@ describe("engine-owned summarizer", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Step 3b — the engine-owned scout (ROADMAP-DOORDASH M5, docs/scout-design.md
-// §3.3-§3.9). Every test here is one of §3.12's obligations; the numbers in
-// the names are that list's.
-// ---------------------------------------------------------------------------
-
-const BUNDLED_SCOUT_PROMPT = path.join(
-  import.meta.dir,
-  "..",
-  "..",
-  "prompts",
-  "scout.md",
-);
-
-// A scout prompt with TOOLS in its frontmatter, so the "engine forces []"
-// assertion is testing a real override and not an absent field.
-async function toolfulScoutPrompt(runDir: string): Promise<string> {
-  const file = path.join(runDir, "toolful-scout.md");
-  await Bun.write(
-    file,
-    [
-      "---",
-      "name: pr-hero-scout",
-      "description: a scout that asked for tools",
-      "model: haiku",
-      "tools: Read, Grep, Glob, mcp__codegraph__codegraph_explore",
-      "---",
-      "",
-      "Read the diff.",
-      "",
-    ].join("\n"),
-  );
-  return file;
-}
-
-// The runner hands the pipeline the PARSED output, so a scripted scout
-// returns the validated ScoutLead[] — the shape `spec.parse` produces, not the
-// `{"leads":[...]}` envelope the model emits. The envelope itself is exercised
-// against the real parse function further down.
-function leads(...entries: Array<[string, number, string]>): ScoutLead[] {
-  return entries.map(([p, line, why]) => ({ path: p, line, why }));
-}
-
 function hunterPromptOf(runner: FakeStepRunner): string {
   const spec = runner.specs.find((s) => s.name === "hunter-reliability");
   if (!spec) throw new Error("no hunter step was spawned");
@@ -1074,13 +1026,6 @@ async function readPlan(runDir: string): Promise<Record<string, unknown>> {
 // stopped exploring: 0 of 8 runs on pr-1858 found anything at `medium`, 8 of 8
 // at `xhigh`. The engine now owns the level and puts it on EVERY StepSpec.
 describe("engine-owned effort", () => {
-  const BUNDLED_SCOUT = path.join(
-    import.meta.dir,
-    "..",
-    "..",
-    "prompts",
-    "scout.md",
-  );
   const refuterScript: StepScript = {
     ...HUNTERS_OK,
     "hunter-reliability": (spec) =>
@@ -1103,11 +1048,9 @@ describe("engine-owned effort", () => {
     const runner = new FakeStepRunner({
       ...refuterScript,
       summarizer: (spec) => ok(spec, summary()),
-      scout: (spec) => ok(spec, []),
     });
     const input = await makeInput({
       summarizer: { promptPath: BUNDLED_SUMMARIZER_PROMPT },
-      scout: { promptPath: BUNDLED_SCOUT },
     });
 
     await runPipeline(input, { runner });
@@ -1117,7 +1060,6 @@ describe("engine-owned effort", () => {
     expect(effortOf(runner, "refuter-F001")).toBe("high");
     // Unmeasured roles keep what every model ran at before the 5.5 family.
     expect(effortOf(runner, "summarizer")).toBe("high");
-    expect(effortOf(runner, "scout")).toBe("high");
   });
 
   test("an explicit frontmatter `effort:` outranks the role default", async () => {
@@ -1324,8 +1266,8 @@ describe("engine-owned effort", () => {
   });
 });
 
-describe("engine-owned scout", () => {
-  test("§3.12.2 — off by default: no step is spawned and no scout row is written", async () => {
+describe("the removed scout stage", () => {
+  test("no scout step is spawned, and the run is complete", async () => {
     const input = await makeInput();
     const runner = new FakeStepRunner(HUNTERS_OK);
 
@@ -1336,409 +1278,38 @@ describe("engine-owned scout", () => {
     expect(result.skillOutput.run_status).toBe("complete");
   });
 
-  test("§3.12.2 — the leads block is ABSENT byte for byte when the scout is off", async () => {
-    const off = new FakeStepRunner(HUNTERS_OK);
-    await runPipeline(await makeInput(), { runner: off });
+  test("the hunter request ends with the output contract, with nothing between the guidance and it", async () => {
+    const runner = new FakeStepRunner(HUNTERS_OK);
+    await runPipeline(await makeInput(), { runner });
 
-    const prompt = hunterPromptOf(off);
+    const prompt = hunterPromptOf(runner);
     expect(prompt).not.toContain("Scout leads");
-    // The contract is the last thing in the prompt, so an empty block cannot
-    // have left a separator behind it.
+    expect(prompt).not.toContain("scout_leads");
+    // The contract is the last thing in the prompt.
     expect(prompt.endsWith("failure.")).toBe(true);
   });
 
-  test("§3.12.2 — a scout that finds NOTHING produces the control arm's exact prompt", async () => {
-    // The load-bearing test for M6: if these two strings differ, the control
-    // arm is not a control arm and every number the A/B produces is confounded.
-    //
-    // Both arms are PINNED to one boundary nonce (C4 O-3.5). That is not a
-    // workaround for the comparison — it is the comparison's own requirement.
-    // Production draws a nonce per run, so two runs differ by it; an A/B whose
-    // arms differed by nonce would be confounded by the nonce, and the only
-    // honest way to isolate the scout variable is to hold it fixed.
-    const nonce = "d0d0cafe";
-    const off = new FakeStepRunner(HUNTERS_OK);
-    await runPipeline(await makeInput({ boundaryNonce: nonce }), {
-      runner: off,
-    });
-
-    const on = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, []),
-    });
-    await runPipeline(
-      await makeInput({
-        boundaryNonce: nonce,
-        scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-      }),
-      { runner: on },
-    );
-
-    expect(hunterPromptOf(on)).toBe(hunterPromptOf(off));
-  });
-
-  test("§3.12.2 — leads reach EVERY hunter, last before the output contract", async () => {
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) =>
-        ok(spec, leads(["src/app.ts", 10, "the new branch skips the guard"])),
-    });
-
-    await runPipeline(
-      await makeInput({ scout: { promptPath: BUNDLED_SCOUT_PROMPT } }),
-      { runner },
-    );
-
-    const hunters = runner.specs.filter((s) => s.name.startsWith("hunter-"));
-    expect(hunters.length).toBeGreaterThan(1);
-    for (const spec of hunters) {
-      expect(spec.prompt).toContain(
-        "- src/app.ts:10 — the new branch skips the guard",
-      );
-      // Order (§3.8): patch, hop budget, self-reported-hops line, LEADS,
-      // contract. The anti-anchoring header must arrive with them.
-      expect(spec.prompt.indexOf("Hop budget:")).toBeLessThan(
-        spec.prompt.indexOf("Scout leads"),
-      );
-      expect(spec.prompt.indexOf("Scout leads")).toBeLessThan(
-        spec.prompt.indexOf("Your final message"),
-      );
-      expect(spec.prompt).toContain("Their absence is not evidence of");
-    }
-  });
-
-  test("§3.12.3 — over-cap leads are dropped in input order and the drop is recorded", async () => {
-    // 15 leads over 5 paths: the per-path cap (3) passes them all, the total
-    // cap (12) takes the first twelve, in input order.
-    const entries: Array<[string, number, string]> = [];
-    for (let i = 0; i < 15; i++) {
-      entries.push([`src/f${Math.floor(i / 3)}.ts`, i + 1, `lead ${i}`]);
-    }
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, leads(...entries)),
-    });
+  test("pipeline.json carries no scout key and no scout step, and says engine, prompt_set and generated_at", async () => {
     const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-    });
-
-    await runPipeline(input, { runner });
-
-    const plan = (await readPlan(input.runDir)) as {
-      scout: { leads_count: number; leads_truncated: number };
-    };
-    expect(plan.scout.leads_count).toBe(12);
-    expect(plan.scout.leads_truncated).toBe(3);
-    expect(hunterPromptOf(runner)).toContain("lead 11");
-    expect(hunterPromptOf(runner)).not.toContain("lead 12");
-  });
-
-  test("§3.12.3 — a truncated `why` is counted, because it is a prompt defect to fix", async () => {
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, leads(["src/app.ts", 10, "x".repeat(400)])),
-    });
-    const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-    });
-
-    await runPipeline(input, { runner });
-
-    const plan = (await readPlan(input.runDir)) as {
-      scout: { why_truncated: number; leads_count: number };
-    };
-    expect(plan.scout.why_truncated).toBe(1);
-    expect(plan.scout.leads_count).toBe(1);
-    expect(hunterPromptOf(runner)).toContain(
-      `- src/app.ts:10 — ${"x".repeat(240)}`,
-    );
-  });
-
-  test("§3.12.4 — a failed scout leaves the run COMPLETE and the hunters unled", async () => {
-    const events: PipelineProgressEvent[] = [];
-    const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-    });
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => failed(spec),
-    });
-
-    const result = await runPipeline(input, {
-      runner,
-      onProgress: (event) => events.push(event),
-    });
-
-    // Fail-open (§3.6): a run without a scout is the CONTROL pipeline, which
-    // is by definition complete — never #42's incompleteness.
-    expect(result.skillOutput.run_status).toBe("complete");
-    expect(result.sessionFailed).toBe(false);
-    expect(hunterPromptOf(runner)).not.toContain("Scout leads");
-    // ...but never silent, in all three places.
-    expect(result.perAgent.scout?.status).toBe("failed");
-    const plan = (await readPlan(input.runDir)) as {
-      scout: { status: string; enabled: boolean };
-      steps: Array<{ name: string; status?: string }>;
-    };
-    expect(plan.scout.status).toBe("failed");
-    expect(plan.scout.enabled).toBe(true);
-    expect(plan.steps.find((s) => s.name === "scout")?.status).toBe("failed");
-    expect(events).toContainEqual({
-      kind: "scout-finished",
-      ok: false,
-      durationMs: expect.any(Number),
-    });
-  });
-
-  test("§3.12.4 — a rejected scout process is observed without an orphaned rejection", async () => {
-    const events: PipelineProgressEvent[] = [];
-    let scoutCalls = 0;
-    const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-    });
-    const runner: StepRunner = {
-      async run(spec) {
-        if (spec.name === "scout") {
-          scoutCalls++;
-          throw new Error("scout process rejected");
-        }
-        return spec.name === "hunter-reliability"
-          ? ok(spec, { findings: [draft()] })
-          : ok(spec, emptyDraft());
-      },
-    };
-
-    const result = await runPipeline(input, {
-      runner,
-      onProgress: (event) => events.push(event),
-    });
-
-    expect(scoutCalls).toBe(1);
-    expect(result.skillOutput.run_status).toBe("complete");
-    expect(result.perAgent.scout?.status).toBe("failed");
-    expect(events).toContainEqual({
-      kind: "scout-finished",
-      ok: false,
-      durationMs: expect.any(Number),
-    });
-  });
-
-  test("§3.12.4 — a malformed scout prompt does not kill the run, and never spawns", async () => {
-    const input = await makeInput();
-    const malformed = path.join(input.runDir, "malformed-scout.md");
-    await Bun.write(malformed, "not frontmatter");
-    input.scout = { promptPath: malformed };
-    const runner = new FakeStepRunner(HUNTERS_OK);
-
-    const result = await runPipeline(input, { runner });
-
-    expect(result.skillOutput.run_status).toBe("complete");
-    expect(runner.specs.map((s) => s.name)).not.toContain("scout");
-    expect(result.perAgent.scout?.status).toBe("failed");
-    const plan = (await readPlan(input.runDir)) as {
-      steps: Array<{ name: string; status?: string }>;
-    };
-    expect(plan.steps.find((s) => s.name === "scout")?.status).toBe("failed");
-  });
-
-  test("§3.12.5 — scout usage lands in the run total AND in per_agent.scout", async () => {
-    const scoutUsage = usage({
-      wall_ms: 90_000,
-      tokens_in: 40_000,
-      tokens_out: 300,
-      tokens_total: 40_300,
-      cost_usd_est: 0.31,
-    });
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, [], scoutUsage),
-    });
-
-    const result = await runPipeline(
-      await makeInput({ scout: { promptPath: BUNDLED_SCOUT_PROMPT } }),
-      { runner },
-    );
-
-    expect(result.perAgent.scout).toMatchObject({
-      tokens_total: 40_300,
-      cost_usd_est: 0.31,
-      status: "ok",
-    });
-    // 110 x 2 hunters + 40_300. No refuter leg: the seeded draft is a
-    // WARNING, and only severe findings are submitted.
-    expect(result.usage.tokens_total).toBe(40_520);
-    expect(result.usage.cost_usd_est).toBeCloseTo(0.33);
-  });
-
-  test("§3.12.5 — a FAILED scout's tokens are still billed to the run", async () => {
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => failed(spec),
-    });
-
-    const result = await runPipeline(
-      await makeInput({ scout: { promptPath: BUNDLED_SCOUT_PROMPT } }),
-      { runner },
-    );
-
-    // A run whose bill excludes a burned step under-reports its arm's cost,
-    // which is one of the numbers M6 exists to compare.
-    // 110 x 2 hunters + the failed scout's 6.
-    expect(result.usage.tokens_total).toBe(226);
-  });
-
-  test("§3.5 mechanism 1 — the engine forces `tools: []`, whatever the prompt asks for", async () => {
-    const input = await makeInput();
-    input.scout = { promptPath: await toolfulScoutPrompt(input.runDir) };
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, []),
-    });
-
-    await runPipeline(input, { runner });
-
-    const spec = runner.specs.find((s) => s.name === "scout");
-    // The guarantee the whole design rests on: no repository access. A
-    // guarantee a prompt edit can revoke is not a guarantee.
-    expect(spec?.tools).toEqual([]);
-    const plan = (await readPlan(input.runDir)) as {
-      steps: Array<{ name: string; tools: string[] }>;
-    };
-    expect(plan.steps.find((s) => s.name === "scout")?.tools).toEqual([]);
-  });
-
-  test("§3.5 mechanism 4 — one attempt, a 15-minute watchdog, the run's worktree", async () => {
-    const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-    });
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, []),
-    });
-
-    await runPipeline(input, { runner });
-
-    const spec = runner.specs.find((s) => s.name === "scout");
-    expect(spec?.maxAttempts).toBe(1);
-    // 15, not §3.5's original 5: M4 MEASURED the stage at 86-600s (§3.10bis)
-    // and a 5-minute ceiling would reap runs the only data we have calls
-    // normal.
-    expect(spec?.timeoutMs).toBe(15 * 60 * 1000);
-    expect(spec?.cwd).toBe(input.worktree);
-    expect(spec?.mcpConfigPath).toBe(input.mcpConfigPath);
-    expect(spec?.outPath).toBe(
-      path.join(input.runDir, "steps", "scout.leads.json"),
-    );
-  });
-
-  test("§3.7 — the scout prompt carries the diff and nothing else", async () => {
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, []),
-    });
-
-    await runPipeline(
-      await makeInput({ scout: { promptPath: BUNDLED_SCOUT_PROMPT } }),
-      { runner },
-    );
-
-    const spec = runner.specs.find((s) => s.name === "scout");
-    expect(spec?.prompt).toContain(PATCH.trim());
-    // No priors, no gotchas, no hop budget: the independence of its pass is
-    // the entire reason it can add coverage (§3.8).
-    expect(spec?.prompt).not.toContain("rank 1 hotspot");
-    expect(spec?.prompt).not.toContain(GOTCHAS);
-    expect(spec?.prompt).not.toContain("Hop budget");
-  });
-
-  test("§3.7 — model precedence: --model > --scout-model > frontmatter", async () => {
-    const input = await makeInput();
-    const promptPath = await toolfulScoutPrompt(input.runDir); // frontmatter: haiku
-    const run = async (overrides: Partial<PipelineInput>) => {
-      const runner = new FakeStepRunner({
-        ...HUNTERS_OK,
-        scout: (spec) => ok(spec, []),
-      });
-      await runPipeline(
-        await makeInput({ scout: { promptPath }, ...overrides }),
-        { runner },
-      );
-      return runner.specs.find((s) => s.name === "scout")?.model;
-    };
-
-    expect(await run({})).toBe("haiku");
-    expect(await run({ scout: { promptPath, model: "opus" } })).toBe("opus");
-    // The JD rule, unchanged: an explicit --model wins for EVERY step.
-    expect(
-      await run({ scout: { promptPath, model: "opus" }, model: "sonnet" }),
-    ).toBe("sonnet");
-  });
-
-  test("§3.12.7 — pipeline.json carries scout, engine, prompt_set and generated_at", async () => {
-    const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
       engine: { name: "pr-hero", version: "9.9.9" },
       promptSet: { name: "baseline", sha256: "a6d9984b459f1b63" },
     });
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) =>
-        ok(
-          spec,
-          leads(["src/app.ts", 10, "the guard moved"]),
-          usage({ wall_ms: 4_000 }),
-        ),
-    });
-
-    await runPipeline(input, { runner });
+    await runPipeline(input, { runner: new FakeStepRunner(HUNTERS_OK) });
 
     const plan = (await readPlan(input.runDir)) as {
       engine: { name: string; version: string };
       prompt_set: { name: string; sha256: string };
       generated_at: string;
-      scout: Record<string, unknown>;
+      steps: Array<{ name: string }>;
     };
+    expect("scout" in plan).toBe(false);
+    expect(plan.steps.map((step) => step.name)).not.toContain("scout");
     expect(plan.engine).toEqual({ name: "pr-hero", version: "9.9.9" });
     expect(plan.prompt_set).toEqual({
       name: "baseline",
       sha256: "a6d9984b459f1b63",
     });
     expect(Number.isNaN(Date.parse(plan.generated_at))).toBe(false);
-    expect(plan.scout).toMatchObject({
-      enabled: true,
-      status: "ok",
-      leads_count: 1,
-      leads_truncated: 0,
-      why_truncated: 0,
-      model: "sonnet",
-    });
-    // The FULL digest, matching what scout-probe.json stores for the same
-    // prompt — the two artifacts must name a prompt with the same string.
-    expect(plan.scout.prompt_sha256).toBe(
-      new Bun.CryptoHasher("sha256")
-        .update(await Bun.file(BUNDLED_SCOUT_PROMPT).text())
-        .digest("hex"),
-    );
-    expect(plan.scout.duration_ms).toEqual(expect.any(Number));
-  });
-
-  test("§3.12.7 — the scout row is written even when the scout never ran", async () => {
-    // M6 has to tell the two arms apart from the artifact alone, and a MISSING
-    // key is indistinguishable from a run that predates the key.
-    const input = await makeInput();
-    await runPipeline(input, { runner: new FakeStepRunner(HUNTERS_OK) });
-
-    const plan = (await readPlan(input.runDir)) as {
-      scout: Record<string, unknown>;
-    };
-    expect(plan.scout).toEqual({
-      enabled: false,
-      status: "skipped",
-      leads_count: 0,
-      leads_truncated: 0,
-      why_truncated: 0,
-      duration_ms: 0,
-    });
   });
 
   test("§3.12.7 — the provenance keys are omitted, not nulled, when unsupplied", async () => {
@@ -1759,27 +1330,20 @@ describe("engine-owned scout", () => {
   // table): `../deep-review/runner/index.ts:334` spreads runPipeline()'s
   // RETURNED `usage` object by name into the bench ledger — a field rename or
   // an extra key there is a silent ledger break, not a compile error. This
-  // test pins today's 5-key legacy contract so PR2's contracts.ts/harness.ts
+  // test pins today's 4-key legacy contract so PR2's contracts.ts/harness.ts
   // surgery (usage -> NormalizedUsage) cannot widen or rename it, and pins
   // that pipeline.json never grows a top-level `usage` key (the new run-level
   // rollup is `usage_v2`, asserted separately below).
-  test("§D1-08 PR2 — runPipeline()'s returned usage keeps exactly its 5 legacy keys; pipeline.json has no top-level usage key", async () => {
+  test("§D1-08 PR2 — runPipeline()'s returned usage keeps exactly its 4 legacy keys; pipeline.json has no top-level usage key", async () => {
     const input = await makeInput();
     const result = await runPipeline(input, {
       runner: new FakeStepRunner(HUNTERS_OK),
     });
 
     expect(Object.keys(result.usage).sort()).toEqual(
-      [
-        "cost_usd_est",
-        "tokens_in",
-        "tokens_out",
-        "tokens_total",
-        "wall_ms",
-      ].sort(),
+      ["tokens_in", "tokens_out", "tokens_total", "wall_ms"].sort(),
     );
     expect(typeof result.usage.wall_ms).toBe("number");
-    expect(typeof result.usage.cost_usd_est).toBe("number");
 
     const plan = await readPlan(input.runDir);
     expect("usage" in plan).toBe(false);
@@ -1804,8 +1368,6 @@ describe("engine-owned scout", () => {
       },
       completeness: "complete",
       billingMode: "subscription",
-      costSource: "provider",
-      cashCostUsd: 0.01,
     };
     const refuterUsageV2: NormalizedUsage = {
       wallMs: 500,
@@ -1818,8 +1380,6 @@ describe("engine-owned scout", () => {
       },
       completeness: "complete",
       billingMode: "subscription",
-      costSource: "provider",
-      cashCostUsd: 0.005,
     };
     const runner = new FakeStepRunner({
       ...HUNTERS_OK,
@@ -1860,21 +1420,17 @@ describe("engine-owned scout", () => {
     expect(rollup.billingMode).toBe("subscription");
     expect(rollup.tokens.inputUncached).toBe(150);
     expect(rollup.tokens.outputVisible).toBe(15);
-    expect(rollup.cashCostUsd).toBeCloseTo(0.015);
   });
 
   // #173: the same rollup, on the RETURNED result rather than only in
-  // pipeline.json. The terminal and report.md need the notional total to show
-  // it beside cash (§8), and taking it off the artifact-bound object is what
-  // keeps the two surfaces unable to disagree — a second accumulation for the
-  // display path is exactly the "parallel mechanism able to disagree" the
-  // per-step join site's own comment refuses.
-  test("#173 — the returned result carries the same normalized rollup, so cash and notional can be shown apart", async () => {
+  // pipeline.json. The terminal and report.md need the run's usage, and
+  // taking it off the artifact-bound object is what keeps the two surfaces
+  // unable to disagree — a second accumulation for the display path is
+  // exactly the "parallel mechanism able to disagree" the per-step join
+  // site's own comment refuses.
+  test("#173 — the returned result carries the same normalized rollup the artifact publishes", async () => {
     const input = await makeInput();
-    const subscriptionUsage = (
-      cash: number,
-      notional: number,
-    ): NormalizedUsage => ({
+    const subscriptionUsage = (): NormalizedUsage => ({
       wallMs: 1_000,
       tokens: {
         inputUncached: 100,
@@ -1885,9 +1441,6 @@ describe("engine-owned scout", () => {
       },
       completeness: "complete",
       billingMode: "subscription",
-      costSource: "subscription",
-      cashCostUsd: cash,
-      notionalCostUsd: notional,
     });
     const runner = new FakeStepRunner({
       ...HUNTERS_OK,
@@ -1900,7 +1453,7 @@ describe("engine-owned scout", () => {
             ],
           },
           {},
-          subscriptionUsage(0, 0.03),
+          subscriptionUsage(),
         ),
       refuter: (spec) =>
         ok(
@@ -1911,20 +1464,20 @@ describe("engine-owned scout", () => {
             ],
           } satisfies RefuterResult,
           {},
-          subscriptionUsage(0, 0.015),
+          subscriptionUsage(),
         ),
     });
 
     const result = await runPipeline(input, { runner });
 
-    // Cash stays 0 across both steps; notional accumulates. Deliberately NOT
-    // asserted against `result.usage.cost_usd_est` here: FakeStepRunner
-    // hand-builds its legacy usage from a fixed per-step constant rather than
-    // projecting it from `usageV2`, so that assertion would test the fixture
-    // and not the code. The real legacy↔cash coupling is proven against the
-    // live harness in test/step-runner.test.ts.
-    expect(result.usageV2?.cashCostUsd).toBe(0);
-    expect(result.usageV2?.notionalCostUsd).toBeCloseTo(0.045);
+    // Two steps reported normalized usage: their tokens add up, and the
+    // credential class survives the sum. Deliberately NOT asserted against the
+    // legacy `result.usage`: FakeStepRunner hand-builds that from a fixed
+    // per-step constant rather than projecting it from `usageV2`, so that
+    // assertion would test the fixture and not the code. The real legacy
+    // projection is proven against the live harness in test/step-runner.test.ts.
+    expect(result.usageV2?.tokens.totalKnown).toBe(220);
+    expect(result.usageV2?.billingMode).toBe("subscription");
     // Same object the artifact publishes — not a second tally.
     const plan = (await readPlan(input.runDir)) as {
       usage_v2?: NormalizedUsage;
@@ -1942,61 +1495,6 @@ describe("engine-owned scout", () => {
       runner: new FakeStepRunner(HUNTERS_OK),
     });
     expect(result.usageV2).toBeUndefined();
-  });
-
-  test("the step's own parse turns the model's envelope into validated leads", async () => {
-    // The FakeStepRunner hands back a pre-parsed output, so without this the
-    // wiring between `{"leads":[...]}` and ScoutLead[] would be untested — and
-    // that seam is where a live run either delivers or silently returns none.
-    const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-    });
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, []),
-    });
-    await runPipeline(input, { runner });
-    const parse = runner.specs.find((s) => s.name === "scout")?.parse;
-    if (!parse) throw new Error("the scout step carried no parse");
-
-    expect(
-      parse('{"leads":[{"path":"b/src/app.ts","line":10,"why":"a hunch"}]}'),
-    ).toEqual([{ path: "src/app.ts", line: 10, why: "a hunch" }]);
-    expect(parse('{"leads":[]}')).toEqual([]);
-    expect(() => parse("no json here")).toThrow(
-      "scout final message has no JSON object",
-    );
-    // An ABSENT key is a failure, never an empty list: a model that omitted it
-    // did not tell us it found nothing, it told us nothing.
-    expect(() => parse("{}")).toThrow();
-  });
-
-  test("the scout's progress events name the model and the delivered lead count", async () => {
-    const events: PipelineProgressEvent[] = [];
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) =>
-        ok(spec, leads(["src/app.ts", 10, "a"], ["src/app.ts", 20, "b"])),
-    });
-
-    await runPipeline(
-      await makeInput({ scout: { promptPath: BUNDLED_SCOUT_PROMPT } }),
-      { runner, onProgress: (event) => events.push(event) },
-    );
-
-    expect(events).toContainEqual({ kind: "scout-started", model: "sonnet" });
-    expect(events).toContainEqual({
-      kind: "scout-finished",
-      ok: true,
-      durationMs: expect.any(Number),
-      leads: 2,
-    });
-    // Before the hunters: the whole point of the started event is that this
-    // stage is the one that runs alone.
-    const kinds = events.map((e) => e.kind);
-    expect(kinds.indexOf("scout-started")).toBeLessThan(
-      kinds.indexOf("hunters-started"),
-    );
   });
 });
 
@@ -2466,7 +1964,6 @@ describe("assembly", () => {
       tokens_in: result.usage.tokens_in,
       tokens_out: result.usage.tokens_out,
       tokens_total: result.usage.tokens_total,
-      cost_usd_est: result.usage.cost_usd_est,
       per_agent: result.perAgent,
     };
     const doc = mergeRunEnvelope({
@@ -2500,7 +1997,6 @@ describe("assembly", () => {
       tokens_in: result.usage.tokens_in,
       tokens_out: result.usage.tokens_out,
       tokens_total: result.usage.tokens_total,
-      cost_usd_est: result.usage.cost_usd_est,
       per_agent: result.perAgent,
     };
     const base = {
@@ -2648,7 +2144,6 @@ describe("assembly", () => {
       effective: {
         agents_dir: "/Users/x/.prhero/sets/clean",
         default_base: "dev",
-        parity_trigger_paths: [],
         suspicion_priors: [],
         summary: { enabled: false },
         max_verification_steps: 2,
@@ -2656,7 +2151,6 @@ describe("assembly", () => {
       sources: {
         agents_dir: "global" as const,
         default_base: "repo" as const,
-        parity_trigger_paths: "default" as const,
         suspicion_priors: "default" as const,
         summary: { enabled: "capped" as const },
         models: "default" as const,
@@ -2666,7 +2160,6 @@ describe("assembly", () => {
         max_concurrent_steps: "default" as const,
         max_changed_lines: "default" as const,
         max_changed_files: "default" as const,
-        scout: "default" as const,
         post: "default" as const,
         post_min_severity: "default" as const,
         ci_review_policy: "default" as const,
@@ -2784,7 +2277,6 @@ describe("assembly", () => {
             tokens_in: 0,
             tokens_out: 0,
             tokens_total: 0,
-            cost_usd_est: 0,
           }),
           attempts: 0,
           stderrTail: "credential projection failed (source_read_failed)",
@@ -3172,7 +2664,6 @@ describe("assembly", () => {
             tokens_in: 300,
             tokens_out: 30,
             tokens_total: 330,
-            cost_usd_est: 0.05,
           },
         ),
       "hunter-resilience": (spec) =>
@@ -3181,7 +2672,6 @@ describe("assembly", () => {
           tokens_in: 200,
           tokens_out: 20,
           tokens_total: 220,
-          cost_usd_est: 0.03,
         }),
     });
     const result = await runPipeline(await makeInput(), { runner });
@@ -3194,13 +2684,11 @@ describe("assembly", () => {
       duration_ms: 2_000,
       tokens_in: 300,
       tokens_out: 30,
-      cost_usd_est: 0.05,
       attempts: 1,
       status: "ok",
     });
     expect(result.usage.tokens_total).toBe(550);
     expect(result.usage.wall_ms).toBe(3_500);
-    expect(result.usage.cost_usd_est).toBeCloseTo(0.08);
   });
 });
 
@@ -3385,7 +2873,7 @@ describe("stepFailureReason", () => {
     "spawn failed: E2BIG: argument list too long; no child started";
   const ANNOTATIONS = [
     "[pr-hero] credential projection unavailable (missing_subscription_record); child runs with operator environment",
-    "[pr-hero] ambient credential bills metered — this attempt reserves against the spend ledger and fences its bucket if the cost cannot be confirmed",
+    "[pr-hero] ambient credential bills metered — this attempt reserves against the spend ledger and fences its bucket if its usage cannot be confirmed",
     "[pr-hero] credential projection destroy failed",
   ];
 
@@ -3698,19 +3186,16 @@ describe("C4 runtime-safety preamble", () => {
       dedupe_key: "src/app.ts:sym10:1",
     });
 
-  // Every step family in one run, so the walk below has all four kinds of
+  // Every step family in one run, so the walk below has all three kinds of
   // system prompt to find rather than proving the claim on hunters alone.
   async function runEveryStepFamily(nonce = "d0d0cafe") {
     const input = await makeInput({
       boundaryNonce: nonce,
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
       summarizer: { promptPath: BUNDLED_SUMMARIZER_PROMPT },
     });
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) => ok(spec, { findings: [c4Blocker("R1")] }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
-      scout: (spec) =>
-        ok(spec, leads(["src/app.ts", 10, "the new branch skips the guard"])),
       summarizer: (spec) => ok(spec, summary()),
       refuter: (spec) =>
         ok(spec, {
@@ -3736,11 +3221,11 @@ describe("C4 runtime-safety preamble", () => {
     );
 
     // Guard the guard: an empty list would make the loop below vacuously true.
-    expect(written.length).toBeGreaterThanOrEqual(4);
+    expect(written.length).toBeGreaterThanOrEqual(3);
     expect(written).toContain("hunter-reliability.system.md");
     expect(written).toContain("refuter.system.md");
     expect(written).toContain("summarizer.system.md");
-    expect(written).toContain("scout.system.md");
+    expect(written).not.toContain("scout.system.md");
 
     for (const file of written) {
       const text = await Bun.file(path.join(stepsDir, file)).text();
@@ -3781,14 +3266,11 @@ describe("C4 runtime-safety preamble", () => {
     const { input, runner } = await runEveryStepFamily("d0d0cafe");
     const hunter = runner.specs.find((s) => s.name === "hunter-reliability");
     const refuter = runner.specs.find((s) => s.name.startsWith("refuter-"));
-    const scout = runner.specs.find((s) => s.name === "scout");
-    if (!hunter || !refuter || !scout) throw new Error("missing step");
+    if (!hunter || !refuter) throw new Error("missing step");
 
-    // User-prompt side: the author's diff, the model's leads, the finding.
+    // User-prompt side: the author's diff and the finding.
     expect(hunter.prompt).toContain("<patch d0d0cafe>");
-    expect(hunter.prompt).toContain("<scout_leads d0d0cafe>");
     expect(refuter.prompt).toContain("<finding d0d0cafe>");
-    expect(scout.prompt).toContain("<patch d0d0cafe>");
 
     // System-prompt side: the operator's blocks are tagged too. Not because
     // the operator is a threat — a rule with exceptions is a rule someone
@@ -4182,7 +3664,6 @@ describe("PR intent to the hunters (S10)", () => {
   test("only the hunters get it: every other step's request is byte-identical to the run without it, and carries neither text", async () => {
     const wired = {
       boundaryNonce: NONCE,
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
       summarizer: { promptPath: BUNDLED_SUMMARIZER_PROMPT },
     };
     const blocker = draft({
@@ -4196,8 +3677,6 @@ describe("PR intent to the hunters (S10)", () => {
     const script: StepScript = {
       "hunter-reliability": (spec) => ok(spec, { findings: [blocker] }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
-      scout: (spec) =>
-        ok(spec, leads(["src/app.ts", 10, "the new branch skips the guard"])),
       summarizer: (spec) => ok(spec, summary()),
       refuter: (spec) =>
         ok(spec, {
@@ -4229,7 +3708,6 @@ describe("PR intent to the hunters (S10)", () => {
     // Guard the guard: the walk must really include the steps the claim is about.
     expect(others.some((name) => name.startsWith("refuter-"))).toBe(true);
     expect(others).toContain("summarizer");
-    expect(others).toContain("scout");
     for (const name of others) {
       expect(withIntent[name]).toEqual(without[name]);
       for (const text of [withIntent[name]?.prompt, withIntent[name]?.system]) {
@@ -4537,35 +4015,27 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
     expect(await Bun.file(planPath).text()).toBe(atCeiling);
   });
 
-  test("§13 — a ceiling that fires during the scout spawns no hunter at all", async () => {
+  test("§13 — a ceiling that fires before the fan-out spawns no hunter at all", async () => {
     // The hunter admission check sits BEFORE the composition loop, not at the
     // join: composing writes a system prompt per hunter into the run dir, so an
     // aborted run should not even build the specs it will never spawn. The
-    // scout is the one stage that can hold a run long enough for a ceiling to
-    // land ahead of the hunters, which is what makes this observable at all.
-    const runner = new SlowStepRunner(
-      { scout: (spec) => ok(spec, leads(["src/app.ts", 10, "suspicious"])) },
-      300,
-    );
-    const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-      pipelineTimeoutMs: 50,
-      ceilingGraceMs: TINY_GRACE_MS,
-    });
+    // controller arrives already aborted, which is what a ceiling that fired
+    // while the diff was still being read leaves behind.
+    const runner = new FakeStepRunner({});
+    const ceilingController = new AbortController();
+    ceilingController.abort();
+    const input = await makeInput();
 
-    const result = await runPipeline(input, { runner });
+    const result = await runPipeline(input, { runner, ceilingController });
 
     expect(result.skillOutput.run_status).toBe("partial");
-    await drainAbandonedRun(runner);
-
-    // Only the scout, which was already in flight when the ceiling fired. A
-    // hunter reaching this runner would throw `unscripted step` — but it never
+    // A hunter reaching this runner would throw `unscripted step` — but it never
     // gets that far, and `specs` is what proves it.
-    expect(runner.specs.map((s) => s.name)).toEqual(["scout"]);
+    expect(runner.specs.map((s) => s.name)).toEqual([]);
     const plan = (await readPlan(input.runDir)) as {
       steps: Array<{ name: string }>;
     };
-    expect(plan.steps.map((step) => step.name)).toEqual(["scout"]);
+    expect(plan.steps.map((step) => step.name)).toEqual([]);
   });
 
   test("§13 — a ceiling that fires before the fan-out still lands every seeded progress row", async () => {
@@ -4575,34 +4045,25 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
     // nobody and the summarizer spec is never built, so without a deliberate
     // terminal emit those seeded rows sit at "waiting"/"running" through the
     // panel's final draw — a finished run that reports itself as still going.
-    const runner = new SlowStepRunner(
-      { scout: (spec) => ok(spec, leads(["src/app.ts", 10, "suspicious"])) },
-      300,
-    );
+    const runner = new FakeStepRunner({});
+    const ceilingController = new AbortController();
+    ceilingController.abort();
     const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
       summarizer: { promptPath: BUNDLED_SUMMARIZER_PROMPT },
-      pipelineTimeoutMs: 50,
-      ceilingGraceMs: TINY_GRACE_MS,
     });
     const events: PipelineProgressEvent[] = [];
 
     const result = await runPipeline(input, {
       runner,
+      ceilingController,
       onProgress: (event) => events.push(event),
     });
 
     expect(result.skillOutput.run_status).toBe("partial");
-    // The orphan emits the fan-out's events after the ceiling has already
-    // returned; in a real run those land inside the default 8.5 s grace, well
-    // before the CLI stops its renderer.
-    await drainAbandonedRun(runner);
 
     // Both seeded hunter rows and the seeded summarizer row get a terminal
     // event, and `ok: false` is the honest flag: neither ever ran.
     expect(events.map((e) => e.kind)).toEqual([
-      "scout-started",
-      "scout-finished",
       "hunters-started",
       "hunter-finished",
       "hunter-finished",
@@ -4624,7 +4085,7 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
     expect(summarizers.map((e) => e.ok)).toEqual([false]);
     // Still no step: the terminal events are bookkeeping for the panel, never
     // a reason to spawn what admission just refused.
-    expect(runner.specs.map((s) => s.name)).toEqual(["scout"]);
+    expect(runner.specs.map((s) => s.name)).toEqual([]);
   });
 
   // This test once pinned the OPPOSITE — "ships a deterministic BLOCKER at
@@ -4818,7 +4279,7 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
 // D1-10c — attempt provenance in pipeline.json's `steps[]`.
 //
 // Before this slice `status` was written for exactly two of the nine steps a
-// real run produces (summarizer and scout), so a plan holding three
+// real run produces (the summarizer), so a plan holding three
 // demonstrably-executed hunters said nothing about any of them: the attempt
 // logs were on disk and the artifact that is supposed to index them was silent.
 // Every entry must now answer four questions — did it run, did it succeed, how
@@ -4928,40 +4389,25 @@ describe("D1-10c attempt provenance", () => {
     );
   });
 
-  test("the scout records attempts even on the paths that abandon the run", async () => {
-    // A scout that SETTLED and failed is not a scout that never spawned: it
+  test("the summarizer records attempts even on the paths that abandon the run", async () => {
+    // A summarizer that SETTLED and failed is not one that never spawned: it
     // burned a paid attempt and wrote both artifacts. Recording only `failed`
     // would throw away the one number that tells those two apart.
     const runner = new FakeStepRunner({
       ...HUNTERS_OK,
-      scout: (spec) => failed(spec),
+      summarizer: (spec) => failed(spec),
     });
     const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
+      summarizer: { promptPath: BUNDLED_SUMMARIZER_PROMPT },
     });
     await runPipeline(input, { runner });
 
-    const step = stepNamed(await readSteps(input.runDir), "scout");
+    const step = stepNamed(await readSteps(input.runDir), "summarizer");
     expect(step?.status).toBe("failed");
     expect(step?.attempts).toBe(2);
     expect(step?.attemptLogPath).toBe(
-      path.join("steps", "logs", "scout.2.log"),
+      path.join("steps", "logs", "summarizer.2.log"),
     );
-  });
-
-  test("a delivered scout records ok with its attempt count", async () => {
-    const runner = new FakeStepRunner({
-      ...HUNTERS_OK,
-      scout: (spec) => ok(spec, leads(["src/app.ts", 10, "suspicious"])),
-    });
-    const input = await makeInput({
-      scout: { promptPath: BUNDLED_SCOUT_PROMPT },
-    });
-    await runPipeline(input, { runner });
-
-    const step = stepNamed(await readSteps(input.runDir), "scout");
-    expect(step?.status).toBe("ok");
-    expect(step?.attempts).toBe(1);
   });
 
   test("each per-finding refuter step carries its own provenance", async () => {
@@ -5089,7 +4535,7 @@ describe("D1-10c attempt provenance", () => {
     // The step was pushed into the plan and then abandoned mid-flight when the
     // ceiling's grace expired. Absence would be indistinguishable from "this
     // engine version never wrote status at all", which is the exact ambiguity
-    // ScoutRecord's comment exists to refuse.
+    // the `consolidation` record's comment exists to refuse.
     const runner = new SlowStepRunner(HUNTERS_OK, 300);
     const input = await makeInput({
       pipelineTimeoutMs: 50,
@@ -5109,18 +4555,20 @@ describe("D1-10c attempt provenance", () => {
     await drainAbandonedRun(runner);
   });
 
-  test("a scout whose prompt file never parsed stays `failed` with no attempts", async () => {
+  test("a summarizer whose prompt file never parsed stays `failed` with no attempts", async () => {
     // Construction failure: the step was asked for and never spawned, so there
     // is no attempt count and no file to point at. `failed` (not `unsettled`)
     // because the stage did reach a terminal verdict — it just did so before a
     // session existed.
     const runner = new FakeStepRunner(HUNTERS_OK);
     const input = await makeInput({
-      scout: { promptPath: path.join(tmpdir(), "pr-hero-no-such-scout.md") },
+      summarizer: {
+        promptPath: path.join(tmpdir(), "pr-hero-no-such-summarizer.md"),
+      },
     });
     await runPipeline(input, { runner });
 
-    const step = stepNamed(await readSteps(input.runDir), "scout");
+    const step = stepNamed(await readSteps(input.runDir), "summarizer");
     expect(step?.status).toBe("failed");
     expect(step?.attempts).toBeUndefined();
     expect(step?.attemptLogPath).toBeUndefined();
@@ -5581,8 +5029,7 @@ describe("shared prefix (--shared-prefix)", () => {
     return dir;
   }
 
-  // Arm identity is read off the artifact, never a directory name (the scout
-  // records `scout.enabled` the same way): without the key a shared-prefix run
+  // Arm identity is read off the artifact, never a directory name: without the key a shared-prefix run
   // whose hunters all sit in groups of one is indistinguishable from control.
   test("pipeline.json records shared_prefix when the flag is on, and nothing when it is off", async () => {
     const on = await makeInput({ sharedPrefix: true });

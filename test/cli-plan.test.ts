@@ -1,7 +1,7 @@
 // The plan card and its details view, as LINES. Both pairs of renderers
 // (local mode's and PR mode's) were `(ctx) => void` runs of log() calls until
-// WU4 and therefore had ZERO coverage: the card that decides whether an
-// operator spends $4 was the least-tested output in the CLI, and the details
+// WU4 and therefore had ZERO coverage: the card an operator reads before
+// proceeding was the least-tested output in the CLI, and the details
 // pair could sit dead through a clean `bun run check` because biome does not
 // flag exported symbols.
 //
@@ -13,7 +13,6 @@ import { describe, expect, test } from "bun:test";
 import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
 import type { CliOptions, ConfigSources } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
-import { estimateCost } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
 import type { ReviewSpec } from "#review/spec";
 import {
@@ -35,7 +34,7 @@ const joined = (lines: string[]): string => stripAnsi(lines.join("\n"));
 // so the two halves of the terminal surface are asserted against one grid.
 const PINNED_WIDTH = 80;
 // Narrow enough to move the wrap points: at 40 columns the decision block's
-// money line is two rows, not one, which is exactly the failure an unpinned
+// gate line is two rows, not one, which is exactly the failure an unpinned
 // width used to produce inside a split pane.
 const NARROW_WIDTH = 40;
 
@@ -63,7 +62,6 @@ const options = (over: Partial<CliOptions> = {}): CliOptions => ({
   repo: ".",
   head: "HEAD",
   hopBudget: 3,
-  scout: false,
   full: false,
   dryRun: false,
   yes: false,
@@ -83,13 +81,7 @@ const options = (over: Partial<CliOptions> = {}): CliOptions => ({
 const spec: ReviewSpec = {
   agents: [
     { key: "reliability", file: "a.md", role: "hunter", model: "sonnet" },
-    {
-      key: "parity",
-      file: "b.md",
-      role: "hunter",
-      model: "sonnet",
-      trigger: ["packages/**"],
-    },
+    { key: "security", file: "b.md", role: "hunter", model: "sonnet" },
     { key: "refuter", file: "c.md", role: "refuter", model: "opus" },
   ],
 };
@@ -130,17 +122,14 @@ const planContext = (over: Partial<PlanContext> = {}): PlanContext => ({
   agentFiles,
   spec,
   runDir: "/tmp/pr-hero-fake-repo/.prhero/runs/local-abcdef",
-  config: { parity_trigger_paths: ["packages/**"], suspicion_priors: [] },
+  config: { suspicion_priors: [] },
   summary: { enabled: true, model: "haiku" },
-  parityFires: true,
   codegraphAvailable: true,
-  estimate: estimateCost(diffStat, 2, true),
-  hunterCount: 2,
   sizeGate: okGate,
   droppedPaths: [],
   // PINNED, on every case. Without it these renderers measured
   // process.stdout.columns — the terminal that happened to be running the
-  // suite — so an assertion like "the money line is the last line" passed in
+  // suite — so an assertion like "the gate line is the last line" passed in
   // an 80-column pane and failed in a 40-column one. See the determinism
   // block at the bottom of this file.
   width: PINNED_WIDTH,
@@ -167,10 +156,8 @@ const prPlanContext = (over: Partial<PrPlanContext> = {}): PrPlanContext => ({
   agentsDir: "/tmp/agents",
   agentFiles,
   spec,
-  config: { parity_trigger_paths: [], suspicion_priors: [] },
+  config: { suspicion_priors: [] },
   summary: { enabled: true, model: "haiku" },
-  estimate: estimateCost(diffStat, 2, true),
-  hunterCount: 2,
   sizeGate: okGate,
   droppedPaths: [],
   // Pinned for the reason PlanContext's is.
@@ -196,30 +183,30 @@ describe("renderPlan", () => {
     expect(text).toContain("per severe finding");
     expect(text).toContain("summarizer");
     expect(text).toContain("haiku");
-    expect(text).toContain("+ summarizer");
     // BOTH endpoints, short-sha'd — the rule the details view spells out.
     expect(text).toContain("main → 1111111111  (--base)");
     expect(text).toContain("2222222222 → 3333333333  (merge base)");
     expect(text).toContain("hop budget 3");
-    // The decision block is LAST: gate verdict, then the money.
+    // The decision block is LAST: the gate verdict, and no money row after it.
     const gateAt = lines.findIndex((l) => l.includes("size gate"));
-    const moneyAt = lines.findIndex((l) => l.includes("estimate $"));
     expect(gateAt).toBeGreaterThan(0);
-    expect(moneyAt).toBeGreaterThan(gateAt);
-    expect(moneyAt).toBe(lines.length - 1);
+    expect(gateAt).toBe(lines.length - 1);
+    expect(text).not.toContain("$");
+    expect(text).not.toContain("estimate");
   });
 
-  test("a non-firing conditional hunter says so", () => {
-    const text = joined(renderPlan(planContext({ parityFires: false }), false));
-    expect(text).toContain("✗ will not fire");
+  test('every hunter reads "always" and the card has no parity row or line', () => {
+    const text = joined(renderPlan(planContext(), false));
+    expect(text).not.toContain("will not fire");
+    expect(text).not.toMatch(/parity/i);
+    expect(text).toContain("always");
   });
 
-  test("a disabled summarizer is visible and not billed", () => {
+  test("a disabled summarizer is visible", () => {
     const text = joined(
       renderPlan(
         planContext({
           summary: { enabled: false, model: "opus" },
-          estimate: estimateCost(diffStat, 2, false),
         }),
         false,
       ),
@@ -227,57 +214,12 @@ describe("renderPlan", () => {
     expect(text).toContain("summarizer");
     expect(text).toContain("opus");
     expect(text).toContain("disabled");
-    expect(text).toContain("+ summarizer disabled");
   });
 
-  // ROADMAP-DOORDASH M5. The scout row prints on EVERY plan, off included:
-  // it adds a paid stage to the front of the run and the band below it
-  // already counts one, so "disabled" is information, not noise.
-  test("the scout row states itself whether or not the flag is on", () => {
-    const off = joined(renderPlan(planContext(), false));
-    expect(off).toContain("scout");
-    expect(off).toContain("disabled");
-    expect(off).not.toContain("+ scout");
-
-    const on = joined(
-      renderPlan(
-        planContext({
-          options: options({ scout: true }),
-          estimate: estimateCost(diffStat, 2, true, true),
-        }),
-        false,
-      ),
-    );
-    expect(on).toContain("diff-only, before the hunters (experimental)");
-    // Default model, shown before the money is spent rather than discovered
-    // in the artifact after.
-    expect(on).toContain("sonnet");
-  });
-
-  test("--scout-model is shown, and --model still outranks it", () => {
-    const scoutModel = joined(
-      renderPlan(
-        planContext({ options: options({ scout: true, scoutModel: "haiku" }) }),
-        false,
-      ),
-    );
-    expect(scoutModel).toContain("haiku");
-
-    const overridden = joined(
-      renderPlan(
-        planContext({
-          options: options({
-            scout: true,
-            scoutModel: "haiku",
-            model: "opus",
-          }),
-        }),
-        false,
-      ),
-    );
-    // The plan must print the model that will actually run, or it is a plan
-    // for a different run than the one about to happen.
-    expect(overridden).toContain("scout       opus");
+  test("the plan carries no scout row and no scout label", () => {
+    const text = joined(renderPlan(planContext(), false));
+    expect(text).not.toContain("scout");
+    expect(text).not.toContain("diff-only");
   });
 
   test("--two-dot renames the range, and --force annotates a failed gate", () => {
@@ -367,7 +309,6 @@ describe("renderPrPlan", () => {
           baseSha: "1111111111111111111111111111111111111111",
           diffFromSha: "2222222222222222222222222222222222222222",
           diffPath: "/tmp/run/diff.patch",
-          parityFires: false,
         },
       }),
       false,
@@ -381,8 +322,9 @@ describe("renderPrPlan", () => {
     expect(text).toContain("worktree will be created");
     expect(text).toContain("summarizer");
     expect(text).toContain("haiku");
-    expect(text).toContain("+ summarizer");
-    expect(joined([lines[lines.length - 1] ?? ""])).toContain("estimate $");
+    expect(joined([lines[lines.length - 1] ?? ""])).toContain("size gate");
+    expect(text).not.toContain("$");
+    expect(text).not.toContain("estimate");
   });
 
   test("pre-fetch the plan admits both unknowns instead of guessing", () => {
@@ -394,7 +336,8 @@ describe("renderPrPlan", () => {
       "merge base of main → 3333333333  (exact sha after fetch)",
     );
     expect(text).not.toContain("?");
-    expect(text).toContain("decided by the diff after fetch");
+    expect(text).not.toContain("decided by the diff after fetch");
+    expect(text).not.toMatch(/parity/i);
     expect(text).toContain("summarizer");
     expect(text).toContain("haiku");
   });
@@ -473,7 +416,6 @@ describe("prPlanDetails", () => {
             baseSha: "1111111111111111111111111111111111111111",
             diffFromSha: "2222222222222222222222222222222222222222",
             diffPath: "/tmp/run/diff.patch",
-            parityFires: true,
           },
         }),
         false,
@@ -593,12 +535,12 @@ describe("plan renderers are deterministic offline", () => {
     expect(narrow).not.toEqual(wide);
     expect(narrow.length).toBeGreaterThan(wide.length);
     // The decision block is where the old flakiness lived: at 80 columns the
-    // money line is one row (and therefore the last line), at 40 it wraps to
+    // gate line is one row (and therefore the last line), at 40 it wraps to
     // two — the exact assertion that used to fail for no reason but the pane.
-    const wideMoney = wide.filter((l) => l.includes("estimate $"));
-    expect(wideMoney).toHaveLength(1);
-    expect(wide.indexOf(wideMoney[0] ?? "")).toBe(wide.length - 1);
-    expect(narrow[narrow.length - 1]).not.toContain("estimate $");
+    const wideGate = wide.filter((l) => l.includes("size gate"));
+    expect(wideGate).toHaveLength(1);
+    expect(wide.indexOf(wideGate[0] ?? "")).toBe(wide.length - 1);
+    expect(narrow[narrow.length - 1]).not.toContain("size gate");
   });
 
   test("every renderer threads the width all the way down", () => {
@@ -627,8 +569,8 @@ describe("plan renderers are deterministic offline", () => {
   });
 
   test("a failed gate with exclusions stays deterministic too", () => {
-    // The longest decision block there is: gate verdict, exclusion note,
-    // --force note, money. Every one of those four goes through
+    // The longest decision block there is: gate verdict, exclusion note and
+    // --force note. Every one of those goes through
     // markerRowLines, so this is the case that catches a missed width
     // argument on any of them.
     const ctx = planContext({
@@ -679,7 +621,6 @@ const provenance = (
   sources: {
     agents_dir: "repo",
     default_base: "repo",
-    parity_trigger_paths: "repo",
     suspicion_priors: "repo",
     summary: { enabled: "repo" },
     models: "default",
@@ -689,7 +630,6 @@ const provenance = (
     max_concurrent_steps: "default",
     max_changed_lines: "default",
     max_changed_files: "default",
-    scout: "default",
     materiality_gate: "default",
     post: "default",
     post_min_severity: "default",
@@ -763,7 +703,6 @@ describe("plan card config provenance (C5 O-7)", () => {
             {
               agents_dir: "default",
               default_base: "default",
-              parity_trigger_paths: "default",
               suspicion_priors: "default",
               summary: { enabled: "default" },
               max_verification_steps: "default",
@@ -1040,7 +979,7 @@ describe("plan card and details route dimensions display", () => {
     cliModel: "sonnet",
   });
   const hunter2 = resolveStepRoute({
-    stepKey: "hunter-parity",
+    stepKey: "hunter-security",
     role: "hunter",
     cliModel: "sonnet",
   });
@@ -1096,38 +1035,29 @@ describe("plan card and details route dimensions display", () => {
 });
 
 // S4: the RUN row's count is the config's suspicion priors, labelled as such, not prior findings.
-// E-c: with `models` set, the summarizer and the scout run what the plan says,
-// not the prompt's default, and their rows must say so.
-describe("the summarizer and scout rows read the route plan", () => {
+// E-c: with `models` set, the summarizer runs what the plan says, not the
+// prompt's default, and its row must say so.
+describe("the summarizer row reads the route plan", () => {
   const routePlan = createResolvedRoutePlan([
     resolveStepRoute({
       stepKey: "summarizer",
       role: "summarizer",
       specModel: "claude:fable-latest",
     }),
-    resolveStepRoute({
-      stepKey: "scout",
-      role: "scout",
-      specModel: "opencode:openai/gpt-5-mini",
-    }),
   ]);
 
-  test("both rows show the planned model on every card", () => {
-    const ctx = planContext({
-      routePlan,
-      options: options({ scout: true }),
-    });
+  test("the row shows the planned model on every card", () => {
+    const ctx = planContext({ routePlan });
     for (const text of [
       flat(renderPlan(ctx, false)),
       flat(planDetails(ctx, false)),
     ]) {
       expect(text).toMatch(/summarizer\s+claude:fable-latest/);
-      expect(text).toMatch(/opencode:openai\/gpt-5-mini\s*diff-only/);
       expect(text).not.toMatch(/summarizer\s+haiku/);
     }
     const pr = flat(
       renderPrPlan(
-        prPlanContext({ routePlan, options: options({ pr: 6, scout: true }) }),
+        prPlanContext({ routePlan, options: options({ pr: 6 }) }),
         false,
       ),
     );
@@ -1135,21 +1065,17 @@ describe("the summarizer and scout rows read the route plan", () => {
   });
 
   test("a long model name is separated from what follows it", () => {
-    const ctx = planContext({
-      routePlan,
-      options: options({ scout: true }),
-    });
+    const ctx = planContext({ routePlan });
     const text = flat(renderPlan(ctx, false));
     expect(text).toContain("claude:fable-latest always");
-    expect(text).toContain("opencode:openai/gpt-5-mini diff-only");
   });
 
-  // A re-review with nothing new to discover runs neither stage, so neither row
-  // may name a model: the plan omits both steps, and the defaults are not what runs.
-  test("a pass that skips discovery says the summarizer and the scout do not run", () => {
+  // A re-review with nothing new to discover runs no summarizer, so its row
+  // may not name a model: the plan omits the step, and the default is not what runs.
+  test("a pass that skips discovery says the summarizer does not run", () => {
     const skipped = prPlanContext({
       routePlan: createResolvedRoutePlan([]),
-      options: options({ pr: 6, scout: true }),
+      options: options({ pr: 6 }),
       rereview: {
         case: "B",
         lastHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -1162,14 +1088,13 @@ describe("the summarizer and scout rows read the route plan", () => {
       flat(prPlanDetails(skipped, false)),
     ]) {
       expect(text).toMatch(/summarizer\s+-\s+not run this pass/);
-      expect(text).toMatch(/scout\s+-\s+not run this pass/);
       expect(text).not.toMatch(/summarizer\s+haiku/);
     }
     const discovering = flat(
       renderPrPlan(
         prPlanContext({
           routePlan,
-          options: options({ pr: 6, scout: true }),
+          options: options({ pr: 6 }),
           rereview: {
             case: "B",
             lastHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -1183,10 +1108,8 @@ describe("the summarizer and scout rows read the route plan", () => {
     expect(discovering).toMatch(/summarizer\s+claude:fable-latest always/);
   });
 
-  test("with no plan the rows keep their defaults", () => {
-    const text = flat(
-      renderPlan(planContext({ options: options({ scout: true }) }), false),
-    );
+  test("with no plan the row keeps its default", () => {
+    const text = flat(renderPlan(planContext(), false));
     expect(text).toMatch(/summarizer\s+haiku/);
   });
 });

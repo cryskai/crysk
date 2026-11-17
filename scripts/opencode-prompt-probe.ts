@@ -141,7 +141,6 @@ interface RepResult {
   classification: WitnessClassification;
   ms: number;
   attempts: number;
-  cost_usd_est: number;
   stderrTail: string;
 }
 
@@ -377,12 +376,11 @@ if (import.meta.main) {
       classification,
       ms,
       attempts: result.attempts,
-      cost_usd_est: result.usage.cost_usd_est,
       stderrTail: redactEvidenceText(result.stderrTail).slice(-300),
     });
 
     console.error(
-      `  [${arm.id} rep${rep}${leg === undefined ? "" : ` leg${leg}`}] ${outcome} (${classification}) attempts=${result.attempts} ${ms}ms $${result.usage.cost_usd_est.toFixed(4)} resultText=${result.resultText.length}ch`,
+      `  [${arm.id} rep${rep}${leg === undefined ? "" : ` leg${leg}`}] ${outcome} (${classification}) attempts=${result.attempts} ${ms}ms resultText=${result.resultText.length}ch`,
     );
   }
 
@@ -401,7 +399,6 @@ if (import.meta.main) {
         classification: "inconclusive",
         ms: Math.round(performance.now() - started),
         attempts: 0,
-        cost_usd_est: 0,
         stderrTail: redactEvidenceText(made.error).slice(-300),
       });
       console.error(

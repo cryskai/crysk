@@ -49,7 +49,7 @@ export type Action =
   | { kind: "push"; variant: VariantName; files?: readonly NewFile[] }
   // A PR comment, posted as the authenticated user.
   | { kind: "comment"; body: string }
-  // T5b: reply `dismissed` on the first blocking finding's thread, then comment /pr-hero recheck.
+  // T5b: reply `dismissed` on the first blocking finding's thread, then comment /crysk recheck.
   | { kind: "dismiss-and-recheck"; argument: string }
   // budget-exhausted-carry S3: reply `tag` on every blocking finding thread of the current
   // head, then push a commit that adds MUTE_PATH, so the push is never empty.
@@ -273,7 +273,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "size-skip",
     description:
-      "a diff over the size gate in gate mode: a skip with a failure status that names /pr-hero review, and a /pr-hero review comment that reviews the same head with its own evidence (S4)",
+      "a diff over the size gate in gate mode: a skip with a failure status that names /crysk review, and a /crysk review comment that reviews the same head with its own evidence (S4)",
     phases: [
       {
         action: { kind: "open", variant: "size-skip" },
@@ -289,7 +289,7 @@ export const SCENARIOS: readonly Scenario[] = [
         ],
       },
       {
-        action: { kind: "comment", body: "/pr-hero review" },
+        action: { kind: "comment", body: "/crysk review" },
         wait: "issue_comment",
         checks: [
           { kind: "run-completed", event: "issue_comment" },
@@ -303,7 +303,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "override",
     description:
-      "the human escape hatch (S8): a red gate on a reviewed head, unlocked by a /pr-hero override comment that posts a success status and an audit comment on that head, with no review and no cost",
+      "the human escape hatch (S8): a red gate on a reviewed head, unlocked by a /crysk override comment that posts a success status and an audit comment on that head, with no review and no cost",
     phases: [
       {
         action: { kind: "open", variant: "normal" },
@@ -317,7 +317,7 @@ export const SCENARIOS: readonly Scenario[] = [
         ],
       },
       {
-        action: { kind: "comment", body: "/pr-hero override" },
+        action: { kind: "comment", body: "/crysk override" },
         wait: "issue_comment",
         checks: [
           { kind: "run-completed", event: "issue_comment" },
@@ -358,7 +358,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "comment-trigger",
     description:
-      "/pr-hero review starts an issue_comment run that completes the review, and removes the outcome comment a failed first run left",
+      "/crysk review starts an issue_comment run that completes the review, and removes the outcome comment a failed first run left",
     phases: [
       {
         action: { kind: "open", variant: "normal" },
@@ -373,7 +373,7 @@ export const SCENARIOS: readonly Scenario[] = [
         checks: [{ kind: "path", accept: ["reviewed", "hunters-failed"] }],
       },
       {
-        action: { kind: "comment", body: "/pr-hero review" },
+        action: { kind: "comment", body: "/crysk review" },
         wait: "issue_comment",
         // Only what this run did is asserted. Phase 1's report and status still read
         // as reviewed on this head, so a head-level check would pass a trigger that
@@ -397,7 +397,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "near-miss",
     description:
-      "a /pr-hero review comment that is not the exact command runs no review: it gets the confused reaction, no review evidence of its own and no outcome comment of its own (T2e)",
+      "a /crysk review comment that is not the exact command runs no review: it gets the confused reaction, no review evidence of its own and no outcome comment of its own (T2e)",
     phases: [
       {
         action: { kind: "open", variant: "normal" },
@@ -406,7 +406,7 @@ export const SCENARIOS: readonly Scenario[] = [
         checks: [{ kind: "path", accept: ["reviewed", "hunters-failed"] }],
       },
       {
-        action: { kind: "comment", body: "/pr-hero review please" },
+        action: { kind: "comment", body: "/crysk review please" },
         wait: "issue_comment",
         checks: [
           { kind: "run-completed", event: "issue_comment" },
@@ -422,7 +422,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "same-head-rereview",
     description:
-      "a blocking finding survives /pr-hero review on the same head: the gate stays red, so the author cannot re-run its way to green (S7)",
+      "a blocking finding survives /crysk review on the same head: the gate stays red, so the author cannot re-run its way to green (S7)",
     phases: [
       {
         action: { kind: "open", variant: "normal" },
@@ -430,7 +430,7 @@ export const SCENARIOS: readonly Scenario[] = [
         checks: [REVIEWED, STATUS_MATCHES_FINDINGS],
       },
       {
-        action: { kind: "comment", body: "/pr-hero review" },
+        action: { kind: "comment", body: "/crysk review" },
         wait: "issue_comment",
         // The comment run itself is asserted every time: the trigger is the
         // subject. Its status is asserted only when phase 1 left a blocking
@@ -465,7 +465,7 @@ export const SCENARIOS: readonly Scenario[] = [
         checks: [{ kind: "run-completed", event: "pull_request" }],
       },
       {
-        action: { kind: "comment", body: "/pr-hero review" },
+        action: { kind: "comment", body: "/crysk review" },
         wait: "issue_comment",
         checks: [
           { kind: "run-completed", event: "issue_comment" },
@@ -484,7 +484,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "recheck-dismissal",
     description:
-      "a false dismissal does not turn the gate green: /pr-hero recheck has the CI adjudicator rule on it, and it is rejected or inconclusive, so the finding still counts (T5b, D5)",
+      "a false dismissal does not turn the gate green: /crysk recheck has the CI adjudicator rule on it, and it is rejected or inconclusive, so the finding still counts (T5b, D5)",
     phases: [
       {
         action: { kind: "open", variant: "normal" },

@@ -122,7 +122,7 @@ describe("activity (active runs tracker & store activity monitor)", () => {
   describe("2.1 Kill action with identity check & bounded escalation", () => {
     test("checkProcessIdentity validates pr-hero review command line", async () => {
       const isMatch = await checkProcessIdentity(1001, async (_cmd) => {
-        return "bun /usr/local/bin/pr-hero review --pr 56";
+        return "bun /usr/local/bin/crysk review --pr 56";
       });
       expect(isMatch).toBe(true);
 
@@ -248,7 +248,6 @@ describe("activity (active runs tracker & store activity monitor)", () => {
           blocking: i % 3,
           advisory: i % 2,
           wall_ms: 60000 + i * 1000,
-          cost_usd_est: 0.5 + i * 0.1,
           generated_at: new Date(Date.now() - i * 60000).toISOString(),
           pr: 100 + i,
           repo_id: "juanmaagd/pr-hero",

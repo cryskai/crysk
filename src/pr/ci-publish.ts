@@ -33,7 +33,6 @@ export async function publishCiReviewIfEligible(input: {
   prNumber: number;
   headSha: string;
   findings: readonly Finding[];
-  costUsdEst: number;
   wallMs: number;
   model: string;
   webUrl: string | undefined;
@@ -50,7 +49,6 @@ export async function publishCiReviewIfEligible(input: {
     prNumber: input.prNumber,
     headSha: input.headSha,
     findings: input.findings,
-    costUsdEst: input.costUsdEst,
     wallMs: input.wallMs,
     model: input.model,
     ...(input.webUrl === undefined ? {} : { repoWebUrl: input.webUrl }),

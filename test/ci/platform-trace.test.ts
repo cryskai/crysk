@@ -153,7 +153,6 @@ function reviewedRunDir(): void {
         wallMs: 4000,
         tokens: { inputUncached: 10, outputVisible: 5 },
         billingMode: "metered",
-        cashCostUsd: 0.01,
       },
     },
   });

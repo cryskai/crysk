@@ -8,9 +8,7 @@ import {
 import { DiversityCapabilityError } from "../../src/diversity/errors";
 import {
   assertRouteFingerprintStable,
-  assertSpendUnderCap,
   buildDiversityPlan,
-  freezeDiversityPlan,
 } from "../../src/diversity/identity";
 
 const diversitySpec = validateReviewSpec({
@@ -18,7 +16,6 @@ const diversitySpec = validateReviewSpec({
     enabled: true,
     armId: "m6-diversity",
     maxLegs: 3,
-    cashCapUsd: 25,
   },
   agents: [
     {
@@ -73,17 +70,5 @@ describe("diversity plan admission", () => {
     expect(() => assertRouteFingerprintStable("abc", "def", "leg-1")).toThrow(
       /route drift/,
     );
-  });
-
-  test("rejects spend above frozen cap before leg authorization", () => {
-    const plan = freezeDiversityPlan({
-      armId: "m6-diversity",
-      feature: "multi-model-diversity",
-      c2SchemaVersion: "1.1.0",
-      legs: [],
-      maxLegs: 2,
-      cashCapUsd: 10,
-    });
-    expect(() => assertSpendUnderCap(plan, 11)).toThrow(/exceeds cap/);
   });
 });

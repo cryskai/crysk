@@ -8,12 +8,19 @@ import {
   parseLocalConfig,
 } from "#review/preflight";
 import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
+import { CliError } from "../errors";
 import { redactConfigValue } from "../security/redact";
 import { bold, box, cyan, dim, sanitizeText, yellow } from "./primitives";
 import type { KeyReader } from "./select";
 
 const SUMMARY_MODEL_GONE =
   'summary.model is gone: set the summary model per person, under models in ~/.crysk/config.json, e.g. "models": {"summary": ["claude:haiku-latest"]}';
+
+// The scout stage is gone, and so is the key's meaning: writing it would plant
+// a setting that does nothing. Removing a stale one (`config unset`) still works.
+const SCOUT_GONE = "scout was removed: the scout stage no longer exists";
+const PARITY_GONE =
+  "parity_trigger_paths was removed: the parity hunter no longer exists";
 
 export interface ConfigEntry {
   key: string;
@@ -51,12 +58,6 @@ export function getEditableLayerEntries(
     const summaryEnabled =
       typeof summaryObj.enabled === "boolean"
         ? summaryObj.enabled
-          ? "[✓] true"
-          : "[ ] false"
-        : "(not set)";
-    const scoutVal =
-      typeof rawData.scout === "boolean"
-        ? rawData.scout
           ? "[✓] true"
           : "[ ] false"
         : "(not set)";
@@ -104,13 +105,6 @@ export function getEditableLayerEntries(
         currentRaw: summaryObj.enabled,
       },
       {
-        key: "scout",
-        value: scoutVal,
-        desc: "Run scout reconnaissance stage",
-        type: "boolean",
-        currentRaw: rawData.scout,
-      },
-      {
         key: "post",
         value: postVal,
         desc: "Publish review as PR comment",
@@ -140,12 +134,6 @@ export function getEditableLayerEntries(
     const summaryEnabled =
       typeof summaryObj.enabled === "boolean"
         ? summaryObj.enabled
-          ? "[✓] true"
-          : "[ ] false"
-        : "(not set)";
-    const scoutVal =
-      typeof rawData.scout === "boolean"
-        ? rawData.scout
           ? "[✓] true"
           : "[ ] false"
         : "(not set)";
@@ -184,13 +172,6 @@ export function getEditableLayerEntries(
         desc: "Generate AI summary overview",
         type: "boolean",
         currentRaw: summaryObj.enabled,
-      },
-      {
-        key: "scout",
-        value: scoutVal,
-        desc: "Personal scout reconnaissance ceiling",
-        type: "boolean",
-        currentRaw: rawData.scout,
       },
       {
         key: "post",
@@ -476,37 +457,11 @@ export async function setConfigValue(input: {
       }
       currentRepo.default_base = input.value.trim();
     } else if (input.key === "parity_trigger_paths") {
-      let paths: string[];
-      if (input.value.startsWith("[")) {
-        try {
-          paths = JSON.parse(input.value);
-        } catch {
-          throw new Error(
-            "parity_trigger_paths must be an array of non-empty strings",
-          );
-        }
-      } else {
-        paths = input.value
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
-      if (
-        !Array.isArray(paths) ||
-        paths.length === 0 ||
-        paths.some((p) => typeof p !== "string" || p.trim().length === 0)
-      ) {
-        throw new Error(
-          "parity_trigger_paths must be an array of non-empty strings",
-        );
-      }
-      currentRepo.parity_trigger_paths = paths;
+      throw new CliError(PARITY_GONE);
     } else if (input.key === "agents_dir") {
       currentRepo.agents_dir = input.value.trim();
     } else if (input.key === "scout") {
-      const b = input.value.toLowerCase() === "true";
-      parsedVal = b;
-      currentRepo.scout = b;
+      throw new CliError(SCOUT_GONE);
     } else if (input.key === "post") {
       const b = input.value.toLowerCase() === "true";
       parsedVal = b;
@@ -556,12 +511,6 @@ export async function setConfigValue(input: {
         ) {
           annotation = `written: ${parsedVal} — your effective value remains ${merged.effective.summary?.enabled}, capped by your Person layer`;
         } else if (
-          input.key === "scout" &&
-          globalLayer.scout !== undefined &&
-          merged.effective.scout !== parsedVal
-        ) {
-          annotation = `written: ${parsedVal} — your effective value remains ${merged.effective.scout}, capped by your Person layer`;
-        } else if (
           input.key === "post" &&
           globalLayer.post !== undefined &&
           merged.effective.post !== parsedVal
@@ -577,11 +526,10 @@ export async function setConfigValue(input: {
   }
 
   if (input.layer === "person") {
-    if (
-      input.key === "default_base" ||
-      input.key === "parity_trigger_paths" ||
-      input.key === "suspicion_priors"
-    ) {
+    if (input.key === "parity_trigger_paths") {
+      throw new CliError(PARITY_GONE);
+    }
+    if (input.key === "default_base" || input.key === "suspicion_priors") {
       throw new Error(
         `${input.key} is a per-repo key; use --team to configure it.`,
       );
@@ -640,8 +588,7 @@ export async function setConfigValue(input: {
     } else if (input.key === "agents_dir") {
       currentPerson.agents_dir = input.value.trim();
     } else if (input.key === "scout") {
-      const b = input.value.toLowerCase() === "true";
-      currentPerson.scout = b;
+      throw new CliError(SCOUT_GONE);
     } else if (input.key === "post") {
       const b = input.value.toLowerCase() === "true";
       currentPerson.post = b;

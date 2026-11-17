@@ -84,8 +84,6 @@ function recordingTransport(requests: TransportRequest[]): ProviderTransport {
           tokens: {},
           completeness: "complete",
           billingMode: "subscription",
-          costSource: "provider",
-          cashCostUsd: 0,
         },
         stderrTail: "",
       } satisfies TransportOutcome;
@@ -117,8 +115,6 @@ function serverLifetimeTransport(
           tokens: {},
           completeness: "complete",
           billingMode: "subscription",
-          costSource: "provider",
-          cashCostUsd: 0,
         },
         stderrTail: "",
       } satisfies TransportOutcome;
@@ -186,14 +182,9 @@ class SpyLedger implements SpendLedger {
 
   async markUnresolvedRemote(
     reservationId: string,
-    knownUsd: number | undefined,
     idempotencyKey: string,
   ): Promise<void> {
-    return this.inner.markUnresolvedRemote(
-      reservationId,
-      knownUsd,
-      idempotencyKey,
-    );
+    return this.inner.markUnresolvedRemote(reservationId, idempotencyKey);
   }
 }
 
@@ -426,8 +417,6 @@ describe("harness with a CredentialBroker", () => {
         tokens: { outputVisible: 40, outputKnown: 40, totalKnown: 40 },
         completeness: "complete",
         billingMode: "metered",
-        costSource: "provider",
-        cashCostUsd: 0.02,
       }),
       spawnFn: (() => ({
         exited: Promise.resolve(0),
@@ -474,12 +463,11 @@ describe("harness with a CredentialBroker", () => {
     // THE FLIP: the spend admission could not see is no longer unaccounted
     // for. One reservation, opened against the MIRRORED metered bucket
     // (never the binding's own — `degradedProjectionBucketId`), settled on
-    // the CLI's reported cost.
+    // the attempt's complete usage.
     expect(ledger.reserveCalls).toHaveLength(1);
     expect(ledger.reserveCalls[0]?.bucketId).toBe("mirrored-metered-bucket");
     expect(result.reservations).toHaveLength(1);
     expect(result.reservations?.[0]?.state).toBe("settled");
-    expect(result.reservations?.[0]?.settledUsd).toBe(0.02);
   });
 
   test("attack-signal projection failures still fail closed before admission", async () => {
@@ -667,8 +655,6 @@ describe("progress reason over the harness's real annotations", () => {
               tokens: {},
               completeness: "complete",
               billingMode: "metered",
-              costSource: "provider",
-              cashCostUsd: 0,
             },
             stderrTail: SPAWN_LINE,
           } satisfies TransportOutcome;
@@ -801,13 +787,15 @@ describe("#150: a transport declaring server-lifetime credential projection", ()
 // explicitly, so each test states its own binding shape rather than
 // inheriting one.
 describe("#279: fencing a degraded projection's ambient spend", () => {
-  const METERED_ZERO = {
+  const METERED_COMPLETE = {
     wallMs: 5,
     tokens: { outputVisible: 40, outputKnown: 40, totalKnown: 40 },
     completeness: "complete" as const,
     billingMode: "metered" as const,
-    costSource: "provider" as const,
-    cashCostUsd: 0,
+  };
+  const METERED_INCOMPLETE = {
+    ...METERED_COMPLETE,
+    completeness: "unavailable" as const,
   };
 
   function degradingHarness(options: {
@@ -823,7 +811,10 @@ describe("#279: fencing a degraded projection's ambient spend", () => {
     return {
       requests,
       harness: new StepExecutionHarness({
-        transport: meteredTransport(requests, options.usage ?? METERED_ZERO),
+        transport: meteredTransport(
+          requests,
+          options.usage ?? METERED_COMPLETE,
+        ),
         spawnFn: (() => ({
           exited: Promise.resolve(0),
         })) as unknown as typeof Bun.spawn,
@@ -836,12 +827,13 @@ describe("#279: fencing a degraded projection's ambient spend", () => {
     };
   }
 
-  test("degraded + ambient key, metered-zero usage → unresolved → the bucket is fenced and a subsequent paid attempt on it is refused", async () => {
+  test("degraded + ambient key, incomplete usage → unresolved → the bucket is fenced and a subsequent paid attempt on it is refused", async () => {
     const ledger = new SpyLedger();
     const { harness } = degradingHarness({
       env: { HOME: "/tmp", ANTHROPIC_API_KEY: "sk-ambient" },
       ledger,
       reservesSpend: false,
+      usage: METERED_INCOMPLETE,
     });
     const result = await runStep(harness);
     expect(result.reservations).toHaveLength(1);
@@ -854,11 +846,23 @@ describe("#279: fencing a degraded projection's ambient spend", () => {
       env: { HOME: "/tmp", ANTHROPIC_API_KEY: "sk-ambient" },
       ledger,
       reservesSpend: false,
+      usage: METERED_INCOMPLETE,
     });
     const secondResult = await runStep(second.harness);
     expect(secondResult.status).toBe("failed");
     expect(secondResult.stderrTail).toContain("fenced");
     expect(second.requests).toHaveLength(0);
+  });
+
+  test("degraded + ambient key, complete usage → the reservation settles", async () => {
+    const ledger = new SpyLedger();
+    const { harness } = degradingHarness({
+      env: { HOME: "/tmp", ANTHROPIC_API_KEY: "sk-ambient" },
+      ledger,
+      reservesSpend: false,
+    });
+    const result = await runStep(harness);
+    expect(result.reservations?.[0]?.state).toBe("settled");
   });
 
   test("degraded + no ambient key → no reservation", async () => {
@@ -883,7 +887,7 @@ describe("#279: fencing a degraded projection's ambient spend", () => {
     const requests: TransportRequest[] = [];
     const broker = new FakeBroker();
     const harness = new StepExecutionHarness({
-      transport: meteredTransport(requests, METERED_ZERO),
+      transport: meteredTransport(requests, METERED_COMPLETE),
       spawnFn: (() => ({
         exited: Promise.resolve(0),
       })) as unknown as typeof Bun.spawn,

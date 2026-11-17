@@ -19,17 +19,17 @@
 import { existsSync } from "node:fs";
 import os from "node:os";
 import {
-  budgetDisabledWarningMessage,
-  budgetUnlimitedNoticeMessage,
+  type CiBillingMode,
   type CiSizeLimits,
   deriveCiBillingMode,
-  resolveCiBudgetCeiling,
+  type ModelRoleBilling,
   resolveCiSizeLimits,
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { formatWorkflowCommand } from "#ci/reporter";
-import { openCodeRoutesBillMetered } from "#ci/setup";
+import { modelRoleBilling, openCodeRoutesBillMetered } from "#ci/setup";
 import { resolveRepoRoot } from "#git/git";
+import { planRoutes, type ResolvedRoutePlan } from "#model/routing";
 import { ghCurrentBranchPr, ghPrView } from "#pr/pr";
 import {
   type PrTarget,
@@ -44,9 +44,9 @@ import {
   type CliOptions,
   isCiEnvironment,
   type NumstatFile,
+  resolveMaterialityGate,
 } from "#review/preflight";
 import type { ParsedAgent, PromptSetIdentity } from "#review/prompt-set";
-import type { estimateCost } from "#review/report";
 import { buildCliRoutePlan, isBundledAgentsDir } from "#review/route-preflight";
 import {
   type LoadedRunConfig,
@@ -113,16 +113,14 @@ export async function resolvePrRunOptions(
   // yet at this point, and a `.crysk/config.json` committed by the PR author
   // must stay unread (O-8). Same loader as local mode, so the two modes
   // cannot drift on precedence.
-  const { loaded, config, summary, scout, post, profile } = await loadRunConfig(
-    {
-      root: operatorRoot,
-      home,
-      configFlag: options.config,
-      options,
-    },
-  );
+  const { loaded, config, summary, post, profile } = await loadRunConfig({
+    root: operatorRoot,
+    home,
+    configFlag: options.config,
+    options,
+  });
   // ROADMAP Pillar 3 (GitHub Actions CI). isCi folds in HERE, alongside
-  // scout/post, so `options.yes` carries the headless bypass (spec 2.1:
+  // post, so `options.yes` carries the headless bypass (spec 2.1:
   // "MUST run headlessly ... equivalent to --yes") through every downstream
   // read of `options.yes` in one move — the confirm gate, the in-flight
   // TOCTOU check (`if (options.yes) return 0` is the correct CI answer to a
@@ -137,7 +135,7 @@ export async function resolvePrRunOptions(
     prNumber,
     home,
     isCi,
-    options: { ...options, scout, post, yes: options.yes || isCi },
+    options: { ...options, post, yes: options.yes || isCi },
     loaded,
     config,
     summary,
@@ -146,7 +144,13 @@ export async function resolvePrRunOptions(
 }
 
 export interface ResolvedPrPromptSet {
-  ciBudgetCeiling: ReturnType<typeof resolveCiBudgetCeiling>;
+  // How the run bills (the engine's own answer: the platform cannot see it).
+  // The CI limits gate reads it (src/pr/plan.ts); the size limits resolve from it.
+  ciBillingMode: CiBillingMode;
+  // Which of the run's model roles bill an API key, for the limits gate's
+  // comparison of a mixed setup (S17). Undefined when the routes could not be
+  // resolved here: the gate then compares the whole estimate.
+  ciRoleBilling: ModelRoleBilling | undefined;
   ciSizeLimits: CiSizeLimits | undefined;
   agents: AgentsDirResolution;
   spec: ReviewSpec;
@@ -156,30 +160,33 @@ export interface ResolvedPrPromptSet {
   gotchasPath: string | undefined;
 }
 
-// The OpenCode providers of every route the run resolves, fallbacks included,
-// from the same plan builder the run confirms with (buildCliRoutePlan), so each
-// source routing reads counts the way routing reads it. Undefined when the plan
-// cannot be built here; the run itself surfaces that error at confirm.
-async function openCodeRouteProviders(
+// The run's route plan, fallbacks included, from the same plan builder the run
+// confirms with (buildCliRoutePlan), so each source routing reads counts the way
+// routing reads it. Undefined when the plan cannot be built here; the run itself
+// surfaces that error at confirm.
+async function resolveRoutePlanForBilling(
   input: Parameters<typeof buildCliRoutePlan>[0],
-): Promise<string[] | undefined> {
-  let plan: Awaited<ReturnType<typeof buildCliRoutePlan>>;
+): Promise<ResolvedRoutePlan | undefined> {
   try {
-    plan = await buildCliRoutePlan(input);
+    return await buildCliRoutePlan(input);
   } catch {
     return undefined;
   }
+}
+
+// The OpenCode providers of every route of the plan, fallbacks included.
+function openCodeRouteProviders(
+  plan: ResolvedRoutePlan | undefined,
+): string[] | undefined {
+  if (plan === undefined) return undefined;
   const providers = new Set<string>();
-  for (const step of plan.steps) {
-    for (const route of [step, ...(step.fallbacks ?? [])]) {
-      if (route.route.backend === "opencode")
-        providers.add(route.route.provider);
-    }
+  for (const route of planRoutes(plan)) {
+    if (route.route.backend === "opencode") providers.add(route.route.provider);
   }
   return [...providers].sort();
 }
 
-// Step 1's second half: the CI budget ceiling (+ its notices), then the
+// Step 1's second half: how the run bills, then the
 // prompt set resolution and the gotchas PATH (never the validation itself —
 // see this module's header). Runs after the caller's own
 // `readLocalIgnoreRules(operatorRoot)` read, before its own
@@ -215,35 +222,41 @@ export async function resolvePrPromptSetAndBudget(params: {
   // invoices nothing for a run whose models do not bill per token. Not
   // envBillsMetered either: that predicate stamps Claude usage and must stay
   // Anthropic-env-only.
-  const billingMode = deriveCiBillingMode(
-    params.claudeRun?.env ?? process.env,
-    {
-      openCodeBillsMetered: openCodeRoutesBillMetered({
-        providers: await openCodeRouteProviders({
-          spec,
-          options: params.options,
-          agentFiles,
-          bundledAgents: isBundledAgentsDir(agents),
-          models: params.config.models,
-          summary: params.summary,
-          profile: params.profile,
-        }),
-        authFilePresent: existsSync(resolveOpenCodeAuthPath()),
-        openCodeSecretNames: readOpenCodeSecretNames(),
-      }),
-    },
-  );
-  // Issue #156: resolve the ceiling ONCE, here, and use this same value at
-  // the budget gate far below (src/pr/review-pr.ts's plan/confirm stage).
-  // Resolving twice invites the announcement and the gate drifting apart.
-  // Deliberately NOT folded back into `options.budgetUsd` — the metered
-  // default is a CI-gate policy, and leaking a 10 that the operator never
-  // typed into every other read of `options.budgetUsd` would make it look
-  // configured.
-  const ciBudgetCeiling = resolveCiBudgetCeiling({
-    configured: params.options.budgetUsd,
-    billingMode,
+  const routePlan = await resolveRoutePlanForBilling({
+    spec,
+    options: params.options,
+    agentFiles,
+    bundledAgents: isBundledAgentsDir(agents),
+    models: params.config.models,
+    summary: params.summary,
+    profile: params.profile,
+    // The judge step joins the run when the gate is on (plan.ts), so the plan
+    // that decides how the run bills must have it too (#551 R002). On, whatever
+    // a re-review later skips: counting a judge that may not run is the
+    // conservative side.
+    materialityEnabled: resolveMaterialityGate(params.config),
   });
+  const claudeEnv = params.claudeRun?.env ?? process.env;
+  const authFilePresent = existsSync(resolveOpenCodeAuthPath());
+  const openCodeSecretNames = readOpenCodeSecretNames();
+  const billingMode = deriveCiBillingMode(claudeEnv, {
+    openCodeBillsMetered: openCodeRoutesBillMetered({
+      providers: openCodeRouteProviders(routePlan),
+      authFilePresent,
+      openCodeSecretNames,
+    }),
+  });
+  // The same routes, per model role: the platform prices each role and the
+  // limits gate compares the ones billed on an API key (S17).
+  const ciRoleBilling = modelRoleBilling({
+    plan: routePlan,
+    agents: spec.agents,
+    claudeEnv,
+    authFilePresent,
+    openCodeSecretNames,
+  });
+  // Resolved ONCE, here: the size limits below and the platform limits gate
+  // far below (src/pr/plan.ts's plan/confirm stage) read this same value.
   // The size gate's half of the same route policy (ci/gates.ts,
   // resolveCiSizeLimits). CI only: a local or watcher run keeps reading the
   // flags and the repo config exactly as before.
@@ -254,25 +267,9 @@ export async function resolvePrPromptSetAndBudget(params: {
         billingMode,
       })
     : undefined;
-  // Spec 3.1: a silent disable is indistinguishable from a passing gate, so
-  // an EXPLICIT `--budget-usd <= 0` warns even though it never skips a run.
-  // Emitted here (once, as soon as isCi/budgetUsd are both known) rather
-  // than beside the budget-gate check far below, which only runs at all when
-  // there IS an estimate to compare against. The subscription notice rides
-  // the same reasoning and the same placement, one register quieter: a
-  // resolved no-ceiling is not an operator mistake, but it is still a gate
-  // that did not run, and this repo does not ship those silently.
+  // A gate that did not run is still announced: the size gate's notice for a
+  // route where its limits resolved to off.
   if (params.isCi) {
-    const disabledWarning = budgetDisabledWarningMessage(
-      ciBudgetCeiling.budgetUsd,
-    );
-    if (disabledWarning !== null) {
-      log(formatWorkflowCommand("warning", disabledWarning));
-    }
-    const unlimitedNotice = budgetUnlimitedNoticeMessage(ciBudgetCeiling);
-    if (unlimitedNotice !== null) {
-      log(formatWorkflowCommand("notice", unlimitedNotice));
-    }
     if (ciSizeLimits !== undefined) {
       const sizeNotice = sizeGateUnlimitedNoticeMessage(ciSizeLimits);
       if (sizeNotice !== null) {
@@ -295,7 +292,8 @@ export async function resolvePrPromptSetAndBudget(params: {
   }
   const gotchasPath = instructions.path;
   return {
-    ciBudgetCeiling,
+    ciBillingMode: billingMode,
+    ciRoleBilling,
     ciSizeLimits,
     agents,
     spec,
@@ -381,7 +379,7 @@ export async function resolvePrTargetRecord(params: {
 
 // Step 3's second half: the free dry-run exit's size-gate verdict, plan
 // card, and closing lines. Relocated out of reviewPr()'s `if (options.dryRun)`
-// block; the FIRST half of that block (hunterCount/estimate/dryRunGateConfig,
+// block; the FIRST half of that block (dryRunGateConfig,
 // then the `resolvePrDryRunNumstat` call just above) stays inline in
 // reviewPr(), unchanged. This half picks up right after `perFile` is known
 // and returns the dry run's exit code (always 0).
@@ -400,8 +398,6 @@ export function renderPrDryRunPlan(params: {
   summary: LoadedRunConfig["summary"];
   loaded: LoadedRunConfig["loaded"];
   isCi: boolean;
-  hunterCount: number;
-  estimate: ReturnType<typeof estimateCost>;
   dryRunGateConfig: SizeGateConfig;
   perFile: NumstatFile[] | null;
 }): number {
@@ -441,8 +437,6 @@ export function renderPrDryRunPlan(params: {
     spec: params.spec,
     config: params.config,
     summary: params.summary,
-    estimate: params.estimate,
-    hunterCount: params.hunterCount,
     sizeGate: estimated,
     sizeGateNote,
     droppedPaths: [],

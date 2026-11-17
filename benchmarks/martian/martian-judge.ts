@@ -380,7 +380,6 @@ interface PrEval {
     severity: string;
     category: string;
   }[];
-  cost_usd_est: number;
 }
 
 function fail(message: string): never {
@@ -506,7 +505,6 @@ if (import.meta.main) {
 
   const evals: PrEval[] = [];
   const runRecords: BenchmarkRunRecord[] = [];
-  let judgeCost = 0;
 
   for (const dir of dirs) {
     const scheduled = schedule.attempts.find((a) => a.directory === dir);
@@ -565,7 +563,6 @@ if (import.meta.main) {
           severity: g.severity,
           category: g.category,
         })),
-        cost_usd_est: doc.telemetry?.cost_usd_est ?? 0,
       });
       runRecords.push({
         pr,
@@ -617,7 +614,6 @@ if (import.meta.main) {
       await disposeJudge();
       fail(`judge spawn failed for PR ${pr}: ${result.stderrTail.slice(-400)}`);
     }
-    judgeCost += result.usage.cost_usd_est;
     const pairs = result.output as PairVerdict[];
 
     const goldState = golden.comments.map((g) => ({
@@ -678,7 +674,6 @@ if (import.meta.main) {
         severity: g.severity,
         category: g.category,
       })),
-      cost_usd_est: result.usage.cost_usd_est,
     });
     runRecords.push({
       pr,
@@ -698,7 +693,7 @@ if (import.meta.main) {
         ? (2 * last.precision * last.recall) / (last.precision + last.recall)
         : 0;
     console.error(
-      `  P ${last.precision.toFixed(2)}  R ${last.recall.toFixed(2)}  F1 ${f1.toFixed(2)}  tp ${tp} fp ${fp} fn ${fn}  $${result.usage.cost_usd_est.toFixed(2)}`,
+      `  P ${last.precision.toFixed(2)}  R ${last.recall.toFixed(2)}  F1 ${f1.toFixed(2)}  tp ${tp} fp ${fp} fn ${fn}`,
     );
   }
 
@@ -805,7 +800,6 @@ if (import.meta.main) {
             fn: fnHC,
             recall: recallHC,
           },
-          judge_cost_usd: judgeCost,
           scheduled: metrics.scheduled,
           preserved_attempts: metrics.preservedAttempts,
           missing: metrics.missing,
@@ -839,7 +833,7 @@ if (import.meta.main) {
   console.log(
     `judge model: ${JUDGE_MODEL}  (Martian prompt, Claude Code CLI, tools:[])`,
   );
-  console.log(`prs: ${evals.length}  judge cost: $${judgeCost.toFixed(2)}`);
+  console.log(`prs: ${evals.length}`);
   console.log(
     `completed: ${metrics.completed}/${metrics.attempted} (${(metrics.completionRate * 100).toFixed(1)}%)  cost/complete: $${metrics.costPerComplete === null ? "unknown" : metrics.costPerComplete.toFixed(2)}`,
   );

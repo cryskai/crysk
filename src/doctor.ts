@@ -96,8 +96,8 @@ export interface RunDoctorOptions {
   // §11/D1-09: doctor consumes the SAME ProviderCapabilityReport execution
   // gates on. Injectable so offline tests stay deterministic; the CLI's
   // doctor command passes the real producer. Opt-in rather than default-on
-  // because the report always carries non-blocking gaps (no pricing table,
-  // no bounded event sink), which would flip every existing "healthy"
+  // because the report always carries a non-blocking gap (no bounded event
+  // sink), which would flip every existing "healthy"
   // fixture to "degraded" for reasons unrelated to what those tests probe.
   // Legacy injectable ProviderCapabilityReport. Ignored when
   // probeExactBindings is provided.
@@ -110,7 +110,7 @@ export interface RunDoctorOptions {
 
 // Whether a review under this configuration sends any step to the Claude CLI
 // (model-profiles S6): the route plan a review would build, every hunter of
-// the bundled spec, the refuter, consolidate, scout, summarizer and, with the
+// the bundled spec, the refuter, consolidate, summarizer and, with the
 // gate on, the materiality judge, resolved through `models` and the active
 // profile. True whenever the answer is not proven: neither `models` nor a
 // `profile`, a plan that fails to build, or a bad CRYSK_EXTRA_HUNTERS. So zero-config and
@@ -137,7 +137,6 @@ export function reviewNeedsClaude(input: {
       profile: resolveProfile(input.profile),
       bundledAgents: true,
       summarizer: { bundled: true },
-      scout: { bundled: true },
       consolidate: { bundled: true },
       // Unknown counts as on: the judge then joins only when it shares a
       // backend with another step or `models.judge` names it.
@@ -218,8 +217,6 @@ export const PROVIDER_HINTS: Record<string, string> = {
     "Await the dedicated codegraph sensitive-file policy (D1-05 residual); isolation currently relies on --strict-mcp-config with a codegraph-only mcp.json.",
   bounded_events_sink_missing:
     "Usage arrives as a final snapshot until the bounded event sink is wired (D1-08 residual).",
-  pricing_table_missing:
-    "Nothing is priced at this level: the report is produced before any route resolves. An attempt's cash cost is whatever its transport reports, and a metered route whose transport reports none is refused at admission.",
 };
 
 // fix/opencode-sdk-absent-degraded: OpenCodeSdkUnavailableError means

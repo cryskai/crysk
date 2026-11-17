@@ -4,7 +4,7 @@
 //
 // What "the request the local CLI sends" means here, and why each line is set:
 //   - spec with one hunter and no refuter: one model call per run. No
-//     summarizer, consolidation, materiality or scout input is given, so none
+//     summarizer, consolidation or materiality input is given, so none
 //     of those stages spends anything.
 //   - sharedPrefix true: the layout the CLI uses by default (patch and output
 //     contract in the system prompt, the hunter's role file as the user
@@ -566,8 +566,9 @@ export async function checkCase(examCase: ExamCase): Promise<string[]> {
 }
 
 // `logic` names a hunter of the local review spec; `key:file.md` names one
-// that is not in the spec yet (a candidate under --agents). The trigger is
-// dropped either way: an exam run asked for this hunter, so it runs.
+// that is not in the spec yet (a candidate under --agents). Either way the
+// returned hunter carries no trigger: an exam run asked for this hunter, so it
+// runs.
 export function resolveHunter(arg: string): AgentSpec {
   const [key, file] = arg.split(":");
   if (file !== undefined) return { key: key ?? "", file, role: "hunter" };

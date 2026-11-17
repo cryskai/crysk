@@ -8,9 +8,7 @@
   "input": {
     "wallMs": 1500,
     "providerReportedTotal": 420,
-    "billingMode": "metered",
-    "costSource": "provider",
-    "cashCostUsd": 0.0007
+    "billingMode": "metered"
   },
   "expected": {
     "wallMs": 1500,
@@ -18,8 +16,6 @@
       "providerReportedTotal": 420
     },
     "completeness": "partial",
-    "billingMode": "metered",
-    "costSource": "provider",
-    "cashCostUsd": 0.0007
+    "billingMode": "metered"
   }
 }

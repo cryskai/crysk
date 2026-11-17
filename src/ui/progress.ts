@@ -6,19 +6,12 @@
 // line per event. I/O by nature, untested by construction — formatElapsed
 // and the progress.ts halves are the pure, tested pieces.
 
-import type { FreeRouteBilling } from "#model/free-discovery";
 import type { PipelineProgressEvent } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
 import { formatElapsed } from "#review/report";
 import { type SizeGateVerdict, sizeGateDisposition } from "#review/size-gate";
 import { log, styleEnabled } from "#ui/primitives";
-import {
-  type ConfirmResult,
-  type ConfirmSpec,
-  confirmReview,
-  confirmSizeGate,
-  freeBillingMode,
-} from "#ui/select";
+import { type ConfirmResult, confirmReview, confirmSizeGate } from "#ui/select";
 import { CliError } from "../errors";
 import {
   applyProgressEvent,
@@ -199,19 +192,6 @@ export function startLineRenderer(startedAtMs: number): ProgressRenderer {
         case "summarizer-finished":
           line(`summarizer: ${finishedText(event)}`);
           return;
-        case "scout-started":
-          line(`scout: reading the diff (${event.model})`);
-          return;
-        case "scout-finished":
-          // "unled", never "the run continues": a scout failure is not a
-          // partial review, it is the control pipeline. Naming it as a
-          // degradation would teach an operator to distrust a complete run.
-          line(
-            event.ok
-              ? `scout: ${event.leads ?? 0} lead(s)`
-              : "scout: failed (the hunters run unled)",
-          );
-          return;
         case "step-retry":
           // EVERY step, hunters and refuter alike — this is the launchd log,
           // where a retry that explains a long wall time has to be readable
@@ -232,42 +212,16 @@ export function startLineRenderer(startedAtMs: number): ProgressRenderer {
   };
 }
 
-// The cost band's gate. `details` is a thunk so the details view — which
+// The confirm gate. `details` is a thunk so the details view — which
 // probes the filesystem — is built only if the human asks for it, and
 // `canSkipPost` is what decides whether "Review, but don't post" exists at
 // all: offering it to a run that was never going to post is a no-op dressed
 // as a choice.
-// The spec without its styles: a pure function of the run, so the billing
-// wording it carries is testable offline. The free-route count is the same one
-// the plan card was printed with (callers pass the same object to both).
-export function confirmSpecFor(
-  low: number,
-  high: number,
-  canSkipPost: boolean,
-  details: () => string[],
-  freeRoute: FreeRouteBilling | undefined,
-): Omit<ConfirmSpec, "styles"> {
-  const billing = freeBillingMode(freeRoute);
-  return {
-    low,
-    high,
-    canSkipPost,
-    details,
-    ...(billing === undefined ? {} : { billing }),
-  };
-}
-
 export function confirm(
-  low: number,
-  high: number,
   canSkipPost: boolean,
   details: () => string[],
-  freeRoute?: FreeRouteBilling,
 ): Promise<ConfirmResult> {
-  return confirmReview({
-    ...confirmSpecFor(low, high, canSkipPost, details, freeRoute),
-    styles: styleEnabled(),
-  });
+  return confirmReview({ canSkipPost, details, styles: styleEnabled() });
 }
 
 // The size-gate override. `onBlock` runs for both the hard skip and the

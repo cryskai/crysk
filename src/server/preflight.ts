@@ -50,7 +50,6 @@ export interface UsageQueryParams {
 export interface UsageResponse {
   rows: CanonicalRunRow[];
   total_tokens: number;
-  total_cost_usd: number;
 }
 
 export interface SearchQueryParams {

@@ -34,22 +34,6 @@
       "argv": null
     },
     {
-      "name": "hunter-parity",
-      "backend": "opencode",
-      "provider": "openai",
-      "model": "sonnet",
-      "modelSnapshot": "gpt-x",
-      "modelVariant": "high",
-      "effort": "xhigh",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "70fbc4e084532d0d8d8f2e1d0b5e192551e5cb2a05381c5063351731916a8ee6",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": null,
-      "argv": null
-    },
-    {
       "name": "hunter-reliability",
       "backend": "opencode",
       "provider": "openai",
@@ -114,22 +98,6 @@
       "argv": null
     },
     {
-      "name": "scout",
-      "backend": "opencode",
-      "provider": "openai",
-      "model": "sonnet",
-      "modelSnapshot": "gpt-x",
-      "modelVariant": "high",
-      "effort": "high",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": [],
-      "systemPromptSha256": "edb1abfb7d72950040871e8d7968175a73dfd9cc6788bef97fe9e8f15df8e6a2",
-      "promptSha256": "6974b38cf091f0f7311d65af77fa11189dd8ce140332cd9f8a916de8c9aaa5f7",
-      "cliModel": null,
-      "argv": null
-    },
-    {
       "name": "summarizer",
       "backend": "opencode",
       "provider": "openai",
@@ -147,7 +115,7 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "47d4653dd900ca4bef5d0b5700c3486dc5ee46ba29af3659c6134169fb4f5a22",
+    "routeFingerprint": "fe1d505b1dd93a842fbb05c4b6e11de22e47f120915643985c49138e861e0f18",
     "steps": [
       {
         "stepKey": "hunter-reliability",
@@ -210,21 +178,6 @@
         "fallbacks": null
       },
       {
-        "stepKey": "hunter-parity",
-        "role": "hunter",
-        "logicalIdentity": "opencode:openai/gpt-x",
-        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
-        "effort": "high",
-        "route": {
-          "backend": "opencode",
-          "provider": "openai",
-          "modelFamily": "gpt-x",
-          "modelSnapshot": "gpt-x",
-          "modelVariant": "high"
-        },
-        "fallbacks": null
-      },
-      {
         "stepKey": "refuter",
         "role": "refuter",
         "logicalIdentity": "opencode:openai/gpt-x",
@@ -241,21 +194,6 @@
       {
         "stepKey": "summarizer",
         "role": "summarizer",
-        "logicalIdentity": "opencode:openai/gpt-x",
-        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
-        "effort": "high",
-        "route": {
-          "backend": "opencode",
-          "provider": "openai",
-          "modelFamily": "gpt-x",
-          "modelSnapshot": "gpt-x",
-          "modelVariant": "high"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "scout",
-        "role": "scout",
         "logicalIdentity": "opencode:openai/gpt-x",
         "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
         "effort": "high",
@@ -303,14 +241,6 @@
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
     },
     {
-      "name": "hunter-parity",
-      "model": "gpt-x",
-      "effort": "xhigh",
-      "effort_applied": true,
-      "variant": "high",
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
       "name": "hunter-reliability",
       "model": "gpt-x",
       "effort": "xhigh",
@@ -340,14 +270,6 @@
       "effort": "high",
       "effort_applied": false,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "scout",
-      "model": "gpt-x",
-      "effort": "high",
-      "effort_applied": true,
-      "variant": "high",
-      "tools": []
     },
     {
       "name": "summarizer",

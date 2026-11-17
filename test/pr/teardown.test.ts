@@ -333,7 +333,7 @@ describe("settleCommitStatusAndLedger — a partial review is red in gate mode (
     }) as unknown as PipelineResult;
 
   const PARTIAL_DESCRIPTION =
-    "crysk: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
+    "crysk: review partial (1 of 4 hunters failed, set 938084) — /crysk review retries it";
 
   test.each([
     [
@@ -353,7 +353,7 @@ describe("settleCommitStatusAndLedger — a partial review is red in gate mode (
       {
         state: "failure",
         description:
-          "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          "crysk: 2 blocking finding(s) — fix and push, or /crysk override",
       },
     ],
     [
@@ -407,7 +407,7 @@ describe("settleCommitStatusAndLedger — a partial review is red in gate mode (
 
 describe("settleCommitStatusAndLedger — gate mode (S4)", () => {
   const BLOCKING_DESCRIPTION =
-    "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override";
+    "crysk: 2 blocking finding(s) — fix and push, or /crysk override";
 
   test.each([
     [
@@ -821,7 +821,7 @@ describe("S7: only an explicit --ci run writes the pr-hero context", () => {
     const flags = parseStatusFlags(calls[0] as string[]);
     expect(flags.state).toBe("failure");
     expect(flags.description).toBe(
-      "crysk: 1 blocking finding(s) — fix and push, or /pr-hero override",
+      "crysk: 1 blocking finding(s) — fix and push, or /crysk override",
     );
   });
 
@@ -972,7 +972,7 @@ describe("settleCommitStatusAndLedger — the unsettled final status", () => {
       {
         state: "failure",
         description:
-          "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          "crysk: 2 blocking finding(s) — fix and push, or /crysk override",
       },
     ],
   ] as const)(
@@ -1035,7 +1035,7 @@ describe("settleCommitStatusAndLedger — the unsettled final status", () => {
       {
         state: "failure",
         description:
-          "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          "crysk: 2 blocking finding(s) — fix and push, or /crysk override",
       },
     ],
   ] as const)(
@@ -1870,11 +1870,11 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
     context: COMMIT_STATUS_CONTEXT,
   };
   const PARTIAL_1_OF_4 =
-    "crysk: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
+    "crysk: review partial (1 of 4 hunters failed, set 938084) — /crysk review retries it";
   const PARTIAL_1_OF_4_CARRIED =
-    "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /pr-hero review retries it";
+    "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /crysk review retries it";
   const REPEAT_1_OF_4 =
-    "crysk: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /pr-hero override";
+    "crysk: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /crysk override";
   const partialResult = (failures: number, total = 4) =>
     ({
       sessionFailed: false,
@@ -1966,7 +1966,7 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
       PENDING_ROW,
       row(
         "failure",
-        "pr-hero: review partial (1 of 4 hunters failed, set d5af83) — /pr-hero review retries it",
+        "pr-hero: review partial (1 of 4 hunters failed, set d5af83) — /crysk review retries it",
       ),
     ]);
     expect(description).toBe(PARTIAL_1_OF_4);
@@ -1977,7 +1977,7 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
       PENDING_ROW,
       row(
         "failure",
-        "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+        "pr-hero: review partial (1 of 4 hunters failed) — /crysk review retries it",
       ),
     ]);
     expect(description).toBe(PARTIAL_1_OF_4);
@@ -2005,7 +2005,7 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
       PENDING_ROW,
       row(
         "failure",
-        "pr-hero: review partial (2 of 4 hunters failed) — /pr-hero review retries it",
+        "pr-hero: review partial (2 of 4 hunters failed) — /crysk review retries it",
       ),
     ]);
     expect(description).toBe(PARTIAL_1_OF_4);
@@ -2016,7 +2016,7 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
       PENDING_ROW,
       row(
         "failure",
-        "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+        "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
       ),
     ]);
     expect(description).toBe(PARTIAL_1_OF_4);
@@ -2045,13 +2045,13 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
 
   test("the repeat text of three-digit counts stays within 140 characters", async () => {
     const key = hunterFailureSetKey(failedHunterNames(999));
-    const REPEAT_999 = `crysk: review partial again (999 of 999 hunters failed, set ${key}) — fix the failing route or /pr-hero override`;
+    const REPEAT_999 = `crysk: review partial again (999 of 999 hunters failed, set ${key}) — fix the failing route or /crysk override`;
     const description = await partialDescriptionWith(
       async () => [
         PENDING_ROW,
         row(
           "failure",
-          `pr-hero: review partial (999 of 999 hunters failed, set ${key}) — /pr-hero review retries it`,
+          `pr-hero: review partial (999 of 999 hunters failed, set ${key}) — /crysk review retries it`,
         ),
       ],
       999,
@@ -2152,7 +2152,7 @@ describe("settleCommitStatusAndLedger: writes crysk alone, reads the legacy pr-h
           context: "pr-hero",
           created_at: "2026-10-17T11:00:00Z",
           description:
-            "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it",
+            "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /crysk review retries it",
         },
       ],
     });

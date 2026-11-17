@@ -290,7 +290,7 @@ describe("settleAdmissionAttempt", () => {
   });
 });
 
-// A forced comment run (`/pr-hero review`, `/pr-hero recheck`) is a deliberate
+// A forced comment run (`/crysk review`, `/crysk recheck`) is a deliberate
 // spend outside the automatic budget, so its own rows never count. Its status
 // is no proof either way (the run may have reached the provider), which is why
 // the flag, not the status, decides.

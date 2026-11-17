@@ -22,6 +22,7 @@ import {
   skipCommitStatusRequest,
 } from "#pr/preflight";
 import { gotchasUnusableReason, parseLocalConfig } from "#review/preflight";
+import { isPlainApplied } from "#triage/plain-reply";
 import { parseTriageMarker } from "#triage/triage";
 import {
   OVERRIDE_MARKER_PREFIX,
@@ -108,7 +109,7 @@ interface CommentRow {
 // `review-advisory` is a review under `mode: advisory`: the same comments, a
 // success status whatever it finds. `size-skip` is a pull_request run over the
 // size gate: the skip marker and a failure status, and no report.
-// `override` is a `/pr-hero override` comment run: the audit comment and a success
+// `override` is a `/crysk override` comment run: the audit comment and a success
 // status naming the actor, and no report and no outcome (S8). `near-miss` is a
 // comment that starts like a command but is not one: its run's review step is
 // skipped inside a step that still concludes success, and it leaves nothing on the PR
@@ -136,17 +137,14 @@ const FAKE_ACTOR = "juanmaagd";
 // comment starts no run and gets no reaction.
 function triggerReaction(body: string): "eyes" | "confused" | undefined {
   if (
-    body === "/pr-hero review" ||
-    body === "/pr-hero review --full" ||
-    body === "/pr-hero recheck" ||
-    body === "/pr-hero override"
+    body === "/crysk review" ||
+    body === "/crysk review --full" ||
+    body === "/crysk recheck" ||
+    body === "/crysk override"
   ) {
     return "eyes";
   }
-  if (
-    body.startsWith("/pr-hero review") ||
-    body.startsWith("/pr-hero override")
-  ) {
+  if (body.startsWith("/crysk review") || body.startsWith("/crysk override")) {
     return "confused";
   }
   return undefined;
@@ -240,7 +238,7 @@ export interface WorldOptions {
   // With muteBlockingFinding, the tier the state row at src/mute.ts carries. `advisory`
   // is the mutation the tiered state-row check must catch.
   muteStateRowTier?: "blocking" | "advisory";
-  // T5b: the verdict the CI adjudicator's reply to a `/pr-hero recheck` carries, with
+  // T5b: the verdict the CI adjudicator's reply to a `/crysk recheck` carries, with
   // blockingFindings on. Unset, it is `rejected`; `upheld` is the mutation the
   // adjudication check must catch.
   adjudicationVerdict?: string;
@@ -425,7 +423,7 @@ export class FakeGithub {
     if (gotchas !== undefined && gotchasUnusableReason(gotchas) !== undefined) {
       return "gotchas";
     }
-    // A pull_request run over a size gate of 1 skips. A /pr-hero review comment
+    // A pull_request run over a size gate of 1 skips. A /crysk review comment
     // is forced past the gate, so it never skips on size.
     if (
       event === "pull_request" &&
@@ -703,7 +701,9 @@ export class FakeGithub {
       if (newest === undefined) return false;
       if (this.options.budgetCarry === "any-answer-unlocks") return true;
       const parsed = parseTriageMarker(newest.body);
-      return parsed?.tag === "applied" && parsed.headSha === reviewed;
+      // triage-without-skill S1: a plain reply that starts with "applied" counts at the finding's head.
+      if (parsed === null) return isPlainApplied(newest.body);
+      return parsed.tag === "applied" && parsed.headSha === reviewed;
     };
     const unlocked =
       this.options.budgetCarry !== "answers-ignored" &&
@@ -790,7 +790,7 @@ export class FakeGithub {
       const workflow = this.mainFiles.get(WORKFLOW_PATH) ?? "";
       // An accepted review runs a review; an override runs its own audit; a near miss
       // runs the workflow with its review step skipped.
-      if (body === "/pr-hero override") {
+      if (body === "/crysk override") {
         this.startRun(
           "issue_comment",
           number,
@@ -812,7 +812,7 @@ export class FakeGithub {
         // T5b: a recheck's run also has the CI adjudicator rule on the dismissal, and
         // its reply is an inline comment stamped as this run's.
         if (
-          body === "/pr-hero recheck" &&
+          body === "/crysk recheck" &&
           this.options.blockingFindings === true
         ) {
           const verdict = this.options.adjudicationVerdict ?? "rejected";

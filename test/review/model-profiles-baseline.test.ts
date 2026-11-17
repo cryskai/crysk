@@ -10,6 +10,10 @@
 // hunters moved. Backend, model, effort, argv and route fingerprints are still
 // those of 4898e1b4.
 //
+// Re-captured on 2026-11-16 after the scout stage was removed: only the scout
+// step's entries and the plan's route fingerprint (a plan with one step fewer)
+// moved; every other step's request and route are byte-identical.
+//
 // To re-capture (only on purpose, and only on a commit whose behavior is the
 // intended baseline): CRYSK_WRITE_PROFILES_BASELINE=1 bun test <this file>,
 // then `./node_modules/.bin/biome format --write` over the fixture directory.

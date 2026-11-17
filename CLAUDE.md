@@ -64,15 +64,10 @@ bun run typecheck      # tsc --noEmit, strict — covers src/test/fixtures/bench
 bun run check          # biome — covers src+test+benchmarks only, NOT fixtures/ or scripts/
 bun run refuter-probe  # LIVE: refuter verdict-vocabulary matrix, 4 arms (opus refuter, ~$0.08/step notional, ~$0.9 at 3 replicates; reads $0 cash under subscription auth)
 bun run fixture-eval   # LIVE: full pipeline vs a planted bug in a disposable repo (~$0.08, ~1 min)
-bun run fixture-eval --scout         # LIVE: same, with the scout stage on (~$0.17, ~2 min)
 bun run scripts/live-micro-eval.ts   # LIVE: one trivial real spawn (~$0.04)
-bun run scripts/live-micro-eval.ts --scout  # LIVE: the scout's real spawn shape, tools:[] (~$0.05)
 bun run scripts/opencode-probe.ts    # LIVE: records what the OpenCode SDK really emits (~$0, needs the SDK resolvable)
 bun run scripts/opencode-mcp-probe.ts        # LIVE: 4 arms — which MCP delivery mechanisms work under --pure ($0, no inference)
 bun run scripts/opencode-mcp-toolid-probe.ts # LIVE: the literal MCP tool id, and whether the tools map gates it ($0 cash, 2 turns)
-bun run scripts/m6.ts plan   # $0: prices M6's 56 runs from gh counters + the target repo's config
-bun run scripts/m6.ts score  # $0: the floor table, re-runnable from artifacts forever
-bun run scripts/m6.ts run    # LIVE and the big one: 56 serial reviews, ~$174-374, ~4h44m
 bun run benchmarks/martian/martian-cal.ts plan|check|run|score   # Martian Cal.com slice (never --pr)
 bun run benchmarks/martian/martian-judge.ts     # LIVE: Martian Surface A judge on existing runs
 bun run scripts/materiality-probe.ts plan|run|score   # materiality judge exam on known-answer anchors (plan/score $0, run LIVE, 176 opus spawns)
@@ -110,6 +105,8 @@ over** (found while wiring C5, 2026-08-23):
 ## Architecture (one line per module)
 
 - `src/spec.ts` — `ReviewSpec`/`AgentSpec`: which agents run, their role, trigger, model. THE flow config.
+  `defaultReviewSpec()` is the lab's legacy wiring and still carries the conditional parity hunter; the
+  product's `localReviewSpec()` has no conditional hunter.
   A benchmark arm can append hunters with `PRHERO_EXTRA_HUNTERS=key:file[,...]` (read once in `localReviewSpec`,
   inert when unset).
 - `src/pipeline.ts` — `runPipeline`: gotchas fail-loud → trigger eval → parallel hunter steps → dedupe →
@@ -126,15 +123,11 @@ over** (found while wiring C5, 2026-08-23):
 - `src/pr.ts` + `src/pr-preflight.ts` — PR mode (B1, `--pr <n>`): gh/worktree/codegraph I/O shell and
   its pure decisions — PR record → range, the worktree reuse gate.
 - `src/compare/compare.ts` — shared PR path normalization and the default line window, used by the floor test.
-- `src/floor-test.ts` — M6's primary instrument, pure: the case list's validator, the per-case gate (a
-  refuter-CORROBORATED finding within compare.ts's ±25 of the site), the per-arm tally, the table. Arm
-  identity is read off `pipeline.json`'s `scout.enabled`, never a directory name. Cases live in
+- `src/compare/floor-test.ts` — the M6 floor cases' instrument, pure: the case list's validator, the per-case
+  gate (a refuter-CORROBORATED finding within compare.ts's ±25 of the site) and the tallies over a run's
+  findings. No scout arm and no M6 run remain: both were retired with the scout stage. Cases live in
   `docs/benchmarks/m6-floor-cases.json`, transcribed from `docs/research/scout-design.md` §2.4septies and drift-guarded by a
   test that re-derives the markdown table.
-- `src/scout.ts` — the diff-only pre-hunter stage's PURE half (DoorDash M4/M5): output contract, lead
-  validation, the four caps, the leads block, the hunk-coverage metric. Its impure half is `runScout` in
-  `pipeline.ts`; the prompt is `prompts/scout.md`, engine-owned and outside the prompt set on purpose.
-  Wired behind `--scout`, default OFF until M6 decides.
 - `src/size-gate.ts` — pure: "this diff is too big, skip it". A COST/predictability gate, never a
   quality one (the size↔quality question is unmeasured — see `scripts/scope-probe.ts`). Wired into
   local review, PR review and the watcher, always BEFORE the cost-band confirm.

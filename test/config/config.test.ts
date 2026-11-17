@@ -1,6 +1,6 @@
 // Offline tests for the config domain (cli-decomp S2, Cluster A): the
 // two-layer read (loadEffectiveConfig/loadGlobalConfigLayer), the
-// pipeline-input adapters (notionalCostInput/pipelineConfigInput), and the
+// pipeline-input adapter (pipelineConfigInput), and the
 // review()/reviewPr() caller-seam wrappers (ingestReviewMetrics/
 // persistCanonicalReview). Moved out of test/cli.test.ts, which tested these
 // functions before they were extracted from cli.ts into src/config/config.ts.
@@ -21,7 +21,6 @@ import {
   ingestReviewMetrics,
   loadEffectiveConfig,
   loadGlobalConfigLayer,
-  notionalCostInput,
   persistCanonicalReview,
   pipelineConfigInput,
 } from "#config/config";
@@ -46,7 +45,6 @@ const TELEMETRY: Telemetry = {
   tokens_in: 10,
   tokens_out: 10,
   tokens_total: 20,
-  cost_usd_est: 1,
 };
 
 function doc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {
@@ -66,68 +64,6 @@ function doc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {
     ...overrides,
   };
 }
-
-// #173. The engine has now shipped three fully-built, correct, never-connected
-// mechanisms (the spend ledger #171, the provider-cost disjunct, and
-// `notionalCostUsd` itself), so the LAST wiring step gets its own pin rather
-// than being trusted to the shell. The renderers and the pipeline rollup are
-// covered by their own suites; without this, deleting all four call sites in
-// `review()`/`reviewPr()` flips zero tests — verified by mutation, which is
-// exactly how the previous three stayed invisible.
-describe("notionalCostInput — the shell's cash/notional split (#173)", () => {
-  test("a subscription run's list figure reaches the renderers", () => {
-    expect(
-      notionalCostInput({
-        usageV2: {
-          wallMs: 1,
-          tokens: {},
-          completeness: "complete",
-          billingMode: "subscription",
-          costSource: "subscription",
-          cashCostUsd: 0,
-          notionalCostUsd: 0.0455,
-        },
-      }),
-    ).toEqual({ notionalUsd: 0.0455 });
-  });
-
-  // Absence over fabrication, on both doors into it: a runner that reported no
-  // normalized usage at all, and one that reported usage carrying no list
-  // figure. Both must yield NO key — the renderers omit their notional row on
-  // `undefined`, and a `0` here would print a list-price claim for a run that
-  // never produced one.
-  test("no rollup, and a rollup with no list figure, both stay absent", () => {
-    expect(notionalCostInput({})).toEqual({});
-    expect(
-      notionalCostInput({
-        usageV2: {
-          wallMs: 1,
-          tokens: {},
-          completeness: "unavailable",
-          billingMode: "unknown",
-          costSource: "unknown",
-        },
-      }),
-    ).toEqual({});
-  });
-
-  // A metered route reports real cash and no notional, so it keeps showing a
-  // single figure — the split must not invent a second one for it.
-  test("a metered run with cash and no notional stays single-figure", () => {
-    expect(
-      notionalCostInput({
-        usageV2: {
-          wallMs: 1,
-          tokens: {},
-          completeness: "complete",
-          billingMode: "metered",
-          costSource: "provider",
-          cashCostUsd: 0.42,
-        },
-      }),
-    ).toEqual({});
-  });
-});
 
 describe("ingestReviewMetrics — the review()/reviewPr() caller seam (W4 Phase 6)", () => {
   test("a throwing ingest degrades to a warning, never throws", () => {
@@ -288,16 +224,19 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
       expect(loaded.effective).toEqual({
         agents_dir: "/Users/juanma/Desktop/deep-review/agents/slice3b-clean",
         default_base: "dev",
-        parity_trigger_paths: [],
         suspicion_priors: [],
         summary: { enabled: false },
       });
+      // The fixture still carries the removed `parity_trigger_paths`, as old
+      // checkouts do: it resolves to nothing and says so once.
+      expect(loaded.warnings).toEqual([
+        ".crysk/config.json: parity_trigger_paths is ignored: the parity hunter was removed",
+      ]);
       // Table-driven over all keys: with no global layer every one of
       // them is the repo's or a default, and NOTHING says `global`/`capped`.
       expect(loaded.sources).toEqual({
         agents_dir: "repo",
         default_base: "repo",
-        parity_trigger_paths: "repo",
         suspicion_priors: "repo",
         summary: { enabled: "repo" },
         models: "default",
@@ -307,7 +246,6 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
         max_concurrent_steps: "default",
         max_changed_lines: "default",
         max_changed_files: "default",
-        scout: "default",
         materiality_gate: "default",
         post: "default",
         post_min_severity: "default",
@@ -356,7 +294,6 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
       expect(loaded.sources).toEqual({
         agents_dir: "default",
         default_base: "default",
-        parity_trigger_paths: "default",
         suspicion_priors: "default",
         summary: { enabled: "default" },
         models: "default",
@@ -366,7 +303,6 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
         max_concurrent_steps: "default",
         max_changed_lines: "default",
         max_changed_files: "default",
-        scout: "default",
         materiality_gate: "default",
         post: "default",
         post_min_severity: "default",
@@ -386,9 +322,9 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
   });
 
   // The other §0.7 branch. An explicitly named file that is not there stays
-  // an ERROR: silently falling back to "no parity triggers" would disable a
-  // hunter the caller just asked for, and a hunter that never fires looks
-  // exactly like a hunter that found nothing.
+  // an ERROR: silently falling back to "no config" would drop settings the
+  // caller just asked for, and a review that ignores them looks exactly like
+  // one that had nothing to apply.
   test("--config pointing at a missing file throws CliError", async () => {
     const home = await tmpHome();
     const repo = await tmpRoot(MUSIVE_CONFIG);
@@ -502,14 +438,12 @@ describe("loadEffectiveConfig — the global layer", () => {
   // message has to name the file it is actually in, or the operator edits the
   // repo's config looking for a typo that is not there.
   test("a malformed global file names the global file", async () => {
-    const home = await tmpHome('{"parity_trigger_paths": []}');
+    const home = await tmpHome('{"default_base": "main"}');
     const repo = await tmpRoot(MUSIVE_CONFIG);
     try {
       await expect(
         loadEffectiveConfig({ root: repo.root, home: home.home }),
-      ).rejects.toThrow(
-        "~/.crysk/config.json: parity_trigger_paths is a per-repo key",
-      );
+      ).rejects.toThrow("~/.crysk/config.json: default_base is a per-repo key");
     } finally {
       await home.cleanup();
       await repo.cleanup();
@@ -642,7 +576,6 @@ describe("pipelineConfigInput — O-6", () => {
       sources: {
         agents_dir: "global" as const,
         default_base: "default" as const,
-        parity_trigger_paths: "default" as const,
         suspicion_priors: "default" as const,
         summary: { enabled: "default" as const },
         models: "default" as const,
@@ -652,7 +585,6 @@ describe("pipelineConfigInput — O-6", () => {
         max_concurrent_steps: "default" as const,
         max_changed_lines: "default" as const,
         max_changed_files: "default" as const,
-        scout: "default" as const,
         materiality_gate: "default" as const,
         post: "default" as const,
         post_min_severity: "default" as const,

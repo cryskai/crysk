@@ -387,7 +387,6 @@ export interface OpenCodeTurnState {
 interface StepUsage {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
-  readonly costUsd?: number;
   // OpenCode's `info.tokens` leaves are disjoint-additive
   // (packages/schema/src/token-usage.ts): total = input + output + reasoning
   // + cache.read + cache.write. Carried so cache use is measurable on this
@@ -662,7 +661,6 @@ function addField(
 function addUsage(base: StepUsage, step: StepUsage): StepUsage {
   const inputTokens = addField(base.inputTokens, step.inputTokens);
   const outputTokens = addField(base.outputTokens, step.outputTokens);
-  const costUsd = addField(base.costUsd, step.costUsd);
   const cacheReadTokens = addField(base.cacheReadTokens, step.cacheReadTokens);
   const cacheWriteTokens = addField(
     base.cacheWriteTokens,
@@ -672,7 +670,6 @@ function addUsage(base: StepUsage, step: StepUsage): StepUsage {
   return {
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(outputTokens !== undefined ? { outputTokens } : {}),
-    ...(costUsd !== undefined ? { costUsd } : {}),
     ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
     ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
@@ -703,11 +700,6 @@ function rememberUsage(
   const wasCompleted = state.completedUsage.has(messageId);
   if (completed) state.completedUsage.add(messageId);
   if (existing !== undefined) {
-    const costConflict =
-      existing.costUsd !== undefined &&
-      usage.costUsd !== undefined &&
-      (usage.costUsd < existing.costUsd ||
-        (wasCompleted && usage.costUsd !== existing.costUsd));
     const tokenConflict =
       (existing.inputTokens !== undefined &&
         usage.inputTokens !== undefined &&
@@ -717,7 +709,7 @@ function rememberUsage(
         usage.outputTokens !== undefined &&
         (usage.outputTokens < existing.outputTokens ||
           (wasCompleted && usage.outputTokens !== existing.outputTokens)));
-    if (costConflict || tokenConflict) {
+    if (tokenConflict) {
       state.usageConflict = true;
       state.usageIncomplete = true;
     }
@@ -728,10 +720,6 @@ function rememberUsage(
     const mergedOutput =
       existing.outputTokens !== undefined || usage.outputTokens !== undefined
         ? Math.max(existing.outputTokens ?? 0, usage.outputTokens ?? 0)
-        : undefined;
-    const mergedCost =
-      existing.costUsd !== undefined || usage.costUsd !== undefined
-        ? Math.max(existing.costUsd ?? 0, usage.costUsd ?? 0)
         : undefined;
     // Cache and reasoning leaves merge like input/output (Math.max) but are
     // deliberately left out of the conflict check above: a snapshot that
@@ -752,7 +740,6 @@ function rememberUsage(
     state.usage.set(messageId, {
       ...(mergedInput !== undefined ? { inputTokens: mergedInput } : {}),
       ...(mergedOutput !== undefined ? { outputTokens: mergedOutput } : {}),
-      ...(mergedCost !== undefined ? { costUsd: mergedCost } : {}),
       ...(mergedCacheRead !== undefined
         ? { cacheReadTokens: mergedCacheRead }
         : {}),
@@ -1273,14 +1260,12 @@ export function reconcileMessages(
       const tokens = asRecord(info.tokens);
       const inputTokens = asNumber(tokens?.input);
       const outputTokens = asNumber(tokens?.output);
-      const costUsd = asNumber(info.cost);
       const cacheReadTokens = asNumber(asRecord(tokens?.cache)?.read);
       const cacheWriteTokens = asNumber(asRecord(tokens?.cache)?.write);
       const reasoningTokens = asNumber(tokens?.reasoning);
       if (
         inputTokens !== undefined ||
         outputTokens !== undefined ||
-        costUsd !== undefined ||
         cacheReadTokens !== undefined ||
         cacheWriteTokens !== undefined ||
         reasoningTokens !== undefined
@@ -1291,7 +1276,6 @@ export function reconcileMessages(
           {
             ...(inputTokens !== undefined ? { inputTokens } : {}),
             ...(outputTokens !== undefined ? { outputTokens } : {}),
-            ...(costUsd !== undefined ? { costUsd } : {}),
             ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
             ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
             ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
@@ -1415,7 +1399,6 @@ export function reconcileMessages(
       if (
         msg.time?.completed === undefined ||
         stepUsage === undefined ||
-        stepUsage.costUsd === undefined ||
         stepUsage.inputTokens === undefined ||
         stepUsage.outputTokens === undefined
       ) {
@@ -1659,14 +1642,12 @@ export function mapOpenCodeEvents(
       const tokens = asRecord(info.tokens);
       const inputTokens = asNumber(tokens?.input);
       const outputTokens = asNumber(tokens?.output);
-      const costUsd = asNumber(info.cost);
       const cacheReadTokens = asNumber(asRecord(tokens?.cache)?.read);
       const cacheWriteTokens = asNumber(asRecord(tokens?.cache)?.write);
       const reasoningTokens = asNumber(tokens?.reasoning);
       if (
         inputTokens !== undefined ||
         outputTokens !== undefined ||
-        costUsd !== undefined ||
         cacheReadTokens !== undefined ||
         cacheWriteTokens !== undefined ||
         reasoningTokens !== undefined
@@ -1677,7 +1658,6 @@ export function mapOpenCodeEvents(
           {
             ...(inputTokens !== undefined ? { inputTokens } : {}),
             ...(outputTokens !== undefined ? { outputTokens } : {}),
-            ...(costUsd !== undefined ? { costUsd } : {}),
             ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
             ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
             ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
@@ -2139,7 +2119,7 @@ const MCP_TOOL_ID_SET: ReadonlySet<string> = new Set(ALL_MCP_TOOL_IDS);
 // `tool.ids()`. "bash" has no entry in that table at all (no AgentSpec has
 // ever granted it), so it is unconditionally denied whenever this is called
 // with a non-empty gate; "read" is denied exactly when this call's canonical
-// tools omit "Read" (a tool-less step: summarizer, scout).
+// tools omit "Read" (a tool-less step: the summarizer).
 function deniedFreeTierGatewayTools(
   canonicalTools: readonly string[],
   freeTierGatewayTools: readonly string[],
@@ -2382,11 +2362,11 @@ export function createOpenCodeClient(
   // FREE_TIER_GATEWAY_TOOLS). The registry caches ONE opencode client per
   // route (transport-registry.ts), so every step routed to the same
   // provider_free model shares this server — a hunter-shaped step (grants
-  // read) and a tool-less step (summarizer/scout) on that SAME route would
+  // read) and a tool-less step (the summarizer) on that SAME route would
   // otherwise silently ride whichever one's ask set the server happened to be
   // launched with. This is fixed at spawn exactly like the MCP registry
   // above, and the pipeline's own phase boundaries (hunters all finish before
-  // dedupe releases the idle server, refuter/scout run in a later phase)
+  // dedupe releases the idle server, the refuter runs in a later phase)
   // mean a real run only ever asks this server to relaunch, never to change
   // shape mid-flight — a genuine concurrent mismatch fails loud instead of
   // silently weakening.

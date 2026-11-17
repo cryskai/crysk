@@ -302,7 +302,6 @@ describe("a prompt the provider refuses", () => {
           tokens: {},
           completeness: "unavailable",
           billingMode: "subscription",
-          costSource: "unknown",
         },
         stderrTail:
           "[pr-hero] opencode sdk: stream errored: opencode session.prompt failed: model not found",
@@ -327,7 +326,6 @@ describe("a prompt the provider refuses", () => {
         tokens: {},
         completeness: "unavailable" as const,
         billingMode: "subscription" as const,
-        costSource: "unknown" as const,
       },
     };
     expect(
@@ -472,7 +470,6 @@ describe("a refused prompt whose stream ended first", () => {
           tokens: {},
           completeness: "unavailable",
           billingMode: "subscription",
-          costSource: "unknown",
         },
         stderrTail:
           "[pr-hero] opencode sdk: poll observed a session failure: opencode session.prompt failed: model not found",

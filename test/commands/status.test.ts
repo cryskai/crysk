@@ -125,7 +125,7 @@ const gateRow = {
   context: COMMIT_STATUS_CONTEXT,
   created_at: new Date(NOW - 5 * 60_000).toISOString(),
   description:
-    "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+    "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override",
   target_url: "https://github.com/MusiveTech/musive/actions/runs/9",
 };
 

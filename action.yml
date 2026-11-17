@@ -46,9 +46,8 @@ inputs:
     description: 'Optional model name for every step but the materiality judge (claude:<alias>-latest, claude:claude-<id> or opencode:<provider>/<model>). It overrides models, takes no effort, and has no fallbacks; set models per role in the models input instead.'
     required: false
   scout:
-    description: 'Run the experimental diff-only scout stage before hunting'
+    description: 'Removed: the scout stage no longer exists. The input is still accepted so existing workflows keep running; it is ignored and logs a warning.'
     required: false
-    default: 'false'
   max-changed-lines:
     description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to use the repo config value max_changed_lines; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription (a run draws on quota, not a per-token invoice), 4000 on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret).'
     required: false
@@ -56,11 +55,11 @@ inputs:
     description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit. Leave unset to use the repo config value max_changed_files; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription, 50 on a metered route.'
     required: false
   budget-usd:
-    description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a Claude subscription (a run draws on quota, not a per-token invoice), a default ceiling on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret). An explicit value is honoured on any route; a value <= 0 disables the ceiling (the size limits above resolve separately).'
+    description: 'Retired and ignored: the dollar limits moved to the Crysk platform (Review > Limits in the dashboard). A workflow that still sets it keeps working and gets one warning; the value has no effect. Remove it from the workflow.'
     required: false
     default: ''
   mode:
-    description: 'gate (default): the crysk commit status, the required check, turns failure on blocking findings or a size/budget skip and error on a crash, and success on a clean or advisory-only review. Comment /crysk review to review a skipped head anyway. advisory: the status is always success for a finished review, as before.'
+    description: 'gate (default): the crysk commit status, the required check, turns failure on blocking findings or a size/limits skip and error on a crash, and success on a clean or advisory-only review. Comment /crysk review to review a skipped head anyway. advisory: the status is always success for a finished review, as before.'
     required: false
     default: 'gate'
   post:
@@ -72,7 +71,7 @@ inputs:
     required: false
     default: 'true'
   force:
-    description: 'Bypass CI skip gates for this run: the size gate, review-policy admission, and the budget ceiling. A pull request comment that is exactly `/crysk review` (or `/crysk review --full`) from a user with write access sets it on its own, with no input; a workflow_dispatch caller, such as a pr-hero-force.yml scaffolded before the comment trigger, can still pass it explicitly.'
+    description: 'Bypass CI skip gates for this run: the size gate, review-policy admission, and the Crysk platform''s dollar limits. A pull request comment that is exactly `/crysk review` (or `/crysk review --full`) from a user with write access sets it on its own, with no input; a workflow_dispatch caller, such as a pr-hero-force.yml scaffolded before the comment trigger, can still pass it explicitly.'
     required: false
     default: 'false'
   full:
@@ -102,8 +101,8 @@ outputs:
     description: 'Total number of advisory-tier findings'
     value: ${{ steps.run-crysk.outputs.advisory_count }}
   cost-usd-est:
-    description: 'Estimated cost of the review, in USD'
-    value: ${{ steps.run-crysk.outputs.cost_usd_est }}
+    description: 'Retired: always empty. The engine reports no dollar figure; cost is shown by the Crysk platform. Kept declared so a workflow that reads it does not break (removed in a later release).'
+    value: ''
   run-dir:
     description: 'Path to the run directory containing findings.json and report.md'
     value: ${{ steps.run-crysk.outputs.run_dir }}
@@ -160,7 +159,7 @@ runs:
         # under the runner's temp directory, never the workspace. Bound here
         # ONLY: the refresh steps below leave it unset, so they never touch it.
         CRYSK_PLATFORM_CONFIG_DIR: ${{ runner.temp }}/crysk-platform
-      run: bun "${{ github.action_path }}/src/ci/platform.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform.ts"
 
     # The trigger decides whether this run reviews at all, and it runs FIRST,
     # before `bun install`, so an ignored comment or a fork PR costs seconds
@@ -248,7 +247,7 @@ runs:
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         # Piped to trigger.ts on stdin, never left in its environment (above).
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
-      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin
 
     - name: Install dependencies
       if: steps.trigger.outputs.run == 'true' || (inputs.operation != 'review' && inputs.operation != '')
@@ -296,7 +295,7 @@ runs:
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
         # Piped on stdin, never left in bun's environment (see Resolve trigger).
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
-      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/credential-refresh.ts" --crysk-secrets-stdin
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/credential-refresh.ts" --crysk-secrets-stdin
 
     # Installed unless the run is KNOWN to send no step to the Claude CLI
     # (model-profiles S6): the connect step's routing-claude is exactly `false`
@@ -365,7 +364,7 @@ runs:
         # claude-credentials, opencode-providers, opencode-auth-file), never a
         # value and never to GITHUB_ENV.
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
-      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin
 
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only
     # (install ≠ Run Crysk). Never unpinned. Digest verify of the official
@@ -416,10 +415,11 @@ runs:
         # The login the platform returned for the App's bot, empty in a
         # standalone run: the answered-findings gate trusts it as a poster.
         CRYSK_PLATFORM_ACTOR: ${{ steps.platform.outputs.github-actor }}
-        # The platform's cost estimate for this run (src/ci/platform-estimate.ts),
-        # empty in a standalone run or when the platform could not price it: the
-        # CI budget gate then reads it instead of the engine's own band.
-        CRYSK_PLATFORM_ESTIMATE: ${{ steps.platform.outputs.estimate }}
+        # The limits the platform sent for this run (src/ci/platform-limits.ts):
+        # the per-review limit, what is left of the month's, and the platform's
+        # estimate. Empty in a standalone run, a forced run (`/crysk review`) or
+        # an older platform; the CI limits gate then skips nothing.
+        CRYSK_PLATFORM_LIMITS: ${{ steps.platform.outputs.limits }}
         # Whether the connect step ran: a skip comment on a platform repository
         # names only what applies there (`/crysk review`, the dashboard).
         CRYSK_PLATFORM_CONNECTED: ${{ steps.platform.outputs.github-token != '' }}
@@ -475,7 +475,7 @@ runs:
         # The PR number is not re-derived here: the trigger step owns it, and
         # it reports a missing number as an error before this step can run.
 
-        # --ci is unconditional: --budget-usd, --step-summary and --ci-mode
+        # --ci is unconditional: --step-summary and --ci-mode
         # all require it at parse time, and it is what puts the CLI into
         # headless CI mode. The job's exit code still does not carry the
         # findings (src/review/exit-code.ts): the crysk commit status does. In
@@ -485,12 +485,12 @@ runs:
         # has no TTY to run against here.
         set -- review --pr "$TRIGGER_PR" --ci --yes
         if [ "$POST_INPUT" = "true" ] && [ "$POST_FROM_PLATFORM" != "true" ]; then set -- "$@" --post; fi
-        if [ "$SCOUT_INPUT" = "true" ]; then set -- "$@" --scout; fi
+        if [ -n "$SCOUT_INPUT" ]; then echo "::warning::the scout input is ignored: the scout stage was removed"; fi
         if [ "$STEP_SUMMARY_INPUT" = "false" ]; then set -- "$@" --no-step-summary; fi
         if [ -n "$MODEL_INPUT" ]; then set -- "$@" --model "$MODEL_INPUT"; fi
         if [ -n "$MAX_CHANGED_LINES_INPUT" ]; then set -- "$@" --max-changed-lines "$MAX_CHANGED_LINES_INPUT"; fi
         if [ -n "$MAX_CHANGED_FILES_INPUT" ]; then set -- "$@" --max-changed-files "$MAX_CHANGED_FILES_INPUT"; fi
-        if [ -n "$BUDGET_USD_INPUT" ]; then set -- "$@" --budget-usd "$BUDGET_USD_INPUT"; fi
+        if [ -n "$BUDGET_USD_INPUT" ]; then echo "::warning::the budget-usd input is ignored: dollar limits moved to the Crysk platform (Review > Limits in the dashboard)"; fi
         if [ -n "$MODE_INPUT" ]; then set -- "$@" --ci-mode "$MODE_INPUT"; fi
         if [ "$TRIGGER_FORCE" = "true" ]; then set -- "$@" --force; fi
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
@@ -503,7 +503,7 @@ runs:
         # reads the crysk-secrets input on stdin to EOF, then runs the same CLI
         # bin/pr-hero.js runs, with these arguments; under pipefail the step's
         # exit is still the CLI's (printf cannot fail on a drained pipe).
-        printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/run.ts" "$@"
+        printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/run.ts" "$@"
 
     # Refresh the Crysk token (platform mode only). The installation token from
     # `Connect to Crysk` was minted before the trigger and lives about an hour,
@@ -525,7 +525,7 @@ runs:
         CRYSK_CLAUDE_OAUTH_TOKEN: ''
         CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
-      run: bun "${{ github.action_path }}/src/ci/platform.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform.ts"
 
     # Speaks for every outcome of a run (T2b, S3, T2c): no credential, a pull
     # request that cannot be resolved, a commenter permission that could not be
@@ -577,11 +577,11 @@ runs:
         # Bound like the run id: a record of another attempt of this run is
         # refused, since gh run rerun keeps the run id.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-      run: bun "${{ github.action_path }}/src/ci/publish.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/publish.ts"
 
     # Platform mode only: tell the Crysk platform how this run ended, so every
-    # run is recorded with its cost. The report posts metadata only (counts,
-    # token and cost totals, models, shas), never a finding or any text of the
+    # run is recorded. The report posts metadata only (counts,
+    # token totals, models, shas), never a finding or any text of the
     # review, to the constant URL in src/ci/platform.ts, with the newest run
     # token (the refresh step's, else the first exchange's). It also carries the gate's
     # count of open blocking findings and their ids and statuses, which hold no text.
@@ -623,7 +623,7 @@ runs:
         CRYSK_RUN_DIR: ${{ steps.run-crysk.outputs.run_dir }}
         TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
         TRIGGER_HEAD_SHA: ${{ steps.trigger.outputs.head_sha }}
-      run: bun "${{ github.action_path }}/src/ci/platform-report.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform-report.ts"
 
     # The same exchange again, for a run that was cancelled (see "Refresh the
     # Crysk token" above): the settle's post must not ride a token minted at the
@@ -641,7 +641,7 @@ runs:
         CRYSK_CLAUDE_OAUTH_TOKEN: ''
         CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
-      run: bun "${{ github.action_path }}/src/ci/platform.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform.ts"
 
     # WHY a separate step: the publish step is !cancelled() on purpose (a
     # superseded run must not report a failure it never had), and a cancelled
@@ -667,10 +667,10 @@ runs:
         # because the trigger clears the outcome directory at job start.
         GITHUB_RUN_ID: ${{ github.run_id }}
         CRYSK_PUBLISH_MODE: cancelled
-      run: bun "${{ github.action_path }}/src/ci/publish.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/publish.ts"
 
     # Platform mode only: send the Crysk platform this run's full trace (every
-    # step, attempt, model call and tool call, with timings, tokens and cost),
+    # step, attempt, model call and tool call, with timings and tokens),
     # so failed runs can be studied after the runner is gone. src/ci/platform-trace.ts
     # builds it from the run directory (the run step's run_dir, else the CLI's
     # run-dir record) and posts it gzip-compressed to the constant URL in
@@ -719,7 +719,7 @@ runs:
         CRYSK_ACTION_PATH: ${{ github.action_path }}
         TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
         TRIGGER_HEAD_SHA: ${{ steps.trigger.outputs.head_sha }}
-      run: bun "${{ github.action_path }}/src/ci/platform-trace.ts"
+      run: bun --no-env-file --config=/dev/null "${{ github.action_path }}/src/ci/platform-trace.ts"
 
     # Without this step the triage half of the review loop has no input.
     # `crysk triage reply --pr <n> --from <run-dir> --finding F00N` is the
@@ -759,7 +759,7 @@ runs:
     #   gh run download <run-id> -n crysk-run-<pr>-<head-sha>
     # then point `crysk triage reply --from` at the download directory.
     - name: Upload Crysk run directory
-      # A size-gated, budget-gated or concurrent review writes no run
+      # A size-gated, limits-gated or concurrent review writes no run
       # directory and publishes no outputs; the emptiness check keeps
       # upload-artifact from being handed an empty `path:` in that case.
       if: always() && steps.trigger.outputs.run == 'true' && steps.run-crysk.outputs.run_dir != '' && (inputs.operation == 'review' || inputs.operation == '')

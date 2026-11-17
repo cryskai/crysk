@@ -62,7 +62,6 @@ describe("workflow variants: the real scaffold", () => {
     // `models`, `credentials` and `profile` name models, an order and a
     // profile id, never a credential.
     expect(Object.keys(inputs).sort()).toEqual([
-      "budget-usd",
       "credentials",
       "github-token",
       "mode",

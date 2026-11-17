@@ -95,28 +95,27 @@ export interface CliOptions {
   out?: string;
   // Gotchas describe the REPO, not the commit under review, so they must be
   // supplyable from outside the reviewed tree — see the note in cli.ts. The
-  // same is true of the config: parity triggers and priors are properties of
-  // the project, and requiring them in-tree silently disables the conditional
-  // parity hunter on any tree you cannot add a file to.
+  // same is true of the config: the suspicion priors are a property of the
+  // project, and requiring them in-tree silently drops them on any tree you
+  // cannot add a file to.
   gotchas?: string;
   config?: string;
   model?: string;
   // Summary activation is tri-state at parse time: undefined means no flag,
   // so review can apply flag > config > the default-on setting.
   summary?: boolean;
-  // The scout is tri-state at parse time: undefined means no flag,
-  // so review can apply flag > config > default (false).
-  scout?: boolean;
+  // Flags of removed features that the command line still carried, once each,
+  // in first-seen order: the scout stage, and the dollar limits that moved to
+  // the Crysk platform (`--budget-usd`, `--billing`). They are accepted and
+  // have no effect; the shell prints one warning per entry
+  // (removedFlagWarnings).
+  removedFlags?: string[];
   // `--shared-prefix` / `--no-shared-prefix`. Undefined means the default,
   // which is ON (see resolveSharedPrefix).
   sharedPrefix?: boolean;
-  // Independent model knob (§3.7), and NOT exercised by M6 — the whole
-  // control corpus is sonnet, so ratifying this is ratifying a flag, not a
-  // second variable. `--model` still outranks it (the JD override rule).
-  scoutModel?: string;
   // Item 7: widen discovery to full B..H on a re-review. Default OFF — a
   // second push is delta-scoped unless asked otherwise. Verification,
-  // triage, and classification still run (R2-C5). Review-only, like --scout.
+  // triage, and classification still run (R2-C5). Review-only.
   full: boolean;
   // T5b: with --pr --ci, also have the CI adjudicator rule on each pending
   // dismissal of a blocking finding. Set by a /crysk recheck comment. Absent
@@ -242,19 +241,19 @@ export interface CliOptions {
   repoExplicit?: boolean;
   // ROADMAP Pillar 3 (GitHub Actions CI). `ci` is the EXPLICIT flag only —
   // `isCiEnvironment()` ORs it with the GITHUB_ACTIONS/CI env vars, which
-  // parseArgs (pure, no process.env read) cannot see. Both `budgetUsd` and
-  // `stepSummary` require `--ci` at parse time (the `--post`-requires-`--pr`
-  // precedent above): a spend ceiling or a summary toggle for a mode that
-  // never activates would be exactly the "silently dropped intention" the
-  // --bug-labels/--scout-model guards already refuse elsewhere in this file.
+  // parseArgs (pure, no process.env read) cannot see. `stepSummary` requires
+  // `--ci` at parse time (the `--post`-requires-`--pr` precedent above): a
+  // summary toggle for a mode that never activates would be exactly the
+  // "silently dropped intention" the --bug-labels guard already refuses
+  // elsewhere in this file.
   //
   // Phase 4 (CI Scaffolding) gave `--ci` a SECOND, command-scoped meaning:
   // on `review` it activates the CI headless shell (requires --pr); on
   // `setup` it means "scaffold .github/workflows/crysk.yml instead of
   // running the interactive wizard" — see `ci init`'s dedicated command
   // below for the same scaffolding without touching `setup`'s wizard
-  // default. `budgetUsd`/`stepSummary` still require the REVIEW reading of
-  // `--ci` specifically (checked below), since neither means anything to
+  // default. `stepSummary` still requires the REVIEW reading of
+  // `--ci` specifically (checked below), since it means nothing to
   // scaffolding.
   ci?: boolean;
   // `ci init` — the same scaffolding as `setup --ci`, as its own command.
@@ -262,25 +261,19 @@ export interface CliOptions {
   // as a literal union (not a bare boolean) so a future `ci status` has
   // somewhere to go without a breaking change.
   ciSubcommand?: "init";
-  // Unset means "no ceiling configured" (no gate, no disabled-ceiling
-  // warning — there is nothing to disable). <= 0, GIVEN explicitly, disables
-  // the ceiling too, but DOES warn: see ci/gates.ts's
-  // budgetDisabledWarningMessage for why the two are not the same state.
-  budgetUsd?: number;
-  // Tri-state like `summary`/`scout`: unset means "the shell's own default
+  // Tri-state like `summary`: unset means "the shell's own default
   // (on)", so `--step-summary` and `--no-step-summary` stay distinguishable
   // from "nobody said".
   stepSummary?: boolean;
   // S4: the commit-status gate for a `review --ci` run, required at parse time
-  // like budgetUsd. `gate` (the CI default) turns the pr-hero commit status red
-  // on blocking findings, a size or budget skip, and a crash; `advisory` keeps
+  // like stepSummary. `gate` (the CI default) turns the pr-hero commit status red
+  // on blocking findings, a size or limits skip, and a crash; `advisory` keeps
   // today's posture. Unset means the run resolves it (resolveCiMode, pr/preflight).
   ciMode?: "gate" | "advisory";
-  // `setup --ci` / `ci init` only: the re-review preset and how CI pays, for an
-  // agent that already asked the person. --ci-mode and --budget-usd also apply
-  // there; together they replace the questions setup asks in a terminal.
+  // `setup --ci` / `ci init` only: the re-review preset, for an agent that
+  // already asked the person. --ci-mode also applies there; together they
+  // replace the questions setup asks in a terminal.
   reviewLevel?: "minimal" | "balanced" | "thorough" | "manual";
-  billing?: "subscription" | "api";
 }
 
 // design.md 3.1's literal formula: Boolean(GITHUB_ACTIONS || CI || --ci).
@@ -332,15 +325,14 @@ Usage:
   crysk review [options]   Review a branch (zero flags inside a configured repo)
   crysk init [options]     Scaffold <repo>/.crysk/config.json, and a root REVIEW.md when the repo has no review instructions
   crysk setup [options]    Run interactive onboarding wizard
-  crysk setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
+  crysk setup --ci [--force] [--level <l>] [--ci-mode <m>]
                              Scaffold .github/workflows/crysk.yml (or update
                              an existing pr-hero.yml) instead
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed. Asks how CI
                              re-reviews (in a terminal) or takes the flags:
                              --level minimal|balanced|thorough|manual,
-                             --ci-mode gate|advisory, --billing
-                             subscription|api, --budget-usd (api only),
+                             --ci-mode gate|advisory,
                              --max-changed-lines (default 4000).
                              Writes the level to .crysk/config.json and
                              prints a summary. Then checks gh and, in a
@@ -367,13 +359,15 @@ Usage:
                              and posts nothing (the only way to preview a
                              plan, since --pr --dry-run returns before any
                              findings exist)
-  crysk triage reply --pr <n> --from <run-dir> --finding <id> --tag <tag>
+  crysk triage reply --pr <n> [--from <run-dir>] --finding <id> --tag <tag>
                    --body-file <path> [--verdict <v>] [--issue <n>] [--dry-run]
                              Post one triage reply. The driver resolves the
                              parent from the posted <!-- crysk-finding
                              marker (never path/line), renders the marker +
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.
+                             Without --from, the finding is read off the PR
+                             by its R### id (crysk status --pr <n> --json).
                              --dry-run prints the parent and posts nothing
   crysk status --pr <n> [--wait] [--json]
                              Read the PR's crysk gate, posted findings and
@@ -434,7 +428,7 @@ Usage:
   crysk gc uninstall       Unload and remove that launchd agent
   crysk gc status          Read-only: whether the GC agent is installed
   crysk usage [--all]      Print the observability store's per-run rows
-                             (cost, tokens, findings) for the current
+                             (tokens, findings) for the current
                              checkout's origin — every review, local and
                              PR, auto-ingests into it. --all shows every
                              origin instead of just this one. Read-only, $0
@@ -521,8 +515,8 @@ Options:
                       gotchas.md, else none); supply it from outside to review
                       a tree you cannot dirty
   --config <file>     Local config (default: <repo>/.crysk/config.json) with
-                      agents_dir, default_base, parity_trigger_paths and
-                      suspicion_priors, optional summary settings, and
+                      agents_dir, default_base and suspicion_priors,
+                      optional summary settings, and
                       optional max_verification_steps (re-review verify cap;
                       default 8; 0 pauses verification), and optional
                       max_concurrent_steps (cap on steps in flight at once;
@@ -534,12 +528,6 @@ Options:
                       their effort go in "models" in ~/.crysk/config.json
   --summary           Enable the engine-owned PR summary (default)
   --no-summary        Disable the engine-owned PR summary
-  --scout             review only: run the diff-only scout stage before the
-                      hunters, biasing their scan with unverified leads.
-                      EXPERIMENTAL and off by default — the A/B that decides
-                      whether it earns its cost has not run yet
-  --scout-model <m>   Model for the scout stage (default: the run's model).
-                      Requires --scout
   --no-shared-prefix  review only: turn off the shared hunter prefix. By
                       default the patch and output contract sit in each
                       hunter's system prompt, identical across hunters, and the
@@ -568,7 +556,7 @@ Options:
   --interval <min>    watch install and gc install: minutes between launchd
                       ticks (watch default: ${DEFAULT_WATCH_INTERVAL_MIN};
                       gc default: ${DEFAULT_GC_INTERVAL_MIN})
-  --dry-run           Resolve, preflight, print the plan and the cost band,
+  --dry-run           Resolve, preflight, print the plan,
                       then exit without spawning anything. For watch --once:
                       print what would be skipped/launched and why, touching
                       nothing
@@ -585,16 +573,16 @@ Options:
   --ci-mode <gate|advisory>
                       With review --ci only. gate (the default): the
                       crysk commit status is failure on blocking findings
-                      and on a size or budget skip, and error on a crash.
+                      and on a size or limits skip, and error on a crash.
                       advisory: the status stays success whatever the
                       findings, as before
   --force             Review even when CI would skip: the size gate, the
-                      review-policy admission rules, and the budget ceiling.
+                      review-policy admission rules, and the platform limits.
                       On GitHub, comment /crysk review on the PR to pass
                       this flag from Actions. An interactive TTY already
                       offers the size-gate choice as a menu; this flag is
                       the unattended hatch. Does NOT imply --yes — the
-                      cost-band prompt still asks. With setup --ci /
+                      confirmation prompt still asks. With setup --ci /
                       ci init: overwrite the existing review workflow
                       (.github/workflows/crysk.yml or pr-hero.yml) instead
                       of refusing
@@ -622,6 +610,41 @@ Exit codes of a review (findings never change them):
   2  usage error
   3  the review is incomplete: a step failed (a hunter, the refuter,
      verify, adjudicate, or the time ceiling). Run it again.`;
+
+// The scout stage was removed. Its flags, its config key and its model role
+// keep being accepted so no existing command line, config file or stored
+// profile starts failing; each does nothing and says so, once (S2).
+const SCOUT_REMOVED = "is ignored: the scout stage was removed";
+
+// The parity hunter was removed from the product the same way: the config key,
+// the `models.hunter.parity` role and a leftover `deep-review-parity.md` in a
+// custom prompt directory are still accepted, do nothing, and say so once.
+export const PARITY_REMOVED = "is ignored: the parity hunter was removed";
+
+// The dollar limits moved to the Crysk platform (platform-owned-cost S7), so
+// the flags that set them are retired the same way: `--budget-usd` set a
+// ceiling, and `--billing` only chose whether setup wrote one.
+const REMOVED_FLAG_NOTES: Readonly<Record<string, string>> = {
+  "--budget-usd":
+    "is ignored: dollar limits moved to the Crysk platform (Review > Limits in the dashboard)",
+  "--billing":
+    "is ignored: dollar limits moved to the Crysk platform, so setup no longer asks how the review is paid",
+};
+
+// What the shell prints, as `warning: <line>`, for every flag of a removed
+// feature a command line carried. Pure: the shells decide where it goes.
+export function removedFlagWarnings(
+  options: Pick<CliOptions, "removedFlags">,
+): string[] {
+  return (options.removedFlags ?? []).map(
+    (flag) => `${flag} ${REMOVED_FLAG_NOTES[flag] ?? SCOUT_REMOVED}`,
+  );
+}
+
+function noteRemovedFlag(options: CliOptions, flag: string): void {
+  const seen = options.removedFlags ?? [];
+  if (!seen.includes(flag)) options.removedFlags = [...seen, flag];
+}
 
 const VALUE_FLAGS = new Set([
   "--repo",
@@ -763,12 +786,8 @@ export function parseArgs(argv: string[]): ParsedCli {
       options.summary = false;
       continue;
     }
-    if (arg === "--scout") {
-      options.scout = true;
-      continue;
-    }
-    if (arg === "--no-scout") {
-      options.scout = false;
+    if (arg === "--scout" || arg === "--no-scout") {
+      noteRemovedFlag(options, arg);
       continue;
     }
     if (arg === "--no-shared-prefix") {
@@ -1074,28 +1093,18 @@ export function parseArgs(argv: string[]): ParsedCli {
     );
   }
   // The adjudicator's verdicts are posted only by the CI shell, so the flag is a
-  // no-op anywhere else. Same reasoning as --budget-usd below.
+  // no-op anywhere else. Same reasoning as --step-summary below.
   if (options.adjudicate && !(options.ci && command === "review")) {
     throw new CliUsageError("--adjudicate only applies with review --ci");
   }
   // Same "silently dropped intention" reasoning as --post/--pr above: a
-  // spend ceiling or a summary toggle for a mode that never turns on would
-  // be a flag the operator believes changed a run it did not. Scoped to
-  // `review`'s reading of --ci specifically now that `setup --ci` exists —
-  // neither flag means anything to scaffolding.
-  // `setup --ci` and `ci init` read both too: they write the gate mode and
-  // the ceiling into the workflow they scaffold.
+  // summary toggle for a mode that never turns on would be a flag the
+  // operator believes changed a run it did not. Scoped to `review`'s reading
+  // of --ci specifically now that `setup --ci` exists — it means nothing to
+  // scaffolding. `setup --ci` and `ci init` read the gate mode too: they
+  // write it into the workflow they scaffold.
   const scaffolding = (options.ci && command === "setup") || command === "ci";
-  if (
-    options.budgetUsd !== undefined &&
-    !(options.ci && command === "review") &&
-    !scaffolding
-  ) {
-    throw new CliUsageError(
-      "--budget-usd only applies with review --ci, setup --ci or ci init",
-    );
-  }
-  // S4: the gate mode is a review reading of --ci, like budgetUsd. Without
+  // S4: the gate mode is a review reading of --ci, like stepSummary. Without
   // it the flag would name a mode that never runs.
   if (
     options.ciMode !== undefined &&
@@ -1106,18 +1115,8 @@ export function parseArgs(argv: string[]): ParsedCli {
       "--ci-mode only applies with review --ci, setup --ci or ci init",
     );
   }
-  if (
-    (options.reviewLevel !== undefined || options.billing !== undefined) &&
-    !scaffolding
-  ) {
-    throw new CliUsageError(
-      "--level and --billing only apply with setup --ci or ci init",
-    );
-  }
-  if (options.billing === "subscription" && options.budgetUsd !== undefined) {
-    throw new CliUsageError(
-      "--budget-usd does not apply with --billing subscription: a subscription review spends quota, not dollars",
-    );
+  if (options.reviewLevel !== undefined && !scaffolding) {
+    throw new CliUsageError("--level only applies with setup --ci or ci init");
   }
   if (
     options.stepSummary !== undefined &&
@@ -1135,28 +1134,8 @@ export function parseArgs(argv: string[]): ParsedCli {
       'the "ci" command requires a subcommand: "ci init"',
     );
   }
-  // The scout is a `review` stage and nothing else reads either flag.
-  // Rejected elsewhere rather than ignored, the --from guard's reasoning: a
-  // flag that parses and then does nothing is an operator believing they
-  // changed a run they did not.
-  if (
-    command !== "review" &&
-    (options.scout !== undefined || options.scoutModel)
-  ) {
-    throw new CliUsageError(
-      "--scout and --scout-model only apply to the review command",
-    );
-  }
   if (command !== "review" && options.full) {
     throw new CliUsageError("--full only applies to the review command");
-  }
-  // A model for a stage that will not run is the same silent no-op, one level
-  // down — and the likeliest way to produce it is believing the model flag
-  // turns the stage on.
-  if (options.scoutModel !== undefined && !options.scout) {
-    throw new CliUsageError(
-      "--scout-model sets the model for the scout stage, so it requires --scout",
-    );
   }
   // `status` (ROADMAP S9) reads one PR and writes nothing, so its whole surface is --pr <n>
   // and --json. Every other flag is refused here, not ignored: a flag that parses and then
@@ -1201,7 +1180,8 @@ export function parseArgs(argv: string[]): ParsedCli {
     if (options.pr === undefined) {
       throw new CliUsageError(`${command} requires --pr <n>`);
     }
-    if (options.from === undefined) {
+    // triage-without-skill S2: triage reply reads the finding off the PR when no run directory is given.
+    if (command === "post" && options.from === undefined) {
       throw new CliUsageError(`${command} requires --from <run-dir>`);
     }
   } else if (options.from !== undefined) {
@@ -1429,7 +1409,7 @@ function applyValueFlag(
       options.model = value;
       return;
     case "--scout-model":
-      options.scoutModel = value;
+      noteRemovedFlag(options, flag);
       return;
     case "--from":
       options.from = value;
@@ -1452,18 +1432,12 @@ function applyValueFlag(
     case "--max-changed-files":
       options.maxChangedFiles = parseLimit(flag, value);
       return;
-    // Unlike parseLimit (integer-only, size-gate's line/file counts):
-    // spend is a float ($7.50), and <= 0 is a real, meaningful value (see
-    // ci/gates.ts's evaluateBudgetGate) rather than a rejected input, so this
-    // only refuses non-numbers, never negatives.
-    case "--budget-usd": {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) {
-        throw new CliUsageError(`--budget-usd must be a number, got: ${value}`);
-      }
-      options.budgetUsd = parsed;
+    // Retired with the dollar limits (platform-owned-cost S7): the value is
+    // read and dropped, whatever it is, and the flag is announced once.
+    case "--budget-usd":
+    case "--billing":
+      noteRemovedFlag(options, flag);
       return;
-    }
     case "--ci-mode": {
       if (value !== "gate" && value !== "advisory") {
         throw new CliUsageError(
@@ -1485,15 +1459,6 @@ function applyValueFlag(
         );
       }
       options.reviewLevel = value;
-      return;
-    }
-    case "--billing": {
-      if (value !== "subscription" && value !== "api") {
-        throw new CliUsageError(
-          `--billing must be subscription or api, got: ${value}`,
-        );
-      }
-      options.billing = value;
       return;
     }
     case "--finding":
@@ -2049,6 +2014,25 @@ const ADDED_AGENT_HINTS: Record<string, string> = {
     "this directory",
 };
 
+// Prompt files of a removed hunter that a custom set copied from an older
+// default may still carry. Not a problem and never used: the directory check
+// lets them pass and says so once instead (ignoredAgentFileWarnings).
+const IGNORED_AGENT_FILES: ReadonlySet<string> = new Set([
+  "deep-review-parity.md",
+]);
+
+// One warning per ignored file that is present and that no agent of the spec
+// names, in the order of the set above. A spec that names the file uses it and
+// has nothing to say.
+function ignoredAgentFileWarnings(
+  specFiles: readonly string[],
+  presentFiles: readonly string[],
+): string[] {
+  return [...IGNORED_AGENT_FILES]
+    .filter((file) => presentFiles.includes(file) && !specFiles.includes(file))
+    .map((file) => `${file} ${PARITY_REMOVED}`);
+}
+
 export function agentsDirProblems(
   specFiles: string[],
   presentFiles: string[],
@@ -2065,7 +2049,7 @@ export function agentsDirProblems(
     }
   }
   for (const file of presentFiles) {
-    if (!named.has(file)) {
+    if (!named.has(file) && !IGNORED_AGENT_FILES.has(file)) {
       problems.push(
         `the dir has "${file}" but no agent in the spec references it ` +
           `(it would never run)${RETIRED_AGENT_HINTS[file] ?? ""}`,
@@ -2122,10 +2106,12 @@ export function resolveAgentsDir(
   return resolution;
 }
 
+// Returns the warnings of the check that passed (ignoredAgentFileWarnings), for
+// the caller to print: this function is pure of any output channel.
 export async function preflightAgentsDir(
   agents: Pick<AgentsDirResolution, "kind" | "dir" | "files">,
   specFiles: string[],
-): Promise<void> {
+): Promise<string[]> {
   const present = new Set<string>();
   if (agents.kind === "bundled") {
     // The manifest's keys ARE the present set, and there is nothing to scan:
@@ -2151,6 +2137,7 @@ export async function preflightAgentsDir(
       { cls: { kind: "prompt-set" } },
     );
   }
+  return ignoredAgentFileWarnings(specFiles, [...present]);
 }
 
 // EXPERIMENT (odd/tasks/logic-hunter.md T3): benchmark-only hunter fan-out,
@@ -2192,10 +2179,10 @@ function parseExtraHunters(read: BrandEnvValue | undefined): AgentSpec[] {
   });
 }
 
-// Local mode's wiring: the four unconditional hunters, the conditional
-// parity hunter, and the refuter. Deliberately NOT defaultReviewSpec() — that
-// one omits the logic and security hunters, and local mode targets the 6-file
-// clean set. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
+// Local mode's wiring: the four unconditional hunters and the refuter.
+// Deliberately NOT defaultReviewSpec() — that one omits the logic and security
+// hunters and keeps the conditional parity hunter, which is the lab's legacy
+// wiring and no longer part of the product. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
 // set, which validateReviewSpec enforces.
 //
 // `env` is injectable (defaults to `process.env`) so PRHERO_EXTRA_HUNTERS can
@@ -2215,12 +2202,6 @@ export function localReviewSpec(
       { key: "resilience", file: "deep-review-resilience.md", role: "hunter" },
       { key: "logic", file: "deep-review-logic.md", role: "hunter" },
       { key: "security", file: "deep-review-security.md", role: "hunter" },
-      {
-        key: "parity",
-        file: "deep-review-parity.md",
-        role: "hunter",
-        trigger: "input",
-      },
       // The boundary, not the three throws: assertBasenameOnly inside
       // parseExtraHunters is a fourth usage throw of the same parse (T2d-1).
       ...withUsageClass({ kind: "config-parse", source: "extra-hunters" }, () =>
@@ -2254,10 +2235,6 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   // plan card — verbatim the "wrong answer with a plausible face" failure the
   // comment at the top of this file names.
   default_base: "repo",
-  // The values are paths INSIDE one repository. A global answer is meaningless
-  // everywhere else and would silently arm or disarm the parity hunter across
-  // every repo on the machine.
-  parity_trigger_paths: "repo",
   suspicion_priors: "repo",
   // Per-field below — the two fields disagree, which is why SUMMARY_DIRECTION
   // exists. This row declares the key for the known-key set; the merge
@@ -2275,10 +2252,9 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   max_concurrent_steps: "capped",
   max_changed_lines: "capped",
   max_changed_files: "capped",
-  scout: "capped",
-  // `capped` like the scout, for the same reason: switching it on adds one
-  // judge spawn per blocking finding, so a committed file may turn it off but
-  // never on against the operator's global ceiling.
+  // `capped`: switching it on adds one judge spawn per blocking finding, so a
+  // committed file may turn it off but never on against the operator's global
+  // ceiling.
   materiality_gate: "capped",
   post: "capped",
   // `person`: a global floor applies to every repo, and a repo file overrides
@@ -2303,7 +2279,6 @@ export const SUMMARY_DIRECTION: Record<keyof SummaryConfig, ConfigDirection> = {
 };
 
 export interface LocalConfig {
-  parity_trigger_paths: string[];
   suspicion_priors: SuspicionPrior[];
   // Both optional, and both exist to make `pr-hero review` a zero-flag
   // command: the prompt set lives in a sibling repo, and the default branch is
@@ -2324,12 +2299,11 @@ export interface LocalConfig {
   // `unconfirmed` (the pause switch, same shape as watch daily_cap).
   max_verification_steps?: number;
   // Admission cap on in-flight steps (hunter, refuter, verify, adjudicate,
-  // scout, summarizer attempts). Absent means unlimited: no gate is built.
+  // summarizer attempts). Absent means unlimited: no gate is built.
   // Positive only: 0 would admit nothing and wedge every run.
   max_concurrent_steps?: number;
   max_changed_lines?: number;
   max_changed_files?: number;
-  scout?: boolean;
   // Opt-in judge that demotes immaterial blocking findings to advisory
   // (review/materiality-gate.ts). Absent means off.
   materiality_gate?: boolean;
@@ -2369,16 +2343,15 @@ export interface SummarySettings {
 }
 
 export const EMPTY_LOCAL_CONFIG: LocalConfig = {
-  parity_trigger_paths: [],
   suspicion_priors: [],
 };
 
 // What a layer SAID, not what the engine will use — every key optional,
-// including the two arrays LocalConfig declares required.
+// including the array LocalConfig declares required.
 //
 // WHY the distinction is load-bearing rather than cosmetic: a merge whose
 // input cannot represent absence has already destroyed the fact it needs to
-// fold on. Under LocalConfig a repo file that omits `parity_trigger_paths`
+// fold on. Under LocalConfig a repo file that omits `suspicion_priors`
 // hands the merge a materialised `[]`, the fold sees the repo layer speak,
 // and provenance reports `repo` for a value that file never named. That is a
 // lie in pipeline.json and in `pr-hero config`, and no amount of care in the
@@ -2416,19 +2389,18 @@ const REPO_CONFIG_LABEL = ".crysk/config.json";
 const GLOBAL_CONFIG_LABEL = "~/.crysk/config.json";
 
 // `.crysk/config.json` is optional and every setting inside it is optional —
-// an absent config is a legal, complete configuration (parity simply never
-// fires, while summary activation is resolved by resolveSummary). What is NOT
-// tolerated is a malformed one: a typo'd key silently
-// read as "no triggers" is exactly how the parity hunter stops firing without
-// anyone noticing, so shape violations throw.
+// an absent config is a legal, complete configuration (summary activation is
+// resolved by resolveSummary). What is NOT tolerated is a malformed one: a
+// typo'd key silently read as "no priors" is exactly how a setting stops
+// applying without anyone noticing, so shape violations throw.
 // WHY summary defaults on: it is the first defaulted setting that spends
 // money, and a silent opt-out would make a normal review's bill differ from
 // the plan. `--no-summary` and `summary.enabled: false` are the explicit exits.
 //
-// WHY it returns a ConfigLayer and no longer materialises the two arrays: the
-// return object used to write `parity_trigger_paths` and `suspicion_priors`
-// unconditionally, because LocalConfig required them. That destroyed the
-// difference between "the file said []" and "the file never mentioned it" —
+// WHY it returns a ConfigLayer and no longer materialises the array: the
+// return object used to write `suspicion_priors` (and the removed
+// `parity_trigger_paths`) unconditionally, because LocalConfig required them.
+// That destroyed the difference between "the file said []" and "the file never mentioned it" —
 // and the merge downstream can only report truthful provenance for a key it
 // can still see was absent. The `?? []` locals below stay exactly as they
 // are: they feed the validators, and validating an absent key against the
@@ -2521,6 +2493,19 @@ function parseConfigLayer(
     if (key === "routing") {
       throw new CliUsageError(`${file}: ${REMOVED_ROUTING_MESSAGE}`);
     }
+    // The removed stage's key: still admitted in both layers (a stored person
+    // profile, a committed repo file), never read, said out loud once per file.
+    if (key === "scout") {
+      warnings?.push(`${file}: scout ${SCOUT_REMOVED}`);
+      continue;
+    }
+    // The removed hunter's key, in either layer: it used to be refused in a
+    // person file as a per-repo key, and telling someone to move a dead key to
+    // another file would be wrong. Whatever the value, it is never read.
+    if (key === "parity_trigger_paths") {
+      warnings?.push(`${file}: parity_trigger_paths ${PARITY_REMOVED}`);
+      continue;
+    }
     if (!KNOWN_CONFIG_KEYS.has(key)) {
       throw new CliUsageError(`${file} unknown key: ${redactConfigValue(key)}`);
     }
@@ -2543,15 +2528,6 @@ function parseConfigLayer(
           "up before the rename)",
       );
     }
-  }
-  const triggers = config.parity_trigger_paths ?? [];
-  if (
-    !Array.isArray(triggers) ||
-    !triggers.every((p) => typeof p === "string" && p.length > 0)
-  ) {
-    throw new CliUsageError(
-      `${file} parity_trigger_paths must be an array of non-empty strings`,
-    );
   }
   const priors = config.suspicion_priors ?? [];
   if (!Array.isArray(priors)) {
@@ -2577,7 +2553,7 @@ function parseConfigLayer(
   const profile = parseProfile(config.profile, file);
   const summaryParse = parseSummaryConfig(config.summary, file);
   const summary = summaryParse?.summary;
-  let models = parseModels(config.models, file);
+  let models = parseModels(config.models, file, warnings);
   if (summaryParse?.initModel === true) {
     if (isRepoFile) {
       // L6 item 6: a repo file can no longer pick the summary model, and
@@ -2631,7 +2607,6 @@ function parseConfigLayer(
     "max_changed_files",
     file,
   );
-  const scout = parseOptionalBoolean(config.scout, "scout", file);
   const materialityGate = parseOptionalBoolean(
     config.materiality_gate,
     "materiality_gate",
@@ -2685,9 +2660,6 @@ function parseConfigLayer(
     file,
   );
   return {
-    ...(given(config.parity_trigger_paths)
-      ? { parity_trigger_paths: triggers as string[] }
-      : {}),
     ...(given(config.suspicion_priors)
       ? { suspicion_priors: priors as SuspicionPrior[] }
       : {}),
@@ -2709,7 +2681,6 @@ function parseConfigLayer(
     ...(maxChangedFiles === undefined
       ? {}
       : { max_changed_files: maxChangedFiles }),
-    ...(scout === undefined ? {} : { scout }),
     ...(materialityGate === undefined
       ? {}
       : { materiality_gate: materialityGate }),
@@ -2752,10 +2723,23 @@ function parseProfile(value: unknown, file: string): string | undefined {
 
 // The `models` object (S1, S3). Its rules live in model/model-name.ts; this
 // adds the file to every message, as every other key's error does.
-function parseModels(value: unknown, file: string): ModelsConfig | undefined {
+function parseModels(
+  value: unknown,
+  file: string,
+  warnings: string[] | undefined,
+): ModelsConfig | undefined {
   if (value === undefined) return undefined;
   try {
-    return parseModelsConfig(value);
+    const removed: string[] = [];
+    const models = parseModelsConfig(value, (role) => removed.push(role));
+    for (const role of removed) {
+      warnings?.push(`${file}: models.${role} ${SCOUT_REMOVED}`);
+    }
+    // A models object that named only a removed role chose no routing: handing
+    // back `{}` would read as "the person chose routing" (routingConfigured).
+    return removed.length > 0 && Object.keys(models).length === 0
+      ? undefined
+      : models;
   } catch (error) {
     if (error instanceof ModelNameError) {
       throw new CliUsageError(`${file} ${error.message}`);
@@ -2967,13 +2951,6 @@ export function resolveSharedPrefix(
   return options.sharedPrefix !== false;
 }
 
-export function resolveScout(
-  options: Pick<CliOptions, "scout">,
-  config: Pick<ConfigLayer, "scout">,
-): boolean {
-  return options.scout ?? config.scout ?? false;
-}
-
 // No CLI flag on purpose: the gate is opt-in through config only, so the
 // merged config is the whole answer and absent means off.
 export function resolveMaterialityGate(
@@ -3085,11 +3062,6 @@ export function mergeConfig(
     CONFIG_DIRECTION.default_base,
     (layer) => layer.default_base,
   );
-  const triggers = foldKey(
-    layers,
-    CONFIG_DIRECTION.parity_trigger_paths,
-    (layer) => layer.parity_trigger_paths,
-  );
   const priors = foldKey(
     layers,
     CONFIG_DIRECTION.suspicion_priors,
@@ -3132,12 +3104,6 @@ export function mergeConfig(
     CONFIG_DIRECTION.max_changed_files,
     (layer) => layer.max_changed_files,
     narrowSizeLimit,
-  );
-  const scout = foldKey(
-    layers,
-    CONFIG_DIRECTION.scout,
-    (layer) => layer.scout,
-    (a, b) => a && b,
   );
   const materialityGate = foldKey(
     layers,
@@ -3227,7 +3193,6 @@ export function mergeConfig(
     // key nobody named, so the array can be handed to the resolvers without
     // that fact being lost. Materialising it any earlier is what made
     // provenance a lie.
-    parity_trigger_paths: triggers.value ?? [],
     suspicion_priors: priors.value ?? [],
     ...(agentsDir.value === undefined ? {} : { agents_dir: agentsDir.value }),
     ...(defaultBase.value === undefined
@@ -3251,7 +3216,6 @@ export function mergeConfig(
     ...(maxFiles.value === undefined
       ? {}
       : { max_changed_files: maxFiles.value }),
-    ...(scout.value === undefined ? {} : { scout: scout.value }),
     ...(materialityGate.value === undefined
       ? {}
       : { materiality_gate: materialityGate.value }),
@@ -3289,7 +3253,6 @@ export function mergeConfig(
   const sources: ConfigSources = {
     agents_dir: agentsDir.source,
     default_base: defaultBase.source,
-    parity_trigger_paths: triggers.source,
     suspicion_priors: priors.source,
     summary: { enabled: summaryEnabled.source },
     models: models.source,
@@ -3299,7 +3262,6 @@ export function mergeConfig(
     max_concurrent_steps: maxConcurrentSteps.source,
     max_changed_lines: maxLines.source,
     max_changed_files: maxFiles.source,
-    scout: scout.source,
     materiality_gate: materialityGate.source,
     post: post.source,
     post_min_severity: postMinSeverity.source,
@@ -3368,8 +3330,8 @@ export interface InitTemplateOmissions {
 //
 // `default_base` is NOT here and must never be: it is a `repo` key (D4),
 // `parseGlobalConfig` rejects it by name, so no global file can supply it and
-// omitting it would scaffold a repo with no base ref at all. The two array
-// keys are `repo` for the same reason. `summary.enabled` IS here even though
+// omitting it would scaffold a repo with no base ref at all. The array key
+// (`suspicion_priors`) is `repo` for the same reason. `summary.enabled` IS here even though
 // O-9's wording names only the person keys — the template hardcodes `true`,
 // which is exactly the value `capped` forbids the team file from raising over
 // a global `false` (judgment ledger JD-17), so seeding it against a global
@@ -3417,7 +3379,6 @@ export function initConfigTemplate(input: InitTemplateInput): string {
       // and configures nothing, which is a line whose only effect is to make
       // the next reader wonder what it does.
       ...(Object.keys(summary).length === 0 ? {} : { summary }),
-      parity_trigger_paths: [],
       suspicion_priors: [],
     },
     null,

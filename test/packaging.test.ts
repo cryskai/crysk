@@ -635,7 +635,7 @@ describe("Packaging & distribution configuration", () => {
       expect(bin).toContain('await import("../src/cli.ts")');
     });
 
-    test("passes --ci unconditionally (--budget-usd/--step-summary require it at parse time)", () => {
+    test("passes --ci unconditionally (--step-summary and --ci-mode require it at parse time)", () => {
       const action = parsedAction();
       const runStep = action.runs.steps.find(
         (step) => step.id === "run-crysk",
@@ -713,8 +713,8 @@ describe("Packaging & distribution configuration", () => {
             ctx.platform?.[expr.slice("steps.platform.outputs.".length)] ?? ""
           );
         }
-        if (expr === "steps.platform.outputs.estimate") {
-          return ctx.platform?.estimate ?? "";
+        if (expr === "steps.platform.outputs.limits") {
+          return ctx.platform?.limits ?? "";
         }
         // The setup step's platform bindings, unset in a standalone run.
         if (expr === "steps.platform.outputs.config-file") {
@@ -864,7 +864,10 @@ describe("Packaging & distribution configuration", () => {
           `\${{ github.action_path }}`,
           "/action",
         );
-        const fakeBun = `bun() { shift; printf '%s\\n' "$@"; return ${cliExit}; }`;
+        // The real call is `bun --no-env-file --config=/dev/null <script> ...`:
+        // the fake refuses a call without both flags, then drops them and the
+        // script path.
+        const fakeBun = `bun() { [ "$1" = --no-env-file ] && [ "$2" = --config=/dev/null ] || return 97; shift 3; printf '%s\\n' "$@"; return ${cliExit}; }`;
         const result = Bun.spawnSync(
           [
             "bash",
@@ -1073,11 +1076,12 @@ describe("Packaging & distribution configuration", () => {
       expect(mentions).toEqual(["trigger", "materialize"]);
     });
 
-    // cryskai/platform#12: the run step gets the connect step's estimate and its
-    // connection, the two the budget gate and the skip comments read. A typo in
-    // either output name would silently fall back to the band and the legacy hints.
-    test("Run Crysk reads the platform's estimate and whether the run is connected", () => {
-      const estimate = '{"usd_low":0.41,"usd_high":0.87,"basis":"history"}';
+    // platform-owned-cost L55: the run step gets the connect step's limits and its
+    // connection, the two the limits gate and the skip comments read. A typo in
+    // either output name would silently leave the gate with nothing to compare.
+    test("Run Crysk reads the platform's limits and whether the run is connected", () => {
+      const limits =
+        '{"review_usd":12,"month_left_usd":3.5,"estimate_usd":0.87}';
       const runStep = steps().find((step) => step.id === "run-crysk");
       const ctx = {
         inputs: {},
@@ -1087,12 +1091,12 @@ describe("Packaging & distribution configuration", () => {
       };
       const connected = resolveEnv(runStep?.env ?? {}, {
         ...ctx,
-        platform: { "github-token": "ghs_x", estimate },
+        platform: { "github-token": "ghs_x", limits },
       });
-      expect(connected.CRYSK_PLATFORM_ESTIMATE).toBe(estimate);
+      expect(connected.CRYSK_PLATFORM_LIMITS).toBe(limits);
       expect(connected.CRYSK_PLATFORM_CONNECTED).toBe("true");
       const standalone = resolveEnv(runStep?.env ?? {}, ctx);
-      expect(standalone.CRYSK_PLATFORM_ESTIMATE).toBe("");
+      expect(standalone.CRYSK_PLATFORM_LIMITS).toBe("");
       expect(standalone.CRYSK_PLATFORM_CONNECTED).toBe("false");
     });
 
@@ -1170,7 +1174,7 @@ describe("Packaging & distribution configuration", () => {
 
     // ---------------------------------------------------------------------
     // The trigger step (odd/tasks/agent-first-ci.md, T1/S1): credential
-    // detection and the `/pr-hero review` comment command live in the
+    // detection and the `/crysk review` comment command live in the
     // action, so the calling workflow can be one short file.
     // ---------------------------------------------------------------------
 
@@ -1254,7 +1258,7 @@ describe("Packaging & distribution configuration", () => {
           event_name: "issue_comment",
           "event.issue.number": "21",
           "event.issue.pull_request.url": `https://api.github.com/repos/${REPOSITORY}/pulls/21`,
-          "event.comment.body": "/pr-hero review",
+          "event.comment.body": "/crysk review",
           "event.comment.user.login": "maintainer",
           "event.comment.id": "9001",
         },
@@ -1393,7 +1397,7 @@ describe("Packaging & distribution configuration", () => {
       expect(step?.name).toBe("Report to Crysk");
       expect(step?.shell).toBe("bash");
       expect(step?.run).toBe(
-        `bun "\${{ github.action_path }}/src/ci/platform-report.ts"`,
+        `bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/platform-report.ts"`,
       );
       const condition = String(step?.if ?? "");
       expect(condition).toContain("!cancelled()");
@@ -1508,7 +1512,7 @@ describe("Packaging & distribution configuration", () => {
         .filter((line) => line !== "" && !line.startsWith("#"))
         .at(-1);
       expect(lastCommand).toBe(
-        `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/run.ts" "$@"`,
+        `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun --no-env-file --config=/dev/null "\${{ github.action_path }}/src/ci/run.ts" "$@"`,
       );
     });
 
@@ -1961,7 +1965,7 @@ describe("Packaging & distribution configuration", () => {
       expect(run.args).not.toContain("--force");
     });
 
-    test("a `/pr-hero review --full` comment from a writer passes --force and --full", async () => {
+    test("a `/crysk review --full` comment from a writer passes --force and --full", async () => {
       const gh: FakeGh = (args) => ({
         exitCode: 0,
         stdout: args[0] === "api" ? "write\n" : `${HEAD}\n`,
@@ -1974,7 +1978,7 @@ describe("Packaging & distribution configuration", () => {
           event_name: "issue_comment",
           "event.issue.number": "21",
           "event.issue.pull_request.url": `https://api.github.com/repos/${REPOSITORY}/pulls/21`,
-          "event.comment.body": "/pr-hero review --full",
+          "event.comment.body": "/crysk review --full",
           "event.comment.user.login": "maintainer",
         },
         gh,
@@ -2166,7 +2170,7 @@ describe("Packaging & distribution configuration", () => {
     });
   });
 
-  // The force workflow is retired: `/pr-hero review` on the pull request is
+  // The force workflow is retired: `/crysk review` on the pull request is
   // the forced run now, and crysk.yml listens for it. A committed or shipped
   // copy would be a second, drifting way to do the same thing, and nothing
   // generates it any more to keep it honest.
@@ -2274,22 +2278,18 @@ describe("Packaging & distribution configuration", () => {
   // choose, while this repo raises only the size gate because it reviews
   // itself. A future edit that "helpfully" pushes an override into the
   // scaffolded template breaks this, not just a byte comparison.
-  test("the scaffolded template sets neither spend nor size ceilings", () => {
+  test("the scaffolded template sets neither a retired budget nor size ceilings", () => {
     const scaffolded = generateCiWorkflowTemplate();
     expect(scaffolded).not.toContain("budget-usd:");
     expect(scaffolded).not.toContain("max-changed-lines:");
   });
 
-  // Spend is deliberately NOT on this list since issue #156. action.yml's
-  // `budget-usd` default is now empty and the CLI resolves the ceiling from
-  // the route's billing mode, so an explicit `budget-usd: 15.00` here would
-  // impose a ceiling the policy would not otherwise apply — on a subscription
-  // route that ceiling gates a token-derived estimate against $0.00 of real
-  // spend, and a skipped review reads exactly like a clean one.
-  test("this repo's own workflow raises the size ceiling and disables the budget ceiling", () => {
+  // The dollar ceiling left the engine (platform-owned-cost S7): `budget-usd` is
+  // a retired input, so no workflow this repo scaffolds writes it, its own
+  // included. This repo raises only the size gate because it reviews itself.
+  test("this repo's own workflow raises the size ceiling and writes no budget-usd", () => {
     const own = generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
-    // 0, not a number: a subscription route has no dollar cost to cap.
-    expect(own).toContain("budget-usd: 0\n");
+    expect(own).not.toContain("budget-usd");
     // 5000, not action.yml's 4000: large refactoring slices (like cli-decomposition)
     // exceed 2000 lines, so dogfooding requires an expanded ceiling.
     expect(own).toContain("max-changed-lines: 5000");
@@ -2393,7 +2393,7 @@ describe("/crysk recheck wiring", () => {
       const content = read(file);
       for (const [review, recheck] of [
         ["/crysk review", "/crysk recheck"],
-        ["/pr-hero review", "/pr-hero recheck"],
+        ["/crysk review", "/crysk recheck"],
       ] as const) {
         const reviewCount = content.split(clause(review)).length - 1;
         expect(reviewCount).toBeGreaterThan(0);

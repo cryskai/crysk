@@ -9,9 +9,9 @@ finding, and deterministic code — never a model — assigns blocking/advisory 
 Its measured profile, stated up front: **high precision, narrow coverage**. What it reports is
 almost always real (13% false positives measured). Its hunters check value contracts across the diff
 (units, domain, conversions, what consumers assume), resilience (lookup and dedupe keys, retries and
-locks, CI guards, test isolation), local logic errors, trust boundaries (outside input reaching a
+locks, CI guards, test isolation), local logic errors, and trust boundaries (outside input reaching a
 query, command, file path or server-side request; missing or misplaced permission checks; a hunter
-added 2026-11-15, after that measurement), and access-control parity with sibling code;
+added 2026-11-15, after that measurement);
 stale state, races and component lifecycle have no dedicated hunter since 2026-11-08. It says nothing
 about style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
 disclaimer, and nothing it prints blocks a merge. In CI its commit status is a gate by default: require the
@@ -20,9 +20,9 @@ green.
 
 > **Renamed from pr-hero.** Crysk used to be `pr-hero`. The package is now `crysk` (`npm install -g crysk`,
 > `npx -y crysk`), and the `pr-hero` command stays as an alias for one version. What an install made under the
-> old name wrote is still read for one version: `/pr-hero …` comments, `PRHERO_*` variables, `<!-- pr-hero-…`
+> old name wrote is still read for one version: `PRHERO_*` variables, `<!-- pr-hero-…`
 > markers, `pr-hero` commit statuses (read, no longer written), `~/.prhero`, `.prhero/` and `.prheroignore`. A workflow file scaffolded
-> before the rename only answers `/pr-hero …`: re-run `crysk ci init --force` for it to accept `/crysk …` too.
+> before the rename only answers `/pr-hero …`, which is no longer a command: re-run `crysk ci init --force` for it to accept `/crysk …`.
 > The repository moved to `cryskai/crysk` and new workflows use `uses: cryskai/crysk@v0`. `juanmaagd/pr-hero` stays as a mirror with the same tags and releases, so a workflow that still says `uses: juanmaagd/pr-hero@v0` keeps working.
 
 ## Two ways to use it
@@ -51,8 +51,7 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    `crysk-loop` answers the findings. `crysk` covers the local CLI, which this path does not use.
 
 2. **Ask your agent to set up Crysk CI** in the repository. `crysk-ci-setup` first asks you how
-   re-reviews should work: a level (minimal, balanced, thorough or manual), gate or advisory, how CI
-   pays (a subscription gets no spend ceiling, an API key gets one you choose), the changed-lines
+   re-reviews should work: a level (minimal, balanced, thorough or manual), gate or advisory, the changed-lines
    threshold above which a PR is skipped (default 4000, on any billing), and whether to tune the
    advanced settings (score weights, observe-only, trusted actors, files limit, exclusions). Then it runs
    `npx -y crysk setup --ci` with your answers (writes `.github/workflows/crysk.yml`, or updates an existing `pr-hero.yml` in place, and the
@@ -117,10 +116,10 @@ not used: on macOS a Claude login always counts. To bill the key, put it first i
 `{"credentials": {"claude": ["api_key", "subscription"]}}`. The Claude CLI child sees only the chosen
 credential.
 
-The dollar figures Crysk prints — the cost band before a run, `crysk usage` after one — are
-always a **token-derived estimate**, because that is the only unit comparable across both models. On
-a subscription, read them as "how much of my window will this consume", not as a bill. A step on an
-OpenCode model bills to that provider's credential instead (see [`docs/configuration.md`](docs/configuration.md)).
+Crysk prints no dollar figure: neither the plan before a run nor the result after one shows a cost. The Crysk
+platform prices every run from the tokens and models the engine reports, and owns the dollar limits (see
+[`docs/github-actions.md`](docs/github-actions.md#spend-controls)). A step on an OpenCode model bills to that
+provider's credential instead (see [`docs/configuration.md`](docs/configuration.md)).
 
 ## Installation
 
@@ -217,7 +216,7 @@ crysk review --pr 123            # any PR by number
 
 > **Breaking change in v2.0**: Invoking `crysk` with zero arguments in a TTY now opens the **interactive TUI menu** instead of implicitly starting a local `review`. In non-interactive environments, it prints the help text and exits with code 2. Set `CRYSK_NO_TUI=1` (`PRHERO_NO_TUI=1` still works) to bypass the TUI in automation.
 
-Every paid run prints a plan and a cost band, then asks for confirmation (`--yes` skips the prompt).
+Every run prints a plan, then asks for confirmation (`--yes` skips the prompt).
 
 ### For AI agents
 
@@ -287,17 +286,17 @@ never be able to enlarge *your* bill: on the two keys that spend, the team can o
 | --- | --- | --- |
 | `agents_dir` | both | Directory holding the agent prompt files (`deep-review-*.md`, `review-*.md`). Relative paths resolve against **the file that named it**. |
 | `default_base` | **repo only** | Base ref when `--base` is not given (e.g. `"dev"`). Without it: the remote head (`origin/HEAD`), then `main`. Rejected in the global file on purpose — see below. |
-| `parity_trigger_paths` | **repo only** | Glob list. The parity hunter runs only when a changed path matches one — no globs, no parity hunter. |
 | `suspicion_priors` | **repo only** | `[{path, weight, reason}]` hints injected into hunter prompts — point them at your known hotspots. |
 | `summary.enabled` | both — team may only turn it **off** | Whether the engine-owned summarizer runs. Defaults to `true`, because it spends money and a silent opt-out would make the bill differ from the plan. |
-| `models` | **global only** | The models per role (`default`, `hunter.<key>`, `refuter`, `consolidate`, `scout`, `summary`, `judge`), each a list of one to three tried in order, e.g. `{"summary": ["claude:haiku-latest"]}`. Unset, each step runs the model its prompt declares. See [Models](docs/configuration.md#models). `summary.model` is gone: `"haiku"` still reads, with a warning; anything else is refused. |
+| `models` | **global only** | The models per role (`default`, `hunter.<key>`, `refuter`, `consolidate`, `summary`, `judge`), each a list of one to three tried in order, e.g. `{"summary": ["claude:haiku-latest"]}`. Unset, each step runs the model its prompt declares. See [Models](docs/configuration.md#models). `summary.model` is gone: `"haiku"` still reads, with a warning; anything else is refused. `models.scout` is still accepted and ignored, with a warning: the scout stage was removed. |
 | `profile` | **global only** | The ready-made models for every role: `claude` (the default) or `openai`, e.g. `"profile": "openai"`. `models` still wins role by role. See [Profiles](docs/configuration.md#profiles). |
 | `credentials` | **global only** | Which Claude credential a run uses, in order: `{"claude": ["subscription", "api_key"]}` (the default). See [Credentials](docs/configuration.md#credentials). |
 | `max_verification_steps` | both — team may only **lower** it | Cap on re-review verification spawns (item 7). Defaults to `8`; `0` is legal and pauses verification. |
-| `max_concurrent_steps` | both — team may only **lower** it | Cap on steps (hunters, refuters, verify, scout, summarizer) in flight at once. Unset means unlimited. Set it below a provider's concurrency limit (e.g. `8` for one that allows 10 in-flight requests) so a refuter fan-out does not draw HTTP 429s. |
+| `max_concurrent_steps` | both — team may only **lower** it | Cap on steps (hunters, refuters, verify, summarizer) in flight at once. Unset means unlimited. Set it below a provider's concurrency limit (e.g. `8` for one that allows 10 in-flight requests) so a refuter fan-out does not draw HTTP 429s. |
 | `max_changed_lines` | both — team may only **lower** it | Line budget threshold before the size gate skips a review. Defaults to `4000`; `0` disables line budget check. |
 | `max_changed_files` | both — team may only **lower** it | File count budget threshold before the size gate skips a review. Defaults to `150`; `0` disables file budget check. |
-| `scout` | both — team may only turn it **off** | Whether the reconnaissance scout hunter runs before review. Defaults to `false`. |
+| `scout` | both | Removed. The key is still accepted and ignored, with a warning (`scout is ignored: the scout stage was removed`); `crysk config set scout` is refused. |
+| `parity_trigger_paths` | both | Removed with the parity hunter. The key is still accepted and ignored, with a warning (`parity_trigger_paths is ignored: the parity hunter was removed`); `crysk config set parity_trigger_paths` is refused. |
 | `materiality_gate` | both — team may only turn it **off** | Defaults to `false`. When `true`, an extra isolated judge checks each blocking finding against Crysk's posting policy; a finding judged not material under normal use is posted as advisory instead of blocking. Findings about security, credentials or data loss are never demoted. Adds one judge call per blocking finding. It runs only on its profile's judge models (Claude sonnet or opus on `claude`, OpenAI Terra on `openai`); on any other route findings stay blocking. Known limitation: on a re-review, a finding that was blocking on an earlier head still counts toward the gate. |
 | `post` | both — team may only turn it **off** | Whether review reports publish as GitHub PR comments by default. Defaults to `false`. |
 | `post_min_severity` | both — the repo file wins either way | The lowest finding a PR review posts: `suggestion` (everything), `warning` (hides advisory suggestions) or `blocking` (hides every advisory finding). A blocking finding always posts. Hidden findings get no comment; the summary counts them in one line. The gate and local reports still see every finding; re-review admission scores only what was posted, so a hidden finding never triggers a re-review. Unset posts everything; `setup --ci` writes the recommended `warning` when the file has no value. |
@@ -307,7 +306,7 @@ resolver checks the config value *before* the remote head. A global `default_bas
 preempt autodetection on every repo that stays quiet, so the first repo whose default branch differs
 would silently review the wrong commit range — with a plausible branch name on the plan card.
 
-**Flags always win, and may exceed a cap.** A flag is you typing an intent in front of the cost band,
+**Flags always win, and may exceed a cap.** A flag is you typing an intent in front of the plan,
 which is a different thing from a committed file asking on your behalf. `--agents` overrides
 `agents_dir` (then the repo file, then the global, then `CRYSK_AGENTS_DIR`, or `PRHERO_AGENTS_DIR` on an install from before the rename); `--base` overrides
 `default_base`; `--summary` / `--no-summary` and `--model` override the summary keys.
@@ -369,10 +368,10 @@ default branch.
 | `crysk gc install` | Install the macOS launchd agent that runs `crysk gc` every `--interval` minutes (default 360 = 6h). No reviews, no `watch.json`, no daily cap — the $0 sweeper so trees do not wait for a review or the watcher. |
 | `crysk gc uninstall` | Unload and remove that GC agent. |
 | `crysk gc status` | Read-only, $0: whether the GC agent is installed, its interval, plist, and tick log. |
-| `crysk usage [--all]` | Read-only, $0: print the observability store's per-run rows (cost, tokens, findings) — every completed review, local and PR, auto-ingests into one global `~/.crysk/metrics.db`. Scoped to the current checkout's origin by default; `--all` shows every origin instead. |
+| `crysk usage [--all]` | Read-only, $0: print the observability store's per-run rows (tokens, findings) — every completed review, local and PR, auto-ingests into one global `~/.crysk/metrics.db`. Scoped to the current checkout's origin by default; `--all` shows every origin instead. |
 
-Flags worth knowing: `--dry-run` (plan + cost band, creates nothing), `--yes`, `--model <m>`,
-`--scout` / `--no-scout` (toggle pre-hunt reconnaissance scout),
+Flags worth knowing: `--dry-run` (the plan, creates nothing), `--yes`, `--model <m>`,
+`--scout`, `--no-scout` and `--scout-model` (accepted and ignored, with a warning: the scout stage was removed),
 `--no-shared-prefix` (turn off the default shared hunter prefix: hunters share one cached system prompt
 holding the patch, their roles move to the user message and a one-turn warm-up writes the cache first; Anthropic routes only,
 since other providers already cache each hunter's own loop),
@@ -537,10 +536,15 @@ A script that merges on success should treat only `0` as a finished review.
 
 ## Cost and expectations
 
+The figures in this section are **measured history**, kept as the evidence behind the size gate. The engine
+no longer prints, stores or limits dollars: the Crysk platform prices a platform run from the usage the
+engine reports and shows what a review cost (dashboard, per pull request and in insights).
+
 - **$2–5 per review** of a typical PR-sized diff — the floor is real, because hunters read the tree,
   not just the diff — and larger trees cost more (a 45-file tree measured $11–15). Wall time is
-  minutes, not seconds: ~10 for a small diff, up to ~25 measured on a large tree. The printed band
-  is an order-of-magnitude guide, not a quote — the same tree has billed 34% apart across runs.
+  minutes, not seconds: ~10 for a small diff, up to ~25 measured on a large tree. These are an
+  order-of-magnitude guide, not a quote — the same tree has billed 34% apart across runs.
+
 ### The size gate — a cost gate, not a quality gate
 
 Past a size threshold Crysk **skips the review** instead of running it. Small trees bill $1.9–$4.8;
@@ -554,7 +558,7 @@ miss came from a 7-file PR. If a large diff is worth its price, review it anyway
 Locally that is `--force`. In GitHub Actions it is a pull request comment, `/crysk review`,
 from a user with write access (a workflow scaffolded before the comment trigger uses
 `gh workflow run pr-hero-force.yml -f pr=<n>` instead). The comment does not review on your
-machine; the Actions runner does. It also clears the CI admission rules and the budget ceiling for
+machine; the Actions runner does. It also clears the CI admission rules and the platform's dollar limits for
 that one run. `gh run rerun` on a skipped run does not: it measures the gates again and skips again.
 
 The gate counts **effective** changed lines (insertions + deletions) and files — excluded content is
@@ -619,7 +623,7 @@ only ever over-count, never under-count.
 
 ```bash
 crysk review --pr 42 --dry-run            # prints the gate verdict, spends nothing
-crysk review --pr 42 --force              # local: review it anyway (does NOT skip the cost prompt)
+crysk review --pr 42 --force              # local: review it anyway (does NOT skip the confirmation prompt)
 gh pr comment 42 --body "/crysk review"  # CI: same forced re-review, on the Actions runner
 gh pr comment 42 --body "/crysk override"  # CI: unlock a red gate on this head, no review, $0
 gh pr comment 42 --body "/crysk stop"      # CI: skip automatic reviews on later pushes, until /crysk review

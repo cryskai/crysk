@@ -6,14 +6,11 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { PlatformEstimateBasis } from "#ci/platform-estimate";
 import type { EffectiveConfig } from "#config/config";
 import { exclusionLines } from "#git/git";
 import { isFullCommitId } from "#git/refs";
-import type { FreeRouteBilling } from "#model/free-discovery";
 import type { ResolvedRoutePlan } from "#model/routing";
 import type { PrTarget } from "#pr/preflight";
-import { DEFAULT_SCOUT_MODEL } from "#review/pipeline";
 import {
   type AgentsDirSource,
   type BaseRefResolution,
@@ -25,15 +22,10 @@ import {
   type SummarySettings,
 } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
-import {
-  type DiffStat,
-  type estimateCost,
-  formatStepRoute,
-} from "#review/report";
+import { type DiffStat, formatStepRoute } from "#review/report";
 import { type SizeGateVerdict, sizeGateLine } from "#review/size-gate";
 import type { ReviewSpec } from "#review/spec";
 import {
-  bold,
   box,
   green,
   labelColumnWidth,
@@ -46,7 +38,6 @@ import {
   terminalWidth,
   yellow,
 } from "#ui/primitives";
-import { FREE_STEPS_NOTE, freeBillingMode } from "#ui/select";
 
 // C5 O-7's payload for both plan surfaces: everything the card and the
 // details view need to name a value the operator cannot see by opening their
@@ -91,7 +82,7 @@ export function configProvenanceOf(
 // capped" disagree). §3.6's reading is the one that keeps the operator
 // un-surprised: a defaulted value is byte-for-byte pre-C5 behaviour, and the
 // card already prints every one of them in a row of its own — the summarizer
-// row, the parity row, the priors count, the base's source tag. Tagging six
+// row, the priors count, the base's source tag. Tagging five
 // defaults on every quiet repo would bury the one tag that is genuinely new
 // information. Naming every key's layer is `pr-hero config`'s job (§3.10),
 // where the whole point is the exhaustive list.
@@ -148,7 +139,6 @@ function configTags(
       ? `agents_dir ← ${provenance.agentsDirSource}`
       : undefined,
     flagged.base ? undefined : configTag("default_base", s.default_base),
-    configTag("parity_trigger_paths", s.parity_trigger_paths),
     configTag("suspicion_priors", s.suspicion_priors),
     flagged.summary
       ? undefined
@@ -227,13 +217,10 @@ export interface PlanContext {
   runDir: string;
   config: LocalConfig;
   summary: SummarySettings;
-  parityFires: boolean;
   codegraphAvailable: boolean;
-  estimate: ReturnType<typeof estimateCost>;
-  hunterCount: number;
   // The gate's ALREADY-EVALUATED verdict, carried in so the plan can print
-  // it last. The gate is still decided by the shell, before the cost band's
-  // confirm() — this only moves where the line lands on screen.
+  // it last. The gate is still decided by the shell, before the confirm
+  // prompt — this only moves where the line lands on screen.
   sizeGate: SizeGateVerdict;
   droppedPaths: string[];
   // C5 O-7. Optional for the reason `resolved`/`rereview` are on the PR
@@ -241,9 +228,6 @@ export interface PlanContext {
   configProvenance?: ConfigProvenance;
   // D2 PR3: Optional resolved route plan for model routing display
   routePlan?: ResolvedRoutePlan;
-  // Free verdicts of the admitted route plan, read off the admission that already
-  // decided them. Absent means unknown, and the estimate line keeps its band.
-  freeRoute?: FreeRouteBilling;
   // The terminal width every row and card below is laid out against, carried
   // in exactly as ui/result.ts's ResultInput carries it. Optional so the shell
   // may leave the one sniff to the renderer's entry point; the tests ALWAYS
@@ -344,34 +328,7 @@ export function summarizerLabel(summary: SummarySettings): string {
   return summary.enabled ? "+ summarizer" : "+ summarizer disabled";
 }
 
-// Printed on EVERY plan, off included. The scout adds a paid stage to the
-// front of the run and the operator is about to confirm a band that already
-// counts it, so "scout: off" is information, not noise — and a stage that
-// only appears when it is on is a stage nobody notices arriving.
-function scoutRow(
-  options: Pick<CliOptions, "scout" | "scoutModel" | "model">,
-  routePlan?: ResolvedRoutePlan,
-  skipped = false,
-): string {
-  const label = "scout".padEnd(12);
-  if (!options.scout) return `${label}${"-".padEnd(8)}disabled`;
-  if (skipped) return `${label}${NOT_RUN_THIS_PASS}`;
-  // The same chain the pipeline resolves, printed before the money is spent:
-  // --model > --scout-model > the engine default (the bundled prompt pins no
-  // model, so there is no frontmatter seat to show here).
-  const model =
-    plannedModel(routePlan, "scout") ??
-    options.model ??
-    options.scoutModel ??
-    DEFAULT_SCOUT_MODEL;
-  return `${label}${model.padEnd(8)} diff-only, before the hunters (experimental)`;
-}
-
-export function scoutLabel(options: Pick<CliOptions, "scout">): string {
-  return options.scout ? " + scout" : "";
-}
-
-// Lives here rather than in review/run.ts, beside the two labels it composes.
+// Lives here rather than in review/run.ts, beside the label it composes.
 // It was first extracted into review/run.ts with the other shared run stages,
 // which made that domain module import #ui/plan by value while ui/plan already
 // imports #review/pipeline and #review/size-gate: no file-level cycle, but the
@@ -384,22 +341,20 @@ export function scoutLabel(options: Pick<CliOptions, "scout">): string {
 export function reviewingLine(
   hunterCount: number,
   summary: SummarySettings,
-  options: Pick<CliOptions, "scout">,
 ): string {
   return (
     `reviewing — ${hunterCount} hunter${hunterCount === 1 ? "" : "s"} + ` +
-    `refuter ${summarizerLabel(summary)}${scoutLabel(options)}; ` +
+    `refuter ${summarizerLabel(summary)}; ` +
     "comparable trees have taken " +
     "8–25 minutes"
   );
 }
 
 // The last block on screen and the only one an operator must read: the gate
-// verdict, then the money. Both used to sit mid-list, where the eye that had
-// already given up on the plan never reached them.
+// verdict. It used to sit mid-list, where the eye that had already given up
+// on the plan never reached it.
 interface PlanDecision {
   sizeGate: SizeGateVerdict;
-  freeRoute?: FreeRouteBilling;
   // Set only where the verdict is an ESTIMATE rather than the gate's own
   // answer (the PR dry run's aggregate counters); printed beside it so
   // nobody reads a guess as the verdict.
@@ -410,9 +365,6 @@ interface PlanDecision {
   // "review anyway" at the size-gate menu. The plan names which hatch
   // opened so a log cannot be read as "they passed --force".
   sizeGateConfirmed?: boolean;
-  estimate: ReturnType<typeof estimateCost>;
-  hunterCount: number;
-  summarizer: boolean;
 }
 
 function decisionLines(
@@ -456,64 +408,7 @@ function decisionLines(
       ),
     );
   }
-  lines.push(
-    ...markerRowLines(
-      "$",
-      planEstimateLine({
-        estimate: d.estimate,
-        hunterCount: d.hunterCount,
-        summarizer: d.summarizer,
-        ...(d.freeRoute === undefined ? {} : { freeRoute: d.freeRoute }),
-      }),
-      bold,
-      styles,
-      width,
-    ),
-  );
   return lines;
-}
-
-// The free-route wording of the estimate, shared by the plan card and the result
-// footer's estimate row so both print one verdict. A free route bills nothing,
-// so the band is relabelled as token-derived instead of read as a cost.
-export function freeRouteEstimateText(estimate: {
-  low: number;
-  high: number;
-}): string {
-  const low = `$${estimate.low.toFixed(2)}`;
-  const high = `$${estimate.high.toFixed(2)}`;
-  return `free route (token-derived ${low} – ${high}, not billed)`;
-}
-
-// The estimate row's text, shared by both plan cards. The band is token-derived
-// whatever the route; the free verdict changes only the claim made about it. A
-// free route bills nothing, so a dollar figure would read as a cost, and the
-// band is relabelled as token-derived instead. A mix keeps the band and names
-// the free share. No free step (metered or subscription) is today's line,
-// byte-identical. The band never reads $0 – $0 here: estimateCost clamps the
-// hunter seats (report.ts), so a free route is "not billed", never a zero estimate.
-export function planEstimateLine(input: {
-  estimate: { low: number; high: number; platform?: PlatformEstimateBasis };
-  hunterCount: number;
-  summarizer: boolean;
-  freeRoute?: FreeRouteBilling;
-}): string {
-  const low = `$${input.estimate.low.toFixed(2)}`;
-  const high = `$${input.estimate.high.toFixed(2)}`;
-  // The mode is the prompt's too (ui/select.ts freeBillingMode): the card and
-  // the confirm read one verdict, so they cannot disagree about what is billed.
-  const billing = freeBillingMode(input.freeRoute);
-  if (billing === "free") {
-    return `estimate: ${freeRouteEstimateText(input.estimate)}`;
-  }
-  // The platform's range is not the band, so the line says where it came from
-  // instead of the agent count the band is built on (cryskai/platform#12).
-  const line =
-    input.estimate.platform === undefined
-      ? `estimate ${low} – ${high} (${input.hunterCount} hunter(s) + refuter ` +
-        `${input.summarizer ? "+ summarizer" : "+ summarizer disabled"})`
-      : `estimate ${low} – ${high} (platform: ${input.estimate.platform})`;
-  return billing === "mixed" ? `${line} ${FREE_STEPS_NOTE}` : line;
 }
 
 // Both details views' rows, with a label column DERIVED from their own labels
@@ -584,15 +479,6 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
   push("run dir", ctx.runDir);
   push("hop budget", String(ctx.options.hopBudget));
   push("summarizer", summarizerRow(ctx.summary, ctx.routePlan));
-  push("scout", scoutRow(ctx.options, ctx.routePlan));
-  push(
-    "parity",
-    ctx.config.parity_trigger_paths.length === 0
-      ? "no parity_trigger_paths configured — the parity hunter never fires"
-      : ctx.parityFires
-        ? `fires (a changed path matches ${ctx.config.parity_trigger_paths.length} configured pattern(s))`
-        : "configured, but no changed path matches — it will not fire",
-  );
   push(
     "codegraph",
     ctx.codegraphAvailable
@@ -601,7 +487,6 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
           "review runs on Read/Grep/Glob alone",
   );
   push("priors", `${ctx.config.suspicion_priors.length} suspicion prior(s)`);
-  push("estimate", ctx.estimate.basis);
   push("permissions", PERMISSIONS_NOTE);
   return [section("details", styles), ...detailRows(pairs, styles, width)];
 }
@@ -625,22 +510,12 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
   ];
   let label = "AGENTS";
   for (const agent of ctx.spec.agents) {
-    const fires =
-      agent.role === "refuter"
-        ? "per severe finding"
-        : agent.trigger === undefined
-          ? "always"
-          : ctx.parityFires
-            ? "triggered"
-            : "✗ will not fire";
+    const fires = agent.role === "refuter" ? "per severe finding" : "always";
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
   }
   lines.push(
     ...row(label, summarizerRow(ctx.summary, ctx.routePlan), { styles, width }),
-  );
-  lines.push(
-    ...row("", scoutRow(ctx.options, ctx.routePlan), { styles, width }),
   );
   label = "";
   lines.push(
@@ -673,10 +548,6 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
         sizeGate: ctx.sizeGate,
         droppedPaths: ctx.droppedPaths,
         force: ctx.options.force,
-        estimate: ctx.estimate,
-        hunterCount: ctx.hunterCount,
-        summarizer: ctx.summary.enabled,
-        ...(ctx.freeRoute === undefined ? {} : { freeRoute: ctx.freeRoute }),
       },
       styles,
       width,
@@ -697,8 +568,6 @@ export interface PrPlanContext {
   spec: ReviewSpec;
   config: LocalConfig;
   summary: SummarySettings;
-  estimate: ReturnType<typeof estimateCost>;
-  hunterCount: number;
   // Same contract as PlanContext: the verdict is decided by the shell (and
   // in PR mode enforced before the run dir even exists), printed here.
   sizeGate: SizeGateVerdict;
@@ -708,9 +577,6 @@ export interface PrPlanContext {
   configProvenance?: ConfigProvenance;
   // D2 PR3: Optional resolved route plan for model routing display
   routePlan?: ResolvedRoutePlan;
-  // Free verdicts of the admitted route plan, read off the admission that already
-  // decided them. Absent means unknown, and the estimate line keeps its band.
-  freeRoute?: FreeRouteBilling;
   // Set when this plan follows an interactive "Review anyway" at the
   // size-gate menu. Distinct from options.force so the decision block can
   // say "confirmed" rather than lie that --force was passed.
@@ -721,11 +587,10 @@ export interface PrPlanContext {
     baseSha: string;
     diffFromSha: string;
     diffPath: string;
-    parityFires: boolean;
   };
   // Same contract, same reason as PlanContext.width.
   width?: number;
-  // Item 7: queued verify steps shown as their own cost-band term (O-5a).
+  // Queued verify steps, shown as their own row (item 7 O-5a).
   verificationSteps?: number;
   rereview?: {
     case: string;
@@ -757,21 +622,6 @@ function prBaseSourceTag(target: PrTarget): string {
   return target.baseSource === "merge-commit-parent"
     ? "merge commit parent"
     : "PR base tip";
-}
-
-// Pre-fetch the parity trigger cannot be evaluated (there is no diff yet).
-// When triggers are configured the parity hunter MIGHT fire, so it counts:
-// both recorded cost overruns were under-estimates, and a band that errs
-// high costs a second of hesitation while one that errs low costs money.
-export function dryRunHunterCount(
-  spec: ReviewSpec,
-  config: LocalConfig,
-): number {
-  return spec.agents.filter(
-    (a) =>
-      a.role === "hunter" &&
-      (a.trigger === undefined || config.parity_trigger_paths.length > 0),
-  ).length;
 }
 
 // Predicted, not decided: the ensure step runs only after the confirm gate,
@@ -864,7 +714,6 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
   push("hop budget", String(ctx.options.hopBudget));
   const skipped = ctx.rereview?.skipDiscovery === true;
   push("summarizer", summarizerRow(ctx.summary, ctx.routePlan, skipped));
-  push("scout", scoutRow(ctx.options, ctx.routePlan, skipped));
   if (ctx.rereview) {
     const last =
       ctx.rereview.lastHead === null
@@ -899,20 +748,8 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
         "exists (idempotent — one comment per PR, found by its marker)",
     );
   }
-  push(
-    "parity",
-    ctx.config.parity_trigger_paths.length === 0
-      ? "no parity_trigger_paths configured — the parity hunter never fires"
-      : ctx.resolved === undefined
-        ? `configured (${ctx.config.parity_trigger_paths.length} ` +
-          "pattern(s)); whether a changed path matches is decided after fetch"
-        : ctx.resolved.parityFires
-          ? `fires (a changed path matches ${ctx.config.parity_trigger_paths.length} configured pattern(s))`
-          : "configured, but no changed path matches — it will not fire",
-  );
   push("codegraph", codegraphPlanNote(ctx.worktreePath));
   push("priors", `${ctx.config.suspicion_priors.length} suspicion prior(s)`);
-  push("estimate", ctx.estimate.basis);
   push("permissions", PERMISSIONS_NOTE);
   return [section("details", styles), ...detailRows(pairs, styles, width)];
 }
@@ -935,16 +772,7 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
   ];
   let label = "AGENTS";
   for (const agent of ctx.spec.agents) {
-    const fires =
-      agent.role === "refuter"
-        ? "per severe finding"
-        : agent.trigger === undefined
-          ? "always"
-          : ctx.resolved === undefined
-            ? "decided by the diff after fetch"
-            : ctx.resolved.parityFires
-              ? "triggered"
-              : "✗ will not fire";
+    const fires = agent.role === "refuter" ? "per severe finding" : "always";
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
   }
@@ -953,17 +781,6 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
       label,
       summarizerRow(
         ctx.summary,
-        ctx.routePlan,
-        ctx.rereview?.skipDiscovery === true,
-      ),
-      { styles, width },
-    ),
-  );
-  lines.push(
-    ...row(
-      "",
-      scoutRow(
-        ctx.options,
         ctx.routePlan,
         ctx.rereview?.skipDiscovery === true,
       ),
@@ -1060,10 +877,6 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
         droppedPaths: ctx.droppedPaths,
         force: ctx.options.force,
         ...(ctx.sizeGateConfirmed === true ? { sizeGateConfirmed: true } : {}),
-        estimate: ctx.estimate,
-        hunterCount: ctx.hunterCount,
-        summarizer: ctx.summary.enabled,
-        ...(ctx.freeRoute === undefined ? {} : { freeRoute: ctx.freeRoute }),
       },
       styles,
       width,

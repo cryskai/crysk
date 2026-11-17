@@ -82,8 +82,6 @@ class FakeRunner implements StepRunner {
       };
     } else if (spec.name === "summarizer") {
       output = { summary: "fixture summary" };
-    } else if (spec.name === "scout") {
-      output = [];
     }
     return {
       name: spec.name,
@@ -154,7 +152,7 @@ function capableOpenCodeTransport(): ProviderTransport {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async () => {
@@ -294,9 +292,8 @@ describe("refuter-probe on a route plan", () => {
 });
 
 describe("fixture-eval on a route plan", () => {
-  const cases: Array<[string, { scout?: boolean; model?: string }]> = [
+  const cases: Array<[string, { model?: string }]> = [
     ["default", {}],
-    ["--scout", { scout: true }],
     ["--model sonnet", { model: "sonnet" }],
   ];
   for (const [name, options] of cases) {
@@ -311,15 +308,14 @@ describe("fixture-eval on a route plan", () => {
     });
   }
 
-  test("the scout stays on haiku and the fixture agents on their frontmatter", async () => {
+  test("the fixture agents stay on their frontmatter", async () => {
     const fixture = await plantedFixture();
     const input = fixtureEvalPipelineInput(fixture, {
       mcpConfigPath: await mcpConfig(fixture.runDir),
-      scout: true,
     });
     expect(input.bundledAgents).not.toBe(true);
     const plan = await buildPipelineHarnessPlan(input);
-    expect(stepModel(plan, "scout")?.modelSnapshot).toBe("haiku");
+    expect(stepModel(plan, "scout")).toBeUndefined();
     expect(stepModel(plan, "hunter-reliability")?.modelSnapshot).toBe("haiku");
   });
 
@@ -327,7 +323,6 @@ describe("fixture-eval on a route plan", () => {
     const fixture = await plantedFixture();
     const input = fixtureEvalPipelineInput(fixture, {
       mcpConfigPath: await mcpConfig(fixture.runDir),
-      scout: true,
     });
     const plan = await buildPipelineHarnessPlan(input);
     const runner = new FakeRunner({ "hunter-reliability": VOLUME_DRAFT });
@@ -336,7 +331,7 @@ describe("fixture-eval on a route plan", () => {
       { runner, transportRegistry: new DefaultTransportRegistry() },
     );
     const names = runner.seen.map((s) => s.name);
-    expect(names).toContain("scout");
+    expect(names).not.toContain("scout");
     expect(names).toContain("summarizer");
     expect(names.some((n) => n.startsWith("refuter-"))).toBe(true);
     for (const spec of runner.seen) expect(spec.route).toBeDefined();
@@ -364,7 +359,6 @@ describe("buildPipelineHarnessPlan", () => {
             enabled: true,
             armId: "arm",
             maxLegs: 2,
-            cashCapUsd: 1,
           },
         },
       }),

@@ -54,7 +54,6 @@ export interface JudgeOutcome {
   label: MaterialityLabel | null;
   reason?: string;
   error?: string;
-  cost: number;
   // The route the judge was planned on, absent only when no plan was built.
   route?: ResolvedModelRoute;
   routeFingerprint?: string;
@@ -117,12 +116,10 @@ export async function runMaterialityJudge(
         parse: parseJudgeVerdict,
       }),
     );
-    const cost = result.usage.cost_usd_est;
     if (result.status !== "ok" || result.output === undefined) {
       return {
         label: null,
         error: result.stderrTail.slice(-300),
-        cost,
         ...recorded,
       };
     }
@@ -130,14 +127,12 @@ export async function runMaterialityJudge(
     return {
       label: verdict.label,
       ...(verdict.reason === undefined ? {} : { reason: verdict.reason }),
-      cost,
       ...recorded,
     };
   } catch (error) {
     return {
       label: null,
       error: error instanceof Error ? error.message : String(error),
-      cost: 0,
       ...(identity === undefined
         ? {}
         : {

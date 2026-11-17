@@ -56,7 +56,6 @@ function usage(): SessionUsage {
     tokens_in: 100,
     tokens_out: 10,
     tokens_total: 110,
-    cost_usd_est: 0.01,
   };
 }
 
@@ -485,7 +484,6 @@ describe("materiality gate: what finish() writes", () => {
       tokens_in: result.usage.tokens_in,
       tokens_out: result.usage.tokens_out,
       tokens_total: result.usage.tokens_total,
-      cost_usd_est: result.usage.cost_usd_est,
       per_agent: result.perAgent,
     };
     const doc = mergeRunEnvelope({

@@ -7,7 +7,7 @@ import {
   ciForceReviewHintLine,
 } from "#ci/force-comment";
 import {
-  planCiBudgetSkip,
+  planCiLimitsSkip,
   planCiReviewManualRequired,
   planCiReviewSkip,
   planCiSizeSkip,
@@ -73,7 +73,7 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
 
   // The comment is the override now; the dispatch line stays for repos
   // whose workflow was scaffolded before the comment trigger existed, where
-  // a `/pr-hero review` comment does nothing at all.
+  // a `/crysk review` comment does nothing at all.
   test("a skip names the comment first, then the legacy dispatch and the re-scaffold", () => {
     const plan = planCiReviewSkip({
       prNumber: 7,
@@ -88,9 +88,7 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
       },
     });
     const comment = plan.comment;
-    expect(comment).toContain(
-      "Comment `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) on this pull request",
-    );
+    expect(comment).toContain("Comment `/crysk review` on this pull request");
     expect(comment).toContain("`/crysk review --full`");
     expect(comment).toContain("`crysk ci init --force`");
     expect(comment.indexOf("`/crysk review`")).toBeLessThan(
@@ -117,38 +115,30 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
   });
 });
 
-// cryskai/platform#12: a platform repository's workflow is the platform's stub,
-// so only `/crysk review` runs a review there, and its spend is the model setup.
-describe("a budget skip on a platform repository", () => {
-  const skip = (platformConnected: boolean) =>
-    planCiBudgetSkip({
-      isCi: true,
-      estimatedCostUsd: 11.06,
-      budgetUsd: 10,
-      prNumber: 11,
-      force: false,
-      ciMode: "advisory",
-      platformConnected,
-    });
+// A limits skip only happens on a platform repository (the limits come from the
+// platform), whose workflow is the platform's stub: only `/crysk review` runs a
+// review there, and the limits are dashboard settings.
+describe("a limits skip on a platform repository", () => {
+  const plan = planCiLimitsSkip({
+    isCi: true,
+    billingMode: "metered",
+    limits: { reviewUsd: 10, estimateUsd: 11.06 },
+    prNumber: 11,
+    force: false,
+    ciMode: "advisory",
+  });
 
   test("names only `/crysk review` and the dashboard, nothing a platform repo lacks", () => {
-    const plan = skip(true);
     for (const text of [plan?.comment ?? "", plan?.summaryMarkdown ?? ""]) {
-      expect(text).not.toContain("/pr-hero review");
+      expect(text).not.toContain("/pr-hero");
       expect(text).not.toContain(CI_FORCE_WORKFLOW_FILE);
       expect(text).not.toContain("crysk ci init --force");
       expect(text).not.toContain("--budget-usd");
-      expect(text).toContain("change the model setup in the Crysk dashboard");
+      expect(text).toContain("Crysk dashboard (Review > Limits)");
     }
     expect(plan?.comment).toContain(
       "Comment `/crysk review` on this pull request to run it anyway",
     );
-  });
-
-  test("a standalone repository keeps the legacy dispatch and the re-scaffold", () => {
-    const plan = skip(false);
-    expect(plan?.comment).toContain(ciForceReviewHintLine(11));
-    expect(plan?.comment).toContain("`--budget-usd`");
   });
 });
 
@@ -206,7 +196,7 @@ describe("every other skip on a platform repository", () => {
       expect(comment).toContain(ciForceReviewHintLine(11, true));
       expect(comment).not.toContain(CI_FORCE_WORKFLOW_FILE);
       expect(comment).not.toContain("crysk ci init --force");
-      expect(comment).not.toContain("/pr-hero review");
+      expect(comment).not.toContain("/pr-hero");
     }
   });
 

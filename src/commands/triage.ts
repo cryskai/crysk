@@ -5,6 +5,7 @@ import { assertRunMatchesPr } from "#ci/gates";
 import { resolveRepoRoot } from "#git/git";
 import {
   fetchPostedFindingComments,
+  fetchPrComments,
   fetchPrReviewComments,
   ghCurrentBranchPr,
   ghPrWebUrl,
@@ -14,6 +15,7 @@ import {
   postReviewCommentReply,
   resolveReviewThreadForComment,
 } from "#pr/pr";
+import { buildPrStatus } from "#pr/pr-status";
 import { resolveCurrentPrNumber } from "#pr/preflight";
 import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
@@ -37,7 +39,7 @@ import { CliError, CliUsageError } from "../errors";
 import { tryOriginRepoId } from "../home";
 import { prheroLayout } from "../home-preflight";
 
-// `pr-hero triage reply --pr <n> --from <run-dir> --finding <id> ...`: the
+// `crysk triage reply --pr <n> [--from <run-dir>] --finding <id> ...`: the
 // only triage verb. It posts one triage reply, records the verdict in the
 // product store, and resolves the thread. The bare `triage --pr --from` verb
 // that bound verdicts into comparison.json is retired: new
@@ -59,9 +61,6 @@ export async function triageCommand(options: CliOptions): Promise<number> {
   // checks here are the type-narrowing TypeScript needs, not new validation.
   if (options.pr === undefined) {
     throw new CliUsageError("triage requires --pr <n>");
-  }
-  if (options.from === undefined) {
-    throw new CliUsageError("triage requires --from <run-dir>");
   }
   const prNumber =
     options.pr === "current"
@@ -111,20 +110,86 @@ async function outsidePullUrl(
   return `${host}/${nameWithOwner}/pull/${prNumber}`;
 }
 
-export async function runTriageReplyCommand(input: {
+// triage-without-skill S2: the finding a reply answers, read off the PR alone. The summary's state block
+// names the id, the posted finding comment carries the head it was posted on, and the join is the one
+// `crysk status --pr` makes (pr/pr-status.ts), so an agent with no run directory replies by id.
+async function postedFindingFromPr(
+  operatorRoot: string,
+  prNumber: number,
+  findingId: string,
+  spawnFn: typeof Bun.spawn | undefined,
+): Promise<{
+  parent: { id: number; channel: "review" | "issue" };
+  headSha: string;
+}> {
+  const issueComments = await fetchPrComments(operatorRoot, prNumber, {
+    spawnFn,
+  });
+  const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
+    spawnFn,
+  });
+  const status = buildPrStatus({
+    pr: prNumber,
+    head: "",
+    nowMs: Date.now(),
+    statuses: [],
+    issueComments,
+    reviewComments,
+    adjudicatorTrust: { kind: "local" },
+  });
+  const finding = status.findings.find((row) => row.id === findingId);
+  if (finding === undefined) {
+    throw new CliUsageError(
+      `PR #${prNumber} has no posted finding ${findingId}: run ` +
+        `\`crysk status --pr ${prNumber} --json\` for its R### ids, or pass --from <run-dir> for an F### id`,
+    );
+  }
+  if (finding.comment_id === null || finding.head === null) {
+    throw new CliError(
+      `${findingId} on PR #${prNumber} has no comment thread to reply to ` +
+        "(it lives only in the summary)",
+    );
+  }
+  return {
+    parent: {
+      id: finding.comment_id,
+      channel: finding.channel === "inline" ? "review" : "issue",
+    },
+    headSha: finding.head,
+  };
+}
+
+async function readReasoning(bodyFile: string): Promise<string> {
+  const bodyPath = path.resolve(bodyFile);
+  if (!existsSync(bodyPath)) {
+    throw new CliUsageError(`--body-file not found: ${bodyPath}`);
+  }
+  const reasoning = await Bun.file(bodyPath).text();
+  if (matchMarkerPrefix(reasoning, TRIAGE_MARKER_PREFIX) !== undefined) {
+    throw new CliUsageError(
+      "--body-file must be reasoning prose only — the driver prepends the " +
+        "triage marker and badge (do not start the file with " +
+        "`<!-- crysk-triage`)",
+    );
+  }
+  return reasoning;
+}
+
+// The posted finding a reply binds to and the head its marker names, read from a completed run
+// directory: the finding row by id, matched to its posted comment by marker.
+async function postedFindingFromRunDir(input: {
   operatorRoot: string;
-  pr: number;
-  from: string;
+  prNumber: number;
+  runDir: string;
   findingId: string;
-  tag: TriageTag;
   bodyFile: string;
-  verdict?: TriageVerdict;
-  issue?: number;
-  dryRun: boolean;
-  spawnFn?: typeof Bun.spawn;
-}): Promise<number> {
-  const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
-  const runDir = path.resolve(input.from);
+  spawnFn: typeof Bun.spawn | undefined;
+}): Promise<{
+  parent: { id: number; channel: "review" | "issue" };
+  headSha: string;
+  reasoning: string;
+}> {
+  const { operatorRoot, prNumber, runDir, spawnFn } = input;
   const findingsPath = path.join(runDir, "findings.json");
   if (!existsSync(findingsPath)) {
     throw new CliUsageError(
@@ -142,18 +207,7 @@ export async function runTriageReplyCommand(input: {
       `${findingsPath} has no finding ${input.findingId}`,
     );
   }
-  const bodyPath = path.resolve(input.bodyFile);
-  if (!existsSync(bodyPath)) {
-    throw new CliUsageError(`--body-file not found: ${bodyPath}`);
-  }
-  const reasoning = await Bun.file(bodyPath).text();
-  if (matchMarkerPrefix(reasoning, TRIAGE_MARKER_PREFIX) !== undefined) {
-    throw new CliUsageError(
-      "--body-file must be reasoning prose only — the driver prepends the " +
-        "triage marker and badge (do not start the file with " +
-        "`<!-- crysk-triage`)",
-    );
-  }
+  const reasoning = await readReasoning(input.bodyFile);
   // anchor.patch first, as in post --from: the diff the finding's line is
   // matched against must be the one inline comments anchor on.
   const anchorPath = path.join(runDir, "anchor.patch");
@@ -174,14 +228,6 @@ export async function runTriageReplyCommand(input: {
     proof_refs: finding.proof_refs,
     diffPatch,
   });
-  const fields: TriageMarkerFields = {
-    tag: input.tag,
-    headSha: doc.head_sha,
-    actor: "agent",
-    verdict: input.verdict,
-    issue: input.issue,
-  };
-  const body = renderTriageReplyBody(fields, reasoning);
   const posted = await fetchPostedFindingComments(operatorRoot, prNumber, {
     spawnFn,
   });
@@ -208,13 +254,59 @@ export async function runTriageReplyCommand(input: {
         `(ids ${match.ids.join(", ")}) — will not pick by proximity`,
     );
   }
-  const parent = match.posted;
+  return { parent: match.posted, headSha: doc.head_sha, reasoning };
+}
+
+export async function runTriageReplyCommand(input: {
+  operatorRoot: string;
+  pr: number;
+  // A completed run directory, or undefined to read the finding off the PR (S2).
+  from?: string;
+  findingId: string;
+  tag: TriageTag;
+  bodyFile: string;
+  verdict?: TriageVerdict;
+  issue?: number;
+  dryRun: boolean;
+  spawnFn?: typeof Bun.spawn;
+}): Promise<number> {
+  const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
+  const runDir =
+    input.from === undefined ? undefined : path.resolve(input.from);
+  const target =
+    runDir === undefined
+      ? {
+          ...(await postedFindingFromPr(
+            operatorRoot,
+            prNumber,
+            input.findingId,
+            spawnFn,
+          )),
+          reasoning: await readReasoning(input.bodyFile),
+        }
+      : await postedFindingFromRunDir({
+          operatorRoot,
+          prNumber,
+          runDir,
+          findingId: input.findingId,
+          bodyFile: input.bodyFile,
+          spawnFn,
+        });
+  const { parent, headSha, reasoning } = target;
+  const fields: TriageMarkerFields = {
+    tag: input.tag,
+    headSha,
+    actor: "agent",
+    verdict: input.verdict,
+    issue: input.issue,
+  };
+  const body = renderTriageReplyBody(fields, reasoning);
   const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
     spawnFn,
   });
   const already = existingTriageAtHead({
     parentId: parent.id,
-    headSha: doc.head_sha,
+    headSha,
     replies: reviewComments,
   });
   const resolveDecision = decideThreadResolve({
@@ -273,7 +365,8 @@ export async function runTriageReplyCommand(input: {
   // Persist triage record to canonical product store (idempotent upsert)
   try {
     const layout = prheroLayout(os.homedir());
-    if (existsSync(layout.prheroDbPath)) {
+    // A reply read off the PR has no run to record against.
+    if (runDir !== undefined && existsSync(layout.prheroDbPath)) {
       const repoId = await tryOriginRepoId(operatorRoot);
       if (repoId) {
         const db = openProductStore(layout.prheroDbPath);

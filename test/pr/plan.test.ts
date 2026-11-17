@@ -86,39 +86,6 @@ describe("resolvePrPlanAndConfirm records its progress on the head it posted", (
   });
 });
 
-// The free-route count is read off the admitted route plan, so it must be
-// taken after resolvePipelineRoute (the admission that decides the verdicts)
-// and before the plan card renders. Rendering first would print the band
-// for a route the run already knows is free.
-describe("resolvePrPlanAndConfirm prices the plan line by the admitted route", () => {
-  test("the free-route count is taken after the admission and before the card renders", () => {
-    const admission = body.search(/await resolvePipelineRoute\(/);
-    const count = body.search(/await countFreeRouteSteps\(/);
-    // The context spread is what hands the count to the renderer; the card
-    // renders from that context, so both must follow the count.
-    const handoff = body.indexOf("...(freeRoute === undefined");
-    const render = body.indexOf("renderPrPlan(planContext");
-    expect(admission).toBeGreaterThan(-1);
-    expect(count).toBeGreaterThan(admission);
-    expect(handoff).toBeGreaterThan(count);
-    expect(render).toBeGreaterThan(handoff);
-  });
-
-  // The count follows the CRYSK_OPENCODE_* names admission bound the kinds with
-  // (U3), never the provider literal alone.
-  test("the free-route count gets the secret names admission read", () => {
-    expect(body).toMatch(
-      /await countFreeRouteSteps\(\{[\s\S]*?openCodeSecretNames:\s*productionAdmission\.authorityOptions\.openCodeSecretNames,?\s*\}\)/,
-    );
-  });
-
-  test("countFreeRouteSteps is imported from the free-discovery module", () => {
-    expect(code).toMatch(
-      /import \{[^}]*\bcountFreeRouteSteps\b[^}]*\} from "#model\/free-discovery";/,
-    );
-  });
-});
-
 // SB3 follow-up: the pending the CLI posts names its run in Actions, and the lock hold keeps the PR page.
 describe("pendingStatusTargetUrl — the pending names its run", () => {
   const PR_URL = "https://github.com/acme/widgets/pull/7";
@@ -150,13 +117,28 @@ describe("pendingStatusTargetUrl — the pending names its run", () => {
   });
 });
 
-// W3-FOOTER: the free-route count reaches the footer, not only the plan card.
-// resolvePrPlanAndConfirm returns it so reviewPr can hand the billing mode to
-// publishRunOutcome; the count is computed once, in the function that renders it.
-describe("resolvePrPlanAndConfirm returns the free-route count for the footer", () => {
-  test("the success return carries freeRoute alongside routePlan", () => {
-    const ret = body.lastIndexOf("return {");
-    expect(ret).toBeGreaterThan(-1);
-    expect(body.slice(ret)).toMatch(/\bfreeRoute,/);
+// platform-owned-cost L55: the one comparison the engine keeps runs in the
+// plan stage, before the route is resolved and anything spawns. The rule itself
+// is tested in test/ci/gates.test.ts; this pins the wiring, which has no seam.
+describe("resolvePrPlanAndConfirm applies the platform limits", () => {
+  const gate = body.indexOf("planCiLimitsSkip({");
+
+  test("the gate reads the run's billing mode, the limits from the connect step's env, and force", () => {
+    expect(gate).toBeGreaterThan(-1);
+    const call = body.slice(gate, body.indexOf("});", gate));
+    expect(call).toMatch(/billingMode: params\.ciBillingMode/);
+    expect(call).toMatch(/roleBilling: params\.ciRoleBilling/);
+    expect(call).toMatch(/limits: readPlatformLimits\(process\.env\)/);
+    expect(call).toMatch(/force: params\.options\.force/);
+  });
+
+  test("it runs before the route is resolved, so a skipped review spawns nothing", () => {
+    expect(gate).toBeLessThan(body.indexOf("resolvePipelineRoute("));
+  });
+
+  test("it is a CI-only gate", () => {
+    expect(body.slice(0, gate)).toMatch(
+      /if \(params\.isCi\) \{\s*const limitsPlan = $/,
+    );
   });
 });

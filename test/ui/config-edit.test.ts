@@ -100,22 +100,8 @@ describe("6.1 & 6.2 & 6.3 Interactive Config Editor & Headless Set/Unset", () =>
     expect(linesRes.status).toBe("ok");
     expect(linesRes.annotation).toContain("effective value remains 1500");
 
-    // Test scout and post capped annotation when person is false and team is set to true
-    writeFileSync(
-      personConfigPath,
-      JSON.stringify({ scout: false, post: false }, null, 2),
-    );
-    const scoutRes = await setConfigValue({
-      layer: "team",
-      key: "scout",
-      value: "true",
-      home,
-      repoRoot: repo,
-    });
-    expect(scoutRes.status).toBe("ok");
-    expect(scoutRes.annotation).toContain(
-      "written: true — your effective value remains false, capped by your Person layer",
-    );
+    // Test post capped annotation when person is false and team is set to true
+    writeFileSync(personConfigPath, JSON.stringify({ post: false }, null, 2));
 
     const postRes = await setConfigValue({
       layer: "team",
@@ -129,13 +115,7 @@ describe("6.1 & 6.2 & 6.3 Interactive Config Editor & Headless Set/Unset", () =>
       "written: true — your effective value remains false, capped by your Person layer",
     );
 
-    // Test setting scout and post directly on person layer
-    await setConfigValue({
-      layer: "person",
-      key: "scout",
-      value: "true",
-      home,
-    });
+    // Test setting post directly on person layer
     await setConfigValue({
       layer: "person",
       key: "post",
@@ -143,7 +123,7 @@ describe("6.1 & 6.2 & 6.3 Interactive Config Editor & Headless Set/Unset", () =>
       home,
     });
     const updatedPerson = JSON.parse(readFileSync(personConfigPath, "utf-8"));
-    expect(updatedPerson.scout).toBe(true);
+    expect("scout" in updatedPerson).toBe(false);
     expect(updatedPerson.post).toBe(false);
   });
 
@@ -258,7 +238,6 @@ describe("6.1 & 6.2 & 6.3 Interactive Config Editor & Headless Set/Unset", () =>
         max_changed_files: 150,
         max_verification_steps: 8,
         summary: { enabled: true },
-        scout: true,
         post: false,
         parity_trigger_paths: ["**/foo/**"],
         suspicion_priors: [{ path: "a.ts", weight: 3, reason: "hot" }],
@@ -271,22 +250,20 @@ describe("6.1 & 6.2 & 6.3 Interactive Config Editor & Headless Set/Unset", () =>
         "max_changed_files",
         "max_verification_steps",
         "summary.enabled",
-        "scout",
         "post",
       ]);
+      expect(keys).not.toContain("scout");
       expect(keys).not.toContain("parity_trigger_paths");
       expect(keys).not.toContain("suspicion_priors");
       expect(keys).not.toContain("summary.model");
       expect(entries.find((e) => e.key === "summary.enabled")?.value).toBe(
         "[✓] true",
       );
-      expect(entries.find((e) => e.key === "scout")?.value).toBe("[✓] true");
       expect(entries.find((e) => e.key === "post")?.value).toBe("[ ] false");
 
       const personData = {
         max_changed_lines: 2000,
         summary: { enabled: false },
-        scout: false,
         post: true,
       };
       const personEntries = getEditableLayerEntries("person", personData);
@@ -295,7 +272,6 @@ describe("6.1 & 6.2 & 6.3 Interactive Config Editor & Headless Set/Unset", () =>
         "max_changed_files",
         "max_verification_steps",
         "summary.enabled",
-        "scout",
         "post",
       ]);
       expect(
@@ -304,9 +280,6 @@ describe("6.1 & 6.2 & 6.3 Interactive Config Editor & Headless Set/Unset", () =>
       expect(
         personEntries.find((e) => e.key === "summary.enabled")?.value,
       ).toBe("[ ] false");
-      expect(personEntries.find((e) => e.key === "scout")?.value).toBe(
-        "[ ] false",
-      );
       expect(personEntries.find((e) => e.key === "post")?.value).toBe(
         "[✓] true",
       );

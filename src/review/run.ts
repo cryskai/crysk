@@ -16,14 +16,10 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import {
-  type EffectiveConfig,
-  loadEffectiveConfig,
-  notionalCostInput,
-} from "#config/config";
+import { type EffectiveConfig, loadEffectiveConfig } from "#config/config";
 import type { ModelsConfig } from "#model/model-name";
 import { type ModelProfile, resolveProfile } from "#model/profiles";
-import type { ResolvedRoutePlan } from "#model/routing";
+import { type ResolvedRoutePlan, removedHunterRoles } from "#model/routing";
 import type { CiMode } from "#pr/preflight";
 import {
   type FindingsDocument,
@@ -31,12 +27,7 @@ import {
   type Telemetry,
   writeFindings,
 } from "#review/findings";
-import {
-  changedPathsFromDiff,
-  type PipelineDeps,
-  type PipelineResult,
-  parityTriggered,
-} from "#review/pipeline";
+import type { PipelineDeps, PipelineResult } from "#review/pipeline";
 import {
   type AgentsDirResolution,
   agentFilePath,
@@ -46,11 +37,11 @@ import {
   gotchasUnusableReason,
   type LocalConfig,
   localReviewSpec,
+  PARITY_REMOVED,
   parseNumstatFiles,
   preflightAgentsDir,
   resolveAgentsDir,
   resolvePost,
-  resolveScout,
   resolveSummary,
   type SummarySettings,
 } from "#review/preflight";
@@ -112,11 +103,16 @@ export const CODEGRAPH_ONLY_MCP_CONFIG = {
 
 export const EMPTY_MCP_CONFIG = { mcpServers: {} };
 
+// Where a non-fatal notice goes by default, beside every other `warning:` line
+// a run prints.
+function warnOnStderr(line: string): void {
+  process.stderr.write(`warning: ${line}\n`);
+}
+
 export interface LoadedRunConfig {
   loaded: EffectiveConfig;
   config: LocalConfig;
   summary: SummarySettings;
-  scout: boolean;
   post: boolean;
   // The run's model profile, resolved once here from `config.profile`
   // (openai-profile S3). Every route, prompt and pipeline input of the run
@@ -124,10 +120,10 @@ export interface LoadedRunConfig {
   profile: ModelProfile;
 }
 
-// Config load + the three per-run resolvers read right after it: identical
+// Config load + the per-run resolvers read right after it: identical
 // in both orchestrators except the root/home they read from (repoRoot +
 // os.homedir() in review(), operatorRoot + the hoisted `home` in reviewPr()).
-// Callers still own their own `options = { ...options, scout, post, ... }`
+// Callers still own their own `options = { ...options, post, ... }`
 // reassignment — reviewPr() folds an extra `yes` field into the same spread,
 // and forcing that in here would make this a mode flag instead of an
 // explicit parameter.
@@ -135,7 +131,7 @@ export async function loadRunConfig(params: {
   root: string;
   home: string;
   configFlag: string | undefined;
-  options: Pick<CliOptions, "summary" | "model" | "scout" | "post">;
+  options: Pick<CliOptions, "summary" | "model" | "post">;
   // Where config warnings go. Defaults to stderr, beside every other
   // `warning:` line a run prints.
   warn?: (line: string) => void;
@@ -145,16 +141,13 @@ export async function loadRunConfig(params: {
     home: params.home,
     configFlag: params.configFlag,
   });
-  const warn =
-    params.warn ??
-    ((line: string) => process.stderr.write(`warning: ${line}\n`));
+  const warn = params.warn ?? warnOnStderr;
   for (const line of loaded.warnings) warn(line);
   const config = loaded.effective;
   const summary = resolveSummary(params.options, config);
-  const scout = resolveScout(params.options, config);
   const post = resolvePost(params.options, config);
   const profile = resolveProfile(config.profile);
-  return { loaded, config, summary, scout, post, profile };
+  return { loaded, config, summary, post, profile };
 }
 
 // Shared range guard. Both orchestrators check the same thing right after
@@ -237,45 +230,14 @@ export async function validateGotchas(
   }
 }
 
-// Which hunters actually run: every unconditional hunter, plus every
-// conditional (triggered) hunter when the parity trigger fired. Refuters are
-// never included — they are a different role. Identical in both
-// orchestrators; `reviewPr()`'s own `skipDiscovery` short-circuit to `[]`
-// stays a call-site concern (a re-review with no delta to discover), not a
-// parameter here.
-export function selectActiveHunters(
-  agents: readonly AgentSpec[],
-  parityFires: boolean,
-): AgentSpec[] {
-  return agents.filter(
-    (a) => a.role === "hunter" && (a.trigger === undefined || parityFires),
-  );
-}
-
-// Whether the parity hunter fires for this diff: identical in both
-// orchestrators. `changedPathsFromDiff`'s own list is never read afterward
-// by either caller, only this boolean.
-export function resolveParityFires(
-  patch: string,
-  parityTriggerPaths: string[],
-): boolean {
-  return parityTriggered(changedPathsFromDiff(patch), parityTriggerPaths);
-}
-
-// How many hunters a full review of the whole PR runs: the unconditional ones,
-// plus the parity hunter when the full PR patch touches a trigger path. A
-// narrowed run's own count (none on a verify-only pass, no parity hunter when
-// only the delta was read) would understate a full review, which is what the
-// platform estimate's share divides by (cryskai/platform#12).
-export function fullReviewHunterCount(
-  agents: readonly AgentSpec[],
-  prPatch: string,
-  parityTriggerPaths: string[],
-): number {
-  return selectActiveHunters(
-    agents,
-    resolveParityFires(prPatch, parityTriggerPaths),
-  ).length;
+// Which hunters actually run: every unconditional hunter. A conditional
+// (triggered) hunter never does, because no product review supplies trigger
+// paths (the pipeline gets `[]`). Refuters are never included — they are a
+// different role. Identical in both orchestrators;
+// `reviewPr()`'s own `skipDiscovery` short-circuit to `[]` stays a call-site
+// concern (a re-review with no delta to discover), not a parameter here.
+export function selectActiveHunters(agents: readonly AgentSpec[]): AgentSpec[] {
+  return agents.filter((a) => a.role === "hunter" && a.trigger === undefined);
 }
 
 // The diff stat, TWICE and on purpose (moved here from review()'s own WHY
@@ -286,10 +248,9 @@ export function fullReviewHunterCount(
 // must not consume the budget, and a file whose every change is whitespace
 // drops out of that numstat entirely (verified: git emits no row for it).
 //
-// The COST BAND counts from the plain numstat, exclusions applied. The
-// hunters are handed diff.patch verbatim, whitespace hunks included, so
-// those bytes are genuinely billed — pricing them at zero would be the same
-// class of lie the exclusion bug was.
+// The report's DIFF STAT counts from the plain numstat, exclusions applied.
+// The hunters are handed diff.patch verbatim, whitespace hunks included, so
+// the stat describes what they actually read.
 //
 // `runGit` arrives as a callback, not an import of `git()` from `#git/git`:
 // this module's import surface is deliberately narrowed to review-domain
@@ -356,8 +317,6 @@ export function buildTelemetry(
     tokens_in: result.usage.tokens_in,
     tokens_out: result.usage.tokens_out,
     tokens_total: result.usage.tokens_total,
-    cost_usd_est: result.usage.cost_usd_est,
-    ...(result.unresolved.length > 0 ? { cost_usd_est_is_floor: true } : {}),
     per_agent: result.perAgent,
   };
 }
@@ -433,8 +392,6 @@ export async function writeRunReport(params: {
       head: params.head,
       diffStat: params.diffStat,
       excludedPaths: params.droppedPaths,
-      costUsd: params.result.usage.cost_usd_est,
-      ...notionalCostInput(params.result),
       wallMs: params.wallMs,
       ...(params.ciMode === undefined ? {} : { ciMode: params.ciMode }),
     }),
@@ -462,16 +419,25 @@ export async function resolvePromptSet(
   prompts: NonNullable<Parameters<typeof resolveAgentsDir>[3]> & {
     profile: ModelProfile;
   },
+  // Where the two notices that need the spec go. Each orchestrator resolves its
+  // prompt set once per run, so each notice prints once.
+  warn: (line: string) => void = warnOnStderr,
 ): Promise<ResolvedPromptSet> {
   const agents = resolveAgentsDir(options, loaded, undefined, prompts);
   const spec = validateReviewSpec(localReviewSpec());
   spec.agents.forEach((agent, i) => {
     assertBasenameOnly(agent.file, i);
   });
-  await preflightAgentsDir(
+  // The removed hunter's leftovers: a file in a custom directory, and a
+  // `models.hunter.parity` role. Neither is an error, neither does anything.
+  const warnings = await preflightAgentsDir(
     agents,
     spec.agents.map((a) => a.file),
   );
+  for (const role of removedHunterRoles(loaded.effective.models, spec.agents)) {
+    warnings.push(`models.${role} ${PARITY_REMOVED}`);
+  }
+  for (const line of warnings) warn(line);
   const agentFiles = new Map<string, ParsedAgent>();
   for (const agent of spec.agents) {
     // Parsing every agent file now is a preflight too: a malformed
@@ -535,7 +501,7 @@ export function routingConfigured(
 
 // Production route resolution: identical in both orchestrators except the
 // workspace root and (reviewPr()'s skipped-discovery re-review only) the
-// summarizer/scout enable overrides. Named distinctly from
+// summarizer/consolidate/materiality enable overrides. Named distinctly from
 // resolveProductionRoutePlanAtConfirm (#review/route-preflight), which this
 // wraps — `resolveProductionRoute` reads as a near-duplicate of that name at
 // a glance, which is exactly the confusion a shared wrapper should not add.
@@ -552,7 +518,6 @@ export async function resolvePipelineRoute(params: {
   profile: ModelProfile;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
-  scoutEnabled?: boolean;
   consolidateEnabled?: boolean;
   materialityEnabled?: boolean;
   // S5: the run's Claude credential, chosen once at run start. Required (undefined
@@ -578,7 +543,6 @@ export async function resolvePipelineRoute(params: {
         profile: params.profile,
         summary: params.summary,
         summarizerEnabled: params.summarizerEnabled,
-        scoutEnabled: params.scoutEnabled,
         consolidateEnabled: params.consolidateEnabled,
         materialityEnabled: params.materialityEnabled,
       }),

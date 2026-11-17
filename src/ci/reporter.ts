@@ -21,7 +21,7 @@
 // for the emoji mapping, blob-link builder, compact duration format, and
 // the re-review delta's data shape — the same severity glyph and blob URL a
 // reader sees on the PR comment must be the one this job summary shows.
-// `deltaLine`/`usd`/`code`/`severityRank` stay PRIVATE in report.ts, so this
+// `deltaLine`/`code`/`severityRank` stay PRIVATE in report.ts, so this
 // module writes small local equivalents rather than exporting report.ts
 // internals for a single extra caller.
 
@@ -44,6 +44,7 @@ import {
 } from "#review/report";
 import { log } from "#ui/primitives";
 import { publishedText } from "../security/published-text";
+import type { PlatformLimitHit } from "./platform-limits";
 
 // ---------------------------------------------------------------------------
 // Workflow commands (`::group::`, `::endgroup::`, `::notice::`, `::warning::`,
@@ -134,7 +135,6 @@ interface CiReviewSummary {
   prNumber: number;
   headSha: string;
   findings: readonly Finding[];
-  costUsdEst: number;
   wallMs: number;
   model: string;
   // Cosmetic and optional, same contract as renderPrComment's repoWebUrl
@@ -158,10 +158,12 @@ interface CiSkipSizeSummary {
 interface CiSkipBudgetSummary {
   kind: "skipped-budget";
   prNumber: number;
-  estimatedCostUsd: number;
-  budgetUsd: number;
-  // A platform repository has no `--budget-usd` to raise (cryskai/platform#12).
-  platformConnected?: true;
+  // Which platform limit was hit. The limits live in the Crysk dashboard
+  // (Review > Limits); the summary names the limit, never a dollar figure.
+  limit: PlatformLimitHit;
+  // The estimate compared was the API share of a mixed setup, not the whole
+  // estimate (S17).
+  apiShare?: true;
 }
 
 interface CiSkipExcludedSummary {
@@ -309,10 +311,6 @@ function formatDeltaLine(delta: PrCommentDelta): string {
   return `${since}: ${delta.resolved} resolved · ${delta.new} new · ${delta.persist} persist`;
 }
 
-function usd(amount: number): string {
-  return `$${amount.toFixed(2)}`;
-}
-
 // A size limit <= 0 means that knob is off (review/size-gate.ts). Printed as
 // a number it reads "limit 0", a limit every diff exceeds, and a subscription
 // route now turns a knob off by default (resolveCiSizeLimits), so the other
@@ -340,20 +338,28 @@ function skipSizeLines(data: CiSkipSizeSummary): string[] {
   ];
 }
 
+const SKIP_BUDGET_REASON: Record<PlatformLimitHit, string> = {
+  "month-used-up": "the organization's monthly review limit is used up.",
+  "review-limit": "the estimated cost is over the per-review limit.",
+  "month-left":
+    "the estimated cost is more than what is left of the monthly limit.",
+};
+
 function skipBudgetLines(data: CiSkipBudgetSummary): string[] {
   return [
     `### ⚠️ Crysk Review Skipped — PR #${data.prNumber}`,
     "",
-    "**Reason:** the estimated cost exceeds the configured budget ceiling.",
+    `**Reason:** ${SKIP_BUDGET_REASON[data.limit]}`,
+    ...(data.apiShare === true
+      ? [
+          "",
+          "Only the part of the estimate that runs on an API key (its API " +
+            "share) was compared with the limit.",
+        ]
+      : []),
     "",
-    "| Metric | Value |",
-    "| --- | --- |",
-    `| Estimated cost | ${usd(data.estimatedCostUsd)} (budget ${usd(data.budgetUsd)}) |`,
-    "",
-    data.platformConnected === true
-      ? "To change what reviews cost, change the model setup in the Crysk dashboard."
-      : "Crysk did not run to stay within the configured `--budget-usd` " +
-        "ceiling.",
+    "Crysk did not run to stay within the limits set in the Crysk dashboard " +
+      "(Review > Limits).",
   ];
 }
 
@@ -466,7 +472,6 @@ function reviewedLines(data: CiReviewSummary): string[] {
     "| --- | --- |",
     `| Findings | ${data.findings.length} (${blocking.length} blocking · ` +
       `${advisory.length} advisory) |`,
-    `| Estimated cost | ${usd(data.costUsdEst)} |`,
     `| Duration | ${formatElapsed(data.wallMs)} |`,
     `| Model | ${data.model} |`,
     "",
@@ -525,10 +530,6 @@ export interface CiOutputs {
   findings_count: number;
   blocking_count: number;
   advisory_count: number;
-  // Spec 1.1: "cost-usd-est: ... (float string, e.g. `"2.45"`)" — formatted
-  // to 2 decimals here so every consumer of $GITHUB_OUTPUT reads the same
-  // fixed-precision string the action.yml output contract promises.
-  cost_usd_est: number;
   run_dir: string;
 }
 
@@ -541,7 +542,6 @@ export function formatCiOutputs(outputs: CiOutputs): string {
     `findings_count=${outputs.findings_count}`,
     `blocking_count=${outputs.blocking_count}`,
     `advisory_count=${outputs.advisory_count}`,
-    `cost_usd_est=${outputs.cost_usd_est.toFixed(2)}`,
     `run_dir=${outputs.run_dir}`,
   ];
   return `${lines.join("\n")}\n`;
@@ -633,7 +633,6 @@ export async function reportFatalCiError(
       findings_count: 0,
       blocking_count: 0,
       advisory_count: 0,
-      cost_usd_est: 0,
       run_dir: "",
     }).catch(() => {});
   }

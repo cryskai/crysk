@@ -7,6 +7,8 @@
 
 > **Decision:** This revision is the final implementation candidate. It is not self-ratified: ratification requires every closure item and offline acceptance test in §13 to pass against the implementation.
 
+> **Superseded in part (2026-11-17, platform-owned-cost):** the dollar parts of this design no longer exist in the engine. There are no cash or notional cost fields, no rate-table pricing, no dollar reservation or settlement and no budget enforcement (§§8–9 and the accounting rows elsewhere describe the design as written, not the code). The engine reports usage facts (models, credential kind, token counts) and the Crysk platform prices them and owns the cost limits; the credential fence, which needs no amount, stays. See `docs/github-actions.md` ("Spend controls") and the `CHANGELOG.md` entry "Dollar figures and the dollar ceiling".
+
 ## Review path
 
 Review lifecycle ownership and settlement first (§§3–5), then isolation and failure policy (§§6–7), accounting (§§8–9), and finally the D3 consensus algebra (§10). Implementation order and acceptance evidence are in §§12–13.

@@ -94,7 +94,6 @@ export function refuterReplayRow(input: {
     expect: c.expect,
     label: c.label,
     prompt_check: input.promptCheck,
-    notional_usd: result.usageV2?.notionalCostUsd ?? null,
     wall_ms: result.usageV2?.wallMs ?? null,
   };
 }
@@ -130,7 +129,6 @@ export type ConsolidateStepRow = {
   readonly plan?: PlanEntry[];
   readonly in: number;
   readonly out: number;
-  readonly notional_usd: number | null;
   readonly model: string;
 } & RouteIdentityFields;
 
@@ -147,7 +145,6 @@ export function consolidateStepRow(input: {
     model: route.model,
     ...routeIdentityFields(route.identity),
   };
-  const notional_usd = result.usageV2?.notionalCostUsd ?? null;
   if (result.status !== "ok") {
     return {
       label,
@@ -155,7 +152,6 @@ export function consolidateStepRow(input: {
       reason: (result.stderrTail ?? "").slice(-300),
       in: ids.length,
       out: ids.length,
-      notional_usd,
       ...ran,
     };
   }
@@ -166,7 +162,6 @@ export function consolidateStepRow(input: {
     plan,
     in: ids.length,
     out: plan.length,
-    notional_usd,
     ...ran,
   };
 }

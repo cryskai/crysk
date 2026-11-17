@@ -209,7 +209,7 @@ export async function reserveCiAdmissionLedger(input: {
   priorScore?: number | null;
   blockingCount?: number | null;
   advisoryCount?: number | null;
-  // A comment-triggered run (`/pr-hero review`, `/pr-hero recheck`): its row is
+  // A comment-triggered run (`/crysk review`, `/crysk recheck`): its row is
   // marked so the attempt count leaves it out (see countTerminalAttempts).
   forced?: boolean;
   // Test-only seam (default: the real Bun.spawn), threaded to the check-run write.
@@ -256,7 +256,7 @@ export async function recordCiAdmissionGateSkip(input: {
   blockingCount: number | null;
   advisoryCount: number | null;
   // A skip that spent nothing and must not count against ci_max_attempts
-  // (a /pr-hero stop): settled as "gate-skipped", like a size or budget skip.
+  // (a /crysk stop): settled as "gate-skipped", like a size or budget skip.
   unspent?: boolean;
 }): Promise<void> {
   try {
@@ -399,7 +399,7 @@ export function carriedSuccessDescription(label: string, sha: string): string {
 // The text a skip writes when it inherits a finished review's blocking failure, with that review's count.
 export function carriedBlockingDescription(count: number, sha: string): string {
   return clipStatusDescription(
-    `${STATUS_CONTEXT}: ${count} blocking finding(s) ${CARRIED_FROM}${sha.slice(0, 7)} — fix and push, or /pr-hero override`,
+    `${STATUS_CONTEXT}: ${count} blocking finding(s) ${CARRIED_FROM}${sha.slice(0, 7)} — fix and push, or /crysk override`,
   );
 }
 
@@ -434,7 +434,7 @@ export function carriedPartialDescription(
 ): string {
   const suffix = set === undefined ? "" : `, set ${set}`;
   return clipStatusDescription(
-    `${STATUS_CONTEXT}: review partial (${failed} of ${total} hunters failed${suffix}) ${CARRIED_FROM}${sha.slice(0, 7)} — /pr-hero review retries it`,
+    `${STATUS_CONTEXT}: review partial (${failed} of ${total} hunters failed${suffix}) ${CARRIED_FROM}${sha.slice(0, 7)} — /crysk review retries it`,
   );
 }
 
@@ -608,7 +608,7 @@ function failClosed(label: string): AdmissionStatusDecision {
   return {
     state: "failure",
     description: clipStatusDescription(
-      `${STATUS_CONTEXT} skipped the review (${label}) and found no earlier verdict — /pr-hero review reviews it`,
+      `${STATUS_CONTEXT} skipped the review (${label}) and found no earlier verdict — /crysk review reviews it`,
     ),
   };
 }
@@ -763,7 +763,7 @@ async function findCarriedVerdict(input: {
   }
 }
 
-// WHY the head's override holds: a human's `/pr-hero override` on this head is the decision for it. A
+// WHY the head's override holds: a human's `/crysk override` on this head is the decision for it. A
 // re-run or reopen of the gate on that unchanged head would otherwise write the skip's verdict over it.
 // So where the newest pr-hero status on the head is an override, the skip writes nothing. This holds when
 // the head's statuses can be read.

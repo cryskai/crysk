@@ -93,22 +93,16 @@ import {
   resolveMaxConcurrentSteps,
   resolveSharedPrefix,
 } from "#review/preflight";
-import { code, estimateCost } from "#review/report";
+import { code } from "#review/report";
 import {
   claudeAuthorityRequired,
   isBundledAgentsDir,
   pipelineConsolidateInput,
   pipelineMaterialityInput,
-  pipelineScoutInput,
   pipelineSummarizerInput,
   pipelineVerifierInput,
 } from "#review/route-preflight";
-import {
-  fullReviewHunterCount,
-  prepareRunnerForRoute,
-  resolveParityFires,
-  validateGotchas,
-} from "#review/run";
+import { prepareRunnerForRoute, validateGotchas } from "#review/run";
 import { sizeGateConfigFor, sizeGateLine } from "#review/size-gate";
 import { registerActiveRun, unregisterActiveRun } from "#store/activity";
 import {
@@ -117,7 +111,7 @@ import {
   CI_ADJUDICATOR_LOGIN,
   trustedAdjudicator,
 } from "#triage/adjudication";
-import { dryRunHunterCount, reviewingLine } from "#ui/plan";
+import { reviewingLine } from "#ui/plan";
 import { log, styleEnabled, terminalWidth } from "#ui/primitives";
 import { applySizeGate, startProgressRenderer } from "#ui/progress";
 import { parsePrFiles } from "#watch/preflight";
@@ -362,7 +356,8 @@ export async function reviewPr(
     throw error;
   }
   const {
-    ciBudgetCeiling,
+    ciBillingMode,
+    ciRoleBilling,
     ciSizeLimits,
     agents,
     spec,
@@ -429,15 +424,6 @@ export async function reviewPr(
   // dry run that says SKIP for a PR the real per-file run happily accepts
   // reads as a broken tool, not a conservative estimate.
   if (options.dryRun) {
-    const hunterCount = dryRunHunterCount(spec, config);
-    const estimate = estimateCost(
-      target.ghDiffStat,
-      hunterCount,
-      summary.enabled,
-      options.scout,
-      0,
-      true,
-    );
     const dryRunGateConfig = sizeGateConfigFor(
       sizeGateOverrides,
       config,
@@ -468,8 +454,6 @@ export async function reviewPr(
       summary,
       loaded,
       isCi,
-      hunterCount,
-      estimate,
       dryRunGateConfig,
       perFile,
     });
@@ -595,7 +579,6 @@ export async function reviewPr(
       adjudicationQueue,
       phaseB,
       diffStat,
-      prDiffStat,
       sizeGate,
     } = discovery;
 
@@ -704,23 +687,13 @@ export async function reviewPr(
 
     // 7 — the plan and the paid gate, exactly like local mode but with the
     // real numstat replacing GitHub's counters.
-    const parityFires = resolveParityFires(
-      effectiveDiff.patch,
-      config.parity_trigger_paths,
-    );
     const activeHunters = discoveryHunters({
       skipDiscovery,
       agents: spec.agents,
-      parityFires,
     });
     const hunterCount = activeHunters.length;
-    const fullHunterCount = fullReviewHunterCount(
-      spec.agents,
-      anchorPatch,
-      config.parity_trigger_paths,
-    );
     // See resolvePrPlanAndConfirm (src/pr/plan.ts) for the full rationale —
-    // the CI budget gate, route/capability resolution, the plan card, the
+    // route/capability resolution, the plan card, the
     // interactive confirm, and the "committed to spending" commit-status
     // hold that follows a successful one.
     const planResult = await resolvePrPlanAndConfirm({
@@ -735,7 +708,6 @@ export async function reviewPr(
       diffFromSha,
       diffPath,
       diffStat,
-      prDiffStat,
       droppedPaths: effectiveDiff.droppedPaths,
       sizeGate,
       sizeGateConfirmed,
@@ -750,13 +722,11 @@ export async function reviewPr(
       isCi,
       ciMode,
       statusContext,
-      ciBudgetCeiling,
+      ciBillingMode,
+      ciRoleBilling,
       claudeRun,
       ciAdmissionLedger,
       skipDiscovery,
-      hunterCount,
-      fullHunterCount,
-      parityFires,
       verifyQueue,
       prepared,
     });
@@ -767,9 +737,7 @@ export async function reviewPr(
       productionAdmission,
       runnerAuthority,
       maxVerificationSteps,
-      estimate,
       statusTargetUrl,
-      freeRoute,
     } = planResult;
 
     let result: PipelineResult | undefined;
@@ -809,7 +777,7 @@ export async function reviewPr(
       // into a group nothing ever closes.
       let started = 0;
       await withCiWorkflowGroup(isCi, "crysk review", log, async () => {
-        log(reviewingLine(hunterCount, summary, options));
+        log(reviewingLine(hunterCount, summary));
         // runnerAuthority resolved before confirm with the exact-binding gate.
         // A plan with no claude-code route never starts the Claude CLI.
         if (
@@ -887,15 +855,12 @@ export async function reviewPr(
               mcpConfigPath,
               hopBudget: options.hopBudget,
               ...(options.model ? { model: options.model } : {}),
-              parityTriggerPaths: config.parity_trigger_paths,
+              parityTriggerPaths: [],
               suspicionPriors: config.suspicion_priors,
               modelProfile: profile,
               ...(skipDiscovery
                 ? {}
                 : pipelineSummarizerInput(summary, { profile })),
-              ...(skipDiscovery
-                ? {}
-                : pipelineScoutInput(options, { profile })),
               ...(skipDiscovery ? {} : pipelineConsolidateInput({ profile })),
               // Gated on skipDiscovery like consolidation: an empty-delta
               // re-review posts no new findings, so there is nothing to judge.
@@ -982,8 +947,6 @@ export async function reviewPr(
         isCi,
         ciMode,
         postMinSeverity: config.post_min_severity,
-        estimate,
-        freeRoute,
         ciAdmissionLedger,
         onPosted: (outcome) => {
           posted = outcome;
