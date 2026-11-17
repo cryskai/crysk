@@ -79,7 +79,7 @@ Before step 2.5, raise the per-call timeout in the **working copy** (not upstrea
 ## Commands
 
 ```bash
-# $0 — size gate + cost band
+# $0 — size gate per PR (no cost band: the engine no longer prints dollars)
 bun run benchmarks/martian/martian-cal.ts plan              # default: 3-PR pilot
 bun run benchmarks/martian/martian-cal.ts plan --all        # ten
 bun run benchmarks/martian/martian-cal.ts plan --only 11059,7232
@@ -115,7 +115,7 @@ Profiles (Martian): Strict = bug/security/concurrency/data/api · Core = Strict 
 
 Injecting `tool: "pr-hero"` into a **copy** of `benchmark_data.json` and running *their* `step3_judge_comments` is optional and needs their API key. Do not mutate the upstream file.
 
-## Cost bands (order of magnitude)
+## Cost bands (order of magnitude, measured history)
 
 | Slice | Band |
 |---|---|
@@ -123,7 +123,7 @@ Injecting `tool: "pr-hero"` into a **copy** of `benchmark_data.json` and running
 | Cal.com 10 × 2 methodologies | ~$80–90 |
 | 50 PRs × 1 pipeline | ~$150–200 — milestone only |
 
-`plan` before `run`. Size gate still applies; record skips, do not silently drop them from the denominator.
+These are figures measured before the engine stopped computing dollars; it no longer prints or stores them, so a new run's cost comes from pricing its recorded usage, not from `plan`. Run `plan` before `run`. Size gate still applies; record skips, do not silently drop them from the denominator.
 
 ## Clone / SHA notes
 

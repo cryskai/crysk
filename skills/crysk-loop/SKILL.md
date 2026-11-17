@@ -127,7 +127,7 @@ Later review passes hunt only the push delta. Once the real defects from pass 1 
 
 The opposite happens when a repository's workflow policy (`once_per_pr`, `thresholded`, `risk_aware` below the score floor, `ci_max_attempts` exhausted, or the size gate) suppresses an automatic review on a push that **genuinely changed load-bearing code**:
 - Under `once_per_pr`, `thresholded`, or `risk_aware`, a skipped push can inherit a carried `success` status from `report.head`, so `next_action` reads `"done"` even though `report.head !== head` (the commits `report.head..head` were never reviewed).
-- Under `ci_max_attempts` or `manual_only`, a red carries the same way, and a green is held `pending` ("crysk: waiting for a manual review"), so `next_action` reads `"override-or-fix"`. Under the size or spend-ceiling gate, the automatic run is blocked and the head is red. Either way `report.head !== head`.
+- Under `ci_max_attempts` or `manual_only`, a red carries the same way, and a green is held `pending` ("crysk: waiting for a manual review"), so `next_action` reads `"override-or-fix"`. Under the size gate or the platform's cost limits (the skip comment says which), the automatic run is blocked and the head is red. Either way `report.head !== head`.
 
 Whenever `report.head !== head`, inspect `git diff <report.head>..<head>`:
 - If that unreviewed delta introduced **new business logic, state-machine or concurrency changes, auth/security/isolation edits, or a non-trivial refactor** (for example, fixing a finding required redesigning a function rather than adding a guard), an extra review **is** justified:
@@ -197,7 +197,7 @@ done; exit 1
        another review" above. A load-bearing delta justifies `/crysk review` (within the forced-run
        bound), then step 0 with `--wait`; otherwise exit the loop and tell the maintainer the PR
        waits for `/crysk review` or `/crysk override`;
-     - the head was size- or budget-skipped (the gate description starts "crysk skipped the
+     - the head was size- or cost-limit-skipped (the gate description starts "crysk skipped the
        review", or "pr-hero skipped the review" on a status an older action wrote): comment `/crysk review`, then run step 0 with `--wait`;
      - the review is "partial again" with the same hunters failing: fix the failing hunter's route
        (model or credential), or ask a maintainer to override;
@@ -212,7 +212,7 @@ done; exit 1
      verified it) is done too: report the PR ready to merge and say the fixes were not verified by a review. Before exiting, check whether `report.head && report.head !== head` (a green status carried over an unreviewed push under `once_per_pr`, `thresholded`, or `risk_aware`): if `git diff <report.head>..<head>` contains non-trivial logic or risky changes ("Requesting or suggesting another review" above), recommend `/crysk review` naming those changes; otherwise exit the loop and report that the PR is ready to merge.
 
    **Bound the forced runs.** `/crysk review` and `/crysk recheck` each run a full paid review
-   that bypasses the size, budget and admission gates (`ci_max_attempts` included), and a gate
+   that bypasses the size, platform cost-limit and admission gates (`ci_max_attempts` included), and a gate
    `error` (expired token, missing credential, crash) makes step 0 say `review` again forever.
    Before posting either, count the ones already on this head, never from memory: the comments in
    `gh pr view <n> --json comments` whose body is exactly `/crysk review` or `/crysk recheck`, and whose `createdAt` is at or after the oldest `crysk` or `pr-hero` status on the head

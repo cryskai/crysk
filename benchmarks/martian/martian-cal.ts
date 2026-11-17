@@ -2,7 +2,7 @@
 // `--corpus cal` (default) is the Cal.com slice; sentry, grafana, keycloak and
 // discourse are the other forty PRs (case files from benchmarks/martian/martian-cases.ts).
 //
-//   bun run benchmarks/martian/martian-cal.ts plan    # $0 — size gate + cost band
+//   bun run benchmarks/martian/martian-cal.ts plan    # $0 — size gate
 //   bun run benchmarks/martian/martian-cal.ts check   # $0 — fetch SHAs, dry-run the CLI
 //   bun run benchmarks/martian/martian-cal.ts run     # LIVE — default: the 3-PR pilot
 //   bun run benchmarks/martian/martian-cal.ts score   # $0 — findings vs goldens, no judge

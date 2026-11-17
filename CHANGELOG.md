@@ -74,12 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gen_ai.usage.cost` and the cash and notional cost attributes in the platform trace. The spend ledger keeps
   its fence without an amount: an attempt on a metered credential whose usage the engine could not confirm
   still fences that credential for the rest of the run. Its dollar rules (a metered attempt that reports
-  `$0` after producing output, a free route that reports a priced cost) are removed.
+  `$0` after producing output, a free route that reports a priced cost) are removed. The local store's API
+  (the one `crysk mcp` reads: runs, a single run and usage) no longer returns the legacy `cost_usd_est`
+  column (it is `0` on every new run, which would read as a free run), and the MCP run and usage tools no
+  longer advertise a cost breakdown; they report tokens.
   **New:** the first connect step declares the `limits` capability. A platform that supports it answers with
   `{ "limits": { "review_usd"?, "month_left_usd"?, "estimate_usd"? } }` (absent for a forced `/crysk review`),
   and the run step applies one comparison: a run that bills an API key is skipped, with today's
   `skipped-budget` status and skip comment (which now names the limit that was hit and the dashboard
-  setting, Review > Limits), when the month's limit is used up or the platform's estimate is over the
+  setting, Review > Limits; the gate commit status reads `over a cost limit set in Crysk` where it used to
+  read `estimated cost over the CI budget`), when the month's limit is used up or the platform's estimate is over the
   per-review limit or over what is left of the month. A subscription or free run is never skipped for cost,
   and `/crysk review` still forces. With no estimate and a month with money left the review runs.
   **Retired, still accepted, no effect, one warning each:** the `budget-usd` action input, the `--budget-usd`
@@ -90,7 +94,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **What to check:** (1) a workflow that sets `budget-usd`, or a script that passes `--budget-usd` or
   `--billing`, keeps working and logs the warning: remove it to silence it; (2) anything that reads
   `cost-usd-est`, `telemetry.cost_usd_est` in `findings.json`, `cost_usd_est` in `pipeline.json` or
-  `usage.cost_usd_est` from `runPipeline` finds no figure any more; the platform's dashboards show the cost.
+  `usage.cost_usd_est` from `runPipeline` finds no figure any more; the platform's dashboards show the cost;
+  (3) a script that read `cost_usd_est` from the store API, or matched the old gate status text, reads the
+  new shape and wording. The README, `docs/github-actions.md`, `docs/configuration.md` and the `crysk`,
+  `crysk-ci-setup`, `crysk-loop` and `martian-bench` skills now describe this behaviour: `setup --ci` no
+  longer asks how CI pays or for a spend ceiling, and measured dollar figures (README "Cost and
+  expectations", benchmark bands) are kept as history only.
   Release order: the platform's limits must be deployed before an engine with this change is released.
 
 ### Security

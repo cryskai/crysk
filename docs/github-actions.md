@@ -471,8 +471,8 @@ OpenCode-only `CRYSK_MODELS` included.
 
 | Secret | CI outcome |
 |---|---|
-| A non-openai `CRYSK_OPENCODE_<P>_API_KEY` (tested: **deepseek**) | Metered. The OpenCode auth file applies the default spend ceiling: this is an invoice route, not an unlimited subscription. |
-| `CRYSK_OPENCODE_OPENAI_API_KEY` | Metered, billed per token like any API key. |
+| A non-openai `CRYSK_OPENCODE_<P>_API_KEY` (tested: **deepseek**) | Metered: an invoice route, not an unlimited subscription, so the platform's dollar limits (Review > Limits) can skip it. |
+| `CRYSK_OPENCODE_OPENAI_API_KEY` | Metered, billed per token like any API key; the platform's dollar limits apply. |
 | `CRYSK_OPENCODE_OPENAI_OAUTH` | The ChatGPT subscription. With both OpenAI secrets set, the subscription is used. |
 | An `_OAUTH` secret for another provider your models use | **Refused**, naming the secret: only OpenAI's subscription can be projected. Set that provider's `_API_KEY`. |
 | Several OpenCode providers in one run | Supported: each model runs through its own OpenCode server, projected with only its provider's record ([configuration.md](configuration.md), "Several OpenCode providers in one review"). |
@@ -1323,7 +1323,7 @@ PR that came back clean.
 
 | Output | Meaning |
 |---|---|
-| `status` | `reviewed`, `skipped-size`, `skipped-budget`, `skipped-excluded`, or `error` — see the caveat below. `skipped-excluded` means every changed file is excluded by the ignore rules, so there was nothing to review: exit 0, a green `crysk` status in gate mode, no PR comment, nothing spent. |
+| `status` | `reviewed`, `skipped-size`, `skipped-budget`, `skipped-excluded`, or `error` — see the caveat below. `skipped-budget` is the name kept for a run the Crysk platform's cost limits skipped (see [Spend controls](#spend-controls)); the engine itself has no budget. `skipped-excluded` means every changed file is excluded by the ignore rules, so there was nothing to review: exit 0, a green `crysk` status in gate mode, no PR comment, nothing spent. |
 | `findings-count` | Total verified findings. |
 | `blocking-count` | Blocking-tier findings. |
 | `advisory-count` | Advisory-tier findings. |

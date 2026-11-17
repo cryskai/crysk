@@ -328,8 +328,8 @@ What it is told is the engine's own text, not the refuter's: it answers whether 
 still present at the current head, which is not the refuter's question. A custom `review-refuter.md` therefore
 no longer changes the verifier's instructions, only its model, effort and tools. There is no CLI flag or
 environment variable that overrides effort, and the child process never inherits `CLAUDE_CODE_EFFORT_LEVEL`
-from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, and the cost band does
-not price effort yet, so expect the real bill to exceed the quote.
+from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, measured on past runs; the
+engine prints no estimate, and the Crysk platform shows what a review actually cost.
 
 **Consolidation.** After the refuter, one more step reads the findings about to be posted and rewrites the
 list so each comment states one defect: findings that describe the same defect are merged into one
@@ -366,7 +366,7 @@ its own entry's effort, not the first model's:
   provider (Anthropic `high` and `max`, OpenAI `none` to `xhigh`, Google `low` and `high`; see OpenCode's
   [Variants](https://opencode.ai/docs/models/)). OpenCode runs a variant the model does not have at its
   default level, without an error, so Crysk checks every variant the plan would send, fallbacks included,
-  against `opencode models <provider> --verbose --refresh` before the cost confirmation. A variant the model
+  against `opencode models <provider> --verbose --refresh` before the confirmation. A variant the model
   does not list, an effort on a model with no variants, or a listing that cannot be read stops the review
   before anything spends, naming the model and the variants it does have. An OpenCode model with no entry
   effort is sent no variant and runs at its default level.
@@ -391,7 +391,7 @@ exist today:
 
 | Kind | Source | Backend | Billing |
 | --- | --- | --- | --- |
-| `claude_subscription_oauth` | `CRYSK_CLAUDE_OAUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`, the macOS Keychain item `Claude Code-credentials` (via `/usr/bin/security`), or `~/.claude/.credentials.json` | `claude-code` | subscription (quota, `$0.00` cash) |
+| `claude_subscription_oauth` | `CRYSK_CLAUDE_OAUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`, the macOS Keychain item `Claude Code-credentials` (via `/usr/bin/security`), or `~/.claude/.credentials.json` | `claude-code` | subscription (quota, no per-token invoice) |
 | `provider_api_token` | `CRYSK_CLAUDE_API_KEY` or `ANTHROPIC_API_KEY` (claude-code), or the named key in OpenCode's `auth.json` (opencode; in CI, built from `CRYSK_OPENCODE_<P>_API_KEY`) | `claude-code`, `opencode` | metered (real invoice) |
 | `opencode_chatgpt_oauth` | the `openai` entry in `~/.local/share/opencode/auth.json` (or `$XDG_DATA_HOME/opencode/auth.json`), which must be `type: "oauth"` (in CI, built from `CRYSK_OPENCODE_OPENAI_OAUTH`) | `opencode` | subscription |
 | `provider_free` | the provider's own catalog declares the model free at runtime (`opencode models <provider> --verbose --refresh`, every cost leaf `0`, status active); the provider's `type: "api"` entry in `auth.json` is projected if one exists, otherwise nothing | `opencode` | free (not metered) |
@@ -423,9 +423,11 @@ OpenCode credential is a provider plus its kind (`provider_api_token`, `opencode
   server, launched under a synthetic home whose `auth.json` holds only that model's provider record. A
   DeepSeek server never sees the OpenAI record, and the other way round. Steps on different credentials
   never share a server.
-- **Billing per model.** A metered model reserves spend and can fence its own credential's bucket; a
-  subscription model reserves nothing; a free model settles at zero unless the provider prices it. The
-  usage record of each attempt carries the billing of the credential it ran on.
+- **Billing per model.** A metered model fences its own credential's bucket when an attempt's usage is not
+  confirmed (see "A fenced credential"); a model on a free route fences only when an attempt returns no usage at
+  all, and releases otherwise; a subscription model never does. The usage record of each
+  attempt carries the billing of the credential it ran on, which is what lets the platform report API and
+  subscription use apart.
 - **Closed when done.** A server stops when its last step ends, whether it succeeded, failed or was
   cancelled, and any server still up stops when the run ends.
 

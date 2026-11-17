@@ -536,10 +536,15 @@ A script that merges on success should treat only `0` as a finished review.
 
 ## Cost and expectations
 
+The figures in this section are **measured history**, kept as the evidence behind the size gate. The engine
+no longer prints, stores or limits dollars: the Crysk platform prices a platform run from the usage the
+engine reports and shows what a review cost (dashboard, per pull request and in insights).
+
 - **$2–5 per review** of a typical PR-sized diff — the floor is real, because hunters read the tree,
   not just the diff — and larger trees cost more (a 45-file tree measured $11–15). Wall time is
-  minutes, not seconds: ~10 for a small diff, up to ~25 measured on a large tree. The printed band
-  is an order-of-magnitude guide, not a quote — the same tree has billed 34% apart across runs.
+  minutes, not seconds: ~10 for a small diff, up to ~25 measured on a large tree. These are an
+  order-of-magnitude guide, not a quote — the same tree has billed 34% apart across runs.
+
 ### The size gate — a cost gate, not a quality gate
 
 Past a size threshold Crysk **skips the review** instead of running it. Small trees bill $1.9–$4.8;
