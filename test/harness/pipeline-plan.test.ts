@@ -152,7 +152,7 @@ function capableOpenCodeTransport(): ProviderTransport {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async () => {
@@ -359,7 +359,6 @@ describe("buildPipelineHarnessPlan", () => {
             enabled: true,
             armId: "arm",
             maxLegs: 2,
-            cashCapUsd: 1,
           },
         },
       }),

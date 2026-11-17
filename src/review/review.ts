@@ -10,7 +10,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   ingestReviewMetrics,
-  notionalCostInput,
   persistCanonicalReview,
   pipelineConfigInput,
 } from "#config/config";
@@ -23,8 +22,6 @@ import {
   resolveRepoRoot,
 } from "#git/git";
 import { engineIdentity } from "#git/identity";
-import { countFreeRouteSteps } from "#model/free-discovery";
-import { planRoutes } from "#model/routing";
 import { reviewPr } from "#pr/review-pr";
 import { reviewExitCode } from "#review/exit-code";
 import type { Telemetry } from "#review/findings";
@@ -38,7 +35,6 @@ import {
   resolveMaxConcurrentSteps,
   resolveSharedPrefix,
 } from "#review/preflight";
-import { estimateCost } from "#review/report";
 import {
   isBundledAgentsDir,
   pipelineConsolidateInput,
@@ -76,7 +72,6 @@ import {
 import { log, styleEnabled } from "#ui/primitives";
 import { applySizeGate, confirm, startProgressRenderer } from "#ui/progress";
 import { renderResult } from "#ui/result";
-import { freeBillingMode } from "#ui/select";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
@@ -193,8 +188,8 @@ export async function review(options: CliOptions): Promise<number> {
   const { runDir, repoId } = await createRunDir(options, repoRoot, headSha);
   const diffPath = path.join(runDir, "diff.patch");
   // diffFromSha, never baseSha: see resolveDiffFrom. The numstat below uses
-  // the same endpoint on purpose — a cost estimate computed over a wider range
-  // than the one being reviewed is a bill that arrives from nowhere.
+  // the same endpoint on purpose — a stat computed over a wider range than
+  // the one being reviewed would describe a different review.
   const diff = await git(repoRoot, ["diff", `${diffFromSha}..${headSha}`]);
   if (!diff.ok) throw new CliError(`git diff failed: ${diff.stderr}`);
   if (diff.stdout.trim().length === 0) {
@@ -237,13 +232,6 @@ export async function review(options: CliOptions): Promise<number> {
   // 11 — the plan.
   const activeHunters = selectActiveHunters(spec.agents);
   const hunterCount = activeHunters.length;
-  const estimate = estimateCost(
-    diffStat,
-    hunterCount,
-    summary.enabled,
-    0,
-    true,
-  );
   const productionRoute = await resolvePipelineRoute({
     modelsConfigured: routingConfigured(config),
     workspaceRoot: repoRoot,
@@ -259,19 +247,6 @@ export async function review(options: CliOptions): Promise<number> {
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
-  // Read off the admission above, which already decided every free verdict:
-  // this adds no probe. Absent without routing, so the band stays.
-  const freeRoute =
-    routePlan === undefined || productionAdmission === undefined
-      ? undefined
-      : await countFreeRouteSteps({
-          steps: planRoutes(routePlan),
-          probe: productionAdmission.freeModelProbe,
-          // The CRYSK_OPENCODE_* names admission bound each route's kind with,
-          // so the card counts free exactly the routes admission probed (U3).
-          openCodeSecretNames:
-            productionAdmission.authorityOptions.openCodeSecretNames,
-        });
   // Named rather than inlined into renderPlan: the same context is what the
   // confirm menu's "Show details" renders, and building it twice would risk
   // the card and the details view disagreeing about the run they describe.
@@ -291,15 +266,12 @@ export async function review(options: CliOptions): Promise<number> {
     config,
     summary,
     codegraphAvailable,
-    estimate,
-    hunterCount,
     // Evaluated above (step 9) and ENFORCED below at step 13, unchanged;
     // the plan only prints the verdict, last, where the decision is made.
     sizeGate,
     droppedPaths: effectiveDiff.droppedPaths,
     configProvenance: configProvenanceOf(loaded, agentsDirSource),
     ...(routePlan === undefined ? {} : { routePlan }),
-    ...(freeRoute === undefined ? {} : { freeRoute }),
   };
   for (const line of renderPlan(planContext, styleEnabled())) log(line);
 
@@ -332,7 +304,7 @@ export async function review(options: CliOptions): Promise<number> {
     productionAdmission,
   });
 
-  // 13 — the size gate, BEFORE the cost band's confirm() for the unattended
+  // 13 — the size gate, BEFORE the confirm prompt for the unattended
   // path. The watcher spawns with --yes, so a gate that lived only inside
   // that confirmation would never fire in the one place — unattended spend
   // — it exists to protect. An interactive TTY is offered Continue/Cancel
@@ -344,12 +316,8 @@ export async function review(options: CliOptions): Promise<number> {
   // without --pr), so the "don't post" option is not offered and the choice's
   // `post` field carries nothing local mode could act on.
   if (!options.yes) {
-    const choice = await confirm(
-      estimate.low,
-      estimate.high,
-      false,
-      () => planDetails(planContext, styleEnabled()),
-      freeRoute,
+    const choice = await confirm(false, () =>
+      planDetails(planContext, styleEnabled()),
     );
     if (choice.kind === "cancel") {
       log("aborted; nothing was spent.");
@@ -511,11 +479,7 @@ export async function review(options: CliOptions): Promise<number> {
   const links = await localResultLinks(repoRoot, headSha);
   for (const line of renderResult({
     doc,
-    costUsd: result.usage.cost_usd_est,
-    ...notionalCostInput(result),
-    ...(freeRoute === undefined ? {} : { billing: freeBillingMode(freeRoute) }),
     wallMs,
-    estimate: { low: estimate.low, high: estimate.high },
     runDir,
     artifacts: [path.basename(reportPath), path.basename(findingsPath)],
     ...(links === undefined ? {} : { links }),

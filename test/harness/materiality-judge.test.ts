@@ -38,7 +38,7 @@ function fakePrepare(result: Partial<StepResult>) {
           return {
             name: spec.name,
             status: "ok",
-            usage: { ...zeroUsage(), cost_usd_est: 0.02 },
+            usage: zeroUsage(),
             attempts: 1,
             stderrTail: "",
             resultText: "",
@@ -83,7 +83,6 @@ describe("runMaterialityJudge", () => {
     expect(outcome).toEqual({
       label: "material",
       reason: "breaks playback",
-      cost: 0.02,
       route: identity.route,
       routeFingerprint: identity.routeFingerprint,
     });
@@ -141,7 +140,7 @@ describe("runMaterialityJudge", () => {
         throw new Error("no claude");
       },
     });
-    expect(failed).toMatchObject({ label: null, error: "no claude", cost: 0 });
+    expect(failed).toMatchObject({ label: null, error: "no claude" });
   });
 
   test("judgeClaim keeps its one-argument signature", () => {

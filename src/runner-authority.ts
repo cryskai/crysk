@@ -14,7 +14,7 @@ import { planRoutes, type ResolvedRoutePlan } from "#model/routing";
 import type { ClaudeCredentialKind } from "#review/preflight";
 import type { CredentialKind, RunnerBackend } from "./execution/contracts";
 // #161: the SAME predicate the Claude CLI transport files usage on
-// (`claudeCliCostBasis` -> `envBillsMetered`) is the one `credentialKindForRoute`
+// (`claudeCliBillingMode` -> `envBillsMetered`) is the one `credentialKindForRoute`
 // reads below, so admission and usage filing cannot answer "does this
 // environment carry a per-token credential?" differently for one attempt. See
 // the ADMISSION WIRING block on `envBillsMetered` itself for the full history.
@@ -333,11 +333,11 @@ export async function withClaudeDiscoveryAllowlist(
 // plan cannot record.
 //
 // WHY the default is `provider_api_token` rather than the subscription kind:
-// metered is the FAIL-CLOSED direction. A metered route with no pricing is
-// refused at the exact-binding gate (`pricing_table_missing`, blocking), so
-// the cost of guessing metered is a refusal. A route wrongly marked
-// subscription EXECUTES and reports `cashCostUsd: 0` over real spend — the
-// cost of guessing subscription is an unmetered bill nobody sees.
+// metered is the FAIL-CLOSED direction. A route wrongly marked subscription
+// EXECUTES and files per-token usage as an uncharged quota — the platform
+// prices a run by the credential class the engine reports, so that bill is
+// nobody's to see. Guessing metered instead costs, at worst, a fence on a
+// credential whose usage the engine could not confirm.
 //
 // #161 (corrected 2026-09-24 by Juanma — the first cut of this inverted
 // precedence and is wrong; read this in full before touching the
@@ -439,7 +439,7 @@ export function credentialKindForRoute(
   // Exhaustive on purpose: a backend with no credential authority must not
   // fall into the metered default by accident. It has no binding at all —
   // resolveBindingAuthority refuses it a few lines below — and inventing a
-  // kind for it here would make that refusal look like a pricing problem.
+  // kind for it here would make that refusal look like a billing problem.
   throw new Error(`No credential authority is bound for backend "${backend}"`);
 }
 
@@ -450,8 +450,9 @@ export function credentialKindForRoute(
 // derives the billing mode STAMPED ON EVERY USAGE RECORD from it
 // (transport-registry.ts). Two copies would be two chances for the capability
 // report and the usage records to disagree about how one attempt bills — and
-// the metered-zero rule in `settlementFromUsage` reads the usage record, so
-// the disagreement would be silently exploitable rather than merely untidy.
+// the platform prices a run by the credential class on the usage record, so
+// the disagreement would silently mis-file the run rather than merely look
+// untidy.
 //
 // A boolean, not a mode: the binding's rule is UPGRADE-ONLY (an OAuth or
 // subscription kind keeps whatever the transport reported, `unknown`

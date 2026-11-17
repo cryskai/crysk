@@ -19,11 +19,9 @@
 import { existsSync } from "node:fs";
 import os from "node:os";
 import {
-  budgetDisabledWarningMessage,
-  budgetUnlimitedNoticeMessage,
+  type CiBillingMode,
   type CiSizeLimits,
   deriveCiBillingMode,
-  resolveCiBudgetCeiling,
   resolveCiSizeLimits,
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
@@ -46,7 +44,6 @@ import {
   type NumstatFile,
 } from "#review/preflight";
 import type { ParsedAgent, PromptSetIdentity } from "#review/prompt-set";
-import type { estimateCost } from "#review/report";
 import { buildCliRoutePlan, isBundledAgentsDir } from "#review/route-preflight";
 import {
   type LoadedRunConfig,
@@ -144,7 +141,9 @@ export async function resolvePrRunOptions(
 }
 
 export interface ResolvedPrPromptSet {
-  ciBudgetCeiling: ReturnType<typeof resolveCiBudgetCeiling>;
+  // How the run bills (the engine's own answer: the platform cannot see it).
+  // The CI limits gate reads it (src/pr/plan.ts); the size limits resolve from it.
+  ciBillingMode: CiBillingMode;
   ciSizeLimits: CiSizeLimits | undefined;
   agents: AgentsDirResolution;
   spec: ReviewSpec;
@@ -177,7 +176,7 @@ async function openCodeRouteProviders(
   return [...providers].sort();
 }
 
-// Step 1's second half: the CI budget ceiling (+ its notices), then the
+// Step 1's second half: how the run bills, then the
 // prompt set resolution and the gotchas PATH (never the validation itself —
 // see this module's header). Runs after the caller's own
 // `readLocalIgnoreRules(operatorRoot)` read, before its own
@@ -231,17 +230,8 @@ export async function resolvePrPromptSetAndBudget(params: {
       }),
     },
   );
-  // Issue #156: resolve the ceiling ONCE, here, and use this same value at
-  // the budget gate far below (src/pr/review-pr.ts's plan/confirm stage).
-  // Resolving twice invites the announcement and the gate drifting apart.
-  // Deliberately NOT folded back into `options.budgetUsd` — the metered
-  // default is a CI-gate policy, and leaking a 10 that the operator never
-  // typed into every other read of `options.budgetUsd` would make it look
-  // configured.
-  const ciBudgetCeiling = resolveCiBudgetCeiling({
-    configured: params.options.budgetUsd,
-    billingMode,
-  });
+  // Resolved ONCE, here: the size limits below and the platform limits gate
+  // far below (src/pr/plan.ts's plan/confirm stage) read this same value.
   // The size gate's half of the same route policy (ci/gates.ts,
   // resolveCiSizeLimits). CI only: a local or watcher run keeps reading the
   // flags and the repo config exactly as before.
@@ -252,25 +242,9 @@ export async function resolvePrPromptSetAndBudget(params: {
         billingMode,
       })
     : undefined;
-  // Spec 3.1: a silent disable is indistinguishable from a passing gate, so
-  // an EXPLICIT `--budget-usd <= 0` warns even though it never skips a run.
-  // Emitted here (once, as soon as isCi/budgetUsd are both known) rather
-  // than beside the budget-gate check far below, which only runs at all when
-  // there IS an estimate to compare against. The subscription notice rides
-  // the same reasoning and the same placement, one register quieter: a
-  // resolved no-ceiling is not an operator mistake, but it is still a gate
-  // that did not run, and this repo does not ship those silently.
+  // A gate that did not run is still announced: the size gate's notice for a
+  // route where its limits resolved to off.
   if (params.isCi) {
-    const disabledWarning = budgetDisabledWarningMessage(
-      ciBudgetCeiling.budgetUsd,
-    );
-    if (disabledWarning !== null) {
-      log(formatWorkflowCommand("warning", disabledWarning));
-    }
-    const unlimitedNotice = budgetUnlimitedNoticeMessage(ciBudgetCeiling);
-    if (unlimitedNotice !== null) {
-      log(formatWorkflowCommand("notice", unlimitedNotice));
-    }
     if (ciSizeLimits !== undefined) {
       const sizeNotice = sizeGateUnlimitedNoticeMessage(ciSizeLimits);
       if (sizeNotice !== null) {
@@ -293,7 +267,7 @@ export async function resolvePrPromptSetAndBudget(params: {
   }
   const gotchasPath = instructions.path;
   return {
-    ciBudgetCeiling,
+    ciBillingMode: billingMode,
     ciSizeLimits,
     agents,
     spec,
@@ -379,7 +353,7 @@ export async function resolvePrTargetRecord(params: {
 
 // Step 3's second half: the free dry-run exit's size-gate verdict, plan
 // card, and closing lines. Relocated out of reviewPr()'s `if (options.dryRun)`
-// block; the FIRST half of that block (hunterCount/estimate/dryRunGateConfig,
+// block; the FIRST half of that block (dryRunGateConfig,
 // then the `resolvePrDryRunNumstat` call just above) stays inline in
 // reviewPr(), unchanged. This half picks up right after `perFile` is known
 // and returns the dry run's exit code (always 0).
@@ -398,8 +372,6 @@ export function renderPrDryRunPlan(params: {
   summary: LoadedRunConfig["summary"];
   loaded: LoadedRunConfig["loaded"];
   isCi: boolean;
-  hunterCount: number;
-  estimate: ReturnType<typeof estimateCost>;
   dryRunGateConfig: SizeGateConfig;
   perFile: NumstatFile[] | null;
 }): number {
@@ -439,8 +411,6 @@ export function renderPrDryRunPlan(params: {
     spec: params.spec,
     config: params.config,
     summary: params.summary,
-    estimate: params.estimate,
-    hunterCount: params.hunterCount,
     sizeGate: estimated,
     sizeGateNote,
     droppedPaths: [],

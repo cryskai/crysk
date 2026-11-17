@@ -59,14 +59,14 @@ export function openProductStore(dbPath: string): Database {
 }
 
 // `generated_at` on conflict: a live re-run into the same run dir (an explicit
-// --out) is a new run, so its timestamp moves with its cost and head. The
+// --out) is a new run, so its timestamp moves with its head. The
 // historical backfill keeps the stored one only for the SAME run: it
 // re-derives the time from artifacts and must not rewrite when that run
 // happened. The live persist always stamps after the pipeline wrote its
 // artifacts (store/preflight.ts), so for the run a row describes the artifact
 // time is never later than the stored one. A different head, or a later
 // artifact time, is a later run in the same run dir whose live persist was
-// missed: it takes the artifact's own time along with its cost and head.
+// missed: it takes the artifact's own time along with its head.
 function runUpsertSql(keepGeneratedAt: boolean): string {
   return RUN_UPSERT_SQL.replace(
     "generated_at = runs.generated_at",
@@ -78,6 +78,11 @@ function runUpsertSql(keepGeneratedAt: boolean): string {
   );
 }
 
+// `runs.cost_usd_est` (and `run_agents.cost_usd_est` below) is a LEGACY column:
+// NOT NULL since the first schema, kept so rows written before the engine
+// dropped dollars stay readable and so no migration is needed. New rows carry
+// the constant 0 because the column cannot be omitted; nothing reads it, and a
+// re-ingest of an existing run leaves that run row's stored figure untouched.
 const RUN_UPSERT_SQL = `
   INSERT INTO runs (
     repo_id, run_dir, pr, checkout_path, head_sha, base_sha, diff_from_sha,
@@ -89,7 +94,7 @@ const RUN_UPSERT_SQL = `
     blocking, advisory, root_causes_json, greptile_found, diversity_plan_json
   ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?
   )
   ON CONFLICT(repo_id, run_dir) DO UPDATE SET
     repo_id = excluded.repo_id,
@@ -122,7 +127,6 @@ const RUN_UPSERT_SQL = `
     tokens_in = excluded.tokens_in,
     tokens_out = excluded.tokens_out,
     tokens_total = excluded.tokens_total,
-    cost_usd_est = excluded.cost_usd_est,
     blocking = excluded.blocking,
     advisory = excluded.advisory,
     root_causes_json = excluded.root_causes_json,
@@ -163,7 +167,6 @@ function runParams(row: CanonicalRunRow): SQLQueryBindings[] {
     row.tokens_in,
     row.tokens_out,
     row.tokens_total,
-    row.cost_usd_est,
     row.blocking,
     row.advisory,
     row.root_causes_json,
@@ -312,7 +315,7 @@ export function saveRunTransaction(
         INSERT INTO run_agents (
           run_id, agent_key, tokens_total, duration_ms, tokens_in, tokens_out,
           cost_usd_est, attempts, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
       `);
       for (const a of projected.agents) {
         insertAgent.run(
@@ -322,7 +325,6 @@ export function saveRunTransaction(
           a.duration_ms,
           a.tokens_in,
           a.tokens_out,
-          a.cost_usd_est,
           a.attempts,
           a.status,
         );
@@ -333,8 +335,8 @@ export function saveRunTransaction(
       const insertAttempt = db.query(`
         INSERT INTO diversity_attempts (
           run_id, attempt_id, leg_id, arm_id, specialty, replicate, attempt,
-          status, cash_cost_usd, notional_cost_usd
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const attempt of projected.diversityAttempts) {
         insertAttempt.run(
@@ -346,8 +348,6 @@ export function saveRunTransaction(
           attempt.replicate,
           attempt.attempt,
           attempt.status,
-          attempt.cash_cost_usd,
-          attempt.notional_cost_usd,
         );
       }
     }
@@ -546,7 +546,6 @@ export function exportFindingsDocument(
     tokens_in: run.tokens_in,
     tokens_out: run.tokens_out,
     tokens_total: run.tokens_total,
-    cost_usd_est: run.cost_usd_est,
     ...(agentRows.length > 0 ? { per_agent } : {}),
   };
 

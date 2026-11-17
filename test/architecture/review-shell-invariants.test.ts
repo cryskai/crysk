@@ -1,8 +1,7 @@
 // review-pr-behavior-seams (Goal B): invariant 10 from the review-shell
 // wiring family, promoted out of test/cli.test.ts into a structural scan of
 // its own. It is a genuine cross-module invariant with no single seam to
-// extract it into — "every renderResult/renderReport call carries its
-// notional companion" and "every gotchas gate asks the shared predicate"
+// extract it into — "every gotchas gate asks the shared predicate"
 // span src/review/ AND src/pr/ by nature — so it stays a source scan, but a
 // DIRECTORY scan rather than a hardcoded file list: adding a THIRD review
 // shell, or moving one of the two existing ones to a new file inside either
@@ -58,17 +57,6 @@ const REVIEW_DOMAIN_FILES = [
   ...getAllTsFiles(path.join(SRC_DIR, "review")),
   ...getAllTsFiles(path.join(SRC_DIR, "pr")),
 ];
-
-describe("every cost-rendering call site in the review shells carries the notional split (#173)", () => {
-  test("renderResult and renderReport are each paired with notionalCostInput", () => {
-    const source = readAll(REVIEW_DOMAIN_FILES);
-    const renderCalls =
-      countCallSites(source, "renderResult") +
-      countCallSites(source, "renderReport");
-    expect(renderCalls).toBeGreaterThan(0);
-    expect(countCallSites(source, "notionalCostInput")).toBe(renderCalls);
-  });
-});
 
 describe("every gotchas gate asks the shared predicate", () => {
   // doctor.ts sits at src/ root, outside both scanned domains — kept as an

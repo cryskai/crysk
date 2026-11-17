@@ -69,7 +69,6 @@ export async function usageCommand(options: CliOptions): Promise<number> {
     tokens_in: r.tokens_in,
     tokens_out: r.tokens_out,
     tokens_total: r.tokens_total,
-    cost_usd_est: r.cost_usd_est,
     blocking: r.blocking,
     advisory: r.advisory,
   }));

@@ -233,7 +233,7 @@ describe("publishCiSkip: the outcome record", () => {
       comment: "skip comment",
       markerPrefix: "<!-- pr-hero-skip-test -->",
       summaryMarkdown: "skip summary\n",
-      outputs: ciGateSkipOutputs(status, 0),
+      outputs: ciGateSkipOutputs(status),
     };
   }
 

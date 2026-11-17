@@ -47,7 +47,6 @@ function createRecordingTransport(
       },
       billing: {
         mode: "subscription",
-        pricingReady: true,
       },
       issues: [],
     }),
@@ -62,8 +61,6 @@ function createRecordingTransport(
           tokens: { totalKnown: 5 },
           completeness: "complete",
           billingMode: "subscription",
-          costSource: "provider",
-          cashCostUsd: 0,
         },
         stderrTail: "",
       };

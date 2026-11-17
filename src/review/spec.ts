@@ -42,7 +42,6 @@ export interface MultiModelDiversityConfig {
   readonly enabled: true;
   readonly armId: string;
   readonly maxLegs: number;
-  readonly cashCapUsd: number;
 }
 
 export interface ReviewSpec {
@@ -92,12 +91,6 @@ export function validateReviewSpec(candidate: unknown): ReviewSpec {
         Number.isInteger(diversity.maxLegs) &&
         (diversity.maxLegs as number) >= 1,
       "multiModelDiversity.maxLegs must be a positive integer",
-    );
-    must(
-      typeof diversity.cashCapUsd === "number" &&
-        Number.isFinite(diversity.cashCapUsd) &&
-        (diversity.cashCapUsd as number) > 0,
-      "multiModelDiversity.cashCapUsd must be a positive number",
     );
   }
   const agents = spec.agents as unknown[];

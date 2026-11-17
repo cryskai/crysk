@@ -14,7 +14,6 @@ export interface DiversityBenchmarkPlan {
   readonly buildFingerprint: string;
   readonly promptFingerprint: string;
   readonly interleaved: true;
-  readonly maxCashUsd: number;
   readonly stopOnInvalidRun: true;
 }
 
@@ -71,10 +70,6 @@ export function validateBenchmarkPlan(
     "promptFingerprint required",
   );
   must(plan.stopOnInvalidRun === true, "stopOnInvalidRun must be true");
-  must(
-    typeof plan.maxCashUsd === "number" && plan.maxCashUsd > 0,
-    "maxCashUsd required",
-  );
   return plan as unknown as DiversityBenchmarkPlan;
 }
 
@@ -88,13 +83,10 @@ export interface BenchmarkRunEvidence {
   readonly treatmentCompleted: boolean;
   readonly blindingIntact: boolean;
   readonly interleavingIntact: boolean;
-  readonly cashCostUsd: number;
-  readonly notionalCostUsd: number;
   readonly uniqueTruePositives: number;
   readonly recall: number;
   readonly cleanPrRestraint: number;
   readonly blindSpots: number;
-  readonly capExceeded?: boolean;
   readonly replicateOmitted?: boolean;
 }
 
@@ -106,13 +98,11 @@ export function deriveRunValidity(
   run: BenchmarkRunEvidence,
   plan: DiversityBenchmarkPlan,
 ): boolean {
-  if (run.capExceeded === true) return false;
   if (run.replicateOmitted === true) return false;
   if (!run.blindingIntact || !run.interleavingIntact) return false;
   if (!run.controlCompleted || !run.treatmentCompleted) return false;
   if (run.observedBuildFingerprint !== plan.buildFingerprint) return false;
   if (run.observedPromptFingerprint !== plan.promptFingerprint) return false;
-  if (run.cashCostUsd > plan.maxCashUsd) return false;
   if (run.replicate < 1 || run.replicate > plan.treatmentArm.replicates) {
     return false;
   }
@@ -120,8 +110,6 @@ export function deriveRunValidity(
 }
 
 export interface BenchmarkScoreReport {
-  readonly cashCostPerUniqueTp: number | null;
-  readonly notionalCostPerUniqueTp: number | null;
   readonly recall: number;
   readonly cleanPrRestraint: number;
   readonly blindSpots: number;
@@ -141,12 +129,10 @@ export function scoreBenchmarkRuns(
       }));
   const validRuns = scored.filter((run) => run.valid);
   const invalidRuns = scored.length - validRuns.length;
-  const uniqueTp = validRuns.reduce(
+  const _uniqueTp = validRuns.reduce(
     (sum, run) => sum + run.uniqueTruePositives,
     0,
   );
-  const cash = validRuns.reduce((sum, run) => sum + run.cashCostUsd, 0);
-  const notional = validRuns.reduce((sum, run) => sum + run.notionalCostUsd, 0);
   const recall =
     validRuns.length === 0
       ? 0
@@ -158,8 +144,6 @@ export function scoreBenchmarkRuns(
         validRuns.length;
   const blindSpots = validRuns.reduce((sum, run) => sum + run.blindSpots, 0);
   return {
-    cashCostPerUniqueTp: uniqueTp > 0 ? cash / uniqueTp : null,
-    notionalCostPerUniqueTp: uniqueTp > 0 ? notional / uniqueTp : null,
     recall,
     cleanPrRestraint,
     blindSpots,

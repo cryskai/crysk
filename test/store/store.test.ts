@@ -105,7 +105,6 @@ function sampleDoc(
       tokens_in: 12000,
       tokens_out: 850,
       tokens_total: 12850,
-      cost_usd_est: 0.38,
       per_agent: {
         lifecycle: { tokens_total: 8000, duration_ms: 3200 },
         reliability: { tokens_total: 4850, duration_ms: 1300 },
@@ -192,7 +191,6 @@ const SAMPLE_PER_AGENT: Record<string, PerAgentUsage> = {
     duration_ms: 3200,
     tokens_in: 7200,
     tokens_out: 800,
-    cost_usd_est: 0.25,
     attempts: 1,
     status: "ok",
   },
@@ -201,7 +199,6 @@ const SAMPLE_PER_AGENT: Record<string, PerAgentUsage> = {
     duration_ms: 1300,
     tokens_in: 4800,
     tokens_out: 50,
-    cost_usd_est: 0.13,
     attempts: 1,
     status: "ok",
   },
@@ -262,6 +259,73 @@ describe("openProductStore", () => {
       expect(tables).toContain("debug_findings");
       expect(tables).toContain("run_agents");
       expect(tables).toContain("comparison_rows");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// The engine reports usage facts and the platform prices them, so a new run stores no cost. The
+// columns stay (no migration), so a row stored before keeps its figure and still reads.
+describe("the legacy cost columns", () => {
+  const save = (db: Database, runDir: string) =>
+    saveRunTransaction(
+      db,
+      projectCompleteRun({
+        doc: sampleDoc(),
+        perAgent: SAMPLE_PER_AGENT,
+        repoId: REPO_ID,
+        runDir,
+        checkoutPath: "/Users/juanma/Desktop/pr-hero",
+        generatedAt: "2026-08-23T18:00:00.000Z",
+      }),
+    );
+
+  test("a new run stores the constant 0 and no per-attempt cost", async () => {
+    const db = openProductStore(await tmpDbPath());
+    try {
+      const runId = save(db, "/runs/pr-42-new");
+      const run = db
+        .query("SELECT cost_usd_est FROM runs WHERE id = ?")
+        .get(runId) as { cost_usd_est: number };
+      expect(run.cost_usd_est).toBe(0);
+      const agents = db
+        .query("SELECT cost_usd_est FROM run_agents WHERE run_id = ?")
+        .all(runId) as { cost_usd_est: number }[];
+      expect(agents).toHaveLength(2);
+      expect(agents.every((agent) => agent.cost_usd_est === 0)).toBe(true);
+      // The exported document carries no cost either.
+      expect(exportFindingsDocument(db, runId)?.telemetry).not.toHaveProperty(
+        "cost_usd_est",
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  test("a row stored with a cost still reads, and a re-save leaves its figure alone", async () => {
+    const db = openProductStore(await tmpDbPath());
+    try {
+      const legacyId = save(db, "/runs/pr-42-legacy");
+      db.query("UPDATE runs SET cost_usd_est = 1.25 WHERE id = ?").run(
+        legacyId,
+      );
+      db.query("UPDATE run_agents SET cost_usd_est = 0.5 WHERE run_id = ?").run(
+        legacyId,
+      );
+      save(db, "/runs/pr-42-new");
+      const rows = queryRuns(db, { all: true });
+      expect(rows.map((row) => row.run_dir).sort()).toEqual([
+        "pr-42-legacy",
+        "pr-42-new",
+      ]);
+      expect(exportFindingsDocument(db, legacyId)?.pr).toBe(42);
+      // Re-saving the legacy run dir updates the run but not the stored cost.
+      save(db, "/runs/pr-42-legacy");
+      const stored = db
+        .query("SELECT cost_usd_est FROM runs WHERE id = ?")
+        .get(legacyId) as { cost_usd_est: number };
+      expect(stored.cost_usd_est).toBe(1.25);
     } finally {
       db.close();
     }
@@ -366,7 +430,7 @@ describe("saveRunTransaction and round-trip fidelity", () => {
   });
 
   // A live re-run into the same run dir (an explicit --out) is a new run: its
-  // timestamp must move with its cost and head, or `usage` pairs them wrong.
+  // timestamp must move with its head, or `usage` pairs them wrong.
   test("a live re-save refreshes generated_at", async () => {
     const dbPath = await tmpDbPath();
     const db = openProductStore(dbPath);
@@ -422,7 +486,7 @@ describe("saveRunTransaction and round-trip fidelity", () => {
 
   // A backfill keeps the stored time only for the SAME run. A different head
   // in the same run dir is a later run whose live persist was missed, so its
-  // own time comes with its own cost and head.
+  // own time comes with its own head.
   test("a backfill re-save with a different head takes the artifact's generated_at", async () => {
     const dbPath = await tmpDbPath();
     const db = openProductStore(dbPath);

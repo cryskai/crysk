@@ -15,7 +15,6 @@ import {
   type DiversityAttemptRecord,
   type DiversityLedger,
   emptyDiversityLedger,
-  summarizeDiversityAccounting,
 } from "./accounting";
 import { synthesizeDeterministicAdjudication } from "./adjudication";
 import {
@@ -27,7 +26,6 @@ import { buildAdjudicationGroups, type FindingObservation } from "./clustering";
 import { DiversityAdmissionError } from "./errors";
 import {
   assertRouteFingerprintStable,
-  assertSpendUnderCap,
   type BenchmarkTarget,
   buildDiversityPlan,
   type DiversityLeg,
@@ -46,8 +44,6 @@ export interface DiversityPipelineRecord {
   readonly attemptCount?: number;
   readonly observationCount?: number;
   readonly failureCount?: number;
-  readonly cashCostUsd?: number;
-  readonly notionalCostUsd?: number;
 }
 
 export interface DiversityExecutionContext {
@@ -159,9 +155,6 @@ function usageFromStep(result: StepResult): NormalizedUsage {
     inputTotal: result.usage.tokens_in,
     outputTotal: result.usage.tokens_out,
     billingMode: "unknown",
-    costSource: "unknown",
-    cashCostUsd: result.usage.cost_usd_est,
-    notionalCostUsd: result.usage.cost_usd_est,
   });
 }
 
@@ -173,8 +166,6 @@ function scaleUsageFraction(
     value === undefined ? undefined : value * fraction;
   return {
     ...usage,
-    cashCostUsd: scale(usage.cashCostUsd),
-    notionalCostUsd: scale(usage.notionalCostUsd),
     tokens: {
       ...usage.tokens,
       inputKnown: scale(usage.tokens.inputKnown),
@@ -206,14 +197,6 @@ export function assertDiversityLegRoutes(
   }
 }
 
-export function assertDiversitySpendUnderCap(
-  plan: DiversityPlan,
-  ledger: DiversityLedger,
-): void {
-  const totals = summarizeDiversityAccounting(ledger);
-  assertSpendUnderCap(plan, totals.cashCostUsd);
-}
-
 export function recordDiversityHunterFailure(
   ledger: DiversityLedger,
   plan: DiversityPlan,
@@ -239,7 +222,6 @@ export function recordDiversityHunterFailure(
       inputTotal: 0,
       outputTotal: 0,
       billingMode: "unknown",
-      costSource: "unknown",
     }),
   };
   return appendAttempt(ledger, attempt);
@@ -396,13 +378,6 @@ export function buildDiversityPipelineRecord(
   if (!ctx.plan) {
     return { enabled: true, status: "failed" };
   }
-  const totals = ctx.ledger.attempts.reduce(
-    (acc, attempt) => ({
-      cash: acc.cash + (attempt.usage.cashCostUsd ?? 0),
-      notional: acc.notional + (attempt.usage.notionalCostUsd ?? 0),
-    }),
-    { cash: 0, notional: 0 },
-  );
   return {
     enabled: true,
     status: partial ? "partial" : "ok",
@@ -412,8 +387,6 @@ export function buildDiversityPipelineRecord(
     attemptCount: ctx.ledger.attempts.length,
     observationCount: ctx.ledger.observations.length,
     failureCount: ctx.ledger.failures.length,
-    cashCostUsd: totals.cash,
-    notionalCostUsd: totals.notional,
   };
 }
 
@@ -431,8 +404,6 @@ export function diversityDebugFromLedger(
       replicate: attempt.replicate,
       attempt: attempt.attempt,
       status: attempt.status,
-      cashCostUsd: attempt.usage.cashCostUsd ?? null,
-      notionalCostUsd: attempt.usage.notionalCostUsd ?? null,
     })),
     observations: ctx.ledger.observations.map((record) => ({
       observationId: record.observation.observationId,

@@ -21,7 +21,7 @@ const FINDING_V11_BAD_HUNTER =
   '{"id":"F001","category":1,"path":"src/a.ts","line":1,"severity":"BLOCKER","evidence_class":"deterministic","refuter_verdict":"not_submitted","causal_disposition":"introduced","claim":"x","proof_refs":[],"hunter":"Security","tier":"blocking","hops_used":0,"hop_trail":[],"dedupe_key":"k"}';
 
 const TELEMETRY =
-  '{"index_ms":1,"index_mode":"fresh","index_disk_mb":1,"wall_ms":1,"tokens_in":1,"tokens_out":1,"tokens_total":2,"cost_usd_est":0.1}';
+  '{"index_ms":1,"index_mode":"fresh","index_disk_mb":1,"wall_ms":1,"tokens_in":1,"tokens_out":1,"tokens_total":2}';
 
 function envelope(
   schemaVersion: string,

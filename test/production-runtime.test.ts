@@ -22,7 +22,6 @@ import path from "node:path";
 import {
   type ExecutableAllowlistEntry,
   exactBindingCapabilityGate,
-  exactBindingCapabilityIssues,
 } from "#model/provider-capabilities";
 import {
   computeRouteFingerprint,
@@ -73,7 +72,6 @@ import {
   DefaultTransportRegistry,
   OpenCodeProductionGatedError,
 } from "../src/transport-registry";
-import { ClaudeCodeCliTransport } from "../src/transports/claude-code-cli";
 import { successfulClaudeCredentialBroker } from "./support/claude-credential-broker";
 
 const MACHO_PREFIX = Buffer.from([0xcf, 0xfa, 0xed, 0xfe]);
@@ -210,7 +208,7 @@ function createMockTransport(
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
       ...capabilityOverrides,
     }),
@@ -225,8 +223,6 @@ function createMockTransport(
           tokens: { totalKnown: 1 },
           completeness: "complete",
           billingMode: "subscription",
-          costSource: "provider",
-          cashCostUsd: 0,
         },
         stderrTail: "",
       };
@@ -387,7 +383,6 @@ describe("production runtime PR1", () => {
             sdkAvailable: true,
             credentialAuthority: true,
             workspaceBroker: true,
-            pricingReady: true,
           },
         ],
       ]);
@@ -633,7 +628,7 @@ describe("production runtime PR1", () => {
     // FOLLOW-UP-1: the legacy ProviderCapabilityReport carries THREE billing
     // modes (subscription | metered | unknown, model/provider-capabilities.ts:266)
     // while the exact contract carries two (contracts.ts:167). The producer
-    // narrows `unknown` into `"subscription"`, so `cashCostAccountingValid`
+    // narrows `unknown` into `"subscription"`, so `modeKnown`
     // must NOT be derived from the narrowed value — the design doc is
     // explicit that `billingMode: "unknown"` is a blocking preflight result
     // (docs/multi-runtime-model-diversity-design.md:461), and the pricing
@@ -690,61 +685,25 @@ describe("production runtime PR1", () => {
     }
 
     test("an unknown legacy billing mode blocks the exact-binding gate through the real producer", async () => {
-      const report = await bindingReportForBilling({
-        mode: "unknown",
-        pricingReady: false,
-      });
+      const report = await bindingReportForBilling({ mode: "unknown" });
 
       // The 2-state narrowing stays: `unknown` still projects as
       // "subscription" on the exact contract.
       expect(report.billing.mode).toBe("subscription");
-      // ...which is exactly why the pricing gate cannot see it.
-      expect(report.billing.pricingApplicability).toBe("not_applicable");
-      // The cash-cost fact is the enforcement point, and it must say NO.
-      expect(report.billing.cashCostAccountingValid).toBe(false);
+      // The mode-known fact is the enforcement point, and it must say NO.
+      expect(report.billing.modeKnown).toBe(false);
 
       const decision = exactBindingCapabilityGate(report);
       expect(decision.ok).toBe(false);
-      expect(decision.reason).toContain("cash_cost_accounting_invalid");
+      expect(decision.reason).toContain("billing_mode_unknown");
     });
 
-    test("subscription and metered billing modes keep their spec-defined cash-cost accounting", async () => {
-      const subscription = await bindingReportForBilling({
-        mode: "subscription",
-        pricingReady: false,
-      });
-      // Spec: subscription OAuth may truthfully report cashCostUsd: 0, with
-      // no pricing table involved.
-      expect(subscription.billing.cashCostAccountingValid).toBe(true);
-      expect(exactBindingCapabilityGate(subscription).ok).toBe(true);
-
-      // #197: "unpriced" is now simply a transport that reports no cost.
-      // This arm used to need an EXPIRED bundled table beside it, because a
-      // fresh one would have priced the route on the catalogue alone and the
-      // arm would have stopped being the unpriced case it exists to prove.
-      // With the table deleted there is one source, so the flag says it all.
-      const meteredUnpriced = await bindingReportForBilling({
-        mode: "metered",
-        pricingReady: false,
-      });
-      // Spec: metered routes require provider cost.
-      expect(meteredUnpriced.billing.cashCostAccountingValid).toBe(false);
-      // The cash gate stays silent for metered (its guard is
-      // `pricingApplicability !== "required"`); pricing_table_missing is the
-      // blocker on this arm.
-      const meteredDecision = exactBindingCapabilityGate(meteredUnpriced);
-      expect(meteredDecision.ok).toBe(false);
-      expect(meteredDecision.reason).toContain("pricing_table_missing");
-      expect(meteredDecision.reason).not.toContain(
-        "cash_cost_accounting_invalid",
-      );
-
-      const meteredPriced = await bindingReportForBilling({
-        mode: "metered",
-        pricingReady: true,
-      });
-      expect(meteredPriced.billing.cashCostAccountingValid).toBe(true);
-      expect(exactBindingCapabilityGate(meteredPriced).ok).toBe(true);
+    test("subscription and metered billing modes are known and admitted without any pricing claim", async () => {
+      for (const mode of ["subscription", "metered"] as const) {
+        const report = await bindingReportForBilling({ mode });
+        expect(report.billing.modeKnown).toBe(true);
+        expect(exactBindingCapabilityGate(report).ok).toBe(true);
+      }
     });
 
     // #161, end to end (corrected 2026-09-24 by Juanma): an ANTHROPIC_API_KEY
@@ -765,19 +724,17 @@ describe("production runtime PR1", () => {
     // (production-runtime.ts:~324, `credentialKindBillsMetered`). The mock
     // transport here reports the shape the REAL `ClaudeCodeCliTransport`
     // reports today — `mode: "subscription"` (the static, backend-wide
-    // claim), `pricingReady: true` (#197) — so both arms below prove the
+    // claim) — so both arms below prove the
     // exact-binding mode follows the CREDENTIAL, not the transport claiming
     // metered itself.
     test("a key alongside a broker stays subscription — the broker wins, deterministically on every host", async () => {
       const subscriptionShapedReport = {
         mode: "subscription" as const,
-        pricingReady: true,
       };
       const withoutKey = await bindingReportForBilling(
         subscriptionShapedReport,
       );
       expect(withoutKey.billing.mode).toBe("subscription");
-      expect(withoutKey.billing.pricingApplicability).toBe("not_applicable");
 
       // The fake broker is what makes this deterministic: it proves the
       // precedence rule without depending on whether THIS host's real
@@ -789,9 +746,6 @@ describe("production runtime PR1", () => {
         { "claude-code": stubClaudeCredentialBroker },
       );
       expect(withKeyAndBroker.billing.mode).toBe("subscription");
-      expect(withKeyAndBroker.billing.pricingApplicability).toBe(
-        "not_applicable",
-      );
       expect(exactBindingCapabilityGate(withKeyAndBroker).ok).toBe(true);
     });
 
@@ -806,61 +760,33 @@ describe("production runtime PR1", () => {
       "a key with no broker upgrades the exact binding to metered and admits it",
       async () => {
         const withKey = await bindingReportForBilling(
-          { mode: "subscription" as const, pricingReady: true },
+          { mode: "subscription" as const },
           undefined,
           { ANTHROPIC_API_KEY: "sk-test" },
         );
         expect(withKey.billing.mode).toBe("metered");
-        expect(withKey.billing.pricingApplicability).toBe("required");
-        expect(withKey.billing.tokenPricingAvailable).toBe(true);
-        expect(withKey.billing.cashCostAccountingValid).toBe(true);
+        expect(withKey.billing.modeKnown).toBe(true);
         // Admitted, not refused for lack of pricing: this is the pairing
         // #161 depends on but does not itself provide (#197 provided it).
         // `ok` only reaches true with an empty `reason`
         // (capabilityGateDecision, model/provider-capabilities.ts), so this
-        // alone rules out `pricing_table_missing` blocking the route.
+        // alone rules out a blocking issue refusing the route.
         expect(exactBindingCapabilityGate(withKey).ok).toBe(true);
       },
     );
 
-    // #197 deleted the bundled catalogue and the `||` arm that read it, so
-    // `tokenPricingAvailable` is the transport's own claim and nothing else.
-    // These two arms are what keeps that a decision rather than an accident:
-    // the ONE thing that used to rescue a transport reporting no cost is gone,
-    // and re-adding any second source turns the first arm red.
-    describe("the transport's own claim is the only pricing source", () => {
-      // #175's pinned snapshot, kept verbatim. It names
-      // `claude-sonnet-5` — the exact model the deleted anthropic table
-      // covered — so this route is the strongest possible case for a table
-      // fallback, and it is refused anyway. A bare alias would have been
-      // refused for a second reason (no version to look up), which is why the
-      // pin is load-bearing here rather than incidental.
-      const PINNED_SNAPSHOT_ROUTE = "claude:claude-sonnet-5";
+    // The engine prices nothing, so a metered route needs no pricing claim from
+    // its transport: the credential class is what admission reads. A route the
+    // old gate refused for a missing price (`pricing_table_missing`) is now
+    // admitted — the one deliberate widening of this change.
+    test("a metered route is admitted on its billing mode alone", async () => {
+      const report = await bindingReportForBilling(
+        { mode: "metered" },
+        "claude:claude-sonnet-5",
+      );
 
-      test("a formerly-catalogued model no longer rescues a transport that reports no cost", async () => {
-        const report = await bindingReportForBilling(
-          { mode: "metered", pricingReady: false },
-          PINNED_SNAPSHOT_ROUTE,
-        );
-
-        expect(report.billing.pricingApplicability).toBe("required");
-        expect(report.billing.tokenPricingAvailable).toBe(false);
-        expect(report.billing.cashCostAccountingValid).toBe(false);
-        const decision = exactBindingCapabilityGate(report);
-        expect(decision.ok).toBe(false);
-        expect(decision.reason).toContain("pricing_table_missing");
-      });
-
-      test("the transport's own pricingReady is what admits the same route", async () => {
-        const report = await bindingReportForBilling(
-          { mode: "metered", pricingReady: true },
-          PINNED_SNAPSHOT_ROUTE,
-        );
-
-        expect(report.billing.tokenPricingAvailable).toBe(true);
-        expect(report.billing.cashCostAccountingValid).toBe(true);
-        expect(exactBindingCapabilityGate(report).ok).toBe(true);
-      });
+      expect(report.billing).toEqual({ mode: "metered", modeKnown: true });
+      expect(exactBindingCapabilityGate(report).ok).toBe(true);
     });
 
     // 2026-09-02, the spend ledger's PRODUCTION composition. Everything the
@@ -903,15 +829,14 @@ describe("production runtime PR1", () => {
         return { transport, executeCount: () => executeCount };
       }
 
-      // Provider-reported $0 on a metered attempt that produced output — the
-      // exact shape `settlementFromUsage`'s metered-zero rule refuses.
+      // A metered attempt whose usage the engine could not confirm (partial):
+      // the shape `settlementFromUsage` sends to the fence. (Named for its old
+      // zero-cost shape; a complete usage no longer fences, whatever it says.)
       const METERED_ZERO: NormalizedUsage = {
         wallMs: 10,
-        tokens: { outputVisible: 120, outputKnown: 120, totalKnown: 300 },
-        completeness: "complete",
+        tokens: { providerReportedTotal: 300 },
+        completeness: "partial",
         billingMode: "metered",
-        costSource: "provider",
-        cashCostUsd: 0,
       };
 
       // Two steps sharing ONE route, so they share one bucket
@@ -973,7 +898,7 @@ describe("production runtime PR1", () => {
         // test owns the third link, which is the one that was missing.
         const opencodeFixture = await writeOpenCodeFixture(tmpDir);
         const metered = countingTransport("opencode", METERED_ZERO, {
-          billing: { mode: "metered", pricingReady: true },
+          billing: { mode: "metered" },
         });
         const { step, options } = openCodeOAuthRuntime(
           opencodeFixture,
@@ -990,7 +915,6 @@ describe("production runtime PR1", () => {
         );
         expect(first.reservations?.length).toBe(1);
         expect(first.reservations?.[0]?.state).toBe("unresolved_remote");
-        expect(first.reservations?.[0]?.knownUsd).toBeUndefined();
         expect(metered.executeCount()).toBe(1);
 
         // A DIFFERENT step on the same bucket. Refused inside `reserve()`,
@@ -1082,15 +1006,13 @@ describe("production runtime PR1", () => {
           cliModel: "sonnet",
         });
         const metered = countingTransport("opencode", METERED_ZERO, {
-          billing: { mode: "metered", pricingReady: true },
+          billing: { mode: "metered" },
         });
         const claude = countingTransport("claude-code", {
           wallMs: 10,
           tokens: { totalKnown: 1 },
           completeness: "complete",
           billingMode: "subscription",
-          costSource: "provider",
-          cashCostUsd: 0,
         });
         const registry = new DefaultTransportRegistry();
         registry.register("opencode", metered.transport);
@@ -1378,20 +1300,12 @@ describe("production runtime PR1", () => {
     // it is produced before any route resolves -- so it keeps saying
     // "subscription" and the binding corrects it.
     //
-    // Why the correction has to reach all THREE billing expressions and not
-    // just `billing.mode`: `pricingApplicability`, `mode` and
-    // `cashCostAccountingValid` each read the mode independently. Upgrading
-    // only `mode` leaves `pricingApplicability` at "not_applicable", the
-    // pricing gate never fires, and a metered route is admitted as
-    // priced-not-required -- which is precisely the under-reporting this
-    // issue exists to prevent: the run executes on real spend and reports $0.
+    // Why the correction has to reach both billing expressions and not just
+    // `billing.mode`: `mode` and `modeKnown` each read the mode independently.
+    // Upgrading only one would report a metered route as something it is not.
     describe("provider_api_token routes bill as metered", () => {
-      // #137 repointed this at a model the bundled zai table deliberately
-      // omitted; #197 deleted that table, so "unpriced" is decided by the
-      // mock transport's `pricingReady: false` alone and any zai model would
-      // now do. `glm-5-turbo` stays: it is routable in OpenCode
-      // (`opencode models`, 2026-09-02), so the arm keeps naming a model that
-      // really exists rather than a placeholder.
+      // `glm-5-turbo` is routable in OpenCode (`opencode models`, 2026-09-02),
+      // so the arm names a model that really exists rather than a placeholder.
       const UNPRICED_ZAI_MODEL = "zai/glm-5-turbo";
 
       async function openCodeBindingReport(
@@ -1411,10 +1325,7 @@ describe("production runtime PR1", () => {
         registry.register(
           "opencode",
           createMockTransport("opencode", [], {
-            // Load-bearing: the mock's default is `pricingReady: true`, which
-            // would make `tokenPricingAvailable` true from the transport alone
-            // and the arm would prove nothing about the gate.
-            billing: { mode: "subscription", pricingReady: false },
+            billing: { mode: "subscription" },
           }),
         );
         const runtime = await createProductionRuntime({
@@ -1437,39 +1348,29 @@ describe("production runtime PR1", () => {
         return { binding, report: await binding.capabilities() };
       }
 
-      test("an unpriced zai route is refused by the pricing gate, not billed as a subscription", async () => {
+      test("a zai route bills as metered and is admitted without any pricing claim", async () => {
         const { binding, report } = await openCodeBindingReport("zai");
 
         expect(binding.credential.kind).toBe("provider_api_token");
         expect(report.auth.kind).toBe("provider_api_token");
-        expect(report.billing.mode).toBe("metered");
-        // The three independent readers must move together.
-        expect(report.billing.pricingApplicability).toBe("required");
-        expect(report.billing.tokenPricingAvailable).toBe(false);
-        expect(report.billing.cashCostAccountingValid).toBe(false);
-
-        const issues = exactBindingCapabilityIssues(report);
-        const pricing = issues.find(
-          (issue) => issue.code === "pricing_table_missing",
-        );
-        expect(pricing).toBeDefined();
-        expect(pricing?.blocking).toBe(true);
-        expect(exactBindingCapabilityGate(report).ok).toBe(false);
+        expect(report.billing).toEqual({ mode: "metered", modeKnown: true });
+        expect(exactBindingCapabilityGate(report).ok).toBe(true);
       });
 
       test("the openai OAuth route on the same backend still bills as a subscription", async () => {
         const { binding, report } = await openCodeBindingReport("openai");
 
         expect(binding.credential.kind).toBe("opencode_chatgpt_oauth");
-        expect(report.billing.mode).toBe("subscription");
-        expect(report.billing.pricingApplicability).toBe("not_applicable");
-        expect(report.billing.cashCostAccountingValid).toBe(true);
+        expect(report.billing).toEqual({
+          mode: "subscription",
+          modeKnown: true,
+        });
         expect(exactBindingCapabilityGate(report).ok).toBe(true);
       });
 
       // The upgrade is one-way. A metered legacy report on an OAuth route
       // must NOT be downgraded to subscription, and `unknown` must still
-      // reach `cashCostAccountingValid: false` for every kind that is not
+      // reach `modeKnown: false` for every kind that is not
       // provider_api_token -- that is what keeps the narrowing comment on
       // FrozenRuntimeBinding.capabilities() true.
       test("the effective mode only ever upgrades", async () => {
@@ -1484,7 +1385,7 @@ describe("production runtime PR1", () => {
         registry.register(
           "opencode",
           createMockTransport("opencode", [], {
-            billing: { mode: "unknown", pricingReady: false },
+            billing: { mode: "unknown" },
           }),
         );
         const runtime = await createProductionRuntime({
@@ -1508,10 +1409,10 @@ describe("production runtime PR1", () => {
 
         expect(binding.credential.kind).toBe("opencode_chatgpt_oauth");
         expect(report.billing.mode).toBe("subscription");
-        expect(report.billing.cashCostAccountingValid).toBe(false);
+        expect(report.billing.modeKnown).toBe(false);
         const decision = exactBindingCapabilityGate(report);
         expect(decision.ok).toBe(false);
-        expect(decision.reason).toContain("cash_cost_accounting_invalid");
+        expect(decision.reason).toContain("billing_mode_unknown");
       });
 
       // #133 scope note, proven rather than asserted: the OpenCode SERVER is
@@ -1521,7 +1422,7 @@ describe("production runtime PR1", () => {
       // LOUD, not run one provider's steps under the other's credential.
       // `resolveFrozenBindings` gates per BINDING, so the unpriced metered
       // route is refused before anything launches.
-      test("a plan mixing an OAuth provider and an API-token provider is refused per binding", async () => {
+      test("a plan mixing an OAuth provider and an API-token provider resolves each binding's own kind", async () => {
         const opencodeFixture = await writeOpenCodeFixture(tmpDir);
         const oauthStep = resolveStepRoute({
           stepKey: "hunter-reliability",
@@ -1538,7 +1439,7 @@ describe("production runtime PR1", () => {
         registry.register(
           "opencode",
           createMockTransport("opencode", [], {
-            billing: { mode: "subscription", pricingReady: false },
+            billing: { mode: "subscription" },
           }),
         );
 
@@ -1558,8 +1459,9 @@ describe("production runtime PR1", () => {
           mode: "conformance",
         });
 
-        expect(probe.decision.ok).toBe(false);
-        expect(probe.decision.reason).toContain("pricing_table_missing");
+        // Admitted: the metered route no longer needs a price. Both bindings
+        // resolve their own kind.
+        expect(probe.decision.ok).toBe(true);
         // The two bindings differ: the OAuth one is admissible on its own.
         const kinds = [...probe.bindings.values()]
           .map((binding) => binding.credential.kind)
@@ -1569,18 +1471,9 @@ describe("production runtime PR1", () => {
       });
     });
 
-    // 2026-09-02: provider cost, the design's PRIMARY metered pricing source
-    // (§8: "Metered routes require provider cost or a versioned rate-table
-    // calculation" — provider cost is named FIRST; the table is the
-    // fallback). `tokenPricingAvailable` has been a disjunction since #137,
-    // but the first disjunct was never connected: every transport reported
-    // `pricingReady: false`, so only the table could ever answer.
-    //
-    // These two arms are a PAIR. The first proves the OpenCode transport's
-    // own claim now admits a route no catalogue can price; the second proves
-    // the widening did not leak to the claude-code CLI, which reports no cost
-    // of its own and for which the table really is the only path. Either arm
-    // alone would also pass against a change that widened both.
+    // 2026-09-02: a metered route on a real transport. The engine prices
+    // nothing, so the exact binding is admitted on its credential class alone
+    // — no catalogue, no transport claim.
     describe("a transport that reports provider cost prices its own routes", () => {
       // Same model the arms above use for "no catalogue can price this":
       // routable in OpenCode, absent from z.ai's published table on any
@@ -1635,38 +1528,19 @@ describe("production runtime PR1", () => {
         // #133 still decides the billing mode: this is a metered route.
         expect(binding.credential.kind).toBe("provider_api_token");
         expect(report.billing.mode).toBe("metered");
-        expect(report.billing.pricingApplicability).toBe("required");
-        // The catalogue cannot answer for this model on ANY clock, so the
-        // transport's own claim is the only thing that can be.
-        expect(report.billing.tokenPricingAvailable).toBe(true);
-        expect(report.billing.cashCostAccountingValid).toBe(true);
+        expect(report.billing.modeKnown).toBe(true);
         expect(exactBindingCapabilityGate(report).ok).toBe(true);
       });
 
-      test("the claude-code CLI reports its own cost, so an unpriceable model there is admitted (#197)", async () => {
-        // THE widening #197 asked for, asserted as an outcome rather than as
-        // a flag. `pricingReady` is READ OFF the real ClaudeCodeCliTransport
-        // rather than written as a literal: the literal would keep this arm
-        // green if the transport were narrowed back, which is the direction
-        // that would silently start refusing routes again.
-        const claudeBilling = await new ClaudeCodeCliTransport().capabilities();
-        expect(claudeBilling.billing.pricingReady).toBe(true);
-
-        // An anthropic snapshot no bundled table ever carried — the point
-        // being that no table is consulted at all any more. Before #197 this
-        // exact route was REFUSED (`pricing_table_missing`, blocking); the
-        // CLI's `total_cost_usd` is what admits it now.
+      test("a claude-code metered route is admitted on its billing mode alone", async () => {
+        // An anthropic snapshot no bundled table ever carried. Before T7 this
+        // exact route needed the transport to claim a price; now nothing does.
         const report = await bindingReportForBilling(
-          {
-            mode: "metered",
-            pricingReady: claudeBilling.billing.pricingReady,
-          },
+          { mode: "metered" },
           "claude:claude-sonnet-4-1",
         );
 
-        expect(report.billing.pricingApplicability).toBe("required");
-        expect(report.billing.tokenPricingAvailable).toBe(true);
-        expect(report.billing.cashCostAccountingValid).toBe(true);
+        expect(report.billing).toEqual({ mode: "metered", modeKnown: true });
         expect(exactBindingCapabilityGate(report).ok).toBe(true);
       });
     });
@@ -1768,7 +1642,7 @@ describe("production runtime PR1", () => {
               mode: "snapshot" as const,
               inputTokens: 10,
               outputTokens: 5,
-              costUsd: 0,
+              incomplete: true,
             };
             yield {
               kind: "terminal" as const,
@@ -1878,7 +1752,6 @@ describe("production runtime PR1", () => {
         // harness returned ok — the record under assertion is the one this
         // session produced.
         expect(driven.sessionCount()).toBe(1);
-        expect(result.usageV2?.cashCostUsd).toBe(0);
         expect(result.usageV2?.tokens.outputKnown).toBe(5);
         // The whole point: the record and the report agree because they now
         // read the SAME field.
@@ -1915,7 +1788,6 @@ describe("production runtime PR1", () => {
         // reservation at all, which reads identically to a $0 that settled.
         assertAttemptRan(first);
         expect(first.reservations?.[0]?.state).toBe("unresolved_remote");
-        expect(first.reservations?.[0]?.knownUsd).toBeUndefined();
         expect(driven.sessionCount()).toBe(1);
 
         const second = await runtime.runner.run(
@@ -2143,7 +2015,6 @@ describe("production runtime PR1", () => {
         sdkAvailable: true,
         credentialAuthority: true,
         workspaceBroker: true,
-        pricingReady: true,
       };
 
       const runtime = await createProductionRuntime({
@@ -2429,7 +2300,7 @@ describe("production runtime PR1", () => {
               usageMode: "snapshot",
             },
             cancellation: { deadlineMs: 7500, conformance: "passed" },
-            billing: { mode: "subscription", pricingReady: false },
+            billing: { mode: "subscription" },
             issues: [
               {
                 code: "auth_failed",

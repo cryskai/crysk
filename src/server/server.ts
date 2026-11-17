@@ -188,17 +188,14 @@ export function startProductStoreServer(
 
           const rows = db.query(sql).all(...params) as CanonicalRunRow[];
           let total_tokens = 0;
-          let total_cost_usd = 0;
 
           for (const r of rows) {
             total_tokens += r.tokens_total;
-            total_cost_usd += r.cost_usd_est;
           }
 
           const response: UsageResponse = {
             rows,
             total_tokens,
-            total_cost_usd,
           };
           return Response.json(response);
         }

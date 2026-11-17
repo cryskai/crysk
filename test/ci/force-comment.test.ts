@@ -7,7 +7,7 @@ import {
   ciForceReviewHintLine,
 } from "#ci/force-comment";
 import {
-  planCiBudgetSkip,
+  planCiLimitsSkip,
   planCiReviewManualRequired,
   planCiReviewSkip,
   planCiSizeSkip,
@@ -115,38 +115,30 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
   });
 });
 
-// cryskai/platform#12: a platform repository's workflow is the platform's stub,
-// so only `/crysk review` runs a review there, and its spend is the model setup.
-describe("a budget skip on a platform repository", () => {
-  const skip = (platformConnected: boolean) =>
-    planCiBudgetSkip({
-      isCi: true,
-      estimatedCostUsd: 11.06,
-      budgetUsd: 10,
-      prNumber: 11,
-      force: false,
-      ciMode: "advisory",
-      platformConnected,
-    });
+// A limits skip only happens on a platform repository (the limits come from the
+// platform), whose workflow is the platform's stub: only `/crysk review` runs a
+// review there, and the limits are dashboard settings.
+describe("a limits skip on a platform repository", () => {
+  const plan = planCiLimitsSkip({
+    isCi: true,
+    billingMode: "metered",
+    limits: { reviewUsd: 10, estimateUsd: 11.06 },
+    prNumber: 11,
+    force: false,
+    ciMode: "advisory",
+  });
 
   test("names only `/crysk review` and the dashboard, nothing a platform repo lacks", () => {
-    const plan = skip(true);
     for (const text of [plan?.comment ?? "", plan?.summaryMarkdown ?? ""]) {
       expect(text).not.toContain("/pr-hero");
       expect(text).not.toContain(CI_FORCE_WORKFLOW_FILE);
       expect(text).not.toContain("crysk ci init --force");
       expect(text).not.toContain("--budget-usd");
-      expect(text).toContain("change the model setup in the Crysk dashboard");
+      expect(text).toContain("Crysk dashboard (Review > Limits)");
     }
     expect(plan?.comment).toContain(
       "Comment `/crysk review` on this pull request to run it anyway",
     );
-  });
-
-  test("a standalone repository keeps the legacy dispatch and the re-scaffold", () => {
-    const plan = skip(false);
-    expect(plan?.comment).toContain(ciForceReviewHintLine(11));
-    expect(plan?.comment).toContain("`--budget-usd`");
   });
 });
 

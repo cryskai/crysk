@@ -9,7 +9,6 @@ export interface BackfillStats {
   skipped: number;
   errors: number;
   total_tokens: number;
-  total_cost_usd: number;
 }
 
 export function createEmptyBackfillStats(): BackfillStats {
@@ -19,7 +18,6 @@ export function createEmptyBackfillStats(): BackfillStats {
     skipped: 0,
     errors: 0,
     total_tokens: 0,
-    total_cost_usd: 0,
   };
 }
 
@@ -43,7 +41,6 @@ export function renderBackfillReport(stats: BackfillStats): string {
     `Skipped runs:    ${stats.skipped}`,
     `Errors:          ${stats.errors}`,
     `Total tokens:    ${stats.total_tokens.toLocaleString()}`,
-    `Total cost USD:  $${stats.total_cost_usd.toFixed(2)}`,
   ];
   return lines.join("\n");
 }

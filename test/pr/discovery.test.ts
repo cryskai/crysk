@@ -657,9 +657,9 @@ function discoveryFor(
   });
 }
 
-// cryskai/platform#12: a narrowed run prices its share of a full review, so
-// discovery also measures the whole PR range under the same filters.
-describe("resolvePrDiscovery — prDiffStat is the whole PR range", () => {
+// The stat the plan prints is the discovery range's own: the delta for an
+// incremental re-review, never the whole pull request.
+describe("resolvePrDiscovery — diffStat is the discovery range's stat", () => {
   function statGit(calls: string[][]) {
     const git = rangeGit(
       { [`${L}..${H}`]: PATCH, [`${B}..${H}`]: PATCH + SESSION_HUNK },
@@ -682,24 +682,10 @@ describe("resolvePrDiscovery — prDiffStat is the whole PR range", () => {
     };
   }
 
-  test("an incremental re-review measures merge-base..head with no path restriction", async () => {
+  test("an incremental re-review measures only the push delta", async () => {
     const result = await discoveryFor(statGit([]), {});
     expect(result.prepared.discoveryFrom).toBe(L);
     expect(result.diffStat).toEqual({ files: 1, insertions: 1, deletions: 1 });
-    expect(result.prDiffStat).toEqual({
-      files: 2,
-      insertions: 10,
-      deletions: 10,
-    });
-  });
-
-  test("a full pass reuses its own stat", async () => {
-    const calls: string[][] = [];
-    const result = await discoveryFor(statGit(calls), {
-      full: true,
-      issueComments: [],
-    });
-    expect(result.prDiffStat).toBe(result.diffStat);
   });
 });
 

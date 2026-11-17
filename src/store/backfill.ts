@@ -103,7 +103,6 @@ export async function backfillHistoricalRuns(
         saveRunTransaction(db, projected, { keepGeneratedAt: true });
         stats.ingested++;
         stats.total_tokens += doc.telemetry.tokens_total;
-        stats.total_cost_usd += doc.telemetry.cost_usd_est;
       } catch (err) {
         stats.errors++;
         options.log?.(

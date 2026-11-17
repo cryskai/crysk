@@ -4,7 +4,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  budgetInput,
   type CiSetupChoices,
   configPlan,
   defaultChoices,
@@ -21,7 +20,7 @@ function choices(over: Partial<CiSetupChoices> = {}): CiSetupChoices {
   return {
     ...defaultChoices(),
     defaulted: false,
-    chosen: { level: true, maxChangedLines: true, mode: true, billing: true },
+    chosen: { level: true, maxChangedLines: true, mode: true },
     ...over,
   };
 }
@@ -59,33 +58,12 @@ describe("review level presets", () => {
     }
   });
 
-  test("the default is balanced, gate, no billing, and marked as nobody's choice", () => {
+  test("the default is balanced, gate, and marked as nobody's choice", () => {
     const d = defaultChoices();
     expect(d.level).toBe("balanced");
     expect(d.mode).toBe("gate");
-    expect(d.billing).toBeUndefined();
     expect(d.maxChangedLines).toBe(4000);
     expect(d.defaulted).toBe(true);
-  });
-});
-
-describe("budgetInput", () => {
-  // A subscription-only repo already resolves to no ceiling; an explicit 0
-  // would warn on every run and outlive a later ANTHROPIC_API_KEY.
-  test("subscription writes nothing", () => {
-    expect(budgetInput(choices({ billing: "subscription" }))).toBeUndefined();
-  });
-  test("an API key with a 0 ceiling writes 0", () => {
-    expect(budgetInput(choices({ billing: "api", budgetUsd: 0 }))).toBe("0");
-  });
-  test("api writes the chosen ceiling, or the metered default", () => {
-    expect(budgetInput(choices({ billing: "api", budgetUsd: 7.5 }))).toBe(
-      "7.5",
-    );
-    expect(budgetInput(choices({ billing: "api" }))).toBe("12");
-  });
-  test("no billing writes nothing", () => {
-    expect(budgetInput(choices())).toBeUndefined();
   });
 });
 
@@ -158,6 +136,9 @@ describe("renderChoicesSummary", () => {
     const text = renderChoicesSummary(defaultChoices()).join("\n");
     expect(text).toContain("defaults: nobody chose them");
     expect(text).toContain("--level");
+    expect(text).toContain("--ci-mode");
+    expect(text).not.toContain("--billing");
+    expect(text).not.toMatch(/budget|ceiling|\$12/i);
     expect(text).toContain("size limit       4000 changed lines");
     expect(text).toContain(
       "risk_aware, at most 2 automatic passes per PR, score floor 4",
@@ -169,7 +150,6 @@ describe("renderChoicesSummary", () => {
       choices({
         level: "minimal",
         mode: "advisory",
-        billing: "subscription",
         advanced: {
           ci_admission_observe_only: true,
           ignorePatterns: ["gen/**"],
@@ -179,20 +159,9 @@ describe("renderChoicesSummary", () => {
     expect(text).not.toContain("nobody chose");
     expect(text).toContain("once_per_pr, at most 1 automatic pass per PR");
     expect(text).toContain("advisory");
-    expect(text).toContain(
-      "not set: no ceiling while the review runs on CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model",
-    );
     expect(text).toContain("observe only     yes");
     expect(text).toContain("gen/**");
     expect(text).toContain("npx -y crysk config");
-  });
-
-  test("an API key with no ceiling is not described as a subscription", () => {
-    const text = renderChoicesSummary(
-      choices({ billing: "api", budgetUsd: 0 }),
-    ).join("\n");
-    expect(text).toContain("none (budget-usd: 0;");
-    expect(text).not.toContain("subscription");
   });
 
   test("a kept group shows the file's values, not the preset nobody wrote", () => {
@@ -341,12 +310,19 @@ describe("presetMatching", () => {
 });
 
 describe("parseWorkflowChoices", () => {
-  test("reads the mode and the ceiling setup writes", () => {
+  test("reads the inputs setup writes", () => {
+    expect(
+      parseWorkflowChoices(
+        "        with:\n          mode: advisory\n          max-changed-lines: 9000\n",
+      ),
+    ).toEqual({ mode: "advisory", maxChangedLines: "9000" });
+  });
+  test("the retired budget-usd input is not read back", () => {
     expect(
       parseWorkflowChoices(
         "        with:\n          budget-usd: 7.5\n          mode: advisory\n",
       ),
-    ).toEqual({ mode: "advisory", budgetUsd: "7.5" });
+    ).toEqual({ mode: "advisory" });
   });
   test("a workflow without them reads as empty", () => {
     expect(parseWorkflowChoices("name: x\n")).toEqual({});
@@ -410,30 +386,23 @@ describe("re-runs over a tuned file (PR #411 review)", () => {
     expect(text).toContain("observe only     yes");
     expect(text).toContain("30 files");
   });
-
-  test("a negative ceiling reads as none, never as a negative price", () => {
-    const text = renderChoicesSummary(
-      choices({ billing: "api", budgetUsd: -5 }),
-    ).join("\n");
-    expect(text).toContain("none (budget-usd: -5;");
-    expect(text).not.toContain("$-5");
-  });
 });
 
 describe("parseWorkflowChoices on hand-edited workflows", () => {
   test("quotes and trailing comments still read", () => {
     expect(
       parseWorkflowChoices(
-        "          mode: \"advisory\"  # report only\n          budget-usd: 7.5 # cap\n          max-changed-lines: 8000\n          max-changed-files: '30'\n",
+        "          mode: \"advisory\"  # report only\n          max-changed-lines: 8000\n          max-changed-files: '30'\n",
       ),
     ).toEqual({
       mode: "advisory",
-      budgetUsd: "7.5",
       maxChangedLines: "8000",
       maxChangedFiles: "30",
     });
   });
   test("a malformed number reads as absent, never as NaN", () => {
-    expect(parseWorkflowChoices("          budget-usd: 1.2.3\n")).toEqual({});
+    expect(
+      parseWorkflowChoices("          max-changed-lines: 1.2.3\n"),
+    ).toEqual({});
   });
 });

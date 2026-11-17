@@ -89,8 +89,6 @@ describe("projectChildEnv", () => {
             tokens: {},
             completeness: "complete",
             billingMode: "subscription",
-            costSource: "provider",
-            cashCostUsd: 0,
           },
           stderrTail: "",
         } satisfies TransportOutcome;

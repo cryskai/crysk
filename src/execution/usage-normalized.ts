@@ -10,33 +10,23 @@ import type { SessionUsage } from "../usage";
 
 export type UsageCompleteness = "complete" | "partial" | "unavailable";
 // #182 follow-up: "free" is a USAGE-layer precision, not a capability mode.
-// A free-declared route bills nothing, but a model free at probe time can flip
-// to metered before/during the attempt — and the transport observes
-// provider-reported cost per message (opencode-sdk.ts cashCostUsd,
-// costSource "provider"). Stamping "subscription" would let
-// `settlementFromUsage`'s free-nonzero rule (spend-limiter.ts) never fire and
-// settle a flipped attempt's priced cost as a truthful zero. Capability
-// `BillingMode` ("subscription"|"metered") stays binary on purpose: the exact
-// binding still reports a free route as subscription/not_applicable, and the
-// spend ledger is composed for it by credential kind (production-runtime.ts).
+// A free-declared route bills nothing and its credential kind travels in the
+// platform report as `free`, apart from `subscription` and `metered`.
+// Capability `BillingMode` ("subscription"|"metered") stays binary on purpose:
+// the exact binding still reports a free route as subscription,
+// and the spend ledger is composed for it by credential kind
+// (production-runtime.ts).
 export type UsageBillingMode = "subscription" | "metered" | "free" | "unknown";
-export type UsageCostSource =
-  | "provider"
-  | "versioned_rate_table"
-  | "subscription"
-  | "unknown";
 
 // 2026-09-02, #177. THE one place that says "this environment carries a
 // per-token credential". Two callers need it and they must not each carry
-// their own copy: `deriveCiBillingMode` (ci/gates.ts) turns it into a CI spend
-// ceiling, and the Claude CLI transport turns it into the `billingMode`
-// STAMPED ON EVERY USAGE RECORD it emits. This is the same anti-drift shape
+// their own copy: the CI route classifier (ci/gates.ts) and the Claude CLI
+// transport, which turns it into the `billingMode` STAMPED ON EVERY USAGE
+// RECORD it emits. This is the same anti-drift shape
 // `credentialKindBillsMetered` (runner-authority.ts) already applies to the
 // credential KIND, and for the same measured reason: #177 IS the drift. The CI
 // gate already called an API-key route metered while the transport filed that
-// user's real spend as `notionalCostUsd`, which renders as "at list price, not
-// charged" — and since budget enforcement is cash-only (§8), that user's spend
-// ceiling read $0 and stopped existing.
+// user's usage under another mode.
 //
 // A boolean, not a mode, matching its sibling: the two callers narrow it into
 // two DIFFERENT enums (`CiBillingMode`, `UsageBillingMode`), and returning a
@@ -56,8 +46,8 @@ export type UsageCostSource =
 // (security/claude-credential.ts) holds only the Claude credential chosen from
 // `credentials.claude`, so this predicate answers metered exactly when the run
 // chose the API key. A caller with its own env that holds both still gets
-// metered, because guessing subscription wrongly reports real money as not
-// charged.
+// metered, because guessing subscription wrongly files a per-token credential
+// as a quota.
 //
 // Trimming is load-bearing, and it is worth being exact about WHAT it buys,
 // because the sentence it replaces overstated it and #177 is a finding about
@@ -68,8 +58,8 @@ export type UsageCostSource =
 // with or without the trim. What the trim actually catches is a
 // WHITESPACE-ONLY value (a secret whose content is a space, a YAML block
 // scalar that kept its newline), which is truthy and would otherwise read as
-// a live key and impose a ceiling — or, here, book a subscription run's quota
-// spend as cash. Mutation-checked: dropping the trim flips exactly the
+// a live key and file a subscription run's quota usage as metered.
+// Mutation-checked: dropping the trim flips exactly the
 // whitespace arms, never the empty-string ones.
 //
 // ---------------------------------------------------------------------------
@@ -82,27 +72,25 @@ export type UsageCostSource =
 // for the question in general.
 //
 // Until #197 the reason was safety: deriving either side from env turned a
-// metered claude-code route into `pricingApplicability: "required"` with no
-// pricing source to answer, so the route was refused admission outright
-// (`pricing_table_missing`, blocking) and API-key users stopped being able to
-// run at all. #197 flipped the claude-code transport's `pricingReady` to
-// `true`, so that refusal can no longer happen and the fail-closed argument
-// is spent.
+// metered claude-code route into a route that needed pricing the engine could
+// not supply, so it was refused admission outright and API-key users stopped
+// being able to run at all. The engine no longer prices anything, so that
+// refusal cannot happen and the fail-closed argument is spent.
 //
 // What remained was ownership, and #161 settles it by NAMING the owner
 // instead of banning the wiring outright: `credentialKindForRoute` is the
 // one admission-side reader of this predicate, and `envBillsMetered` is the
 // one shared implementation both it and the Claude CLI transport's
-// `claudeCliCostBasis` call — never two copies of the same trim rule
+// `claudeCliBillingMode` call — never two copies of the same trim rule
 // answering "does this environment carry a per-token credential?"
 // differently for the same attempt.
 //
 // The two calls read DIFFERENT env values on purpose, and on a SUCCESSFUL
-// projection that is not a fork: `claudeCliCostBasis` reads the child's
+// projection that is not a fork: `claudeCliBillingMode` reads the child's
 // ACTUAL, POST-projection-strip env (`request.isolation.env`) — a successful
 // projection strips the key-bearing vars (`PROJECTION_OWNED_KEYS`,
-// harness.ts), so this is a truthful read of what the process the money was
-// spent by actually saw. `credentialKindForRoute` runs BEFORE any child
+// harness.ts), so this is a truthful read of what the process whose usage
+// is filed actually saw. `credentialKindForRoute` runs BEFORE any child
 // exists, so it cannot read that env — it reads the raw, pre-strip one plus
 // whether a broker WILL ATTEMPT to strip it (`hasBroker`), and
 // `!hasBroker && envBillsMetered(rawEnv)` equals `envBillsMetered(postStripEnv)`
@@ -117,9 +105,9 @@ export type UsageCostSource =
 // UNSTRIPPED, so `hasBroker: true` no longer implies "the child's env has no
 // key" — admission still says subscription (this function's answer is
 // deliberately left unchanged; it cannot see a runtime degrade), and
-// `claudeCliCostBasis` (reading the real, unstripped child env) correctly
+// `claudeCliBillingMode` (reading the real, unstripped child env) correctly
 // files it metered. That disagreement between admission and filing is
-// permanent by design — but the spend it describes is no longer
+// permanent by design — but the usage it describes is no longer
 // unaccounted for: `StepExecutionHarness.run` (harness.ts) recognizes its
 // own degraded projection and applies THIS SAME `envBillsMetered` predicate
 // to the SAME child env to open a spend-ledger reservation for that one
@@ -179,17 +167,11 @@ export interface NormalizedUsage {
   readonly tokens: NormalizedTokens;
   readonly completeness: UsageCompleteness;
   readonly billingMode: UsageBillingMode;
-  readonly cashCostUsd?: number;
-  readonly notionalCostUsd?: number;
-  readonly costSource: UsageCostSource;
   readonly redactedRaw?: unknown;
 }
 
-interface UsageCostInput {
+interface UsageModeInput {
   readonly billingMode: UsageBillingMode;
-  readonly costSource: UsageCostSource;
-  readonly cashCostUsd?: number;
-  readonly notionalCostUsd?: number;
 }
 
 function sumOrZero(...values: ReadonlyArray<number | undefined>): number {
@@ -208,34 +190,12 @@ function attemptTotalKnown(tokens: NormalizedTokens): number | undefined {
   return tokens.totalKnown ?? tokens.providerReportedTotal;
 }
 
-// 2026-09-02: "did this attempt produce output tokens?", answered from the
-// LEAVES and not from `outputKnown` alone. `outputKnown` is a rollup some
-// builders populate (`normalizeInclusiveUsage`, the OpenCode transport) and
-// others do not, so a reader that consulted it alone would let a transport
-// filling only `outputVisible` slip past — deciding an accounting question by
-// which fields a transport happens to set rather than by whether tokens were
-// produced. The §8 output leaves are disjoint by contract, so summing them is
-// not double counting. One consumer today: `settlementFromUsage`'s
-// metered-zero rule (spend-limiter.ts).
-export function outputTokensKnown(
-  tokens: NormalizedTokens,
-): number | undefined {
-  return (
-    tokens.outputKnown ??
-    sumIfAnyDefined(
-      tokens.outputVisible,
-      tokens.outputReasoning,
-      tokens.outputOther,
-    )
-  );
-}
-
 // §8 line 455: "If a provider total includes detailed cache/reasoning
 // values, split the total into leaves and store only the non-negative
 // residual in inputOther/outputOther; never add the detail to the inclusive
 // total." OpenAI's `prompt_tokens`/`completion_tokens` are this shape — the
 // detail fields are a SUBSET of the total, never additional to it.
-export interface InclusiveUsageInput extends UsageCostInput {
+export interface InclusiveUsageInput extends UsageModeInput {
   readonly wallMs: number;
   readonly inputTotal: number;
   readonly inputCacheRead?: number;
@@ -270,18 +230,15 @@ export function normalizeInclusiveUsage(
     },
     completeness: "complete",
     billingMode: input.billingMode,
-    costSource: input.costSource,
-    cashCostUsd: input.cashCostUsd,
-    notionalCostUsd: input.notionalCostUsd,
   };
 }
 
 // §8 line 457: "If inclusion cannot be proven, keep providerReportedTotal,
 // mark partial, and do not invent a split." No leaf field is populated here
-// — inventing one would resurrect the exact "$0 on parse failure" collapse
+// — inventing one would resurrect the exact "zero on parse failure" collapse
 // this slice exists to kill, just with a fabricated split instead of a
 // fabricated zero.
-export interface PartialUsageInput extends UsageCostInput {
+export interface PartialUsageInput extends UsageModeInput {
   readonly wallMs: number;
   readonly providerReportedTotal: number;
 }
@@ -294,17 +251,14 @@ export function normalizePartialUsage(
     tokens: { providerReportedTotal: input.providerReportedTotal },
     completeness: "partial",
     billingMode: input.billingMode,
-    costSource: input.costSource,
-    cashCostUsd: input.cashCostUsd,
-    notionalCostUsd: input.notionalCostUsd,
   };
 }
 
-// spec: "Parse Failure Yields Unavailable Completeness, Never Zero Cost" —
+// spec: "Parse Failure Yields Unavailable Completeness, Never Zero Usage" —
 // used when nothing about an attempt's usage can be trusted (corrupted
 // stdout, a dropped final usage chunk, a safety-blocked response with no
-// usage block at all). No leaf, cost, or total field is ever populated as a
-// fabricated zero; billingMode/costSource fall back to "unknown" rather
+// usage block at all). No leaf or total field is ever populated as a
+// fabricated zero; billingMode falls back to "unknown" rather
 // than guessing which one applied.
 export interface UnavailableUsageInput {
   readonly wallMs: number;
@@ -319,7 +273,6 @@ export function normalizeUnavailableUsage(
     tokens: {},
     completeness: "unavailable",
     billingMode: input.billingMode ?? "unknown",
-    costSource: "unknown",
   };
 }
 
@@ -337,10 +290,8 @@ function worseCompleteness(
 }
 
 // Accumulates two attempts' usage within one step. A failed attempt's tokens
-// still cost money (ported rationale from `sumUsage` in `src/usage.ts`), so
-// this sums, never replaces. Cash and notional accumulate independently
-// (spec: "Cash And Notional Cost Stay Separate") — neither is ever read to
-// derive the other. billingMode/costSource fall back to "unknown" on
+// still count (ported rationale from `sumUsage` in `src/usage.ts`), so
+// this sums, never replaces. billingMode falls back to "unknown" on
 // disagreement between attempts rather than guessing which one is right.
 export function sumNormalizedUsage(
   a: NormalizedUsage,
@@ -384,9 +335,6 @@ export function sumNormalizedUsage(
     },
     completeness: worseCompleteness(a.completeness, b.completeness),
     billingMode: a.billingMode === b.billingMode ? a.billingMode : "unknown",
-    costSource: a.costSource === b.costSource ? a.costSource : "unknown",
-    cashCostUsd: sumIfAnyDefined(a.cashCostUsd, b.cashCostUsd),
-    notionalCostUsd: sumIfAnyDefined(a.notionalCostUsd, b.notionalCostUsd),
   };
 }
 
@@ -466,6 +414,5 @@ export function projectLegacyUsage(usage: NormalizedUsage): SessionUsage {
     tokens_in,
     tokens_out,
     tokens_total,
-    cost_usd_est: usage.cashCostUsd ?? 0,
   };
 }

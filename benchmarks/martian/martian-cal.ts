@@ -27,7 +27,6 @@ import {
 } from "#compare/martian-adapter";
 import type { FindingsDocument } from "#review/findings";
 import { localReviewSpec } from "#review/preflight";
-import { estimateCost } from "#review/report";
 import {
   DEFAULT_SIZE_GATE,
   evaluateSizeGateAggregate,
@@ -51,11 +50,11 @@ const DEFAULT_LAB_AGENTS_DIR =
   "/Users/juanma/Desktop/deep-review/agents/slice3b-lifecycle-v6-clean";
 
 const ROOT = path.join(import.meta.dir, "..", "..");
-// Display/cost only (never affects which agents actually run — that is
+// Display only (never affects which agents actually run — that is
 // localReviewSpec() itself, resolved fresh per CLI subprocess in review()
 // below). Derived rather than a hand-maintained literal so an unconditional
 // hunter added to the wiring — including PRHERO_EXTRA_HUNTERS
-// (odd/tasks/logic-hunter.md T3) — is reflected in the estimate without a
+// (odd/tasks/logic-hunter.md T3) — is reflected in the plan without a
 // second place to remember to update. Counts unconditional hunters only
 // (the local spec has no other kind), matching martian-evidence.ts's
 // freezeBenchmarkIdentity requiredSteps derivation.
@@ -254,13 +253,9 @@ async function review(
 if (mode === "plan") {
   const gate = DEFAULT_SIZE_GATE;
   console.log(
-    `pr   files   +/−      lines  gate   gold  band (${HUNTERS} hunters, no summary)`,
+    `pr   files   +/−      lines  gate   gold  title (${HUNTERS} hunters, no summary)`,
   );
-  console.log(
-    "---- ----- --------  ------  -----  ----  ---------------------------------------",
-  );
-  let low = 0;
-  let high = 0;
+  console.log("---- ----- --------  ------  -----  ----  -----");
   const refused: number[] = [];
   for (const row of rows) {
     const lines = row.additions + row.deletions;
@@ -272,36 +267,24 @@ if (mode === "plan") {
       },
       gate,
     );
-    const estimate = estimateCost(
-      {
-        files: row.changedFiles,
-        insertions: row.additions,
-        deletions: row.deletions,
-      },
-      HUNTERS,
-      false,
-    );
     const golden = lookupGolden(goldens, row.pr);
-    low += estimate.low;
-    high += estimate.high;
     if (!verdict.ok) refused.push(row.pr);
     console.log(
       `${String(row.pr).padStart(5)} ${String(row.changedFiles).padStart(5)} ` +
         `${String(row.additions).padStart(4)}/${String(row.deletions).padStart(4)} ` +
         `${String(lines).padStart(6)}  ${verdict.ok ? "ok   " : "SKIP "} ` +
         `${String(golden.comments.length).padStart(4)}  ` +
-        `$${estimate.low.toFixed(2)}–$${estimate.high.toFixed(2)}  ${row.title}`,
+        `${row.title}`,
     );
   }
   console.log("");
   console.log(
-    `${rows.length} PR(s). Estimated ${HUNTERS} hunters + refuter, summarizer off.`,
+    `${rows.length} PR(s). ${HUNTERS} hunters + refuter, summarizer off.`,
   );
   console.log(`arm: ${arm}  (run dirs: ${corpusName}-<pr>-${arm})`);
   console.log(
     `model: ${model ?? "(frontmatter)"}  (CLI --model precedence over frontmatter)`,
   );
-  console.log(`band sum: $${low.toFixed(2)}–$${high.toFixed(2)}`);
   console.log(
     "Gate column is GitHub aggregate counters (no exclusions, no whitespace). Conservative.",
   );
@@ -483,9 +466,7 @@ for (const row of rows) {
     continue;
   }
   const doc = (await Bun.file(findingsPath).json()) as FindingsDocument;
-  console.log(
-    `  cost $${doc.telemetry.cost_usd_est.toFixed(2)}  findings ${doc.findings.length}  status ${doc.run_status}`,
-  );
+  console.log(`  findings ${doc.findings.length}  status ${doc.run_status}`);
   console.log("  goldens:");
   for (const g of golden.comments) {
     console.log(`    [${g.severity}/${g.category}] ${g.comment.slice(0, 140)}`);

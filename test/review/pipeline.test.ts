@@ -120,7 +120,6 @@ function usage(overrides: Partial<SessionUsage> = {}): SessionUsage {
     tokens_in: 100,
     tokens_out: 10,
     tokens_total: 110,
-    cost_usd_est: 0.01,
     ...overrides,
   };
 }
@@ -969,7 +968,6 @@ describe("engine-owned summarizer", () => {
       tokens_in: 700,
       tokens_out: 80,
       tokens_total: 780,
-      cost_usd_est: 0.07,
     });
     const runner = new FakeStepRunner({
       ...HUNTERS_OK,
@@ -983,11 +981,9 @@ describe("engine-owned summarizer", () => {
       tokens_total: 780,
       tokens_in: 700,
       tokens_out: 80,
-      cost_usd_est: 0.07,
       status: "ok",
     });
     expect(result.usage.tokens_total).toBe(1_000);
-    expect(result.usage.cost_usd_est).toBeCloseTo(0.09);
   });
 
   test("the bundled prompt has exactly Read, Grep, Glob tools and a model", async () => {
@@ -1334,27 +1330,20 @@ describe("the removed scout stage", () => {
   // table): `../deep-review/runner/index.ts:334` spreads runPipeline()'s
   // RETURNED `usage` object by name into the bench ledger — a field rename or
   // an extra key there is a silent ledger break, not a compile error. This
-  // test pins today's 5-key legacy contract so PR2's contracts.ts/harness.ts
+  // test pins today's 4-key legacy contract so PR2's contracts.ts/harness.ts
   // surgery (usage -> NormalizedUsage) cannot widen or rename it, and pins
   // that pipeline.json never grows a top-level `usage` key (the new run-level
   // rollup is `usage_v2`, asserted separately below).
-  test("§D1-08 PR2 — runPipeline()'s returned usage keeps exactly its 5 legacy keys; pipeline.json has no top-level usage key", async () => {
+  test("§D1-08 PR2 — runPipeline()'s returned usage keeps exactly its 4 legacy keys; pipeline.json has no top-level usage key", async () => {
     const input = await makeInput();
     const result = await runPipeline(input, {
       runner: new FakeStepRunner(HUNTERS_OK),
     });
 
     expect(Object.keys(result.usage).sort()).toEqual(
-      [
-        "cost_usd_est",
-        "tokens_in",
-        "tokens_out",
-        "tokens_total",
-        "wall_ms",
-      ].sort(),
+      ["tokens_in", "tokens_out", "tokens_total", "wall_ms"].sort(),
     );
     expect(typeof result.usage.wall_ms).toBe("number");
-    expect(typeof result.usage.cost_usd_est).toBe("number");
 
     const plan = await readPlan(input.runDir);
     expect("usage" in plan).toBe(false);
@@ -1379,8 +1368,6 @@ describe("the removed scout stage", () => {
       },
       completeness: "complete",
       billingMode: "subscription",
-      costSource: "provider",
-      cashCostUsd: 0.01,
     };
     const refuterUsageV2: NormalizedUsage = {
       wallMs: 500,
@@ -1393,8 +1380,6 @@ describe("the removed scout stage", () => {
       },
       completeness: "complete",
       billingMode: "subscription",
-      costSource: "provider",
-      cashCostUsd: 0.005,
     };
     const runner = new FakeStepRunner({
       ...HUNTERS_OK,
@@ -1435,21 +1420,17 @@ describe("the removed scout stage", () => {
     expect(rollup.billingMode).toBe("subscription");
     expect(rollup.tokens.inputUncached).toBe(150);
     expect(rollup.tokens.outputVisible).toBe(15);
-    expect(rollup.cashCostUsd).toBeCloseTo(0.015);
   });
 
   // #173: the same rollup, on the RETURNED result rather than only in
-  // pipeline.json. The terminal and report.md need the notional total to show
-  // it beside cash (§8), and taking it off the artifact-bound object is what
-  // keeps the two surfaces unable to disagree — a second accumulation for the
-  // display path is exactly the "parallel mechanism able to disagree" the
-  // per-step join site's own comment refuses.
-  test("#173 — the returned result carries the same normalized rollup, so cash and notional can be shown apart", async () => {
+  // pipeline.json. The terminal and report.md need the run's usage, and
+  // taking it off the artifact-bound object is what keeps the two surfaces
+  // unable to disagree — a second accumulation for the display path is
+  // exactly the "parallel mechanism able to disagree" the per-step join
+  // site's own comment refuses.
+  test("#173 — the returned result carries the same normalized rollup the artifact publishes", async () => {
     const input = await makeInput();
-    const subscriptionUsage = (
-      cash: number,
-      notional: number,
-    ): NormalizedUsage => ({
+    const subscriptionUsage = (): NormalizedUsage => ({
       wallMs: 1_000,
       tokens: {
         inputUncached: 100,
@@ -1460,9 +1441,6 @@ describe("the removed scout stage", () => {
       },
       completeness: "complete",
       billingMode: "subscription",
-      costSource: "subscription",
-      cashCostUsd: cash,
-      notionalCostUsd: notional,
     });
     const runner = new FakeStepRunner({
       ...HUNTERS_OK,
@@ -1475,7 +1453,7 @@ describe("the removed scout stage", () => {
             ],
           },
           {},
-          subscriptionUsage(0, 0.03),
+          subscriptionUsage(),
         ),
       refuter: (spec) =>
         ok(
@@ -1486,20 +1464,20 @@ describe("the removed scout stage", () => {
             ],
           } satisfies RefuterResult,
           {},
-          subscriptionUsage(0, 0.015),
+          subscriptionUsage(),
         ),
     });
 
     const result = await runPipeline(input, { runner });
 
-    // Cash stays 0 across both steps; notional accumulates. Deliberately NOT
-    // asserted against `result.usage.cost_usd_est` here: FakeStepRunner
-    // hand-builds its legacy usage from a fixed per-step constant rather than
-    // projecting it from `usageV2`, so that assertion would test the fixture
-    // and not the code. The real legacy↔cash coupling is proven against the
-    // live harness in test/step-runner.test.ts.
-    expect(result.usageV2?.cashCostUsd).toBe(0);
-    expect(result.usageV2?.notionalCostUsd).toBeCloseTo(0.045);
+    // Two steps reported normalized usage: their tokens add up, and the
+    // credential class survives the sum. Deliberately NOT asserted against the
+    // legacy `result.usage`: FakeStepRunner hand-builds that from a fixed
+    // per-step constant rather than projecting it from `usageV2`, so that
+    // assertion would test the fixture and not the code. The real legacy
+    // projection is proven against the live harness in test/step-runner.test.ts.
+    expect(result.usageV2?.tokens.totalKnown).toBe(220);
+    expect(result.usageV2?.billingMode).toBe("subscription");
     // Same object the artifact publishes — not a second tally.
     const plan = (await readPlan(input.runDir)) as {
       usage_v2?: NormalizedUsage;
@@ -1986,7 +1964,6 @@ describe("assembly", () => {
       tokens_in: result.usage.tokens_in,
       tokens_out: result.usage.tokens_out,
       tokens_total: result.usage.tokens_total,
-      cost_usd_est: result.usage.cost_usd_est,
       per_agent: result.perAgent,
     };
     const doc = mergeRunEnvelope({
@@ -2020,7 +1997,6 @@ describe("assembly", () => {
       tokens_in: result.usage.tokens_in,
       tokens_out: result.usage.tokens_out,
       tokens_total: result.usage.tokens_total,
-      cost_usd_est: result.usage.cost_usd_est,
       per_agent: result.perAgent,
     };
     const base = {
@@ -2301,7 +2277,6 @@ describe("assembly", () => {
             tokens_in: 0,
             tokens_out: 0,
             tokens_total: 0,
-            cost_usd_est: 0,
           }),
           attempts: 0,
           stderrTail: "credential projection failed (source_read_failed)",
@@ -2689,7 +2664,6 @@ describe("assembly", () => {
             tokens_in: 300,
             tokens_out: 30,
             tokens_total: 330,
-            cost_usd_est: 0.05,
           },
         ),
       "hunter-resilience": (spec) =>
@@ -2698,7 +2672,6 @@ describe("assembly", () => {
           tokens_in: 200,
           tokens_out: 20,
           tokens_total: 220,
-          cost_usd_est: 0.03,
         }),
     });
     const result = await runPipeline(await makeInput(), { runner });
@@ -2711,13 +2684,11 @@ describe("assembly", () => {
       duration_ms: 2_000,
       tokens_in: 300,
       tokens_out: 30,
-      cost_usd_est: 0.05,
       attempts: 1,
       status: "ok",
     });
     expect(result.usage.tokens_total).toBe(550);
     expect(result.usage.wall_ms).toBe(3_500);
-    expect(result.usage.cost_usd_est).toBeCloseTo(0.08);
   });
 });
 
@@ -2902,7 +2873,7 @@ describe("stepFailureReason", () => {
     "spawn failed: E2BIG: argument list too long; no child started";
   const ANNOTATIONS = [
     "[pr-hero] credential projection unavailable (missing_subscription_record); child runs with operator environment",
-    "[pr-hero] ambient credential bills metered — this attempt reserves against the spend ledger and fences its bucket if the cost cannot be confirmed",
+    "[pr-hero] ambient credential bills metered — this attempt reserves against the spend ledger and fences its bucket if its usage cannot be confirmed",
     "[pr-hero] credential projection destroy failed",
   ];
 

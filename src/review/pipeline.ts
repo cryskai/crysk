@@ -136,7 +136,6 @@ import type { InternalCapabilityReport } from "../diversity/admission";
 import type { BenchmarkTarget } from "../diversity/identity";
 import {
   assertDiversityLegRoutes,
-  assertDiversitySpendUnderCap,
   buildDiversityPipelineRecord,
   type DiversityExecutionContext,
   diversityDebugFromLedger,
@@ -593,7 +592,6 @@ export interface PerAgentUsage {
   duration_ms: number;
   tokens_in: number;
   tokens_out: number;
-  cost_usd_est: number;
   attempts: number;
   status: string;
   // Why a failed step failed, in the provider's own words: the transport's one-line
@@ -610,17 +608,14 @@ export interface PipelineResult {
   usage: SessionUsage;
   // #173: the run-level normalized rollup, the SAME object `pipeline.json`
   // publishes as its `usage_v2` key — handed to the caller so the terminal and
-  // report.md can show cash and notional apart (§8: "Artifacts and reports
-  // show cash and notional totals separately"). The legacy `usage` above
-  // projects `cashCostUsd` only, and on a Claude subscription route that is a
-  // truthful $0.00 with the list-basis figure living here instead.
+  // report.md can show the run's tokens and credential class.
   //
   // Taken off `state.usageTotalV2` rather than re-accumulated for the display
   // path: a second tally is the "parallel mechanism able to disagree with
   // per_agent" the per-step usage join site already refuses. Absent — never
   // zeroed — when no step reported normalized usage, because the display
-  // surfaces key on `undefined` to omit their notional row, and a fabricated
-  // zero would print a list-price claim for a run that produced none.
+  // surfaces key on `undefined` to omit their usage row, and a fabricated
+  // zero would print a claim for a run that produced none.
   usageV2?: NormalizedUsage;
   // True only when ALL hunter steps failed — nothing was hunted. A single
   // hunter failure is a partial run (prose Step 4: "proceed with whatever
@@ -1509,7 +1504,7 @@ interface RunState {
   // D1-08 PR2: the run-level rollup of every step's normalized usage, summed
   // via `accumulateUsageV2` alongside each existing `usageTotal` accumulation
   // site. `undefined` until the first step reports `usageV2` — seeding it
-  // with a billingMode/costSource-less zero would force `sumNormalizedUsage`
+  // with a billingMode-less zero would force `sumNormalizedUsage`
   // to collapse the run's real billing mode to "unknown" on the first sum.
   usageTotalV2?: NormalizedUsage;
   steps: StepMeta[];
@@ -2362,7 +2357,6 @@ async function execute(
         ),
       };
       state.diversity = diversityCtx;
-      assertDiversitySpendUnderCap(plan, diversityCtx.ledger);
     }
     if (result.status !== "ok") {
       state.hunterFailures++;
@@ -2805,7 +2799,7 @@ async function runRefuter(
     state.verdicts.set(id, "inconclusive");
   }
   // The spec carries ONE refuter agent, so its telemetry stays one row —
-  // token and cost fields summed across the steps it fanned into, which keeps
+  // token fields summed across the steps it fanned into, which keeps
   // `per_agent` totals reconcilable against the run total. `duration_ms` is the
   // one field that cannot be summed: it reports the leg's measured elapsed
   // time. `attempts` IS a sum on purpose — N steps have no single attempt
@@ -2817,7 +2811,6 @@ async function runRefuter(
         duration_ms: legElapsedMs,
         tokens_in: usage.tokens_in,
         tokens_out: usage.tokens_out,
-        cost_usd_est: usage.cost_usd_est,
         attempts,
         status: anyFailed ? "failed" : "ok",
         ...(anyFailed ? firstFailureDetail(settled) : {}),
@@ -3012,7 +3005,6 @@ async function runVerify(
         duration_ms: legElapsedMs,
         tokens_in: usage.tokens_in,
         tokens_out: usage.tokens_out,
-        cost_usd_est: usage.cost_usd_est,
         attempts,
         status: anyFailed ? "failed" : "ok",
         ...(anyFailed ? firstFailureDetail(settled) : {}),
@@ -3166,7 +3158,6 @@ async function runAdjudicate(
         duration_ms: legElapsedMs,
         tokens_in: usage.tokens_in,
         tokens_out: usage.tokens_out,
-        cost_usd_est: usage.cost_usd_est,
         attempts,
         status: anyFailed ? "failed" : "ok",
         ...(anyFailed ? firstFailureDetail(settled) : {}),
@@ -3748,7 +3739,6 @@ async function runMaterialityJudge(
         duration_ms: Date.now() - startedAt,
         tokens_in: usage.tokens_in,
         tokens_out: usage.tokens_out,
-        cost_usd_est: usage.cost_usd_est,
         attempts,
         status: record.failed > 0 ? "failed" : "ok",
         ...(record.failed > 0 ? firstFailureDetail(settled) : {}),
@@ -4064,7 +4054,6 @@ function collectUnresolvedSpend(state: RunState): UnresolvedSpend[] {
         step: step.name,
         bucketId: reservation.bucketId,
         reservationId: reservation.reservationId,
-        knownUsd: reservation.knownUsd,
       });
     }
   }
@@ -4337,7 +4326,6 @@ function perAgentEntry(result: StepResult): PerAgentUsage {
     duration_ms: result.usage.wall_ms,
     tokens_in: result.usage.tokens_in,
     tokens_out: result.usage.tokens_out,
-    cost_usd_est: result.usage.cost_usd_est,
     attempts: result.attempts,
     status: result.status,
     ...detailField(result.status === "ok" ? undefined : result),
@@ -4371,7 +4359,6 @@ function failedAgentEntry(): PerAgentUsage {
     duration_ms: 0,
     tokens_in: 0,
     tokens_out: 0,
-    cost_usd_est: 0,
     attempts: 0,
     status: "failed",
   };

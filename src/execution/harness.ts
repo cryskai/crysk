@@ -84,7 +84,6 @@ import {
   beginStep,
   nextCycle,
   type ReserveToken,
-  type SettlementDecision,
   type SpendLedger,
   type SpendReservation,
   SpendReservationFencedError,
@@ -260,13 +259,6 @@ export interface StepExecutionHarnessOptions {
   // every existing caller (PR5a's own tests included) keeps its ledger-free
   // shape unmodified.
   readonly spendLedger?: SpendLedger;
-  // What each attempt reserves BEFORE its actual cost is known. Estimating a
-  // real per-step dollar figure from prompt/model/provider pricing is a
-  // caller concern this slice does not attempt (same framing as PR5a's own
-  // `rateLimitBucketId` default: deriving the real number belongs to
-  // whoever composes the run, not to this harness). Defaults to 0 so an
-  // unconfigured caller reserves nothing rather than an invented ceiling.
-  readonly reservedUsdPerAttempt?: number;
   // #279: the BINDING's own reserve decision — true for a metered or
   // free-credential route (production-runtime.ts's `reservesSpend`),
   // independent of whether `spendLedger` is configured at all. Defaults to
@@ -339,7 +331,7 @@ const ENV_PASSTHROUGH = [
   // disagreeing about the same variable. pr-hero's first real CI self-review
   // (2026-08-27) passed the gate, passed the size gate, then lost all three
   // hunters and the summarizer in three seconds to "Not logged in · Please run
-  // /login", $0.00 spent, because this projection dropped the token the action
+  // /login", because this projection dropped the token the action
   // had just handed it. It is the same credential class as ANTHROPIC_API_KEY
   // directly above, and it is the ONLY route on Linux: credential projection
   // needs darwin + /usr/bin/security, so every CI runner falls back to exactly
@@ -358,9 +350,9 @@ const ENV_PASSTHROUGH = [
 // untouched on exactly the path whose purpose is isolating the credential.
 //
 // The leak was inert while nothing read it back. #177 ended that: the Claude
-// CLI transport now derives `billingMode`/`costSource` from this very env
-// (`claudeCliCostBasis` → `envBillsMetered`), so a developer running on the
-// projected subscription credential got the review filed as metered cash on
+// CLI transport now derives `billingMode` from this very env
+// (`claudeCliBillingMode` → `envBillsMetered`), so a developer running on the
+// projected subscription credential got the review filed as metered on
 // the strength of a key the projection was supposed to have replaced. Both
 // readings of the leak are defects — either the CLI honours the leaked key
 // and the isolation promise is false, or it prefers the projected OAuth and
@@ -424,7 +416,7 @@ function notifyRetry(step: StepSpec, info: RetryInfo): void {
 const DESTROY_FAILED_ANNOTATION =
   "[pr-hero] credential projection destroy failed";
 const AMBIENT_METERED_ANNOTATION =
-  "[pr-hero] ambient credential bills metered — this attempt reserves against the spend ledger and fences its bucket if the cost cannot be confirmed";
+  "[pr-hero] ambient credential bills metered — this attempt reserves against the spend ledger and fences its bucket if its usage cannot be confirmed";
 // The class is variable in the shape even though only
 // missing_subscription_record reaches the append today: the shape is what
 // the harness writes, the class list is a policy that may grow.
@@ -675,7 +667,6 @@ export class StepExecutionHarness implements StepRunner {
   private readonly attemptAdmissionGate?: AttemptAdmissionGate;
   private readonly rateLimitBucketId: string;
   private readonly spendLedger?: SpendLedger;
-  private readonly reservedUsdPerAttempt: number;
   private readonly reservesSpend: boolean;
   private readonly degradedProjectionBucketId?: string;
   private readonly attemptAdmissionTimeoutMs: number;
@@ -708,7 +699,6 @@ export class StepExecutionHarness implements StepRunner {
     this.rateLimitBucketId =
       options.rateLimitBucketId ?? DEFAULT_RATE_LIMIT_BUCKET_ID;
     this.spendLedger = options.spendLedger;
-    this.reservedUsdPerAttempt = options.reservedUsdPerAttempt ?? 0;
     // #279: default `true` — see the WHY on `StepExecutionHarnessOptions.
     // reservesSpend` for why an unset flag must keep every pre-existing
     // `spendLedger`-configuring caller reserving unconditionally.
@@ -1757,7 +1747,7 @@ export class StepExecutionHarness implements StepRunner {
     // `projectLegacyUsage` at every return point below, never accumulated
     // independently — that is what keeps the two shapes unable to drift.
     // `undefined` until the first attempt settles: seeding it with a
-    // billingMode/costSource-less zero would force `sumNormalizedUsage` to
+    // billingMode-less zero would force `sumNormalizedUsage` to
     // collapse the run's real billing mode to "unknown" on the very first sum.
     let totalUsageV2: NormalizedUsage | undefined;
     let attempts = 0;
@@ -2140,8 +2130,8 @@ export class StepExecutionHarness implements StepRunner {
       // a METERED binding of this SAME provider+credential would compute,
       // production-runtime.ts) — never this binding's own subscription
       // bucket. Fencing the subscription bucket would block the NEXT
-      // non-degraded attempt on the SAME OAuth credential over dollars that
-      // credential never spent. NO fallback to `rateLimitBucketId` on this
+      // non-degraded attempt on the SAME OAuth credential over usage that
+      // credential never made. NO fallback to `rateLimitBucketId` on this
       // branch: the constructor refuses to build a `reservesSpend: false` +
       // `spendLedger` harness without `degradedProjectionBucketId` (see the
       // throw in the constructor), so a silent wrong-bucket fence can never
@@ -2158,7 +2148,6 @@ export class StepExecutionHarness implements StepRunner {
         reservation = await this.spendLedger.reserve(
           {
             bucketId,
-            reservedUsd: this.reservedUsdPerAttempt,
             sessionId: request.sessionId,
             attempt,
           },
@@ -2194,86 +2183,16 @@ export class StepExecutionHarness implements StepRunner {
         harnessWatchdogMs,
       });
 
-      // Step 4: settle actual known cost exactly once (or route to
-      // markUnresolvedRemote when usage completeness never became
-      // "complete" — coupling 1, spend-limiter.ts).
+      // Step 4: settle exactly once (or route to markUnresolvedRemote when
+      // usage completeness never became "complete" — coupling 1,
+      // spend-limiter.ts).
       if (reservation === undefined) return result;
       const finalized = await this.finalizeReservation(
         reservation,
         result,
         transport,
       );
-      // #182 follow-up fail-fast: a free-declared route that settled with
-      // reason `free_nonzero_cost` means the model flipped from free to
-      // metered mid-flight and the provider priced the work. Unresolved alone
-      // only fences the bucket while the retry loop keeps spending attempts on
-      // the flipped model, so the attempt FAILS CLOSED here with no retry —
-      // `legacy_terminal` breaks the run loop before `decideRetryDisposition`
-      // can resurrect it, and the fence from `markUnresolvedRemote` (already
-      // applied inside `finalizeReservation` — the spend may be real) blocks
-      // the next reserve. Free usage with NO cash figure carries no reason and
-      // releases without fencing (finalizeReservation's free-route fence
-      // scope) — no cash figure means no evidence of billing. Incomplete
-      // usage with a non-free mode still fences: no usage mode to exonerate
-      // it, so fail closed.
-      if (
-        finalized.decision.kind === "unresolved" &&
-        finalized.decision.reason === "free_nonzero_cost"
-      ) {
-        const known =
-          finalized.decision.knownUsd ?? finalized.reservation.knownUsd;
-        const flipNote =
-          `[pr-hero] free-route cost flip: provider reported $${known} cash ` +
-          `on a free-declared route; the model may have flipped from free to ` +
-          `metered — re-probe before retrying (no retry attempted)`;
-        if (result.kind === "cancelled") {
-          return {
-            kind: "failed",
-            outcome: {
-              completion: "failed",
-              protocolIntegrity: "unverified",
-              finalText: "",
-              usage: normalizeUnavailableUsage({ wallMs: 0 }),
-              stderrTail: flipNote,
-            },
-            resolution: { kind: "legacy_terminal" },
-            reservation: finalized.reservation,
-          };
-        }
-        // A DELIVERED attempt already persisted its parsed output
-        // (writeJsonAtomically in runAdmittedAttempt) and the loop returns ok
-        // on delivered without consulting the resolution — so rewriting it to
-        // failed would claim an artifact was never written. Preserve the
-        // delivered kind and append the flip note to stderrTail instead. The
-        // fence is already applied above, and no retry follows delivered
-        // anyway, so nothing about fail-closed is weakened: the next reserve
-        // on this bucket still refuses.
-        if (result.kind === "delivered") {
-          return {
-            kind: "delivered",
-            outcome: {
-              ...result.outcome,
-              stderrTail: [result.outcome.stderrTail, flipNote]
-                .filter(Boolean)
-                .join("\n"),
-            },
-            parsed: result.parsed,
-            reservation: finalized.reservation,
-          };
-        }
-        return {
-          kind: "failed",
-          outcome: {
-            ...result.outcome,
-            stderrTail: [result.outcome.stderrTail, flipNote]
-              .filter(Boolean)
-              .join("\n"),
-          },
-          resolution: { kind: "legacy_terminal" },
-          reservation: finalized.reservation,
-        };
-      }
-      return { ...result, reservation: finalized.reservation };
+      return { ...result, reservation: finalized };
     } catch (error) {
       if (
         error instanceof ConcurrencyAdmissionAbortedError ||
@@ -2305,111 +2224,64 @@ export class StepExecutionHarness implements StepRunner {
   // `settlementFromUsage` and applies whichever CAS transition it names.
   // `result.kind === "cancelled"` here means the provider attempt WAS
   // invoked (executeSession calls the transport unconditionally) but no
-  // usage ever arrived — that case can never settle as a number either, so
-  // it takes the same unresolved path with `knownUsd: undefined`.
-  //
-  // Returns the decision alongside the terminal reservation so `runAttempt`
-  // can fail closed on `free_nonzero_cost` (#182 follow-up) — the only caller.
+  // usage ever arrived — that case can never settle either, so it takes the
+  // same unresolved path.
   private async finalizeReservation(
     reservation: SpendReservation,
     result: AttemptRunResult,
     transport?: ProviderTransport,
-  ): Promise<{
-    readonly reservation: SpendReservation;
-    readonly decision: SettlementDecision;
-  }> {
+  ): Promise<SpendReservation> {
     const ledger = this.spendLedger;
     // Unreachable via `runAttempt` (it returns before calling here when no
     // reservation was opened, which is exactly when no ledger is configured),
-    // but kept total: report the pure decision without applying any CAS
-    // transition, so the shape holds and no fence is claimed.
-    if (ledger === undefined) {
-      const usage =
-        result.kind === "cancelled" ? undefined : result.outcome.usage;
-      return {
-        reservation,
-        decision:
-          usage === undefined
-            ? { kind: "unresolved", knownUsd: undefined }
-            : settlementFromUsage(usage),
-      };
-    }
+    // but kept total: no CAS transition is applied and no fence is claimed.
+    if (ledger === undefined) return reservation;
     const idempotencyKey = `${reservation.reservationId}:finalize`;
     const usage =
       result.kind === "cancelled" ? undefined : result.outcome.usage;
     if (usage === undefined) {
       await ledger.markUnresolvedRemote(
         reservation.reservationId,
-        undefined,
         idempotencyKey,
       );
-      return {
-        reservation: {
-          ...reservation,
-          state: "unresolved_remote",
-          knownUsd: undefined,
-        },
-        decision: { kind: "unresolved", knownUsd: undefined },
-      };
+      return { ...reservation, state: "unresolved_remote" };
     }
     const decision = settlementFromUsage(usage);
     if (decision.kind === "settle") {
       await ledger.settle(reservation.reservationId, decision, idempotencyKey);
-      return {
-        reservation: {
-          ...reservation,
-          state: "settled",
-          settledUsd: decision.actualUsd,
-        },
-        decision,
-      };
+      return { ...reservation, state: "settled" };
     }
-    // #182 follow-up, free-route fence scope: a free binding reserves so the
-    // free-nonzero rule can fence on a priced flip — but that made EVERY
-    // terminal free outcome fence the shared credential bucket, so one
-    // transient failure (parse failure, watchdog timeout shape) killed the
-    // whole all-free run. That contradicts the neighboring subscription
-    // reasoning in production-runtime.ts MultiProviderRunner.run: on a route
-    // that bills nothing there are no dollars to stop spending over.
+    // #182 follow-up, free-route fence scope: a free binding reserves, but
+    // fencing the shared credential bucket on EVERY terminal free outcome
+    // meant one transient failure (parse failure, watchdog timeout shape)
+    // killed the whole all-free run. That contradicts the neighboring
+    // subscription reasoning in production-runtime.ts MultiProviderRunner.run:
+    // a route that bills nothing has no credential worth protecting.
     //
-    // So an unresolved free outcome WITHOUT reason releases instead of
-    // fencing: no cash figure means no spend evidence on a free route, and a
-    // terminal released_unstarted fences nothing — the same-step retry
-    // reserves fine and sibling steps are unaffected. Coupling-1 is
-    // preserved: a non-complete usage still never settles as a number, it
-    // just releases instead of fencing. Cancelled/undefined-usage keeps the
-    // fence (no usage means no evidence either way — fail closed), the
-    // free_nonzero_cost reason keeps the fence (priced work may be real), and
-    // the metered path below is untouched. Downstream-safe:
-    // collectUnresolvedSpend (pipeline.ts) and renderResult (ui/result.ts)
-    // only read unresolved_remote reservations, so a released_unstarted free
-    // attempt is invisible to both — no floor marker, no unresolved row.
+    // So an unresolved free outcome releases instead of fencing: a terminal
+    // released_unstarted fences nothing — the same-step retry reserves fine
+    // and sibling steps are unaffected. Coupling-1 is preserved: a non-complete
+    // usage still never settles, it just releases instead of fencing.
+    // Cancelled/undefined-usage keeps the fence (no usage means no evidence
+    // either way — fail closed), and the metered path below is untouched.
+    // Downstream-safe: collectUnresolvedSpend (pipeline.ts) and renderResult
+    // (ui/result.ts) only read unresolved_remote reservations, so a
+    // released_unstarted free attempt is invisible to both.
     //
     // #187: watchdog timeout on a free route synthesizes an unavailable usage;
     // preserving the transport's free billing mode ensures it releases
     // unstarted instead of fencing the bucket, allowing attempt 2 to retry.
     const isFreeRoute =
       usage.billingMode === "free" || transport?.billingMode === "free";
-    if (isFreeRoute && decision.reason === undefined) {
+    if (isFreeRoute) {
       await ledger.releaseUnstarted(reservation.reservationId, idempotencyKey);
-      return {
-        reservation: { ...reservation, state: "released_unstarted" },
-        decision,
-      };
+      return { ...reservation, state: "released_unstarted" };
     }
     await ledger.markUnresolvedRemote(
       reservation.reservationId,
-      decision.knownUsd,
       idempotencyKey,
     );
-    return {
-      reservation: {
-        ...reservation,
-        state: "unresolved_remote",
-        knownUsd: decision.knownUsd,
-      },
-      decision,
-    };
+    return { ...reservation, state: "unresolved_remote" };
   }
 
   // The body of a single attempt, unchanged from PR0 except for the §9.2

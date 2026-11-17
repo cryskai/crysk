@@ -1,14 +1,11 @@
-// D1-08 PR4 (§9.1): the transactional spend reservation ledger. These tests
-// exercise `InMemorySpendLedger`, `settlementFromUsage`, `beginStep`/
-// `nextCycle` directly, at the module level.
+// D1-08 PR4 (§9.1): the credential fence. These tests exercise
+// `InMemorySpendLedger`, `settlementFromUsage`, `beginStep`/`nextCycle`
+// directly, at the module level.
 //
-// 2026-09-02: this header used to add "no harness wiring yet (that is PR5b)",
-// which was the same stale claim `spend-limiter.ts`'s own header carried —
-// PR5b landed and `StepExecutionHarness` calls all four ledger methods. The
-// module-level framing here is still correct, but as a SCOPE choice and not a
-// statement about the harness: `test/harness/spend-wiring.test.ts` owns the
-// harness-observable half, and every pure rule asserted here has a wiring arm
-// there.
+// platform-owned-cost T7: the ledger holds no amount. Usage completeness alone
+// decides whether an attempt settles or fences its bucket; `test/harness/
+// spend-wiring.test.ts` owns the harness-observable half, and every pure rule
+// asserted here has a wiring arm there.
 
 import { describe, expect, test } from "bun:test";
 import type { RetryDisposition } from "../../src/execution/failure-policy";
@@ -26,6 +23,7 @@ import {
   normalizeInclusiveUsage,
   normalizePartialUsage,
   normalizeUnavailableUsage,
+  type UsageBillingMode,
 } from "../../src/execution/usage-normalized";
 
 function reserveInput(
@@ -33,342 +31,120 @@ function reserveInput(
 ): ReserveSpendInput {
   return {
     bucketId: "bucket-default",
-    reservedUsd: 1,
     sessionId: "session-1",
     attempt: 1,
     ...overrides,
   };
 }
 
+const MODES: readonly UsageBillingMode[] = [
+  "subscription",
+  "metered",
+  "free",
+  "unknown",
+];
+
 describe("settlementFromUsage (coupling 1 producer)", () => {
-  // 4.1 RED: completeness !== "complete" -> ALWAYS the unresolved arm.
-  test("complete usage settles with its cash cost", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0.42,
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "settle",
-      actualUsd: 0.42,
-    });
+  // Completeness !== "complete" -> ALWAYS the unresolved arm; no amount, no
+  // reason, on any credential class.
+  test("complete usage settles, whatever the credential class", () => {
+    for (const billingMode of MODES) {
+      const usage = normalizeInclusiveUsage({
+        wallMs: 1200,
+        inputTotal: 100,
+        outputTotal: 50,
+        billingMode,
+      });
+      expect(settlementFromUsage(usage)).toEqual({ kind: "settle" });
+    }
   });
 
-  test("complete usage with undefined cashCostUsd resolves to unresolved, never a fabricated zero settlement", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "metered",
-      costSource: "provider",
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "unresolved",
-      knownUsd: undefined,
-    });
-  });
-
-  test("partial usage always resolves to unresolved, carrying whatever cash cost is known", () => {
-    const usage = normalizePartialUsage({
-      wallMs: 800,
-      providerReportedTotal: 500,
-      billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0.1,
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "unresolved",
-      knownUsd: 0.1,
-    });
-  });
-
-  test("unavailable usage resolves to unresolved with no known cost — never a fabricated zero settlement", () => {
-    const usage = normalizeUnavailableUsage({ wallMs: 300 });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "unresolved",
-      knownUsd: undefined,
-    });
-  });
-});
-
-// 2026-09-02, the metered-zero rule. #133 taught the capability report that a
-// `provider_api_token` route bills as METERED; this describe is the same
-// under-reporting failure arriving through the other door — not a missing
-// cost, but a present one that reads $0.
-//
-// The door: the OpenCode client reads the provider's own `cost` field
-// (opencode-client.ts, `asNumber(info.cost)`), and `asNumber` returns 0 for 0
-// rather than undefined. A provider OpenCode holds no price for, or a custom
-// endpoint, reports `cost: 0` — which reaches here as a COMPLETE usage with a
-// defined `cashCostUsd` and settles as a truthful-looking zero wearing the
-// provider's badge.
-//
-// The discriminator is the credential's billing mode, not the number: zero
-// cash cost is truthful for a SUBSCRIPTION credential and is not truthful for
-// a metered one that produced output tokens. Both arms below are needed —
-// either alone would also pass against a rule that simply refuses every zero,
-// which would misfile every genuinely-free subscription attempt.
-describe("settlementFromUsage: a metered zero is not a settlement", () => {
-  test("a metered attempt reporting $0 with output tokens settles unresolved", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0,
-    });
-
-    // `knownUsd` is absent on purpose: the whole point is that 0 is NOT a
-    // known cost here. Carrying it would relocate the same lie into the
-    // unresolved arm, where renderResult would print "$0 known".
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "unresolved",
-      knownUsd: undefined,
-    });
-  });
-
-  test("a subscription attempt reporting $0 with output tokens still settles 0", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "subscription",
-      costSource: "provider",
-      cashCostUsd: 0,
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "settle",
-      actualUsd: 0,
-    });
-  });
-
-  test("a metered attempt that produced no output tokens still settles 0", () => {
-    // The refusal-shaped case: a session that never reached the provider
-    // (opencode-sdk.ts `noSessionUsage`) is a real, truthful $0 even on a
-    // metered route. Gating on output tokens is what keeps it settleable.
-    const usage = normalizeInclusiveUsage({
-      wallMs: 40,
-      inputTotal: 0,
-      outputTotal: 0,
-      billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0,
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "settle",
-      actualUsd: 0,
-    });
-  });
-
-  test("a metered attempt with a real cost is untouched by the rule", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0.42,
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "settle",
-      actualUsd: 0.42,
-    });
-  });
-
-  test("a transport that reports only outputVisible is not exempt from the rule", () => {
-    // `outputKnown` is what the OpenCode transport populates, but the rule
-    // must not be dodgeable by a transport that fills the leaves and skips
-    // the rollup — otherwise the exemption is decided by which fields a
-    // transport happens to set rather than by whether tokens were produced.
+  test("a metered attempt that produced output tokens settles: no figure decides it", () => {
+    // Before T7 a metered attempt reporting a zero cost with output tokens was
+    // unresolved. Tokens are not a price, so completeness is all that is read.
     expect(
       settlementFromUsage({
         wallMs: 1200,
         tokens: { outputVisible: 50 },
         completeness: "complete",
         billingMode: "metered",
-        costSource: "provider",
-        cashCostUsd: 0,
       }),
-    ).toEqual({ kind: "unresolved", knownUsd: undefined });
+    ).toEqual({ kind: "settle" });
   });
 
-  test("an unknown billing mode reporting $0 is left to the capability gate", () => {
-    // `billingMode: "unknown"` is already a BLOCKING preflight result
-    // (design doc line 461, enforced by `cashCostAccountingValid`), so no
-    // such route reaches an attempt. Widening this rule to cover it would
-    // add a second, weaker enforcement point for a fact the gate already
-    // refuses outright.
+  test("a free attempt settles; a free route's usage is never judged by a price", () => {
     expect(
       settlementFromUsage({
         wallMs: 1200,
         tokens: { outputVisible: 50, outputKnown: 50 },
         completeness: "complete",
-        billingMode: "unknown",
-        costSource: "provider",
-        cashCostUsd: 0,
+        billingMode: "free",
       }),
-    ).toEqual({ kind: "settle", actualUsd: 0 });
-  });
-});
-
-// #182 follow-up, the free-nonzero rule: a model free at probe time can flip
-// to metered before/during the attempt, and the attempt then runs
-// credentialless under an empty projection. The transport accumulates
-// provider-reported cost per message, so priced work on a free-declared route
-// arrives here as complete usage with cash > 0 — unaccountable by definition,
-// since the route declared free. Measured first (Step-0 live probe, "Say OK"
-// on muse-spark-1.3-contributor-free): a legitimate free attempt reports cash
-// 0, so this rule cannot misfire on list-price reporting.
-describe("settlementFromUsage: priced work on a free-declared route is unresolved with a reason", () => {
-  test("a free attempt reporting $0 with output tokens still settles 0", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "free",
-      costSource: "provider",
-      cashCostUsd: 0,
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "settle",
-      actualUsd: 0,
-    });
+    ).toEqual({ kind: "settle" });
   });
 
-  test("a free attempt that never reached the provider (noSessionUsage shape) settles 0", () => {
-    // Route-mode stamp + cash 0 + empty tokens: a truthful zero, not a flip.
-    // No output-token gate on the free rule is what keeps this settleable —
-    // the discriminator is the cash figure alone.
+  test("an attempt that never reached the provider (empty tokens) settles", () => {
     expect(
       settlementFromUsage({
         wallMs: 40,
         tokens: {},
         completeness: "complete",
-        billingMode: "free",
-        costSource: "provider",
-        cashCostUsd: 0,
+        billingMode: "metered",
       }),
-    ).toEqual({ kind: "settle", actualUsd: 0 });
+    ).toEqual({ kind: "settle" });
   });
 
-  test("a free attempt reporting $0.06 complete resolves to unresolved WITH reason and knownUsd", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "free",
-      costSource: "provider",
-      cashCostUsd: 0.06,
-    });
-
-    // Asymmetry with metered-zero (which drops knownUsd) is deliberate: a
-    // metered 0 is an untrusted number, while this cash figure IS the
-    // provider's stated price — the fence and the harness fail-fast message
-    // both need it to name what happened.
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "unresolved",
-      knownUsd: 0.06,
-      reason: "free_nonzero_cost",
-    });
+  test("partial usage always resolves to unresolved, on every credential class", () => {
+    for (const billingMode of MODES) {
+      const usage = normalizePartialUsage({
+        wallMs: 800,
+        providerReportedTotal: 500,
+        billingMode,
+      });
+      expect(settlementFromUsage(usage)).toEqual({ kind: "unresolved" });
+    }
   });
 
-  test("a free attempt with undefined cash stays unresolved WITHOUT a reason (no evidence of billing)", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "free",
-      costSource: "provider",
-    });
+  test("unavailable usage resolves to unresolved", () => {
+    const usage = normalizeUnavailableUsage({ wallMs: 300 });
 
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "unresolved",
-      knownUsd: undefined,
-    });
-  });
-
-  test("a free attempt with incomplete usage stays unresolved WITHOUT a reason even when cash is known", () => {
-    // Partial usage never settles as a number and never fail-fasts: the cash
-    // figure on an incomplete record is not settlement-grade evidence.
-    const usage = normalizePartialUsage({
-      wallMs: 800,
-      providerReportedTotal: 500,
-      billingMode: "free",
-      costSource: "provider",
-      cashCostUsd: 0.06,
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "unresolved",
-      knownUsd: 0.06,
-    });
-  });
-
-  test("metered-zero arms are unchanged by the free rule (no reason carried)", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 1200,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0,
-    });
-
-    expect(settlementFromUsage(usage)).toEqual({
-      kind: "unresolved",
-      knownUsd: undefined,
-    });
+    expect(settlementFromUsage(usage)).toEqual({ kind: "unresolved" });
   });
 });
 
 describe("settle() type gate (coupling 1 consumer)", () => {
-  // 4.2 RED: settle()'s second argument is
-  // Extract<SettlementDecision, {kind:"settle"}> — a raw number must fail
-  // tsc, not be caught by a runtime guard. This is a compile-time proof:
-  // `bun run typecheck` fails if the `@ts-expect-error` below stops being
-  // necessary (i.e. if the signature is ever loosened to accept a number).
-  test("a bare number is not assignable to settle's decision parameter", () => {
-    type SettleDecisionArg = Parameters<InMemorySpendLedger["settle"]>[1];
-    // @ts-expect-error — a raw number is not assignable to
-    // Extract<SettlementDecision, {kind:"settle"}>; this must stay a type
-    // error, proving coupling 1 is type-unreachable rather than test-asserted.
-    const invalid: SettleDecisionArg = 5;
-    expect(invalid as unknown as number).toBe(5);
+  // settle()'s second argument is Extract<SettlementDecision, {kind:"settle"}>
+  // — an "unresolved" decision must fail tsc, not be caught by a runtime
+  // guard. `bun run typecheck` fails if the `@ts-expect-error` below stops
+  // being necessary.
+  test("an unresolved decision is not accepted by settle()", async () => {
+    const ledger = new InMemorySpendLedger();
+    const unresolved: SettlementDecision = { kind: "unresolved" };
+    // @ts-expect-error — only the "settle" arm is accepted; this must stay a
+    // type error, proving coupling 1 is type-unreachable rather than
+    // test-asserted. (The id is unknown, so the call rejects at runtime.)
+    await expect(ledger.settle("none", unresolved, "k")).rejects.toThrow();
   });
 
-  test("the settle arm is the only variant settle() accepts at the value level too", async () => {
+  test("the settle arm settles the reservation", async () => {
     const ledger = new InMemorySpendLedger();
-    const token = beginStep();
-    const reservation = await ledger.reserve(reserveInput(), token);
-    const decision: Extract<SettlementDecision, { kind: "settle" }> = {
-      kind: "settle",
-      actualUsd: 3.14,
-    };
+    const reservation = await ledger.reserve(reserveInput(), beginStep());
 
-    await ledger.settle(reservation.reservationId, decision, "idem-settle-1");
+    await ledger.settle(
+      reservation.reservationId,
+      { kind: "settle" },
+      "idem-settle-1",
+    );
 
     const settled = await ledger.getReservation(reservation.reservationId);
     expect(settled?.state).toBe("settled");
-    expect(settled?.settledUsd).toBe(3.14);
   });
 });
 
 describe("ReserveToken coupling (coupling 2)", () => {
-  // 4.3 RED: reserve() requires a ReserveToken; nextCycle() on a terminal
-  // disposition returns undefined, so a terminal attempt cannot construct
-  // one to open a new cycle.
+  // reserve() requires a ReserveToken; nextCycle() on a terminal disposition
+  // returns undefined, so a terminal attempt cannot construct one to open a
+  // new cycle.
   test("beginStep() yields a token that opens the first reservation of a step", async () => {
     const ledger = new InMemorySpendLedger();
     const token = beginStep();
@@ -411,29 +187,30 @@ describe("ReserveToken coupling (coupling 2)", () => {
 });
 
 describe("CAS idempotency", () => {
-  // 4.4 RED: double-settle/double-release on one reservationId+idempotencyKey
-  // is a no-op.
+  // Double-settle/double-release on one reservationId+idempotencyKey is a
+  // no-op.
   test("calling settle twice with the same idempotency key does not re-apply", async () => {
     const ledger = new InMemorySpendLedger();
-    const token = beginStep();
-    const reservation = await ledger.reserve(reserveInput(), token);
-    const decision: Extract<SettlementDecision, { kind: "settle" }> = {
-      kind: "settle",
-      actualUsd: 2.5,
-    };
+    const reservation = await ledger.reserve(reserveInput(), beginStep());
 
-    await ledger.settle(reservation.reservationId, decision, "idem-repeat");
-    await ledger.settle(reservation.reservationId, decision, "idem-repeat");
+    await ledger.settle(
+      reservation.reservationId,
+      { kind: "settle" },
+      "idem-repeat",
+    );
+    await ledger.settle(
+      reservation.reservationId,
+      { kind: "settle" },
+      "idem-repeat",
+    );
 
     const settled = await ledger.getReservation(reservation.reservationId);
     expect(settled?.state).toBe("settled");
-    expect(settled?.settledUsd).toBe(2.5);
   });
 
   test("calling releaseUnstarted twice with the same idempotency key does not throw", async () => {
     const ledger = new InMemorySpendLedger();
-    const token = beginStep();
-    const reservation = await ledger.reserve(reserveInput(), token);
+    const reservation = await ledger.reserve(reserveInput(), beginStep());
 
     await ledger.releaseUnstarted(reservation.reservationId, "idem-release");
     await ledger.releaseUnstarted(reservation.reservationId, "idem-release");
@@ -444,36 +221,30 @@ describe("CAS idempotency", () => {
 
   test("a second settle under a DIFFERENT idempotency key on an already-terminal reservation is a conflict, not a silent overwrite", async () => {
     const ledger = new InMemorySpendLedger();
-    const token = beginStep();
-    const reservation = await ledger.reserve(reserveInput(), token);
+    const reservation = await ledger.reserve(reserveInput(), beginStep());
 
     await ledger.settle(
       reservation.reservationId,
-      { kind: "settle", actualUsd: 1 },
+      { kind: "settle" },
       "idem-first",
     );
 
     await expect(
       ledger.settle(
         reservation.reservationId,
-        { kind: "settle", actualUsd: 999 },
+        { kind: "settle" },
         "idem-second",
       ),
     ).rejects.toBeInstanceOf(SpendReservationConflictError);
-
-    // The conflicting call must not have overwritten the settled amount.
-    const settled = await ledger.getReservation(reservation.reservationId);
-    expect(settled?.settledUsd).toBe(1);
   });
 
   test("the same idempotency key with a different terminal operation is a conflict, not a silent overwrite", async () => {
     const ledger = new InMemorySpendLedger();
-    const token = beginStep();
-    const reservation = await ledger.reserve(reserveInput(), token);
+    const reservation = await ledger.reserve(reserveInput(), beginStep());
 
     await ledger.settle(
       reservation.reservationId,
-      { kind: "settle", actualUsd: 1 },
+      { kind: "settle" },
       "idem-shared",
     );
 
@@ -483,24 +254,19 @@ describe("CAS idempotency", () => {
 
     const settled = await ledger.getReservation(reservation.reservationId);
     expect(settled?.state).toBe("settled");
-    expect(settled?.settledUsd).toBe(1);
   });
 });
 
 describe("unresolved_remote fences the bucket", () => {
-  // 4.5 RED: an unresolved_remote reservation in a bucket blocks any new
-  // reservation in that bucket for the rest of the run.
+  // An unresolved_remote reservation in a bucket blocks any new reservation in
+  // that bucket for the rest of the run.
   test("once a bucket has an unresolved_remote reservation, a new reservation in that bucket is refused before it runs", async () => {
     const ledger = new InMemorySpendLedger();
     const first = await ledger.reserve(
       reserveInput({ bucketId: "bucket-fenced" }),
       beginStep(),
     );
-    await ledger.markUnresolvedRemote(
-      first.reservationId,
-      0.5,
-      "idem-unresolved",
-    );
+    await ledger.markUnresolvedRemote(first.reservationId, "idem-unresolved");
 
     await expect(
       ledger.reserve(
@@ -516,7 +282,7 @@ describe("unresolved_remote fences the bucket", () => {
       reserveInput({ bucketId: "bucket-fenced-2" }),
       beginStep(),
     );
-    await ledger.markUnresolvedRemote(first.reservationId, undefined, "idem-2");
+    await ledger.markUnresolvedRemote(first.reservationId, "idem-2");
 
     const other = await ledger.reserve(
       reserveInput({ bucketId: "bucket-healthy" }),
@@ -524,5 +290,76 @@ describe("unresolved_remote fences the bucket", () => {
     );
 
     expect(other.state).toBe("reserved");
+  });
+});
+
+// The surviving rule end to end at the module level: usage completeness picks
+// the CAS transition, and only the fencing one blocks the credential. The
+// metered credential is the case that matters — incomplete usage there is a
+// hole in what the platform will price.
+describe("completeness drives the fence on a metered credential", () => {
+  async function finalize(usage: Parameters<typeof settlementFromUsage>[0]) {
+    const ledger = new InMemorySpendLedger();
+    const reservation = await ledger.reserve(
+      reserveInput({ bucketId: "bucket-metered" }),
+      beginStep(),
+    );
+    const decision = settlementFromUsage(usage);
+    if (decision.kind === "settle") {
+      await ledger.settle(reservation.reservationId, decision, "idem-final");
+    } else {
+      await ledger.markUnresolvedRemote(
+        reservation.reservationId,
+        "idem-final",
+      );
+    }
+    return ledger;
+  }
+
+  test("incomplete usage fences the bucket: the next reserve is refused", async () => {
+    const ledger = await finalize(
+      normalizePartialUsage({
+        wallMs: 10,
+        providerReportedTotal: 120,
+        billingMode: "metered",
+      }),
+    );
+
+    await expect(
+      ledger.reserve(
+        reserveInput({ bucketId: "bucket-metered", attempt: 2 }),
+        beginStep(),
+      ),
+    ).rejects.toBeInstanceOf(SpendReservationFencedError);
+  });
+
+  test("unavailable usage fences the bucket too", async () => {
+    const ledger = await finalize(
+      normalizeUnavailableUsage({ wallMs: 10, billingMode: "metered" }),
+    );
+
+    await expect(
+      ledger.reserve(
+        reserveInput({ bucketId: "bucket-metered", attempt: 2 }),
+        beginStep(),
+      ),
+    ).rejects.toBeInstanceOf(SpendReservationFencedError);
+  });
+
+  test("complete usage settles without fencing: the next reserve is admitted", async () => {
+    const ledger = await finalize(
+      normalizeInclusiveUsage({
+        wallMs: 10,
+        inputTotal: 100,
+        outputTotal: 50,
+        billingMode: "metered",
+      }),
+    );
+
+    const next = await ledger.reserve(
+      reserveInput({ bucketId: "bucket-metered", attempt: 2 }),
+      beginStep(),
+    );
+    expect(next.state).toBe("reserved");
   });
 });

@@ -158,9 +158,9 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     expect(await limitsFor([], false)).toBeUndefined();
   });
 
-  // cryskai/platform#12 item 5: with an OpenCode auth file on disk, the ceiling
-  // reads the routes the run actually resolves, from every source routing reads.
-  async function ceilingWithAuthFile(argv: string[]) {
+  // cryskai/platform#12 item 5: with an OpenCode auth file on disk, the billing
+  // mode reads the routes the run actually resolves, from every source routing reads.
+  async function billingWithAuthFile(argv: string[]) {
     const authDir = path.join(dir, "xdg", "opencode");
     mkdirSync(authDir, { recursive: true });
     writeFileSync(path.join(authDir, "auth.json"), "{}");
@@ -181,35 +181,35 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
       isCi: true,
       operatorRoot: repo,
     });
-    return step2.ciBudgetCeiling.budgetUsd;
+    return step2.ciBillingMode;
   }
 
   test("a model named on the removed --scout-model routes nothing, so a Claude run stays unmetered", async () => {
     expect(
-      await ceilingWithAuthFile([
+      await billingWithAuthFile([
         "--scout",
         "--scout-model",
         "opencode:deepseek/deepseek-v4-flash",
       ]),
-    ).toBeUndefined();
+    ).toBe("subscription");
   });
 
   test("--model is read the way routing reads it, surrounding spaces included", async () => {
     expect(
-      await ceilingWithAuthFile([
+      await billingWithAuthFile([
         "--model",
         " opencode:deepseek/deepseek-v4-flash",
       ]),
-    ).toBe(12);
+    ).toBe("metered");
   });
 
   test("an auth file no resolved route uses leaves a Claude run unmetered", async () => {
-    expect(
-      await ceilingWithAuthFile(["--model", "claude:sonnet-latest"]),
-    ).toBeUndefined();
+    expect(await billingWithAuthFile(["--model", "claude:sonnet-latest"])).toBe(
+      "subscription",
+    );
   });
 
-  // S5: the ceiling and the size limits follow the credential the run chose, not
+  // S5: the billing mode and the size limits follow the credential the run chose, not
   // the presence of a key. Both Claude secrets set is the billing change the docs
   // name: the default order picks the subscription.
   async function step2With(
@@ -239,23 +239,17 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     });
   }
 
-  test("S5: both Claude credentials, default order: the subscription is chosen, no metered ceiling", async () => {
+  test("S5: both Claude credentials, default order: the subscription is chosen, so the run is not metered", async () => {
     // The process still holds a key: the run env, not the process env, decides.
     process.env.ANTHROPIC_API_KEY = "sk-ambient";
     const step2 = await step2With(undefined);
-    expect(step2.ciBudgetCeiling).toEqual({
-      budgetUsd: undefined,
-      source: "unlimited-subscription",
-    });
+    expect(step2.ciBillingMode).toBe("subscription");
     expect(step2.ciSizeLimits?.defaultedOff).toEqual(["lines"]);
   });
 
-  test("S5: both Claude credentials, credentials.claude [api_key, subscription]: the key keeps the default ceiling", async () => {
+  test("S5: both Claude credentials, credentials.claude [api_key, subscription]: the key makes the run metered", async () => {
     const step2 = await step2With(["api_key", "subscription"]);
-    expect(step2.ciBudgetCeiling).toEqual({
-      budgetUsd: 12,
-      source: "default-metered",
-    });
+    expect(step2.ciBillingMode).toBe("metered");
     expect(step2.ciSizeLimits?.defaultedOff).toEqual([]);
   });
 });

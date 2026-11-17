@@ -1,5 +1,5 @@
 // The terminal surface's INTERACTIVE half: the keyboard-driven menu that
-// replaced the cost band's `[y/N]` read. ui/primitives.ts stays pure by construction;
+// replaced the plain `[y/N]` read. ui/primitives.ts stays pure by construction;
 // this module is where the one unavoidable side effect — putting the user's
 // terminal into raw mode — is quarantined behind an injected reader, so every
 // decision above it (which options exist, where the cursor lands, what a key
@@ -13,7 +13,6 @@
 // keeps the old plain-text behaviour byte for byte, and the restore lives in a
 // `finally` so a throw mid-menu cannot strand a human in raw mode.
 
-import type { FreeRouteBilling } from "#model/free-discovery";
 import { bold, dim, log } from "./primitives";
 
 export type ConfirmResult =
@@ -82,7 +81,6 @@ interface MenuOption {
   // re-presents the menu instead of resolving it.
   action: "review" | "details" | "cancel";
   label: string;
-  hint?: string;
   // Lowercase single characters. `y`/`n` are kept on the review/cancel rows on
   // purpose: they are what a decade of `[y/N]` prompts trained into fingers.
   shortcuts: string[];
@@ -90,11 +88,6 @@ interface MenuOption {
 }
 
 export interface ConfirmSpec {
-  low: number;
-  high: number;
-  // Set only for a route the plan card already priced as free or mixed. Absent
-  // means today's wording on both the menu hint and the plain prompt.
-  billing?: FreeBillingMode;
   // Only true when the run was actually going to post: offering "don't post"
   // to a run that never would is an option with no meaning behind it.
   canSkipPost: boolean;
@@ -137,8 +130,7 @@ export function menuOptions(canSkipPost: boolean): MenuOption[] {
 
 export type SizeGateConfirmResult = { kind: "proceed" } | { kind: "cancel" };
 
-// Continue / Cancel only. No cost hint (the gate exists because we will
-// not guess at this bill) and no details view (the SKIP line above the
+// Continue / Cancel only, and no details view (the SKIP line above the
 // menu already named the reason and the two flag hatches).
 export function sizeGateMenuOptions(): MenuOption[] {
   return [
@@ -157,55 +149,6 @@ export function sizeGateMenuOptions(): MenuOption[] {
   ];
 }
 
-const LABEL_WIDTH = 32;
-
-// The billing mode of an admitted route plan, derived ONCE from the same
-// free-step count the plan card prints (planEstimateLine in ui/plan.ts reads
-// this too). All steps free: nothing is billed. Some free: the band stays and
-// names the free share. Otherwise there is no mode, and today's wording stands.
-export type FreeBillingMode = "free" | "mixed";
-
-export const FREE_STEPS_NOTE = "(free steps not billed)";
-
-export function freeBillingMode(
-  free: FreeRouteBilling | undefined,
-): FreeBillingMode | undefined {
-  if (free === undefined || free.total === 0) return undefined;
-  if (free.free === free.total) return "free";
-  return free.free > 0 ? "mixed" : undefined;
-}
-
-function band(low: number, high: number): string {
-  return `$${low.toFixed(2)} – $${high.toFixed(2)}`;
-}
-
-// The menu's first-row hint. A free route shows no dollar figure at all: the
-// band would read as spend, which is the claim the plan card just retracted.
-export function costHint(
-  low: number,
-  high: number,
-  billing?: FreeBillingMode,
-): string {
-  if (billing === "free") return "free route (not billed)";
-  if (billing === "mixed") return `${band(low, high)} ${FREE_STEPS_NOTE}`;
-  return band(low, high);
-}
-
-// The plain [y/N] prompt's sentence, without its question mark and answer
-// domain. Metered is the sentence this module always printed, byte for byte.
-export function spendSentence(
-  low: number,
-  high: number,
-  billing?: FreeBillingMode,
-): string {
-  const range = `$${low.toFixed(2)}–$${high.toFixed(2)}`;
-  if (billing === "free") {
-    return `Run this review on a free route (token-derived ${range}, not billed)`;
-  }
-  const note = billing === "mixed" ? ` ${FREE_STEPS_NOTE}` : "";
-  return `Spend an estimated ${range} on this review${note}`;
-}
-
 // The frame, as lines. Built unstyled and painted per line, same rule as the
 // plan card: the pointer is plain text either way, so a piped run reads
 // correctly with no escapes at all.
@@ -217,10 +160,7 @@ export function renderMenu(
   return options.map((option, i) => {
     const active = i === cursor;
     const head = active ? "❯ " : "  ";
-    const body = option.hint
-      ? `${option.label.padEnd(LABEL_WIDTH)}${option.hint}`
-      : option.label;
-    const line = `  ${head}${body}`;
+    const line = `  ${head}${option.label}`;
     if (!styles) return line;
     return active ? bold(line, true) : dim(line, true);
   });
@@ -265,11 +205,6 @@ export async function runConfirm(
   if (!reader.raw) return runPlainConfirm(spec, reader, io);
 
   const options = menuOptions(spec.canSkipPost);
-  const withHint = options.map((option, i) =>
-    i === 0
-      ? { ...option, hint: costHint(spec.low, spec.high, spec.billing) }
-      : option,
-  );
   let cursor = 0;
   // Repainting in place needs cursor-movement escapes, which are exactly what
   // must never reach a pipe. When styling is off the frames are simply
@@ -279,7 +214,7 @@ export async function runConfirm(
 
   const draw = (): void => {
     if (repaint && drawn > 0) io.write(`${ESC}[${drawn}A`);
-    const lines = renderMenu(withHint, cursor, spec.styles);
+    const lines = renderMenu(options, cursor, spec.styles);
     for (const line of lines) {
       if (repaint) io.write(`${ESC}[2K`);
       io.line(line);
@@ -313,19 +248,15 @@ export async function runConfirm(
         return { kind: "cancel" };
       }
       if (key.type === "up" || key.type === "down") {
-        cursor = moveCursor(
-          cursor,
-          key.type === "up" ? -1 : 1,
-          withHint.length,
-        );
+        cursor = moveCursor(cursor, key.type === "up" ? -1 : 1, options.length);
         draw();
         continue;
       }
       const chosen =
         key.type === "enter"
-          ? withHint[cursor]
+          ? options[cursor]
           : key.type === "char"
-            ? withHint.find((option) => option.shortcuts.includes(key.char))
+            ? options.find((option) => option.shortcuts.includes(key.char))
             : undefined;
       if (chosen === undefined) continue;
       if (chosen.action === "details") {
@@ -357,7 +288,7 @@ async function runPlainConfirm(
   io: ConfirmIo,
 ): Promise<ConfirmResult> {
   io.line();
-  io.write(`${spendSentence(spec.low, spec.high, spec.billing)}? [y/N] `);
+  io.write("Run this review? [y/N] ");
   const answer = (await reader.read())?.trim().toLowerCase() ?? "";
   io.line();
   return answer === "y" || answer === "yes"
@@ -437,8 +368,7 @@ export async function confirmReview(
 }
 
 // Sibling of runConfirm for the size-gate override. Same reader/io contract,
-// same unanswered-is-no rule, no details view and no dollar hint — guessing
-// at this bill is the thing the gate refuses to do.
+// same unanswered-is-no rule, no details view.
 export async function runSizeGateConfirm(
   styles: boolean,
   reader: KeyReader,

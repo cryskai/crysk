@@ -539,13 +539,12 @@ function buildOpenCodeProjection(
 //     `type === "oauth"` lock. This kind promises a metered API token;
 //     projecting an OAuth record under it would make the capability report's
 //     `billing.mode: "metered"` wrong in the other direction — a subscription
-//     route gated, and charged, as if it spent cash per token.
+//     route gated as if it were a per-token credential.
 //
 // Projection shape proven live (2026-09-01, opencode 1.18.23): a synthetic
 // HOME carrying only `{ <provider>: { type: "api", ... } }` is read as exactly
 // that one credential, with the operator's sibling providers absent, on two
-// different provider keys. Inference under that credential is NOT yet proven —
-// that smoke is blocked on #137's pricing table.
+// different provider keys. Inference under that credential is NOT yet proven.
 // ---------------------------------------------------------------------------
 
 // The provider name is interpolated into a JSON object key and compared
@@ -700,9 +699,9 @@ export class OpenCodeApiTokenBroker implements CredentialBroker {
 //     throws — the record lookup above never gets the chance to.
 //
 // Accepted cost (owner decision, #280, 2026-09-24): a model that flips from
-// free to paid mid-run can spend on one attempt before the free-nonzero
-// settlement rule fences the bucket — unchanged from #182, since billing
-// stays keyed on `provider_free`/"free" regardless of what this broker
+// free to paid mid-run can run one attempt before a re-probe notices —
+// unchanged from #182, since the platform prices the usage the engine reports
+// and billing stays keyed on `provider_free`/"free" regardless of what this broker
 // projects. And an OpenCode Zen user with a stored `opencode` api key now
 // runs Zen's free models with that key rather than keyless — accepted
 // because it is strictly an upgrade (a working credential where none

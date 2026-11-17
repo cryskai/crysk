@@ -269,6 +269,35 @@ describe("parseArgs", () => {
     expect(removedFlagWarnings(base)).toEqual([]);
   });
 
+  // platform-owned-cost S7: `--billing` only chose whether `setup --ci` wrote a
+  // budget, so it retires with `--budget-usd`: accepted for any value, on any
+  // command, no effect, one warning.
+  test("--billing is accepted with any value, changes nothing else and warns once", () => {
+    const base = parseArgs(["setup", "--ci", "--level", "balanced"]).options;
+    const withBilling = parseArgs([
+      "setup",
+      "--ci",
+      "--level",
+      "balanced",
+      "--billing",
+      "api",
+      "--billing",
+      "free",
+    ]).options;
+    expect(withBilling.removedFlags).toEqual(["--billing"]);
+    expect({ ...withBilling, removedFlags: undefined }).toEqual({
+      ...base,
+      removedFlags: undefined,
+    });
+    expect("billing" in withBilling).toBe(false);
+    expect(removedFlagWarnings(withBilling)).toEqual([
+      "--billing is ignored: dollar limits moved to the Crysk platform, so setup no longer asks how the review is paid",
+    ]);
+    expect(
+      parseArgs(["review", "--billing", "x"]).options.removedFlags,
+    ).toEqual(["--billing"]);
+  });
+
   test("post is tri-state: undefined by default, true with --post, false with --no-post", () => {
     expect(parseArgs(["review"]).options.post).toBeUndefined();
     expect(parseArgs(["review", "--pr", "42", "--post"]).options.post).toBe(

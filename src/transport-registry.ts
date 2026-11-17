@@ -396,7 +396,6 @@ export interface D1_11ReadinessEvidence {
   readonly sdkAvailable: boolean;
   readonly credentialAuthority: boolean;
   readonly workspaceBroker: boolean;
-  readonly pricingReady: boolean;
   readonly issues?: readonly {
     code: string;
     message: string;
@@ -415,12 +414,7 @@ export function checkD1_11Readiness(
   if (!evidence) {
     return {
       ready: false,
-      missing: [
-        "sdkAvailable",
-        "credentialAuthority",
-        "workspaceBroker",
-        "pricingReady",
-      ],
+      missing: ["sdkAvailable", "credentialAuthority", "workspaceBroker"],
     };
   }
 
@@ -434,9 +428,6 @@ export function checkD1_11Readiness(
     }
     if (!report.isolation.workspaceReadBroker) {
       missing.push("workspaceBroker");
-    }
-    if (!report.billing.pricingReady) {
-      missing.push("pricingReady");
     }
     const hasDeferredSdkIssue = (report.issues ?? []).some(
       (i) => i.code === "real_sdk_adapter_deferred_to_d1_11",
@@ -454,9 +445,6 @@ export function checkD1_11Readiness(
     }
     if (!d1Evidence.workspaceBroker) {
       missing.push("workspaceBroker");
-    }
-    if (!d1Evidence.pricingReady) {
-      missing.push("pricingReady");
     }
   }
 
@@ -665,9 +653,9 @@ export class DefaultTransportRegistry implements TransportRegistry {
       // Every caller of the public `createProductionRuntime` that supplies
       // its own registry bypasses the only wiring that sets it
       // (`productionFallbackRegistry`), so a metered route's records were
-      // stamped "subscription" — which makes `settlementFromUsage`'s
-      // metered-zero rule dead and lets an unaccountable provider $0 settle
-      // as a truthful cost. `defaultOptions.credentialKind` is now the
+      // stamped "subscription" — which files a metered route's usage under
+      // the wrong credential class for the platform's pricing.
+      // `defaultOptions.credentialKind` is now the
       // FALLBACK for callers holding no binding; `get()`'s merge order
       // (`{ ...defaultOptions, ...options }`) lets the per-binding value win.
       //
@@ -679,8 +667,8 @@ export class DefaultTransportRegistry implements TransportRegistry {
       // the metered test (`credentialKindBillsMetered` is false for free, so
       // order is what keeps the stamp exact). Everything downstream passes the
       // mode through generically — the transport stamps it onto every usage
-      // record (incl. `noSessionUsage`, which stays settleable at 0 with empty
-      // tokens) and `settlementFromUsage`'s free-nonzero rule reads it.
+      // record (incl. `noSessionUsage`, which stays complete with empty
+      // tokens).
       const usageBillingMode: UsageBillingMode =
         merged.credentialKind === "provider_free"
           ? "free"
@@ -915,18 +903,6 @@ export class DefaultTransportRegistry implements TransportRegistry {
             },
             billing: {
               mode: "subscription",
-              // #137 leaves this hardcoded: no model id is in scope. This is
-              // the synthetic report for a backend whose transport could not
-              // be CONSTRUCTED (OpenCodeProductionGatedError), so there is no
-              // route, no client and no model behind it — and the report is
-              // already blocking on `d1_11_production_gated`.
-              //
-              // 2026-09-02: NOT the case the OpenCode transport's `true`
-              // covers. That claim is a TRANSPORT reporting the provider cost
-              // it reads off each assistant message; here there is no
-              // transport to make the claim, so `false` is the only honest
-              // answer and stays one.
-              pricingReady: false,
             },
             issues: [
               {

@@ -2,14 +2,12 @@
 // for them when an agent runs it. The answers are plain data (CiSetupChoices);
 // src/ci/review-levels.ts turns them into config keys and workflow inputs.
 
-import { CI_DEFAULT_METERED_BUDGET_USD } from "#ci/gates";
 import {
   DEFAULT_CI_ADVISORY_WEIGHT,
   DEFAULT_CI_BLOCKING_WEIGHT,
 } from "#ci/review-admission";
 import {
   type AdvancedChoices,
-  type Billing,
   type CiSetupChoices,
   type CurrentSettings,
   DEFAULT_MAX_CHANGED_LINES,
@@ -46,31 +44,18 @@ export interface SetupPrompter {
 export function choicesFromFlags(
   options: Pick<
     CliOptions,
-    | "reviewLevel"
-    | "ciMode"
-    | "billing"
-    | "budgetUsd"
-    | "maxChangedLines"
-    | "maxChangedFiles"
+    "reviewLevel" | "ciMode" | "maxChangedLines" | "maxChangedFiles"
   >,
 ): CiSetupChoices | undefined {
   const given =
     options.reviewLevel !== undefined ||
     options.ciMode !== undefined ||
-    options.billing !== undefined ||
-    options.budgetUsd !== undefined ||
     options.maxChangedLines !== undefined ||
     options.maxChangedFiles !== undefined;
   if (!given) return undefined;
-  const billing: Billing | undefined =
-    options.billing ?? (options.budgetUsd !== undefined ? "api" : undefined);
   return {
     level: options.reviewLevel ?? DEFAULT_REVIEW_LEVEL,
     mode: options.ciMode ?? "gate",
-    ...(billing === undefined ? {} : { billing }),
-    ...(options.budgetUsd === undefined
-      ? {}
-      : { budgetUsd: options.budgetUsd }),
     maxChangedLines: options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES,
     advanced:
       options.maxChangedFiles === undefined
@@ -82,7 +67,6 @@ export function choicesFromFlags(
       level: options.reviewLevel !== undefined,
       maxChangedLines: options.maxChangedLines !== undefined,
       mode: options.ciMode !== undefined,
-      billing: billing !== undefined,
     },
   };
 }
@@ -139,7 +123,6 @@ export async function askChoices(
     level: true,
     maxChangedLines: true,
     mode: true,
-    billing: true,
   };
   const cfg = current.config;
 
@@ -186,45 +169,9 @@ export async function askChoices(
     current.workflow.mode ?? "gate",
   );
 
-  choices.billing = await prompter.choose<Billing>(
-    "How will CI pay for reviews?",
-    [
-      {
-        value: "subscription",
-        label: "Claude subscription",
-        description:
-          "CRYSK_CLAUDE_OAUTH_TOKEN. Reviews spend quota, not dollars.",
-      },
-      {
-        value: "api",
-        label: "API key",
-        description:
-          "CRYSK_CLAUDE_API_KEY or an OpenCode provider's CRYSK_OPENCODE_* key. Reviews are billed per token.",
-      },
-    ],
-    current.workflow.budgetUsd === undefined ? "subscription" : "api",
-  );
-  if (choices.billing === "subscription") {
-    say(
-      `  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the run uses CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model with its CRYSK_OPENCODE_* secret. A run on CRYSK_CLAUDE_API_KEY (no subscription set, or api_key first in credentials.claude) or an OpenCode model with its CRYSK_OPENCODE_* secret brings back the $${CI_DEFAULT_METERED_BUDGET_USD} ceiling.`,
-    );
-  } else {
-    choices.budgetUsd = await askValue(
-      prompter,
-      "Spend ceiling per review in USD (0 = none)",
-      current.workflow.budgetUsd ?? String(CI_DEFAULT_METERED_BUDGET_USD),
-      (raw) => {
-        const n = Number(raw);
-        return raw !== "" && Number.isFinite(n) && n >= 0 ? n : undefined;
-      },
-      say,
-      "Enter a number, 0 or more, for example 10 or 7.5.",
-    );
-  }
-
   say();
   say(
-    "Size threshold: a PR with more changed lines than this is skipped, not reviewed. It applies on any billing: without it a subscription reviews any size.",
+    "Size threshold: a PR with more changed lines than this is skipped, not reviewed. It applies on any route: without it a subscription reviews any size.",
   );
   choices.maxChangedLines = await askValue(
     prompter,

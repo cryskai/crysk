@@ -148,13 +148,12 @@ describe("buildTelemetry", () => {
       tokens_in: 10,
       tokens_out: 20,
       tokens_total: 30,
-      cost_usd_est: 0.5,
     },
     perAgent: { reliability: { tokens_total: 30, duration_ms: 100 } },
     unresolved: [],
   } as unknown as Parameters<typeof buildTelemetry>[0];
 
-  test("local mode shape: indexMs 0, no cost_usd_est_is_floor when unresolved is empty", () => {
+  test("local mode shape: indexMs 0, tokens and per-agent usage only", () => {
     const telemetry = buildTelemetry(baseResult, 12345, 0);
     expect(telemetry).toEqual({
       index_ms: 0,
@@ -164,7 +163,6 @@ describe("buildTelemetry", () => {
       tokens_in: 10,
       tokens_out: 20,
       tokens_total: 30,
-      cost_usd_est: 0.5,
       per_agent: { reliability: { tokens_total: 30, duration_ms: 100 } },
     });
   });
@@ -175,13 +173,14 @@ describe("buildTelemetry", () => {
     expect(telemetry.wall_ms).toBe(999);
   });
 
-  test("a non-empty unresolved list sets cost_usd_est_is_floor: true", () => {
+  test("a non-empty unresolved list leaves the telemetry shape unchanged", () => {
     const resultWithUnresolved = {
       ...baseResult,
       unresolved: [{ reservationId: "r1" }],
     } as unknown as Parameters<typeof buildTelemetry>[0];
-    const telemetry = buildTelemetry(resultWithUnresolved, 1, 0);
-    expect(telemetry.cost_usd_est_is_floor).toBe(true);
+    expect(buildTelemetry(resultWithUnresolved, 1, 0)).toEqual(
+      buildTelemetry(baseResult, 1, 0),
+    );
   });
 });
 

@@ -105,7 +105,6 @@ function makeFakeSpawn(script: ScriptedCall[]): {
 function envelope(
   result: string,
   tokens: { input: number; output: number } = { input: 100, output: 20 },
-  cost = 0.01,
 ): string {
   return JSON.stringify({
     result,
@@ -115,7 +114,7 @@ function envelope(
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
     },
-    total_cost_usd: cost,
+    total_cost_usd: 0.01,
   });
 }
 
@@ -249,11 +248,10 @@ describe("ClaudeCodeRunner success path", () => {
   test("captures usage from the envelope", async () => {
     const { spawnFn } = makeFakeSpawn([
       {
-        stdout: envelope(
-          JSON.stringify(GOOD_DRAFT),
-          { input: 300, output: 40 },
-          0.05,
-        ),
+        stdout: envelope(JSON.stringify(GOOD_DRAFT), {
+          input: 300,
+          output: 40,
+        }),
       },
     ]);
     // #177: `childEnv: {}` is load-bearing, not tidiness. The Claude CLI
@@ -267,14 +265,20 @@ describe("ClaudeCodeRunner success path", () => {
     expect(stepResult.usage.tokens_in).toBe(300);
     expect(stepResult.usage.tokens_out).toBe(40);
     expect(stepResult.usage.tokens_total).toBe(340);
-    // #173: `cost_usd_est` is projected from `cashCostUsd`, and a claude-code
-    // route is a subscription — nothing is charged, so the legacy figure is a
-    // truthful 0. The CLI's list-basis number is not lost, it moved to
-    // `notionalCostUsd`, and asserting BOTH here is what makes this a
-    // relocation rather than a deletion.
-    expect(stepResult.usage.cost_usd_est).toBe(0);
-    expect(stepResult.usageV2?.cashCostUsd).toBe(0);
-    expect(stepResult.usageV2?.notionalCostUsd).toBe(0.05);
+    // The envelope carries the CLI's own `total_cost_usd`; the engine reports
+    // tokens and the credential class only, so neither the legacy usage nor
+    // the normalized record carries any money field.
+    expect(stepResult.usageV2?.billingMode).toBe("subscription");
+    expect(stepResult.usageV2?.tokens.totalKnown).toBe(340);
+    expect(Object.keys(stepResult.usage).sort()).toEqual([
+      "tokens_in",
+      "tokens_out",
+      "tokens_total",
+      "wall_ms",
+    ]);
+    expect(
+      Object.keys(stepResult.usageV2 ?? {}).filter((key) => /cost/i.test(key)),
+    ).toEqual([]);
   });
 });
 
@@ -283,18 +287,13 @@ describe("ClaudeCodeRunner transient retry", () => {
   const transientEnvelope = envelope(
     "API Error: Connection closed mid-response",
     { input: 100, output: 20 },
-    0.01,
   );
 
   test("retries once, deletes stale debris, sums usage", async () => {
     const { spawnFn, calls } = makeFakeSpawn([
       { stdout: transientEnvelope },
       {
-        stdout: envelope(
-          JSON.stringify(GOOD_DRAFT),
-          { input: 50, output: 5 },
-          0.02,
-        ),
+        stdout: envelope(JSON.stringify(GOOD_DRAFT), { input: 50, output: 5 }),
       },
     ]);
     const spec = await makeSpec();
@@ -308,16 +307,12 @@ describe("ClaudeCodeRunner transient retry", () => {
     expect(stepResult.status).toBe("ok");
     expect(stepResult.attempts).toBe(2);
     expect(calls.length).toBe(2);
-    // Usage summed across BOTH attempts — the failed one still consumed quota.
+    // Usage summed across BOTH attempts — the failed one still consumed quota —
+    // and the credential class survives the sum (both attempts are subscription).
     expect(stepResult.usage.tokens_in).toBe(150);
     expect(stepResult.usage.tokens_out).toBe(25);
-    // #173: the cash figure is 0 on a subscription and stays 0 however many
-    // attempts run, while the notional figure ACCUMULATES across them
-    // (0.01 + 0.02). That is `sumNormalizedUsage`'s "cash and notional
-    // accumulate independently" rule reaching production for the first time.
-    expect(stepResult.usage.cost_usd_est).toBe(0);
-    expect(stepResult.usageV2?.cashCostUsd).toBe(0);
-    expect(stepResult.usageV2?.notionalCostUsd).toBeCloseTo(0.03);
+    expect(stepResult.usageV2?.tokens.totalKnown).toBe(175);
+    expect(stepResult.usageV2?.billingMode).toBe("subscription");
     expect(await Bun.file(spec.outPath).json()).toEqual(GOOD_DRAFT);
   });
 
@@ -521,7 +516,6 @@ describe("ClaudeCodeRunner malformed stdout", () => {
     const stepResult = await runner.run(spec);
     expect(stepResult.status).toBe("failed");
     expect(stepResult.usage.tokens_total).toBe(0);
-    expect(stepResult.usage.cost_usd_est).toBe(0);
   });
 });
 

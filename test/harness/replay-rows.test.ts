@@ -128,7 +128,6 @@ describe("refuterReplayRow", () => {
       expect: "keep",
       label: "real",
       prompt_check: "match",
-      notional_usd: 0.5,
       wall_ms: 1200,
     } as never);
   });
@@ -152,7 +151,6 @@ describe("refuterReplayRow", () => {
       verdict: "inconclusive",
       status: "failed",
       stderr_tail: "quota",
-      notional_usd: null,
     });
     expect(row.route.backend).toBe("opencode");
   });
@@ -215,7 +213,6 @@ describe("consolidateStepRow", () => {
       plan: [{ primary: "F001", sources: ["F001", "F002"] }],
       in: 2,
       out: 1,
-      notional_usd: 0.1,
       model: "sonnet",
       route: route.identity.route,
       route_fingerprint: route.identity.routeFingerprint,
@@ -238,7 +235,6 @@ describe("consolidateStepRow", () => {
       status: "fallback",
       in: 1,
       out: 1,
-      notional_usd: null,
       step_route_fingerprint: route.identity.stepRouteFingerprint,
     });
     expect(row.reason).toHaveLength(300);

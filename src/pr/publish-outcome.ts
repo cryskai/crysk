@@ -27,14 +27,9 @@
 import path from "node:path";
 import { classifyCliError } from "#ci/classify-error";
 import { recordReviewDelivered, writeCliRecord } from "#ci/cli-record";
-import {
-  ingestReviewMetrics,
-  notionalCostInput,
-  persistCanonicalReview,
-} from "#config/config";
+import { ingestReviewMetrics, persistCanonicalReview } from "#config/config";
 import { gitRemoteWebUrl } from "#git/git";
 import { engineIdentity } from "#git/identity";
-import type { FreeRouteBilling } from "#model/free-discovery";
 import {
   type CiAdmissionLedgerState,
   settleCiAdmissionLedger,
@@ -54,13 +49,11 @@ import type { ParsedAgent, PromptSetIdentity } from "#review/prompt-set";
 import {
   type DiffStat,
   envelopeModel,
-  type estimateCost,
   incompleteReviewAnnotation,
 } from "#review/report";
 import { buildTelemetry, writeRunFindings, writeRunReport } from "#review/run";
 import { log, styleEnabled } from "#ui/primitives";
 import { type ResultLinks, renderResult } from "#ui/result";
-import { freeBillingMode } from "#ui/select";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 
@@ -93,10 +86,6 @@ export interface PublishRunOutcomeInput {
   ciMode: CiMode;
   // The `post_min_severity` config key. Only the PR comments read it.
   postMinSeverity?: PostMinSeverity;
-  estimate: ReturnType<typeof estimateCost>;
-  // W3-FOOTER: the plan's free-route count. Absent means no free share, and the
-  // footer keeps its subscription wording.
-  freeRoute?: FreeRouteBilling;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   // Fired the instant `posted` would have been assigned inside reviewPr()
   // itself — see the header above.
@@ -289,13 +278,7 @@ export async function publishRunOutcome(
         };
   for (const line of renderResult({
     doc,
-    costUsd: result.usage.cost_usd_est,
-    ...notionalCostInput(result),
-    ...(input.freeRoute === undefined
-      ? {}
-      : { billing: freeBillingMode(input.freeRoute) }),
     wallMs,
-    estimate: { low: input.estimate.low, high: input.estimate.high },
     runDir: input.runDir,
     artifacts: [
       path.basename(reportPath),
@@ -337,7 +320,6 @@ export async function publishRunOutcome(
     prNumber: input.prNumber,
     headSha: input.headSha,
     findings: doc.findings,
-    costUsdEst: result.usage.cost_usd_est,
     wallMs,
     model: envelopeModel(input.options, input.agentFiles, result.routePlan),
     webUrl,

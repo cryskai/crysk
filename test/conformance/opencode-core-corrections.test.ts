@@ -32,7 +32,6 @@ const part = (extra: Record<string, unknown> = {}) => ({
   text: "ANSWER",
   ...extra,
 });
-const user = { id: uid, role: "user", sessionID: sid };
 const event = (info: unknown) => ({
   type: "message.updated",
   properties: { sessionID: sid, info },
@@ -126,33 +125,6 @@ test("ambiguous dispatched error cannot certify zero cash", async () => {
   expect(result.usage.completeness).toBe("unavailable");
   expect(settlementFromUsage(result.usage).kind).not.toBe("settle");
 });
-test("tokens without price leave aggregate spend incomplete", async () => {
-  const tool = assistant({ id: "msg_tool", finish: "tool-calls", cost: 0.1 });
-  const final = assistant({ cost: undefined });
-  const result = await run(
-    [
-      { info: user, parts: [] },
-      { info: tool, parts: [] },
-      { info: final, parts: [part()] },
-    ],
-    [event(user), event(tool), event(final)],
-  );
-  expect(result.usage.completeness).not.toBe("complete");
-  expect(settlementFromUsage(result.usage).kind).not.toBe("settle");
-});
-test.each([0.1, 0.9])(
-  "completed usage conflict is incomplete in either direction: %s",
-  async (cost) => {
-    const result = await run(
-      [
-        { info: user, parts: [] },
-        { info: assistant(), parts: [part()] },
-      ],
-      [event(user), event(assistant({ cost }))],
-    );
-    expect(result.usage.completeness).not.toBe("complete");
-  },
-);
 test("foreign part lineage cannot establish a final result", () => {
   const result = reconcileMessages(
     [

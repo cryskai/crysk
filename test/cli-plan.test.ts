@@ -1,7 +1,7 @@
 // The plan card and its details view, as LINES. Both pairs of renderers
 // (local mode's and PR mode's) were `(ctx) => void` runs of log() calls until
-// WU4 and therefore had ZERO coverage: the card that decides whether an
-// operator spends $4 was the least-tested output in the CLI, and the details
+// WU4 and therefore had ZERO coverage: the card an operator reads before
+// proceeding was the least-tested output in the CLI, and the details
 // pair could sit dead through a clean `bun run check` because biome does not
 // flag exported symbols.
 //
@@ -13,7 +13,6 @@ import { describe, expect, test } from "bun:test";
 import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
 import type { CliOptions, ConfigSources } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
-import { estimateCost } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
 import type { ReviewSpec } from "#review/spec";
 import {
@@ -35,7 +34,7 @@ const joined = (lines: string[]): string => stripAnsi(lines.join("\n"));
 // so the two halves of the terminal surface are asserted against one grid.
 const PINNED_WIDTH = 80;
 // Narrow enough to move the wrap points: at 40 columns the decision block's
-// money line is two rows, not one, which is exactly the failure an unpinned
+// gate line is two rows, not one, which is exactly the failure an unpinned
 // width used to produce inside a split pane.
 const NARROW_WIDTH = 40;
 
@@ -126,13 +125,11 @@ const planContext = (over: Partial<PlanContext> = {}): PlanContext => ({
   config: { suspicion_priors: [] },
   summary: { enabled: true, model: "haiku" },
   codegraphAvailable: true,
-  estimate: estimateCost(diffStat, 2, true),
-  hunterCount: 2,
   sizeGate: okGate,
   droppedPaths: [],
   // PINNED, on every case. Without it these renderers measured
   // process.stdout.columns — the terminal that happened to be running the
-  // suite — so an assertion like "the money line is the last line" passed in
+  // suite — so an assertion like "the gate line is the last line" passed in
   // an 80-column pane and failed in a 40-column one. See the determinism
   // block at the bottom of this file.
   width: PINNED_WIDTH,
@@ -161,8 +158,6 @@ const prPlanContext = (over: Partial<PrPlanContext> = {}): PrPlanContext => ({
   spec,
   config: { suspicion_priors: [] },
   summary: { enabled: true, model: "haiku" },
-  estimate: estimateCost(diffStat, 2, true),
-  hunterCount: 2,
   sizeGate: okGate,
   droppedPaths: [],
   // Pinned for the reason PlanContext's is.
@@ -188,17 +183,16 @@ describe("renderPlan", () => {
     expect(text).toContain("per severe finding");
     expect(text).toContain("summarizer");
     expect(text).toContain("haiku");
-    expect(text).toContain("+ summarizer");
     // BOTH endpoints, short-sha'd — the rule the details view spells out.
     expect(text).toContain("main → 1111111111  (--base)");
     expect(text).toContain("2222222222 → 3333333333  (merge base)");
     expect(text).toContain("hop budget 3");
-    // The decision block is LAST: gate verdict, then the money.
+    // The decision block is LAST: the gate verdict, and no money row after it.
     const gateAt = lines.findIndex((l) => l.includes("size gate"));
-    const moneyAt = lines.findIndex((l) => l.includes("estimate $"));
     expect(gateAt).toBeGreaterThan(0);
-    expect(moneyAt).toBeGreaterThan(gateAt);
-    expect(moneyAt).toBe(lines.length - 1);
+    expect(gateAt).toBe(lines.length - 1);
+    expect(text).not.toContain("$");
+    expect(text).not.toContain("estimate");
   });
 
   test('every hunter reads "always" and the card has no parity row or line', () => {
@@ -208,12 +202,11 @@ describe("renderPlan", () => {
     expect(text).toContain("always");
   });
 
-  test("a disabled summarizer is visible and not billed", () => {
+  test("a disabled summarizer is visible", () => {
     const text = joined(
       renderPlan(
         planContext({
           summary: { enabled: false, model: "opus" },
-          estimate: estimateCost(diffStat, 2, false),
         }),
         false,
       ),
@@ -221,7 +214,6 @@ describe("renderPlan", () => {
     expect(text).toContain("summarizer");
     expect(text).toContain("opus");
     expect(text).toContain("disabled");
-    expect(text).toContain("+ summarizer disabled");
   });
 
   test("the plan carries no scout row and no scout label", () => {
@@ -330,8 +322,9 @@ describe("renderPrPlan", () => {
     expect(text).toContain("worktree will be created");
     expect(text).toContain("summarizer");
     expect(text).toContain("haiku");
-    expect(text).toContain("+ summarizer");
-    expect(joined([lines[lines.length - 1] ?? ""])).toContain("estimate $");
+    expect(joined([lines[lines.length - 1] ?? ""])).toContain("size gate");
+    expect(text).not.toContain("$");
+    expect(text).not.toContain("estimate");
   });
 
   test("pre-fetch the plan admits both unknowns instead of guessing", () => {
@@ -542,12 +535,12 @@ describe("plan renderers are deterministic offline", () => {
     expect(narrow).not.toEqual(wide);
     expect(narrow.length).toBeGreaterThan(wide.length);
     // The decision block is where the old flakiness lived: at 80 columns the
-    // money line is one row (and therefore the last line), at 40 it wraps to
+    // gate line is one row (and therefore the last line), at 40 it wraps to
     // two — the exact assertion that used to fail for no reason but the pane.
-    const wideMoney = wide.filter((l) => l.includes("estimate $"));
-    expect(wideMoney).toHaveLength(1);
-    expect(wide.indexOf(wideMoney[0] ?? "")).toBe(wide.length - 1);
-    expect(narrow[narrow.length - 1]).not.toContain("estimate $");
+    const wideGate = wide.filter((l) => l.includes("size gate"));
+    expect(wideGate).toHaveLength(1);
+    expect(wide.indexOf(wideGate[0] ?? "")).toBe(wide.length - 1);
+    expect(narrow[narrow.length - 1]).not.toContain("size gate");
   });
 
   test("every renderer threads the width all the way down", () => {
@@ -576,8 +569,8 @@ describe("plan renderers are deterministic offline", () => {
   });
 
   test("a failed gate with exclusions stays deterministic too", () => {
-    // The longest decision block there is: gate verdict, exclusion note,
-    // --force note, money. Every one of those four goes through
+    // The longest decision block there is: gate verdict, exclusion note and
+    // --force note. Every one of those goes through
     // markerRowLines, so this is the case that catches a missed width
     // argument on any of them.
     const ctx = planContext({

@@ -46,8 +46,8 @@ export interface ToolCall {
 }
 
 // One model call of an agent loop (#511): an OpenCode attempt is dozens of
-// these, one assistant message each, and each message records its own times,
-// tokens and cost. Token counts are OpenCode's disjoint leaves.
+// these, one assistant message each, and each message records its own times
+// and tokens. Token counts are OpenCode's disjoint leaves.
 export interface Turn {
   startMs?: number;
   endMs?: number;
@@ -60,7 +60,6 @@ export interface Turn {
   reasoningTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
-  costUsd?: number;
   // What the turn answered. Content only: withoutContent drops it.
   message?: ChatMessage;
 }
@@ -454,8 +453,8 @@ function count(value: unknown): number | undefined {
     : undefined;
 }
 
-// An assistant message's own record: `time.created`/`completed` in epoch ms,
-// `tokens` {input, output, reasoning, cache: {read, write}} and `cost` in USD.
+// An assistant message's own record: `time.created`/`completed` in epoch ms
+// and `tokens` {input, output, reasoning, cache: {read, write}}.
 // A message still being written has no `completed` time.
 function openCodeTurn(info: Record<string, unknown>): Turn {
   const time = isRecord(info.time) ? info.time : {};
@@ -471,7 +470,6 @@ function openCodeTurn(info: Record<string, unknown>): Turn {
     ["reasoningTokens", count(tokens.reasoning)],
     ["cacheReadTokens", count(cache.read)],
     ["cacheWriteTokens", count(cache.write)],
-    ["costUsd", count(info.cost)],
   ];
   const turn: Record<string, unknown> = {};
   for (const [key, value] of leaves) if (value !== undefined) turn[key] = value;

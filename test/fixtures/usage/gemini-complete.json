@@ -15,10 +15,7 @@
     "inputCacheRead": 300,
     "outputTotal": 150,
     "outputReasoning": 50,
-    "billingMode": "metered",
-    "costSource": "provider",
-    "cashCostUsd": 0.0009,
-    "notionalCostUsd": 0.0009
+    "billingMode": "metered"
   },
   "expected": {
     "wallMs": 2600,
@@ -33,9 +30,6 @@
       "providerReportedTotal": 950
     },
     "completeness": "complete",
-    "billingMode": "metered",
-    "costSource": "provider",
-    "cashCostUsd": 0.0009,
-    "notionalCostUsd": 0.0009
+    "billingMode": "metered"
   }
 }

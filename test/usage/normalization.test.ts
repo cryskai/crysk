@@ -19,7 +19,6 @@ describe("normalizeInclusiveUsage — proven inclusion split (§8 line 455)", ()
       outputTotal: 50,
       outputReasoning: 20,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     expect(result.tokens.inputCacheRead).toBe(30);
@@ -37,7 +36,6 @@ describe("normalizeInclusiveUsage — proven inclusion split (§8 line 455)", ()
       inputCacheRead: 400,
       outputTotal: 200,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     expect(result.tokens.inputCacheRead).toBe(400);
@@ -54,7 +52,6 @@ describe("normalizeInclusiveUsage — proven inclusion split (§8 line 455)", ()
       inputCacheRead: 40,
       outputTotal: 0,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     const leafSum =
@@ -70,7 +67,6 @@ describe("normalizeInclusiveUsage — proven inclusion split (§8 line 455)", ()
       inputCacheRead: 15,
       outputTotal: 0,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     expect(result.tokens.inputOther).toBe(0);
@@ -83,7 +79,6 @@ describe("normalizePartialUsage — unproven inclusion (§8 line 457)", () => {
       wallMs: 500,
       providerReportedTotal: 1234,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     expect(result.completeness).toBe("partial");
@@ -99,7 +94,6 @@ describe("normalizePartialUsage — unproven inclusion (§8 line 457)", () => {
       wallMs: 0,
       providerReportedTotal: 42,
       billingMode: "subscription",
-      costSource: "subscription",
     });
 
     expect(result.tokens.providerReportedTotal).toBe(42);
@@ -180,83 +174,48 @@ describe("envBillsMetered — the shared metered-credential signal (#177)", () =
   });
 });
 
-describe("cash and notional cost stay separate", () => {
-  test("a subscription attempt keeps cashCostUsd at 0 while notionalCostUsd is nonzero, untouched", () => {
-    const result = normalizeInclusiveUsage({
-      wallMs: 1000,
-      inputTotal: 100,
-      outputTotal: 50,
-      billingMode: "subscription",
-      costSource: "subscription",
-      cashCostUsd: 0,
-      notionalCostUsd: 3.5,
-    });
-
-    expect(result.cashCostUsd).toBe(0);
-    expect(result.notionalCostUsd).toBe(3.5);
-  });
-
-  test("sumNormalizedUsage accumulates cash and notional independently, never crossing", () => {
+describe("usage records carry no money field", () => {
+  test("builders, sums and the legacy projection emit tokens, completeness and credential class only", () => {
     const a = normalizeInclusiveUsage({
       wallMs: 100,
       inputTotal: 10,
       outputTotal: 10,
       billingMode: "subscription",
-      costSource: "subscription",
-      cashCostUsd: 0,
-      notionalCostUsd: 1,
     });
-    const b = normalizeInclusiveUsage({
+    const b = normalizePartialUsage({
       wallMs: 100,
-      inputTotal: 10,
-      outputTotal: 10,
+      providerReportedTotal: 5,
       billingMode: "subscription",
-      costSource: "subscription",
-      cashCostUsd: 0,
-      notionalCostUsd: 2,
     });
-
     const total = sumNormalizedUsage(a, b);
-    expect(total.cashCostUsd).toBe(0);
-    expect(total.notionalCostUsd).toBe(3);
-  });
+    const costKeys = (value: object) =>
+      Object.keys(value).filter((key) => /cost/i.test(key));
 
-  test("projectLegacyUsage's cost_usd_est reflects only cashCostUsd, never notionalCostUsd", () => {
-    const usage = normalizeInclusiveUsage({
-      wallMs: 100,
-      inputTotal: 10,
-      outputTotal: 10,
-      billingMode: "subscription",
-      costSource: "subscription",
-      cashCostUsd: 0,
-      notionalCostUsd: 99,
-    });
-
-    const legacy = projectLegacyUsage(usage);
-    expect(legacy.cost_usd_est).toBe(0);
+    expect(costKeys(a)).toEqual([]);
+    expect(costKeys(b)).toEqual([]);
+    expect(costKeys(total)).toEqual([]);
+    expect(costKeys(projectLegacyUsage(total))).toEqual([]);
+    expect(total.billingMode).toBe("subscription");
   });
 });
 
 describe("sumNormalizedUsage — accumulation across attempts", () => {
-  test("keeps billingMode and costSource when both attempts agree", () => {
+  test("keeps billingMode when both attempts agree", () => {
     const a = normalizeInclusiveUsage({
       wallMs: 1,
       inputTotal: 1,
       outputTotal: 1,
       billingMode: "metered",
-      costSource: "provider",
     });
     const b = normalizeInclusiveUsage({
       wallMs: 1,
       inputTotal: 1,
       outputTotal: 1,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     const total = sumNormalizedUsage(a, b);
     expect(total.billingMode).toBe("metered");
-    expect(total.costSource).toBe("provider");
   });
 
   test("falls back to unknown when attempts disagree rather than guessing", () => {
@@ -265,19 +224,16 @@ describe("sumNormalizedUsage — accumulation across attempts", () => {
       inputTotal: 1,
       outputTotal: 1,
       billingMode: "metered",
-      costSource: "provider",
     });
     const b = normalizeInclusiveUsage({
       wallMs: 1,
       inputTotal: 1,
       outputTotal: 1,
       billingMode: "subscription",
-      costSource: "subscription",
     });
 
     const total = sumNormalizedUsage(a, b);
     expect(total.billingMode).toBe("unknown");
-    expect(total.costSource).toBe("unknown");
   });
 
   test("completeness degrades to the worst of the two attempts", () => {
@@ -286,13 +242,11 @@ describe("sumNormalizedUsage — accumulation across attempts", () => {
       inputTotal: 1,
       outputTotal: 1,
       billingMode: "metered",
-      costSource: "provider",
     });
     const partial = normalizePartialUsage({
       wallMs: 1,
       providerReportedTotal: 5,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     const total = sumNormalizedUsage(complete, partial);
@@ -305,13 +259,11 @@ describe("sumNormalizedUsage — accumulation across attempts", () => {
       inputTotal: 100,
       outputTotal: 80,
       billingMode: "metered",
-      costSource: "provider",
     });
     const partial = normalizePartialUsage({
       wallMs: 50,
       providerReportedTotal: 500,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     const total = sumNormalizedUsage(complete, partial);
@@ -326,7 +278,6 @@ describe("sumNormalizedUsage — accumulation across attempts", () => {
       inputCacheRead: 4,
       outputTotal: 5,
       billingMode: "metered",
-      costSource: "provider",
     });
     const b = normalizeInclusiveUsage({
       wallMs: 200,
@@ -334,7 +285,6 @@ describe("sumNormalizedUsage — accumulation across attempts", () => {
       inputCacheRead: 8,
       outputTotal: 7,
       billingMode: "metered",
-      costSource: "provider",
     });
 
     const total = sumNormalizedUsage(a, b);
@@ -392,8 +342,6 @@ describe("projectLegacyUsage — exact legacy shape at the runPipeline boundary"
       outputTotal: 60,
       outputReasoning: 10,
       billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0.42,
     });
 
     const legacy = projectLegacyUsage(usage);
@@ -402,7 +350,6 @@ describe("projectLegacyUsage — exact legacy shape at the runPipeline boundary"
       tokens_in: 120,
       tokens_out: 60,
       tokens_total: 180,
-      cost_usd_est: 0.42,
     });
   });
 
@@ -411,8 +358,6 @@ describe("projectLegacyUsage — exact legacy shape at the runPipeline boundary"
       wallMs: 100,
       providerReportedTotal: 999,
       billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 1.1,
     });
 
     const legacy = projectLegacyUsage(usage);
@@ -421,7 +366,6 @@ describe("projectLegacyUsage — exact legacy shape at the runPipeline boundary"
       tokens_in: 0,
       tokens_out: 0,
       tokens_total: 999,
-      cost_usd_est: 1.1,
     });
   });
 });

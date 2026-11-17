@@ -60,12 +60,15 @@ export interface IngestRunInput {
   generatedAt?: string;
 }
 
+// `cost_usd_est` is a LEGACY column (see the note on store.ts's RUN_UPSERT_SQL):
+// NOT NULL since schema v1, so new rows carry the constant 0, nothing reads it,
+// and a re-ingest of an existing run keeps its stored figure.
 const RUN_UPSERT_SQL = `
   INSERT INTO runs (
     repo_id, run_dir, pr, checkout_path, head_sha, base_sha, run_status,
     session_failed, model, generated_at, wall_ms, index_ms, tokens_in,
     tokens_out, tokens_total, cost_usd_est, blocking, advisory
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
   ON CONFLICT(run_dir) DO UPDATE SET
     repo_id = excluded.repo_id,
     pr = excluded.pr,
@@ -81,7 +84,6 @@ const RUN_UPSERT_SQL = `
     tokens_in = excluded.tokens_in,
     tokens_out = excluded.tokens_out,
     tokens_total = excluded.tokens_total,
-    cost_usd_est = excluded.cost_usd_est,
     blocking = excluded.blocking,
     advisory = excluded.advisory
 `;
@@ -103,7 +105,6 @@ function runParams(row: RunRow): SQLQueryBindings[] {
     row.tokens_in,
     row.tokens_out,
     row.tokens_total,
-    row.cost_usd_est,
     row.blocking,
     row.advisory,
   ];
@@ -150,7 +151,7 @@ function insertAgents(
     INSERT INTO run_agents (
       run_id, agent_key, tokens_total, duration_ms, tokens_in, tokens_out,
       cost_usd_est, attempts, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
   `);
   for (const agent of agents) {
     insert.run(
@@ -160,7 +161,6 @@ function insertAgents(
       agent.duration_ms,
       agent.tokens_in,
       agent.tokens_out,
-      agent.cost_usd_est,
       agent.attempts,
       agent.status,
     );

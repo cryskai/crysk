@@ -99,7 +99,6 @@ import { gcCommand } from "#store/gc";
 import {
   type ConfigProvenance,
   configProvenanceOf,
-  dryRunHunterCount,
   type PlanContext,
   type PrPlanContext,
   planDetails,
@@ -111,7 +110,6 @@ import {
 export {
   type ConfigProvenance,
   configProvenanceOf,
-  dryRunHunterCount,
   type PlanContext,
   type PrPlanContext,
   planDetails,

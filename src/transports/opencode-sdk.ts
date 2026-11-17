@@ -56,7 +56,6 @@ function sumDefinedLeaves(
 interface TerminalUsage {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
-  readonly costUsd?: number;
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
   readonly reasoningTokens?: number;
@@ -215,7 +214,6 @@ export type OpenCodeClientEvent =
       readonly final?: boolean;
       readonly inputTokens?: number;
       readonly outputTokens?: number;
-      readonly costUsd?: number;
       // OpenCode's disjoint-additive token leaves (see opencode-client.ts
       // StepUsage). Optional: a route that reports only input/output omits them.
       readonly cacheReadTokens?: number;
@@ -626,14 +624,12 @@ function errorMessage(error: unknown): string {
 }
 
 // Session creation failing means no attempt ever reached the provider —
-// genuine zero cost, not "unavailable" (which would misfile a $0 refusal as
-// an unresolved spend now that PR5b's spend ledger does read completeness).
+// genuinely no usage, not "unavailable" (which would misfile a refusal as an
+// unresolved spend now that the spend ledger reads completeness).
 //
 // 2026-09-02: it carries the ROUTE's billing mode like every other usage
-// record here, metered included. That is safe precisely because `tokens` is
-// empty — `settlementFromUsage`'s metered-zero rule gates on output tokens,
-// so this stays settleable at 0 while a metered attempt that actually
-// produced output does not.
+// record here, metered included, so a retry that sums this with a spawned
+// attempt keeps one credential class.
 function noSessionUsage(
   wallMs: number,
   billingMode: UsageBillingMode,
@@ -643,8 +639,6 @@ function noSessionUsage(
     tokens: {},
     completeness: "complete",
     billingMode,
-    costSource: "provider",
-    cashCostUsd: 0,
   };
 }
 
@@ -770,7 +764,7 @@ export class OpenCodeSdkTransport implements ProviderTransport {
 
   // §11/D1-09 honesty: every unimplemented feature is claimed false with a
   // non-blocking issue, never assumed green — hence status "degraded", not
-  // "ready". The real adapter, credential route, and pricing table are D1-11.
+  // "ready". The real adapter and credential route are D1-11.
   async capabilities(
     input?: OpenCodeCapabilitiesInput,
   ): Promise<ProviderCapabilityReport> {
@@ -799,45 +793,6 @@ export class OpenCodeSdkTransport implements ProviderTransport {
       },
       billing: {
         mode: "subscription",
-        // 2026-09-02: `true`, because this transport reports PROVIDER COST.
-        //
-        // The design's metered rule (§8, docs/multi-runtime-model-diversity-
-        // design.md line 461) is a disjunction and its order is the point:
-        // "Metered routes require provider cost or a versioned rate-table
-        // calculation." Provider cost is named FIRST — it is the primary
-        // path; the rate table is the fallback for a transport that reports
-        // nothing. `tokenPricingAvailable` in production-runtime.ts has read
-        // both disjuncts since #137.
-        //
-        // This transport satisfies the first one. The OpenCode SDK's
-        // `AssistantMessage` carries a NON-OPTIONAL `cost: number` (and so
-        // does `StepFinishPart`); `opencode-client.ts` reads it off every
-        // assistant message, this file accumulates it across the turn, and
-        // the outcome's usage carries it as `cashCostUsd` with
-        // `costSource: "provider"`. That is a provider-reported cost for
-        // whatever model the route named, with no table involved — which is
-        // why it holds for all of models.dev, not the two providers we bundle
-        // a table for, and why it does not expire.
-        //
-        // What this REPLACES, because the old reasoning was not wrong so much
-        // as aimed at the wrong disjunct: it argued that no model id is in
-        // scope here, that the factory hands this transport only `{ client }`,
-        // and that an Anthropic catalogue would not cover `openai/gpt-4o`
-        // anyway. Every clause of that is true OF THE RATE TABLE, which this
-        // transport genuinely cannot consult — and none of it bears on
-        // provider cost, which needs no model id because the provider prices
-        // its own call. Applying a table's limitation to the cost path left
-        // the design's primary source unconnected, so a metered route on any
-        // model outside the two bundled catalogues was refused as unpriceable
-        // while the provider was reporting its price on every message.
-        //
-        // #197: the claim is no longer scoped to this transport. The
-        // claude-code CLI reports `total_cost_usd`, so its transport and its
-        // backend-wide producer now answer `true` for the same reason this
-        // one does. The remaining `false` is transport-registry.ts's
-        // synthetic report for a backend whose transport could not be
-        // CONSTRUCTED — no transport, so no claim.
-        pricingReady: true,
       },
       ...(input !== undefined
         ? {
@@ -862,23 +817,6 @@ export class OpenCodeSdkTransport implements ProviderTransport {
           code: "usage_mode_client_reported",
           message:
             "usage aggregation mode (§4.2 line 195) is fixed at runtime by the first client usage event, so no static snapshot/delta claim can be defended; usageMode is 'none'",
-          blocking: false,
-        },
-        {
-          // NOTIONAL cost, a different fact from the cash cost above: what a
-          // subscription attempt WOULD have cost metered. No route is in
-          // scope here to name a model, and since #197 there is no bundled
-          // table to look one up in either — a subscription attempt's
-          // notional figure now comes from whatever the transport reports for
-          // the attempt, not from this report.
-          //
-          // #197 removed this list's OTHER `pricing_table_missing` entry,
-          // which said no bundled table could be consulted from here: both
-          // halves of it died with the tables, and a "missing table" issue
-          // beside `pricingReady: true` read as a contradiction.
-          code: "pricing_table_missing",
-          message:
-            "no route is in scope here, so notional cost cannot be derived for this backend's models; subscription cash cost stays 0",
           blocking: false,
         },
       ],
@@ -1292,7 +1230,6 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     // `applyUsageUpdate` is the pure snapshot-replaces/delta-accumulates state
     // machine, shared with every other transport that folds a usage stream.
     let usageState: UsageModeState | undefined;
-    let cashCostUsd: number | undefined;
     let sinkClosed = false;
     let closedDataPlaneEvents = 0;
     let pollTimeouts = 0;
@@ -1367,7 +1304,6 @@ export class OpenCodeSdkTransport implements ProviderTransport {
       // onto `done` for every event a long stream delivers.
       const settledSignal = done.then(() => STREAM_SETTLED);
       let lastKnownTokens = 0;
-      let lastKnownCost = 0;
       try {
         for (;;) {
           const step = await Promise.race([iterator.next(), settledSignal]);
@@ -1376,7 +1312,7 @@ export class OpenCodeSdkTransport implements ProviderTransport {
           const event = step.value;
           if (settled) return;
           // Provider-silence tripwire accounting: advance progress only on novel
-          // delta text or strictly advanced usage tokens/cost. Heartbeats and
+          // delta text or strictly advanced usage tokens. Heartbeats and
           // duplicate identical usage are keepalives, not signs of real delivery.
           let advancedProgress = false;
           if (event.kind === "delta") {
@@ -1390,11 +1326,9 @@ export class OpenCodeSdkTransport implements ProviderTransport {
           } else if (event.kind === "usage") {
             const totalTokens =
               (event.inputTokens ?? 0) + (event.outputTokens ?? 0);
-            const cost = event.costUsd ?? 0;
-            if (totalTokens > lastKnownTokens || cost > lastKnownCost) {
+            if (totalTokens > lastKnownTokens) {
               advancedProgress = true;
-              if (totalTokens > lastKnownTokens) lastKnownTokens = totalTokens;
-              if (cost > lastKnownCost) lastKnownCost = cost;
+              lastKnownTokens = totalTokens;
             }
           }
           if (advancedProgress) {
@@ -1478,15 +1412,7 @@ export class OpenCodeSdkTransport implements ProviderTransport {
                 }
                 throw error;
               }
-              if (event.costUsd !== undefined) {
-                cashCostUsd =
-                  event.mode === "snapshot"
-                    ? event.costUsd
-                    : (cashCostUsd ?? 0) + event.costUsd;
-              }
-              const usage: Partial<NormalizedTokens> & {
-                cashCostUsd?: number;
-              } = {
+              const usage: Partial<NormalizedTokens> = {
                 ...(event.inputTokens !== undefined
                   ? { inputUncached: event.inputTokens }
                   : {}),
@@ -1501,9 +1427,6 @@ export class OpenCodeSdkTransport implements ProviderTransport {
                   : {}),
                 ...(event.reasoningTokens !== undefined
                   ? { outputReasoning: event.reasoningTokens }
-                  : {}),
-                ...(event.costUsd !== undefined
-                  ? { cashCostUsd: event.costUsd }
                   : {}),
               };
               const pushed = await pushGuarded({
@@ -1989,16 +1912,10 @@ export class OpenCodeSdkTransport implements ProviderTransport {
 
       const effectiveIncomplete = usageIncomplete || terminalUsageIncomplete;
 
-      const effectiveCostUsd =
-        terminalUsage?.costUsd !== undefined
-          ? Math.max(cashCostUsd ?? 0, terminalUsage.costUsd)
-          : cashCostUsd;
-
       const hasObservedUsage =
         usageState !== undefined ||
         (terminalUsage !== undefined &&
-          (terminalUsage.costUsd !== undefined ||
-            terminalUsage.inputTokens !== undefined ||
+          (terminalUsage.inputTokens !== undefined ||
             terminalUsage.outputTokens !== undefined));
 
       outcome = {
@@ -2014,22 +1931,17 @@ export class OpenCodeSdkTransport implements ProviderTransport {
           : {}),
         finalText: effectiveFinalText,
         // §8: no usage event ever arriving is not a proven zero —
-        // "unavailable" says honestly that the cost is unknown rather than
-        // fabricating a $0 for a session that DID run. `usageState` defined
+        // "unavailable" says honestly that the usage is unknown rather than
+        // fabricating a zero for a session that DID run. `usageState` defined
         // means at least one usage event landed and fixed a mode, so the
         // leaves it accumulated are trustworthy.
         //
-        // 2026-09-02: the parenthetical here used to read "capabilities().
-        // protocol.usageMode is 'none' until D1-11's real SDK adapter", which
-        // misattributed that field. `usageMode: "none"` is not a gap waiting
-        // on an adapter — it is the honest static answer to a RUNTIME
+        // `usageMode: "none"` in the static capability report is not a gap
+        // waiting on an adapter — it is the honest static answer to a RUNTIME
         // question, because the aggregation mode is fixed by the first usage
         // event (§4.2 line 195) and no static snapshot/delta claim can be
         // defended before one arrives. The transport's own
-        // `usage_mode_client_reported` issue says exactly that. Reading the
-        // old wording as "usage does not arrive yet" is what made
-        // `pricingReady: false` look consistent with a client that has been
-        // reading the provider's cost off every assistant message.
+        // `usage_mode_client_reported` issue says exactly that.
         usage: !hasObservedUsage
           ? promptRefusedBeforeStart(
               reason,
@@ -2065,16 +1977,9 @@ export class OpenCodeSdkTransport implements ProviderTransport {
               // any provider but `openai` runs on a `provider_api_token`
               // and therefore bills METERED, and the exact-binding
               // capability report has said so since. This record used to
-              // contradict it — and the contradiction is exploitable, not
-              // cosmetic: `settlementFromUsage`'s metered-zero rule reads
-              // THIS field, so a metered attempt wearing a subscription
-              // badge settles a provider-reported $0 as truthful.
+              // contradict it, and the credential class it reports is what
+              // the platform prices the run by.
               billingMode: this.usageBillingMode,
-              costSource:
-                effectiveCostUsd !== undefined ? "provider" : "unknown",
-              ...(effectiveCostUsd !== undefined
-                ? { cashCostUsd: effectiveCostUsd }
-                : {}),
             },
         // D1-07 bridge recovers watchdog_timeout from harness-set timedOut on
         // the outcome, not from transport notes.

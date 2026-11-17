@@ -1,6 +1,6 @@
 // Offline tests for the config domain (cli-decomp S2, Cluster A): the
 // two-layer read (loadEffectiveConfig/loadGlobalConfigLayer), the
-// pipeline-input adapters (notionalCostInput/pipelineConfigInput), and the
+// pipeline-input adapter (pipelineConfigInput), and the
 // review()/reviewPr() caller-seam wrappers (ingestReviewMetrics/
 // persistCanonicalReview). Moved out of test/cli.test.ts, which tested these
 // functions before they were extracted from cli.ts into src/config/config.ts.
@@ -21,7 +21,6 @@ import {
   ingestReviewMetrics,
   loadEffectiveConfig,
   loadGlobalConfigLayer,
-  notionalCostInput,
   persistCanonicalReview,
   pipelineConfigInput,
 } from "#config/config";
@@ -46,7 +45,6 @@ const TELEMETRY: Telemetry = {
   tokens_in: 10,
   tokens_out: 10,
   tokens_total: 20,
-  cost_usd_est: 1,
 };
 
 function doc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {
@@ -66,68 +64,6 @@ function doc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {
     ...overrides,
   };
 }
-
-// #173. The engine has now shipped three fully-built, correct, never-connected
-// mechanisms (the spend ledger #171, the provider-cost disjunct, and
-// `notionalCostUsd` itself), so the LAST wiring step gets its own pin rather
-// than being trusted to the shell. The renderers and the pipeline rollup are
-// covered by their own suites; without this, deleting all four call sites in
-// `review()`/`reviewPr()` flips zero tests — verified by mutation, which is
-// exactly how the previous three stayed invisible.
-describe("notionalCostInput — the shell's cash/notional split (#173)", () => {
-  test("a subscription run's list figure reaches the renderers", () => {
-    expect(
-      notionalCostInput({
-        usageV2: {
-          wallMs: 1,
-          tokens: {},
-          completeness: "complete",
-          billingMode: "subscription",
-          costSource: "subscription",
-          cashCostUsd: 0,
-          notionalCostUsd: 0.0455,
-        },
-      }),
-    ).toEqual({ notionalUsd: 0.0455 });
-  });
-
-  // Absence over fabrication, on both doors into it: a runner that reported no
-  // normalized usage at all, and one that reported usage carrying no list
-  // figure. Both must yield NO key — the renderers omit their notional row on
-  // `undefined`, and a `0` here would print a list-price claim for a run that
-  // never produced one.
-  test("no rollup, and a rollup with no list figure, both stay absent", () => {
-    expect(notionalCostInput({})).toEqual({});
-    expect(
-      notionalCostInput({
-        usageV2: {
-          wallMs: 1,
-          tokens: {},
-          completeness: "unavailable",
-          billingMode: "unknown",
-          costSource: "unknown",
-        },
-      }),
-    ).toEqual({});
-  });
-
-  // A metered route reports real cash and no notional, so it keeps showing a
-  // single figure — the split must not invent a second one for it.
-  test("a metered run with cash and no notional stays single-figure", () => {
-    expect(
-      notionalCostInput({
-        usageV2: {
-          wallMs: 1,
-          tokens: {},
-          completeness: "complete",
-          billingMode: "metered",
-          costSource: "provider",
-          cashCostUsd: 0.42,
-        },
-      }),
-    ).toEqual({});
-  });
-});
 
 describe("ingestReviewMetrics — the review()/reviewPr() caller seam (W4 Phase 6)", () => {
   test("a throwing ingest degrades to a warning, never throws", () => {

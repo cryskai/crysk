@@ -41,7 +41,6 @@ function sampleDoc(
       tokens_in: 5000,
       tokens_out: 500,
       tokens_total: 5500,
-      cost_usd_est: 0.15,
       per_agent: {
         reliability: { tokens_total: 5500, duration_ms: 2500 },
       },

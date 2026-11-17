@@ -47,9 +47,7 @@ function exactBindingReport(
     usage: { normalized: true },
     billing: {
       mode: "subscription",
-      pricingApplicability: "not_applicable",
-      tokenPricingAvailable: false,
-      cashCostAccountingValid: true,
+      modeKnown: true,
     },
     ...overrides,
   };

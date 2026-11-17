@@ -65,7 +65,6 @@ function baseDoc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {
       tokens_in: 100,
       tokens_out: 50,
       tokens_total: 150,
-      cost_usd_est: 0.42,
     },
     findings: [baseFinding()],
     debug: { refuted: [] },
@@ -79,7 +78,6 @@ const PER_AGENT: Record<string, PerAgentUsage> = {
     duration_ms: 4000,
     tokens_in: 70,
     tokens_out: 30,
-    cost_usd_est: 0.3,
     attempts: 1,
     status: "ok",
   },
@@ -153,6 +151,59 @@ describe("ingestRun + queryUsage", () => {
       blocking: 1,
       advisory: 0,
     });
+  });
+
+  test("a new run stores no cost, and a row written before that kept its stored figure and still reads", async () => {
+    const dbPath = await tmpDbPath();
+    const seed = openMetricsDb(dbPath);
+    try {
+      // A row from before the engine dropped dollars, cost column and all.
+      seed
+        .query(
+          `INSERT INTO runs (repo_id, run_dir, pr, checkout_path, head_sha, base_sha, run_status,
+             session_failed, model, generated_at, wall_ms, index_ms, tokens_in, tokens_out,
+             tokens_total, cost_usd_est, blocking, advisory)
+           VALUES (?, '/runs/legacy-1', NULL, NULL, ?, ?, 'complete', 0, 'sonnet',
+             '2026-01-01T00:00:00.000Z', 1000, 0, 10, 5, 15, 1.25, 0, 0)`,
+        )
+        .run(REPO_A, "c".repeat(40), "d".repeat(40));
+    } finally {
+      seed.close();
+    }
+    const ingest = (runDir: string) =>
+      ingestRun({
+        dbPath,
+        repoId: REPO_A,
+        runDir,
+        checkoutPath: null,
+        doc: baseDoc({ pr: 0 }),
+        perAgent: PER_AGENT,
+        generatedAt: "2026-08-15T12:00:00.000Z",
+      });
+    ingest("/runs/new-1");
+    // Re-ingesting the legacy run dir must not overwrite its stored figure.
+    ingest("/runs/legacy-1");
+    const rows = queryUsage(dbPath, { repoId: REPO_A });
+    expect(rows.map((row) => row.run_dir).sort()).toEqual([
+      "/runs/legacy-1",
+      "/runs/new-1",
+    ]);
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const stored = db
+        .query("SELECT run_dir, cost_usd_est FROM runs ORDER BY run_dir;")
+        .all() as { run_dir: string; cost_usd_est: number }[];
+      expect(stored).toEqual([
+        { run_dir: "/runs/legacy-1", cost_usd_est: 1.25 },
+        { run_dir: "/runs/new-1", cost_usd_est: 0 },
+      ]);
+      const agentCosts = db
+        .query("SELECT cost_usd_est FROM run_agents;")
+        .all() as { cost_usd_est: number }[];
+      expect(agentCosts.every((agent) => agent.cost_usd_est === 0)).toBe(true);
+    } finally {
+      db.close();
+    }
   });
 
   test("a PR run keeps the numeric pr, and re-ingest keeps comparison rows stored before", async () => {

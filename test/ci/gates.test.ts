@@ -10,21 +10,17 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  type BudgetGateVerdict,
-  budgetDisabledWarningMessage,
-  budgetUnlimitedNoticeMessage,
-  CI_DEFAULT_METERED_BUDGET_USD,
   CI_DEFAULT_METERED_MAX_CHANGED_FILES,
-  type CiBudgetGateSkipInput,
   type CiGateSkip,
   type CiSizeGateSkipInput,
-  ciBudgetGateSkip,
+  ciLimitsGateSkip,
   ciSizeGateSkip,
   deriveCiBillingMode,
-  evaluateBudgetGate,
+  evaluatePlatformLimits,
   planCiExcludedSkip,
-  resolveCiBudgetCeiling,
+  planCiLimitsSkip,
   resolveCiSizeLimits,
+  SKIP_BUDGET_COMMENT_MARKER,
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { renderStepSummary } from "#ci/reporter";
@@ -32,8 +28,6 @@ import {
   openCodeProvidersOfModels,
   openCodeRoutesBillMetered,
 } from "#ci/setup";
-import { localReviewSpec } from "#review/preflight";
-import { estimateCost } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
 
 // cryskai/platform#12 item 5: the OpenCode half of the metered ceiling reads
@@ -107,47 +101,107 @@ describe("openCodeRoutesBillMetered", () => {
 });
 
 // ---------------------------------------------------------------------------
-// evaluateBudgetGate
+// evaluatePlatformLimits — platform-owned-cost L55. The engine keeps ONE
+// comparison: a run that bills an API key is skipped when the month's limit is
+// used up, or when the platform's estimate is over the per-review limit or over
+// what is left of the month. Every other input is a pass.
 // ---------------------------------------------------------------------------
 
-describe("evaluateBudgetGate", () => {
-  test("allows a cost strictly below the budget, with no reason", () => {
-    const verdict: BudgetGateVerdict = evaluateBudgetGate(4.5, 10);
-    expect(verdict).toEqual({ allowed: true });
+describe("evaluatePlatformLimits", () => {
+  const metered = "metered" as const;
+
+  test("the month's limit used up skips, with or without an estimate", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 12, monthLeftUsd: 0 },
+      }),
+    ).toEqual({ allowed: false, hit: "month-used-up" });
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { monthLeftUsd: 0, estimateUsd: 0 },
+      }),
+    ).toEqual({ allowed: false, hit: "month-used-up" });
   });
 
-  test("allows a cost exactly equal to the budget (inclusive boundary)", () => {
-    const verdict = evaluateBudgetGate(10, 10);
-    expect(verdict).toEqual({ allowed: true });
+  test("an estimate over the per-review limit skips", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 12, estimateUsd: 12.5 },
+      }),
+    ).toEqual({ allowed: false, hit: "review-limit" });
   });
 
-  test("disallows a cost above the budget and states both figures", () => {
-    const verdict = evaluateBudgetGate(12.5, 10);
-    expect(verdict.allowed).toBe(false);
-    expect(verdict.reason).toContain("$12.50");
-    expect(verdict.reason).toContain("$10.00");
+  test("an estimate over what is left of the month skips", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 12, monthLeftUsd: 3, estimateUsd: 3.5 },
+      }),
+    ).toEqual({ allowed: false, hit: "month-left" });
   });
 
-  // size-gate.ts:20 already settled what a non-positive spend knob means in
-  // this repo: "<= 0 disables the limit. Both knobs, independently." The
-  // budget ceiling ships beside max-changed-lines / max-changed-files in the
-  // same action.yml and feeds the same preflight, so it has to read the same
-  // way — a non-positive ceiling is NO ceiling, not a $0 one.
-  //
-  // The two failure modes are not symmetric, which is what decides it. Read
-  // as "no ceiling" when the operator meant "spend nothing", the cost of
-  // being wrong is one visible review, still bounded by the size gate that
-  // runs independently. Read as "always skip" when the operator meant "no
-  // ceiling", pr-hero goes silently dark and every run still exits 0 green —
-  // the same shape of failure as a lint gate that checks nothing and passes.
-  test("treats a zero budget as no ceiling, matching size-gate's <= 0 convention", () => {
-    expect(evaluateBudgetGate(0, 0)).toEqual({ allowed: true });
-    expect(evaluateBudgetGate(0.01, 0)).toEqual({ allowed: true });
-    expect(evaluateBudgetGate(9999, 0)).toEqual({ allowed: true });
+  test("an estimate exactly at a limit passes (inclusive boundary)", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 12, monthLeftUsd: 12, estimateUsd: 12 },
+      }),
+    ).toEqual({ allowed: true });
   });
 
-  test("treats a negative budget as no ceiling too", () => {
-    expect(evaluateBudgetGate(12.5, -1)).toEqual({ allowed: true });
+  test("an estimate within both limits passes", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 12, monthLeftUsd: 40, estimateUsd: 4.5 },
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  // The stated limit of the design: a model the platform cannot price is not
+  // capped per review.
+  test("no estimate and a month with money left runs the review", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 12, monthLeftUsd: 5 },
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 12 },
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  test("with both limits over, the per-review limit is the one named", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 5, monthLeftUsd: 3, estimateUsd: 9 },
+      }),
+    ).toEqual({ allowed: false, hit: "review-limit" });
+  });
+
+  test("a subscription (or free) run is never skipped, whatever the limits say", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: "subscription",
+        limits: { reviewUsd: 1, monthLeftUsd: 0, estimateUsd: 999 },
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  // The platform omits `limits` when the dispatch was forced (`/crysk review`,
+  // `recheck`), and a standalone or older-platform run never had any.
+  test("without limits (a forced run, a standalone run) nothing is skipped", () => {
+    expect(
+      evaluatePlatformLimits({ billingMode: metered, limits: undefined }),
+    ).toEqual({ allowed: true });
   });
 });
 
@@ -347,107 +401,126 @@ describe("ciSizeGateSkip", () => {
 // ciBudgetGateSkip
 // ---------------------------------------------------------------------------
 
-describe("ciBudgetGateSkip", () => {
-  test("returns null outside CI mode, even when the cost exceeds the budget", () => {
+describe("ciLimitsGateSkip", () => {
+  const over = {
+    isCi: true,
+    billingMode: "metered" as const,
+    limits: { reviewUsd: 12, estimateUsd: 12.5 },
+    prNumber: 56,
+  };
+
+  test("returns null outside CI mode, even when a limit was hit", () => {
+    expect(ciLimitsGateSkip({ ...over, isCi: false })).toBeNull();
+  });
+
+  test("returns null in CI mode when the review is within the limits", () => {
     expect(
-      ciBudgetGateSkip({
-        isCi: false,
-        estimatedCostUsd: 12.5,
-        budgetUsd: 10,
-        prNumber: 56,
-      }),
+      ciLimitsGateSkip({ ...over, limits: { reviewUsd: 12, estimateUsd: 8 } }),
     ).toBeNull();
   });
 
-  test("returns null in CI mode when the cost is within budget", () => {
+  test("returns null on a subscription route, even over the limits", () => {
     expect(
-      ciBudgetGateSkip({
-        isCi: true,
-        estimatedCostUsd: 8,
-        budgetUsd: 10,
-        prNumber: 56,
-      }),
+      ciLimitsGateSkip({ ...over, billingMode: "subscription" }),
     ).toBeNull();
   });
 
-  // The disable convention has to survive the whole path, not just the
-  // predicate: a CI run configured with no ceiling must publish nothing at
-  // all, rather than a courteous notice explaining it skipped everything.
-  test("returns null in CI mode when the budget is disabled with <= 0", () => {
-    expect(
-      ciBudgetGateSkip({
-        isCi: true,
-        estimatedCostUsd: 999,
-        budgetUsd: 0,
-        prNumber: 56,
-      }),
-    ).toBeNull();
-  });
-
-  test("in CI mode with an over-budget estimate, builds a comment and a skipped-budget summary without throwing", () => {
-    const input: CiBudgetGateSkipInput = {
-      isCi: true,
-      estimatedCostUsd: 12.5,
-      budgetUsd: 10,
-      prNumber: 56,
-    };
-    const skip: CiGateSkip | null = ciBudgetGateSkip(input);
+  test("in CI mode over a limit, builds a comment and a skipped-budget summary naming the limit", () => {
+    const skip: CiGateSkip | null = ciLimitsGateSkip(over);
     expect(skip).not.toBeNull();
     expect(skip?.summary).toEqual({
       kind: "skipped-budget",
       prNumber: 56,
-      estimatedCostUsd: 12.5,
-      budgetUsd: 10,
+      limit: "review-limit",
     });
   });
 
-  test("the comment markdown starts with a machine-readable pr-hero marker", () => {
-    const skip = ciBudgetGateSkip({
-      isCi: true,
-      estimatedCostUsd: 12.5,
-      budgetUsd: 10,
-      prNumber: 56,
-    });
-    expect(skip?.comment.startsWith("<!-- crysk-skip-budget -->")).toBe(true);
+  test("the comment markdown starts with the machine-readable skip-budget marker", () => {
+    const skip = ciLimitsGateSkip(over);
+    expect(skip?.comment.startsWith(`${SKIP_BUDGET_COMMENT_MARKER}\n`)).toBe(
+      true,
+    );
+    expect(SKIP_BUDGET_COMMENT_MARKER).toBe("<!-- crysk-skip-budget -->");
   });
 
-  test("the comment states both the estimated cost and the budget ceiling", () => {
-    const skip = ciBudgetGateSkip({
-      isCi: true,
-      estimatedCostUsd: 12.5,
-      budgetUsd: 10,
-      prNumber: 56,
-    });
-    expect(skip?.comment).toContain("$12.50");
-    expect(skip?.comment).toContain("$10.00");
+  test("the comment names the limit that was hit and the dashboard setting, with no dollar figure", () => {
+    const perReview = ciLimitsGateSkip(over)?.comment ?? "";
+    expect(perReview).toContain("per-review limit");
+    expect(perReview).toContain("Review > Limits");
+    expect(perReview).not.toContain("$");
+    const used = ciLimitsGateSkip({
+      ...over,
+      limits: { monthLeftUsd: 0 },
+    })?.comment;
+    expect(used).toContain("monthly review limit");
+    expect(used).toContain("used up");
+    expect(used).toContain("Review > Limits");
+    const left = ciLimitsGateSkip({
+      ...over,
+      limits: { monthLeftUsd: 3, estimateUsd: 4 },
+    })?.comment;
+    expect(left).toContain("monthly limit");
+    expect(left).toContain("left");
+  });
+
+  test("the comment keeps the /crysk review force hint of a platform repository", () => {
+    expect(ciLimitsGateSkip(over)?.comment).toContain("/crysk review");
   });
 
   test("the comment never reads as a reprimand — no quality/blame language", () => {
-    const skip = ciBudgetGateSkip({
-      isCi: true,
-      estimatedCostUsd: 12.5,
-      budgetUsd: 10,
-      prNumber: 56,
-    });
-    const lowered = skip?.comment.toLowerCase() ?? "";
+    const lowered = ciLimitsGateSkip(over)?.comment.toLowerCase() ?? "";
     expect(lowered).not.toContain("bad");
     expect(lowered).not.toContain("low quality");
     expect(lowered).not.toContain("reject");
   });
 
   test("the summary payload renders cleanly through ci-reporter's renderStepSummary (shape compatibility)", () => {
-    const skip = ciBudgetGateSkip({
-      isCi: true,
-      estimatedCostUsd: 12.5,
-      budgetUsd: 10,
-      prNumber: 56,
-    });
+    const skip = ciLimitsGateSkip(over);
     expect(skip).not.toBeNull();
     if (skip === null) throw new Error("unreachable");
-    expect(() => renderStepSummary(skip.summary)).not.toThrow();
     const rendered = renderStepSummary(skip.summary);
     expect(rendered).toContain("PR #56");
-    expect(rendered).toContain("$12.50 (budget $10.00)");
+    expect(rendered).toContain("per-review limit");
+    expect(rendered).not.toContain("$");
+  });
+});
+
+describe("planCiLimitsSkip", () => {
+  const over = {
+    isCi: true,
+    billingMode: "metered" as const,
+    limits: { reviewUsd: 12, estimateUsd: 12.5 },
+    prNumber: 56,
+    ciMode: "gate" as const,
+  };
+
+  test("is today's skipped-budget plan: same marker, status and zero counts, no cost output", () => {
+    const plan = planCiLimitsSkip({ ...over, force: false });
+    expect(plan?.markerPrefix).toBe(SKIP_BUDGET_COMMENT_MARKER);
+    expect(plan?.outputs).toEqual({
+      status: "skipped-budget",
+      findings_count: 0,
+      blocking_count: 0,
+      advisory_count: 0,
+      run_dir: "",
+    });
+    expect(plan?.summaryMarkdown).toContain("PR #56");
+  });
+
+  // `/crysk review` (CI `--force`) answers "run this one anyway". The platform
+  // also omits the limits for it, so this is the second line of defence.
+  test("a forced run is never skipped, even when limits are present", () => {
+    expect(planCiLimitsSkip({ ...over, force: true })).toBeNull();
+  });
+
+  test("a run within the limits has no plan", () => {
+    expect(
+      planCiLimitsSkip({
+        ...over,
+        limits: { reviewUsd: 12, estimateUsd: 1 },
+        force: false,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -583,156 +656,14 @@ describe("deriveCiBillingMode", () => {
     );
   });
 
-  test("deepseek-style OpenCode routes get the default metered ceiling", () => {
+  test("an OpenCode API-key route is metered for the limits gate", () => {
     const billingMode = deriveCiBillingMode({}, { openCodeBillsMetered: true });
     expect(
-      resolveCiBudgetCeiling({ configured: undefined, billingMode }),
-    ).toEqual({
-      budgetUsd: CI_DEFAULT_METERED_BUDGET_USD,
-      source: "default-metered",
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// resolveCiBudgetCeiling — total over four cases, and `source` is what the
-// shell branches on so the two non-operator outcomes stay distinguishable.
-// ---------------------------------------------------------------------------
-
-describe("resolveCiBudgetCeiling", () => {
-  test("an operator value wins on a metered route", () => {
-    expect(
-      resolveCiBudgetCeiling({ configured: 5, billingMode: "metered" }),
-    ).toEqual({ budgetUsd: 5, source: "operator" });
-  });
-
-  // How an operator imposes a ceiling on a subscription route: `budget-usd: 5`
-  // is honoured verbatim, exactly as it is on a metered one.
-  test("an operator value wins on a subscription route too", () => {
-    expect(
-      resolveCiBudgetCeiling({ configured: 5, billingMode: "subscription" }),
-    ).toEqual({ budgetUsd: 5, source: "operator" });
-  });
-
-  test("unset on a metered route falls back to the default ceiling", () => {
-    expect(
-      resolveCiBudgetCeiling({ configured: undefined, billingMode: "metered" }),
-    ).toEqual({
-      budgetUsd: CI_DEFAULT_METERED_BUDGET_USD,
-      source: "default-metered",
-    });
-  });
-
-  test("unset on a subscription route has no ceiling at all", () => {
-    expect(
-      resolveCiBudgetCeiling({
-        configured: undefined,
-        billingMode: "subscription",
-      }),
-    ).toEqual({ budgetUsd: undefined, source: "unlimited-subscription" });
-  });
-
-  // 0 and negatives are how an operator DISABLES the ceiling on a metered
-  // route (evaluateBudgetGate's `<= 0` convention). Swallowing them into the
-  // default-metered branch would silently reimpose the default they just removed.
-  test("an explicit 0 takes the operator branch, never the metered default", () => {
-    expect(
-      resolveCiBudgetCeiling({ configured: 0, billingMode: "metered" }),
-    ).toEqual({ budgetUsd: 0, source: "operator" });
-  });
-
-  test("an explicit negative takes the operator branch too", () => {
-    expect(
-      resolveCiBudgetCeiling({ configured: -1, billingMode: "metered" }),
-    ).toEqual({ budgetUsd: -1, source: "operator" });
-  });
-
-  // The gate compares the estimate's upper bound with this ceiling, and the
-  // estimate prices one seat per hunter. A hunter added to the default set
-  // without this ceiling moving skips every pull request on a metered route:
-  // that is what the security hunter did against a ceiling of 10. The seats
-  // are read from the spec the product runs, so the next hunter added turns
-  // this red instead of turning reviews off.
-  test("the metered default admits a small change reviewed by the default hunter set", () => {
-    const alwaysOnHunters = localReviewSpec({}).agents.filter(
-      (agent) => agent.role === "hunter" && agent.trigger === undefined,
-    ).length;
-    expect(alwaysOnHunters).toBeGreaterThan(0);
-    for (const diffStat of [
-      { files: 2, insertions: 10, deletions: 2 },
-      { files: 10, insertions: 250, deletions: 50 },
-    ]) {
-      const { high } = estimateCost(diffStat, alwaysOnHunters, true, 0, true);
-      expect(evaluateBudgetGate(high, CI_DEFAULT_METERED_BUDGET_USD)).toEqual({
-        allowed: true,
-      });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// budgetUnlimitedNoticeMessage — ci/gates.ts:107-115's "a disable is only
-// safe when it is loud" applied to the new no-ceiling branch, which produces
-// no ceiling and would otherwise be silent.
-// ---------------------------------------------------------------------------
-
-describe("budgetUnlimitedNoticeMessage", () => {
-  test("only the unlimited-subscription branch speaks", () => {
-    expect(
-      budgetUnlimitedNoticeMessage({ budgetUsd: 5, source: "operator" }),
-    ).toBeNull();
-    expect(
-      budgetUnlimitedNoticeMessage({
-        budgetUsd: CI_DEFAULT_METERED_BUDGET_USD,
-        source: "default-metered",
-      }),
-    ).toBeNull();
-    expect(
-      budgetUnlimitedNoticeMessage({
-        budgetUsd: undefined,
-        source: "unlimited-subscription",
-      }),
-    ).not.toBeNull();
-  });
-
-  test("states the reason, the surviving size gate, and how to impose a ceiling", () => {
-    const message = budgetUnlimitedNoticeMessage({
-      budgetUsd: undefined,
-      source: "unlimited-subscription",
-    });
-    expect(message).not.toBeNull();
-    if (message === null) throw new Error("unreachable");
-    expect(message).toBe(
-      "no budget-usd ceiling was applied: this route has no per-token invoice " +
-        "credential (a Claude subscription or a free route), so a run draws on " +
-        "quota rather than a per-token invoice and the estimated cost is not a " +
-        "dollar figure to gate on. The size gate resolves from the route separately. " +
-        "Set `budget-usd: <n>` to impose a ceiling anyway.",
-    );
-  });
-
-  // W3-FOOTER: the notice runs on a free OpenCode route too, so it must not
-  // name the Claude subscription as the only cause.
-  test("names no single provider: a free route is covered by the same notice", () => {
-    const message = budgetUnlimitedNoticeMessage({
-      budgetUsd: undefined,
-      source: "unlimited-subscription",
-    });
-    expect(message).toContain("a free route");
-    expect(message).not.toContain("authenticates against");
-  });
-
-  // Two different facts: "you disabled the ceiling you configured" and "no
-  // ceiling was resolved because the route draws on a subscription". Merging
-  // them would tell an operator who configured nothing that they disabled
-  // something.
-  test("is distinct from budgetDisabledWarningMessage", () => {
-    const notice = budgetUnlimitedNoticeMessage({
-      budgetUsd: undefined,
-      source: "unlimited-subscription",
-    });
-    expect(notice).not.toBe(budgetDisabledWarningMessage(0));
-    expect(notice?.toLowerCase()).not.toContain("disabled");
+      evaluatePlatformLimits({
+        billingMode,
+        limits: { reviewUsd: 12, estimateUsd: 13 },
+      }).allowed,
+    ).toBe(false);
   });
 });
 
@@ -879,7 +810,6 @@ describe("planCiExcludedSkip", () => {
       findings_count: 0,
       blocking_count: 0,
       advisory_count: 0,
-      cost_usd_est: 0,
       run_dir: "",
     });
   });
