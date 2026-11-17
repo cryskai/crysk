@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finding with no reply the gate reads. The skip now counts only a reply whose author has write access; when
   GitHub does not return that permission, after one retry, the command posts nothing and says to run it again.
 
+- **A command followed by more lines runs.** A pull request comment counted as a command only when the whole
+  comment was the command, so `/crysk review` with a signature below it (coding agents sign their comments) did
+  nothing, and said nothing. A comment is now a command when its first line is exactly the command; the lines
+  below it are ignored. Other words on that line, as in `/crysk review please`, still make it no command. The
+  same rule reads `/crysk recheck`, `/crysk override` and `/crysk stop`.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed

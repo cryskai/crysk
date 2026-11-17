@@ -205,7 +205,7 @@ The trigger answers a `/crysk` comment command with a reaction on that comment, 
 
 - 👀 (`eyes`): the command is accepted. That is a writer's `/crysk review`, an override that unlocks its gate, and an authorised review on a repository with no credential, which then fails for the credential and says why.
 - 👎 (`-1`): the command is refused. The commenter has no write or admin access, or the override is refused: on a fork, or when the lookup cannot say whether the pull request is a fork.
-- 😕 (`confused`): a near miss, a comment that starts like a command but is not one, such as `/crysk review please` or `/crysk override --force`. A near miss runs nothing: no permission lookup, no review and no override. Only an exact command runs.
+- 😕 (`confused`): a near miss, a comment that starts like a command but is not one, such as `/crysk review please` or `/crysk override --force`. A near miss runs nothing: no permission lookup, no review and no override. Only a comment whose first line is exactly a command runs; lines below it, such as a signature, are ignored.
 
 A commenter whose permission cannot be verified gets no reaction: its run is red, and its error comment explains why. A reaction is best effort. When GitHub refuses one, the run prints one warning, and its decision and exit code do not change. Only the first attempt of the comment's job reacts: a re-run (attempt 2 or later) keeps the decision, notices and exit code of the first attempt and adds no reaction, so the comment keeps the one the first attempt gave.
 
@@ -573,8 +573,8 @@ Two consequences follow from the posting identity and from the token's life:
 ### PR comment commands
 
 A platform-managed repository's workflow stub listens only to `workflow_dispatch`, so the platform reads
-the pull request comments instead. It checks that the comment is exactly a command and that its author has
-write access, then dispatches the run:
+the pull request comments instead. It checks that the comment's first line is exactly a command and that
+its author has write access, then dispatches the run:
 
 - `/crysk review` and `/crysk review --full`: a forced review, as standalone.
 - `/crysk recheck`: a forced review plus the CI adjudicator, as standalone. Its rulings are posted as the
@@ -1036,12 +1036,12 @@ request:
 /crysk review
 ```
 
-The review runs on the GitHub Actions runner, not on the machine of whoever comments. The comment must
-start with `/crysk review` and be exactly that command (trailing whitespace and newlines are
-ignored; leading whitespace means no job starts at all); anything else, such as
-`/crysk review please`, starts a job that ends without reviewing. The commenter needs write access
-to the repository; a comment from anyone else is refused. `gh run rerun` on a skipped run re-evaluates
-the gates and does not force.
+The review runs on the GitHub Actions runner, not on the machine of whoever comments. The comment's first line
+must be exactly `/crysk review`: lines below it, such as an agent's signature, are ignored, and so is
+whitespace at the end of the line. Leading whitespace means no job starts at all. Other words on that line,
+as in `/crysk review please`, start a job that ends without reviewing. The commenter needs write access to
+the repository; a comment from anyone else is refused. `gh run rerun` on a skipped run re-evaluates the gates
+and does not force.
 
 A local agent (Claude Code) posts the same comment:
 
@@ -2557,7 +2557,7 @@ On a workflow set up before the rename, comment `/crysk review` instead.
   scaffolded before the comment trigger, run `gh workflow run pr-hero-force.yml -f pr=<n>` instead.
 - **A `/crysk review` comment did nothing** — the comment trigger reads the workflow file from the
   default branch, so it works only once that file (with its `issue_comment` trigger) is merged there.
-  The comment must be exactly `/crysk review` or `/crysk review --full`, and its author needs
+  The comment's first line must be exactly `/crysk review` or `/crysk review --full`, and its author needs
   write access to the repository. An older workflow file has no comment trigger at all: re-scaffold
   with `crysk ci init --force`.
 - **The run is red and names a missing credential** — no `CRYSK_*` secret in the `crysk-secrets` input
