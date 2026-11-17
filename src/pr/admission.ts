@@ -830,7 +830,7 @@ async function reviewVerdictTime(input: {
 }
 
 // A verdict a review wrote itself: never a carried, skipped, or override text.
-function finishedVerdict(
+export function finishedVerdict(
   status: Pick<CommitStatusFact, "state" | "description">,
 ): boolean {
   const description = status.description;

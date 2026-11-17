@@ -6,7 +6,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
-import { NOTHING_TO_REVIEW_DESCRIPTION } from "#pr/admission";
+import {
+  carriedBlockingDescription,
+  NOTHING_TO_REVIEW_DESCRIPTION,
+} from "#pr/admission";
 import {
   buildPrStatus,
   type PrStatusInput,
@@ -2597,6 +2600,62 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
           },
           {
             ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T11:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  // A skip carried the red onto a newer head. Its status is newer than the review's own verdict,
+  // so the verdict time is unread and a reply at the posted head counts.
+  const NEXT = "7".repeat(40);
+  const carriedRed = (extra: Partial<PrStatusInput> = {}): PrStatusInput =>
+    carried({
+      head: NEXT,
+      statuses: [
+        {
+          state: "failure",
+          context: COMMIT_STATUS_CONTEXT,
+          created_at: "2026-10-30T12:00:00Z",
+          description: carriedBlockingDescription(1, CURRENT),
+          target_url: null,
+        },
+      ],
+      ...extra,
+    });
+
+  test("on a head a skip carried, a reply made after the review and before the skip answers it", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T11:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("on that head a reply stamped with the reviewed head answers it too", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
             created_at: "2026-10-30T11:00:00Z",
           },
         ],

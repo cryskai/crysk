@@ -18,6 +18,7 @@ import {
   REVIEW_COMMAND,
   REVIEW_FULL_COMMAND,
 } from "#ci/trigger";
+import { finishedVerdict } from "#pr/admission";
 import {
   COMMIT_STATUS_CONTEXT,
   type CommitStatusFact,
@@ -189,7 +190,7 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
     input,
     summary.rows,
     summary.head,
-    verdictTime(gate),
+    reviewVerdictAt(input),
   );
   const liveBlocking = analyzed.filter(
     (a) => a.finding.blocking && a.finding.live_on_head,
@@ -221,11 +222,15 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
 // The gate is crysk's own commit status on the head, read by its context alone (the legacy
 // pr-hero name counts as the same context), so a local run's crysk/local status never
 // answers for the gate.
-// When the gate's verdict was written, in ms, or null when there is no gate status or its
-// time does not parse.
-function verdictTime(gate: PrStatusGate): number | null {
-  if (gate.created_at === null) return null;
-  const at = Date.parse(gate.created_at);
+// When the review of this head wrote its verdict, in ms; "unread" when the head's status is one a
+// skip, a carry or an override wrote, because the review's own verdict then sits on an earlier commit
+// that this read does not fetch (the gate walks to it: admission.ts reviewVerdictTime); null when
+// there is no status or its time does not parse.
+function reviewVerdictAt(input: PrStatusInput): number | "unread" | null {
+  const latest = latestStatusInContext(input.statuses, COMMIT_STATUS_CONTEXT);
+  if (latest === null) return null;
+  if (!finishedVerdict(latest)) return "unread";
+  const at = Date.parse(latest.created_at);
   return Number.isNaN(at) ? null : at;
 }
 
@@ -332,7 +337,7 @@ function readFindings(
   input: PrStatusInput,
   rows: StateFinding[],
   reviewedHead: string | null,
-  verdictAt: number | null,
+  verdictAt: number | "unread" | null,
 ): AnalyzedFinding[] {
   const sources: {
     id: number;
@@ -428,14 +433,18 @@ function readFindings(
             : null,
       },
       // A reply at another review's head does not answer this one (replyAnswersReview).
-      answersReview: replies.some((r) =>
-        replyAnswersReview({
-          replyHead: r.marker.headSha,
-          replyCreatedAt: r.createdAt,
-          findingHead: marker.headSha,
-          reviewedHead,
-          verdictAt,
-        }),
+      // WHY the posted head alone when the verdict is unread: cutting at a skip's time would send
+      // the loop to triage a reply the gate counts, since the gate cuts at the review's own verdict.
+      answersReview: replies.some(
+        (r) =>
+          (verdictAt === "unread" && r.marker.headSha === marker.headSha) ||
+          replyAnswersReview({
+            replyHead: r.marker.headSha,
+            replyCreatedAt: r.createdAt,
+            findingHead: marker.headSha,
+            reviewedHead,
+            verdictAt: verdictAt === "unread" ? null : verdictAt,
+          }),
       ),
     });
   }
