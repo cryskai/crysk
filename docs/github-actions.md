@@ -129,10 +129,10 @@ one is on your default branch). The name of the file does not matter to Crysk, s
 `pr-hero.yml` for good or rename it to `crysk.yml` yourself.
 
 **Upgrading from the `/pr-hero` commands.** The commands are now `/crysk review`, `/crysk review --full`,
-`/crysk recheck`, `/crysk override` and `/crysk stop`. The action still accepts the `/pr-hero …` spellings
-for one version. A workflow file scaffolded earlier only starts a run on `/pr-hero …` comments, so a
-`/crysk …` comment does nothing there: re-run `crysk ci init --force` (or copy the `if:` and `group:`
-lines above) to accept both.
+`/crysk recheck`, `/crysk override` and `/crysk stop`. The `/pr-hero …` spellings are no longer
+commands: a comment that uses them starts nothing. A workflow file scaffolded earlier only starts a run on
+`/pr-hero …` comments, so no comment starts a run there: re-run `crysk ci init --force` (or copy the `if:`
+and `group:` lines above) to accept `/crysk …`.
 
 The action does the rest: it checks that a credential is set (and fails the run red, with the commands
 that fix it, when none is), parses a `/crysk review` comment and checks that its author has write
@@ -201,7 +201,7 @@ stops it too.
 
 ### Reactions on a command
 
-The trigger answers a `/pr-hero` comment it does not review with a reaction on that comment, and no text reply:
+The trigger answers a `/crysk` comment command with a reaction on that comment, and no text reply:
 
 - 👀 (`eyes`): the command is accepted. That is a writer's `/crysk review`, an override that unlocks its gate, and an authorised review on a repository with no credential, which then fails for the credential and says why.
 - 👎 (`-1`): the command is refused. The commenter has no write or admin access, or the override is refused: on a fork, or when the lookup cannot say whether the pull request is a fork.

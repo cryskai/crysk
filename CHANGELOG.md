@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/pr-hero override` while the comment said `/crysk override`).
   **What to check:** (1) comment `/crysk …` instead of `/pr-hero …`; (2) a workflow set up before the rename
   filters only `/pr-hero` in its `if:` and so starts on no command at all: re-scaffold it with
-  `npx -y crysk setup --ci` (it updates `pr-hero.yml` in place).
+  `npx -y crysk ci init --force` (it rewrites `pr-hero.yml` in place; without `--force` an existing file is
+  left alone).
 
 - **The scout stage** (#545). The diff-only pre-hunter stage never earned its place and was off by default,
   so no review changes unless it asked for it. `--scout`, `--no-scout`, `--scout-model <model>`, the `scout`

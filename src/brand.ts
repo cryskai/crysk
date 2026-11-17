@@ -155,11 +155,17 @@ export function isLegacyStatusContext(context: string): boolean {
 // `pr-hero` instead. A reader rewrites a legacy lead into the new one and then
 // matches against the text this version writes, so one pattern serves both. Only a
 // lead followed by `:` or a space is the brand: `pr-heroic` is not.
+// The command a status names is rewritten the same way: a status an earlier release wrote ends in
+// `/pr-hero override` or `/pr-hero review`, and the readers that rebuild a verdict's text to
+// recognise it (pr/admission.ts) must still recognise that verdict, or the carry walk passes over it.
+const LEGACY_STATUS_COMMAND = /\/pr-hero (review|recheck|override|stop)\b/g;
+
 export function canonicalStatusText(text: string): string {
-  if (!text.startsWith(LEGACY_STATUS_CONTEXT)) return text;
-  const next = text.charAt(LEGACY_STATUS_CONTEXT.length);
-  if (next !== ":" && next !== " ") return text;
-  return STATUS_CONTEXT + text.slice(LEGACY_STATUS_CONTEXT.length);
+  const commands = text.replace(LEGACY_STATUS_COMMAND, "/crysk $1");
+  if (!commands.startsWith(LEGACY_STATUS_CONTEXT)) return commands;
+  const next = commands.charAt(LEGACY_STATUS_CONTEXT.length);
+  if (next !== ":" && next !== " ") return commands;
+  return STATUS_CONTEXT + commands.slice(LEGACY_STATUS_CONTEXT.length);
 }
 
 // The bundled agent skills, by role, in sync order. The role key joins a skill

@@ -247,4 +247,19 @@ describe("canonicalStatusText", () => {
     // A word that merely starts with the old name is not the old lead.
     expect(canonicalStatusText("pr-heroic: x")).toBe("pr-heroic: x");
   });
+
+  // PR #549 R001: a status an earlier release wrote names the legacy command.
+  test("a legacy command in the text becomes the /crysk one", () => {
+    expect(
+      canonicalStatusText(
+        "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      ),
+    ).toBe("crysk: 2 blocking finding(s) — fix and push, or /crysk override");
+    expect(canonicalStatusText("crysk: x — /pr-hero review retries it")).toBe(
+      "crysk: x — /crysk review retries it",
+    );
+    expect(canonicalStatusText("/pr-hero reviewing")).toBe(
+      "/pr-hero reviewing",
+    );
+  });
 });

@@ -20,9 +20,9 @@ green.
 
 > **Renamed from pr-hero.** Crysk used to be `pr-hero`. The package is now `crysk` (`npm install -g crysk`,
 > `npx -y crysk`), and the `pr-hero` command stays as an alias for one version. What an install made under the
-> old name wrote is still read for one version: `/pr-hero …` comments, `PRHERO_*` variables, `<!-- pr-hero-…`
+> old name wrote is still read for one version: `PRHERO_*` variables, `<!-- pr-hero-…`
 > markers, `pr-hero` commit statuses (read, no longer written), `~/.prhero`, `.prhero/` and `.prheroignore`. A workflow file scaffolded
-> before the rename only answers `/pr-hero …`: re-run `crysk ci init --force` for it to accept `/crysk …` too.
+> before the rename only answers `/pr-hero …`, which is no longer a command: re-run `crysk ci init --force` for it to accept `/crysk …`.
 > The repository moved to `cryskai/crysk` and new workflows use `uses: cryskai/crysk@v0`. `juanmaagd/pr-hero` stays as a mirror with the same tags and releases, so a workflow that still says `uses: juanmaagd/pr-hero@v0` keeps working.
 
 ## Two ways to use it

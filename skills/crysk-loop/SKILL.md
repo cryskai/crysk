@@ -149,21 +149,18 @@ Suspect a flawed integration or architecture when **either** of these signals ap
 
 ## Which command spelling to post
 
-This skill names the commands as `/crysk review`, `/crysk recheck` and `/crysk override`. A
-workflow set up before the rename to Crysk listens only for `/pr-hero review`, `/pr-hero recheck`
-and `/pr-hero override`, and ignores `/crysk` comments. Comment triggers run the workflow on the
-default branch, so check that file once per PR before posting any command. The workflow file is
-`crysk.yml`, or `pr-hero.yml` in a repository set up before the rename (never both), so try either:
+Post the `/crysk` form: `/crysk review`, `/crysk recheck`, `/crysk override`, `/crysk stop`. The
+legacy `/pr-hero …` spelling is no longer a command, and a comment that uses it starts nothing. A
+workflow set up before the rename (`pr-hero.yml`) may still filter only `/pr-hero` in its `if:`, so a
+`/crysk` comment starts nothing there either: check the workflow once per PR, and when it lacks
+`'/crysk review'`, tell the maintainer to re-scaffold it with `npx -y crysk@0.7.0 ci init --force`
+instead of posting any command.
 
 ```bash
 for f in crysk.yml pr-hero.yml; do
   gh api "repos/{owner}/{repo}/contents/.github/workflows/$f" --jq .content 2>/dev/null | base64 -d | grep -q "'/crysk review'" && exit 0
 done; exit 1
 ```
-
-Exit 0 means the workflow accepts `/crysk`: post the `/crysk` form. Otherwise post the same
-command with `/pr-hero` in place of `/crysk`. If the workflow lives under another file name,
-read that file instead.
 
 ## The loop, end to end
 
@@ -218,8 +215,7 @@ read that file instead.
    that bypasses the size, budget and admission gates (`ci_max_attempts` included), and a gate
    `error` (expired token, missing credential, crash) makes step 0 say `review` again forever.
    Before posting either, count the ones already on this head, never from memory: the comments in
-   `gh pr view <n> --json comments` whose body is exactly `/crysk review`, `/crysk recheck`,
-   or their legacy spellings `/pr-hero review` and `/pr-hero recheck` (both still start a run), and whose `createdAt` is at or after the oldest `crysk` or `pr-hero` status on the head
+   `gh pr view <n> --json comments` whose body is exactly `/crysk review` or `/crysk recheck`, and whose `createdAt` is at or after the oldest `crysk` or `pr-hero` status on the head
    (`gh api "repos/{owner}/{repo}/commits/<head>/statuses?per_page=100" --jq '[.[] | select(.context == "crysk" or .context == "pr-hero")] | last.created_at'`;
    no status yet means none counted). Each reason step 0 gives gets its command once per head:
    one `/crysk review` each for a skipped head, a partial review, a used-up budget, a gate
