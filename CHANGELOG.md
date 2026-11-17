@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-17
+
+### Added
+
+- **Per-request usage facts for the Crysk platform** (#548). A connected run reports, per step and attempt, the
+  tokens of every request (uncached, cache read, cache write with its lifetime, output, reasoning), the exact
+  model and provider, and whether it billed an API key, a subscription or a free route. The platform prices
+  them itself, so cost counts on every route, subscription included, shown apart from API spend.
+
 ### Fixed
 
 - **A review whose roles bill differently is compared with the platform's dollar limits on its API share
@@ -1167,7 +1176,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/cryskai/crysk/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/cryskai/crysk/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/cryskai/crysk/compare/v0.5.1...v0.6.0
