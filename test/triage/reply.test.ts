@@ -10,10 +10,11 @@ import {
 } from "#pr/preflight";
 import {
   decideThreadResolve,
-  existingTriageAtHead,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
   replyAnswersReview,
+  rowTriageAuthorsAtHead,
+  triageAuthorsAtHead,
 } from "#triage/reply";
 import { triageMarker } from "#triage/triage";
 
@@ -210,10 +211,47 @@ describe("decideThreadResolve", () => {
   });
 });
 
-describe("existingTriageAtHead", () => {
-  test("detects a same-head triage reply on the parent", () => {
+describe("triageAuthorsAtHead", () => {
+  test("returns the author of a same-head triage reply on the parent", () => {
     expect(
-      existingTriageAtHead({
+      triageAuthorsAtHead({
+        parentId: 22,
+        headSha: HEAD,
+        replies: [
+          {
+            in_reply_to_id: 22,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
+          },
+        ],
+      }),
+    ).toEqual(["dev"]);
+  });
+
+  test("two matching replies return both authors in order", () => {
+    expect(
+      triageAuthorsAtHead({
+        parentId: 22,
+        headSha: HEAD,
+        replies: [
+          {
+            in_reply_to_id: 22,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
+          },
+          {
+            in_reply_to_id: 22,
+            user: "drive-by",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nagain`,
+          },
+        ],
+      }),
+    ).toEqual(["dev", "drive-by"]);
+  });
+
+  test("a matching reply with no user yields an undefined author", () => {
+    expect(
+      triageAuthorsAtHead({
         parentId: 22,
         headSha: HEAD,
         replies: [
@@ -223,37 +261,55 @@ describe("existingTriageAtHead", () => {
           },
         ],
       }),
-    ).toBe(true);
+    ).toEqual([undefined]);
   });
 
   test("a different head is not a skip", () => {
     expect(
-      existingTriageAtHead({
+      triageAuthorsAtHead({
         parentId: 22,
         headSha: HEAD,
         replies: [
           {
             in_reply_to_id: 22,
+            user: "dev",
             body: `${triageMarker({ tag: "applied", headSha: OTHER_HEAD, actor: "agent" })}\nok`,
           },
         ],
       }),
-    ).toBe(false);
+    ).toEqual([]);
   });
 
   test("a reply to a different parent is not a skip", () => {
     expect(
-      existingTriageAtHead({
+      triageAuthorsAtHead({
         parentId: 22,
         headSha: HEAD,
         replies: [
           {
             in_reply_to_id: 11,
+            user: "dev",
             body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
           },
         ],
       }),
-    ).toBe(false);
+    ).toEqual([]);
+  });
+
+  test("a thread reply that names a row is not this thread's reply", () => {
+    expect(
+      triageAuthorsAtHead({
+        parentId: 22,
+        headSha: HEAD,
+        replies: [
+          {
+            in_reply_to_id: 22,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\nok`,
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -358,5 +414,76 @@ describe("replyAnswersReview", () => {
         }),
       ).toBe(false);
     }
+  });
+});
+
+describe("rowTriageAuthorsAtHead", () => {
+  const rowReply = (row: string, headSha: string, user: string) => ({
+    user,
+    body: `${triageMarker({ tag: "applied", headSha, actor: "agent", row })}\n\nok`,
+  });
+
+  test("returns the author of a same-head reply that names the row", () => {
+    expect(
+      rowTriageAuthorsAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [rowReply("R001", HEAD, "dev")],
+      }),
+    ).toEqual(["dev"]);
+  });
+
+  test("two matching replies return both authors in order", () => {
+    expect(
+      rowTriageAuthorsAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [
+          rowReply("R001", HEAD, "dev"),
+          rowReply("R001", HEAD, "drive-by"),
+        ],
+      }),
+    ).toEqual(["dev", "drive-by"]);
+  });
+
+  test("the same row at another head is not a skip", () => {
+    expect(
+      rowTriageAuthorsAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [rowReply("R001", OTHER_HEAD, "dev")],
+      }),
+    ).toEqual([]);
+  });
+
+  test("another row at the same head is not a skip", () => {
+    expect(
+      rowTriageAuthorsAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [rowReply("R002", HEAD, "dev")],
+      }),
+    ).toEqual([]);
+  });
+
+  test("a marker with no row is not a skip", () => {
+    expect(
+      rowTriageAuthorsAtHead({
+        rowId: "R001",
+        headSha: HEAD,
+        comments: [
+          {
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nok`,
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  test("an empty list is not a skip", () => {
+    expect(
+      rowTriageAuthorsAtHead({ rowId: "R001", headSha: HEAD, comments: [] }),
+    ).toEqual([]);
   });
 });

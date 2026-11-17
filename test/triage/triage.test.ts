@@ -291,6 +291,89 @@ describe("triageMarker + parseTriageMarker", () => {
     expect(parseTriageMarker(`see above:\n${marker}`)).toBeNull();
     expect(parseTriageMarker(` ${marker} leading space`)).toBeNull();
   });
+
+  // A finding GitHub could not anchor has no thread, only a summary row, so
+  // its reply names the row instead; the token is written last.
+  test("a row token round-trips, written last", () => {
+    const marker = triageMarker({
+      tag: "applied",
+      headSha: HEAD,
+      actor: "agent",
+      row: "R003",
+    });
+    expect(marker.endsWith(" actor=agent row=R003 -->")).toBe(true);
+    expect(parseTriageMarker(marker)).toEqual({
+      tag: "applied",
+      headSha: HEAD,
+      actor: "agent",
+      row: "R003",
+    });
+  });
+
+  test("a row token round-trips on a dismissal, after the verdict", () => {
+    const marker = triageMarker({
+      tag: "dismissed",
+      headSha: HEAD,
+      actor: "agent",
+      verdict: "upheld",
+      row: "R012",
+    });
+    expect(marker.endsWith(" verdict=upheld row=R012 -->")).toBe(true);
+    expect(parseTriageMarker(marker)).toEqual({
+      tag: "dismissed",
+      headSha: HEAD,
+      actor: "agent",
+      verdict: "upheld",
+      row: "R012",
+    });
+  });
+
+  test("a deferred reply with an issue keeps its row", () => {
+    const marker = triageMarker({
+      tag: "deferred",
+      headSha: HEAD,
+      actor: "agent",
+      issue: 7,
+      verdict: "upheld",
+      row: "R001",
+    });
+    expect(parseTriageMarker(marker)).toEqual({
+      tag: "deferred",
+      headSha: HEAD,
+      actor: "agent",
+      issue: 7,
+      verdict: "upheld",
+      row: "R001",
+    });
+  });
+
+  test("a marker without a row parses with no row key", () => {
+    const parsed = parseTriageMarker(
+      triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" }),
+    );
+    expect(parsed).not.toBeNull();
+    expect("row" in (parsed ?? {})).toBe(false);
+  });
+
+  test("triageMarker throws for a malformed row", () => {
+    for (const row of ["R1", "r001", "F001", "R001 x"]) {
+      expect(() =>
+        triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row }),
+      ).toThrow(/summary row id/);
+    }
+  });
+
+  test("a marker with a malformed row does not parse", () => {
+    const valid = triageMarker({
+      tag: "applied",
+      headSha: HEAD,
+      actor: "agent",
+    });
+    expect(parseTriageMarker(valid.replace(" -->", " row=R1 -->"))).toBeNull();
+    expect(
+      parseTriageMarker(valid.replace(" -->", " row=F001 -->")),
+    ).toBeNull();
+  });
 });
 
 describe("triageBadge + renderTriageReplyBody", () => {
@@ -357,6 +440,43 @@ describe("triageBadge + renderTriageReplyBody", () => {
     );
     expect(body).toContain("✅ **APPLIED** · agent");
     expect(body.endsWith("\n")).toBe(true);
+  });
+
+  test("renderTriageReplyBody without a subject is unchanged by the optional parameter", () => {
+    const fields = {
+      tag: "applied" as const,
+      headSha: HEAD,
+      actor: "agent" as const,
+    };
+    expect(renderTriageReplyBody(fields, "Fixed in 3f9a2c1.")).toBe(
+      renderTriageReplyBody(fields, "Fixed in 3f9a2c1.", undefined),
+    );
+  });
+
+  test("renderTriageReplyBody places the subject between badge and prose", () => {
+    const fields = {
+      tag: "applied" as const,
+      headSha: HEAD,
+      actor: "agent" as const,
+    };
+    const marker = triageMarker(fields);
+    const badge = triageBadge(fields);
+    expect(
+      renderTriageReplyBody(fields, "Fixed in 3f9a2c1.", "SUBJECT LINE"),
+    ).toBe(`${marker}\n\n${badge}\n\nSUBJECT LINE\n\nFixed in 3f9a2c1.\n`);
+  });
+
+  test("renderTriageReplyBody with a subject and empty prose ends after the subject", () => {
+    const fields = {
+      tag: "applied" as const,
+      headSha: HEAD,
+      actor: "agent" as const,
+    };
+    const marker = triageMarker(fields);
+    const badge = triageBadge(fields);
+    expect(renderTriageReplyBody(fields, "  \n", "SUBJECT LINE")).toBe(
+      `${marker}\n\n${badge}\n\nSUBJECT LINE\n`,
+    );
   });
 });
 

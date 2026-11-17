@@ -618,6 +618,27 @@ describe("postInlineFindings — step-14 ordering", () => {
     }
   });
 
+  test("an Outside Diff entry names the row its finding has in the summary's state block", async () => {
+    const findings = [
+      finding({ id: "F001", path: "src/never-a.ts", line: 1 }),
+      finding({ id: "F002", path: "src/never-b.ts", line: 1 }),
+    ];
+    const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/other.ts", 5),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const body = summaryStdins(calls).at(-1) ?? "";
+    expect(body).toContain("<!-- crysk-state ");
+    expect(body).toContain("`src/never-a.ts:1` (R001)");
+    expect(body).toContain("`src/never-b.ts:1` (R002)");
+  });
+
   test("an off-hunk finding re-anchors to a hunter-cited in-diff proof_ref instead of Outside Diff (Musive #1727)", async () => {
     const findings = [
       finding({

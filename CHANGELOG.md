@@ -25,6 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a carried finding names the `R###` id to reply with. Replies already on pull requests are read as
   before. Reinstall the skills (`crysk skills install`) to get the updated triage instructions.
 
+- **A finding listed only in the summary can be answered.** A finding GitHub cannot anchor has no comment of its
+  own, so `crysk triage reply` had nothing to bind to and the gate counted it open whatever the author did: a
+  blocking one could only be fixed or overridden. `triage reply --finding R###` now answers it with a top-level
+  comment whose marker names the row; the gate counts an `applied` one, `crysk status` asks to triage a row with
+  none, and the next review reads the reply, so an `applied` answer buys its verification. The summary's
+  Comments Outside Diff entries show their row id. A `dismissed` reply to such a finding still cannot get a CI
+  ruling. Reinstall the skills (`crysk skills install`) for the updated triage instructions.
+
+- **A reply-shaped comment from someone without write access no longer blocks a real reply.** `crysk triage
+  reply` skipped posting when a triage marker for the same review was already there, whoever wrote it, while the
+  gate counts a reply only from a login with write access. Anyone could post the marker first and leave the
+  finding with no reply the gate reads. The skip now counts only a reply whose author has write access; when
+  GitHub does not return that permission, after one retry, the command posts nothing and says to run it again.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed

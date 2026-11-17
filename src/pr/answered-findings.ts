@@ -14,6 +14,7 @@ import { parsePrCommentMarker } from "#watch/preflight";
 // its newest triage reply answers the reviewed head's review (triage/reply.ts replyAnswersReview, the rule
 // crysk status uses) and is `applied`, or is a `dismissed` the CI adjudicator upheld. `deferred` and
 // `misclassified` stay open: they name a real finding, and only a fix or a human override may close one.
+// A finding with no comment of its own, a row of the summary, is answered by a top-level reply that names the row.
 export interface AnsweredFindings {
   blocking: number;
   open: number;
@@ -168,12 +169,15 @@ export function answeredBlockingFindings(input: {
     const triage = finding.triage;
     const answered =
       triage !== null &&
-      finding.head !== null &&
-      // WHY either head: a reply names the review it answers, which is the reviewed head. A
-      // finding carried from an earlier review keeps that review's comment, so its posted head is
-      // older; an older driver's reply and a plain `applied` one still carry that posted head, and
-      // isStaleReply has already dropped those that predate the verdict.
-      (triage.head === finding.head || triage.head === input.reviewedHead) &&
+      // WHY either head for a finding with a comment: a reply names the review it answers, which
+      // is the reviewed head. A finding carried from an earlier review keeps that review's comment,
+      // so its posted head is older; an older driver's reply and a plain `applied` one still carry
+      // that posted head, and isStaleReply has already dropped those that predate the verdict.
+      // WHY only the reviewed head for a row with no comment: it has no posted head, so there is
+      // nothing a reply could carry but the head of the review it answers.
+      (finding.head === null
+        ? triage.head === input.reviewedHead
+        : triage.head === finding.head || triage.head === input.reviewedHead) &&
       (triage.tag === "applied" ||
         (triage.tag === "dismissed" && finding.ci_verdict === "upheld"));
     if (!answered) open++;

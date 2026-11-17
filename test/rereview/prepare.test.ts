@@ -7,6 +7,7 @@ import {
 } from "#rereview/classify";
 import { planDiscovery } from "#rereview/plan";
 import {
+  adjudicationQueue,
   bindPriorsToPosted,
   buildPhaseBQueue,
   collapseTargets,
@@ -498,6 +499,196 @@ describe("S-B — enrichPriorsFromThreads newness", () => {
     });
     expect(queuedBefore.queued).toEqual([]);
     expect(queuedBefore.settled[0]?.status).toBe("carried");
+  });
+});
+
+describe("enrichPriorsFromThreads — a prior with no comment", () => {
+  const HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const claim = "a finding GitHub could not anchor";
+  const rowPrior = {
+    id: "R001",
+    sev: "CRITICAL" as const,
+    tier: "blocking" as const,
+    channel: "inline" as const,
+    locs: ["src/app.ts:10"],
+    claim,
+    triage: null,
+    newThreadReply: false,
+  };
+
+  function rowReply(over: {
+    id: number;
+    tag: "applied" | "dismissed";
+    row: string;
+    verdict?: "upheld" | "rejected" | "inconclusive";
+    created_at?: string;
+    text?: string;
+  }) {
+    const marker = triageMarker({
+      tag: over.tag,
+      headSha: HEAD,
+      actor: over.tag === "dismissed" ? "human" : "agent",
+      ...(over.verdict === undefined ? {} : { verdict: over.verdict }),
+      row: over.row,
+    });
+    return {
+      id: over.id,
+      body: over.text === undefined ? marker : `${marker}\n\n${over.text}`,
+      ...(over.created_at === undefined ? {} : { created_at: over.created_at }),
+    };
+  }
+
+  test("a top-level reply that names the prior's row becomes its triage", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({
+          id: 70,
+          tag: "applied",
+          row: "R001",
+          created_at: "2026-10-30T11:00:00Z",
+          text: "fixed in x",
+        }),
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage).toEqual({
+      tag: "applied",
+      verdict: null,
+      createdAt: "2026-10-30T11:00:00Z",
+      replyId: 70,
+      argument: "fixed in x",
+      ciVerdict: null,
+    });
+    expect(enriched?.triage && "threadId" in enriched.triage).toBe(false);
+  });
+
+  test("the last reply that names the row wins", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({ id: 70, tag: "applied", row: "R001" }),
+        rowReply({
+          id: 71,
+          tag: "dismissed",
+          row: "R001",
+          verdict: "upheld",
+        }),
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage?.tag).toBe("dismissed");
+    expect(enriched?.triage?.replyId).toBe(71);
+  });
+
+  test("a reply that names another row is ignored", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [rowReply({ id: 70, tag: "applied", row: "R002" })],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched).toEqual(rowPrior);
+  });
+
+  test("a top-level triage marker with no row is ignored", () => {
+    const plain = `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n`;
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [{ id: 70, body: plain }],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched).toEqual(rowPrior);
+  });
+
+  test("without rowReplies the prior is unchanged", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched).toEqual(rowPrior);
+  });
+
+  test("a row reply newer than the summary marks the prior as newly answered", () => {
+    const after = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({
+          id: 70,
+          tag: "applied",
+          row: "R001",
+          created_at: "2026-10-30T11:00:00Z",
+        }),
+      ],
+      summaryUpdatedAt: "2026-10-30T10:00:00Z",
+    });
+    expect(after[0]?.newThreadReply).toBe(true);
+
+    const before = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({
+          id: 70,
+          tag: "applied",
+          row: "R001",
+          created_at: "2026-10-30T09:00:00Z",
+        }),
+      ],
+      summaryUpdatedAt: "2026-10-30T10:00:00Z",
+    });
+    expect(before[0]?.newThreadReply).toBe(false);
+  });
+
+  test("a row reply is not read as a thread reply", () => {
+    const fingerprint = claimFingerprint(claim);
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [
+        { id: 22, marker: { path: "src/app.ts", line: 10, c: fingerprint } },
+      ],
+      replies: [
+        {
+          id: 80,
+          in_reply_to_id: 22,
+          body: rowReply({ id: 80, tag: "applied", row: "R009" }).body,
+          created_at: "2026-10-30T11:00:00Z",
+        },
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage).toBeNull();
+  });
+
+  test("a dismissed row reply is not queued for adjudication", () => {
+    const [dismissed] = enrichPriorsFromThreads({
+      priors: [{ ...rowPrior, tier: "blocking" }],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({
+          id: 71,
+          tag: "dismissed",
+          row: "R001",
+          verdict: "upheld",
+        }),
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(dismissed?.triage?.tag).toBe("dismissed");
+    expect(adjudicationQueue([dismissed as PriorRecord])).toEqual([]);
   });
 });
 

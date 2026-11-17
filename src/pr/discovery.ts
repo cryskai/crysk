@@ -395,6 +395,7 @@ export async function resolvePrDiscovery(params: {
       priors: rawPriors,
       posted: postedFindings,
       replies: reviewComments,
+      rowReplies: issueComments,
       summaryUpdatedAt,
       headSha,
       platformActor: process.env.CRYSK_PLATFORM_ACTOR,

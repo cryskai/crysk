@@ -598,6 +598,10 @@ export function renderPrComment(
   // Findings below `post_min_severity` (pr/post-floor.ts): left out of `doc`
   // by the caller, counted here in one line so the summary says they exist.
   notPosted?: { count: number; floor: PostMinSeverity },
+  // The summary row id (`R001`, …) of each Outside Diff finding, keyed by the finding's own id.
+  // Shown beside the entry, because that id is how the finding is answered (triage reply
+  // --finding R###). A finding with no entry shows none.
+  rowIdByFindingId?: ReadonlyMap<string, string>,
 ): string {
   // Normalize away one trailing slash so `gh repo view` output and a
   // hand-typed URL build the same links.
@@ -772,6 +776,7 @@ export function renderPrComment(
         doc.head_sha,
         webUrl,
         compactFrom,
+        rowIdByFindingId,
       ),
     );
     out.push("");
@@ -1051,10 +1056,13 @@ function outsideDiffSection(
   headSha: string,
   webUrl: string | undefined,
   compactFrom: number | undefined,
+  rowIdByFindingId: ReadonlyMap<string, string> | undefined,
 ): string[] {
   const out: string[] = [`### Comments Outside Diff (${findings.length})`, ""];
   for (const [i, finding] of findings.entries()) {
     if (i > 0) out.push("");
+    const rowId = rowIdByFindingId?.get(finding.id);
+    const rowTag = rowId === undefined ? "" : ` (${rowId})`;
     // A compact entry keeps only its tier and linked location: no claim,
     // evidence, or prompt-to-fix body. WHY the tier stays: without it a reader
     // (or the sandbox's report parser) cannot tell a compacted blocking entry
@@ -1062,11 +1070,15 @@ function outsideDiffSection(
     if (compactFrom !== undefined && i >= compactFrom) {
       out.push(
         `${scanAidEmoji(finding)} ${finding.tier} · ` +
-          findingLocationLine(finding, headSha, webUrl, true),
+          findingLocationLine(finding, headSha, webUrl, true) +
+          rowTag,
       );
       continue;
     }
-    out.push(...findingBodyLines(finding, headSha, webUrl, true));
+    const lines = findingBodyLines(finding, headSha, webUrl, true);
+    // The location line carries the row id: the same `(R###)` form the Still live list uses.
+    lines[1] = `${lines[1]}${rowTag}`;
+    out.push(...lines);
   }
   return out;
 }

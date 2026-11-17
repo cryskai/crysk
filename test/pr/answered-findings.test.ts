@@ -88,6 +88,26 @@ function reply(
   };
 }
 
+function rowReply(
+  id: number,
+  row: string,
+  tag: TriageTag,
+  options: { user?: string; head?: string; at?: string } = {},
+): AnswerIssueComment {
+  return {
+    id,
+    user: options.user ?? AUTHOR,
+    ...(options.at === undefined ? {} : { created_at: options.at }),
+    body: `${triageMarker({
+      tag,
+      headSha: options.head ?? REVIEWED,
+      actor: "agent",
+      row,
+      ...(tag === "applied" ? {} : { verdict: "upheld" as const }),
+    })}\n\nreasoning`,
+  };
+}
+
 function ruling(
   id: number,
   parent: number,
@@ -289,6 +309,168 @@ describe("answeredBlockingFindings", () => {
         reviewComments: [finding(10, 10, CLAIM_A), reply(11, 10, "applied")],
       }),
     ).toEqual({ blocking: 2, open: 1 });
+  });
+});
+
+describe("answeredBlockingFindings — a summary row with no comment", () => {
+  const ROW_R001 = { id: "R001", loc: "src/a.ts:10", claim: CLAIM_A };
+  const ROW_R002 = { id: "R002", loc: "src/a.ts:40", claim: CLAIM_B };
+  const rowSummary = (rows: { id: string; loc: string; claim: string }[]) => ({
+    id: 1,
+    user: BOT,
+    body: summary(rows),
+  });
+  const rowRead = (
+    replies: AnswerIssueComment[],
+    options: {
+      writers?: Record<string, boolean | null>;
+      rows?: { id: string; loc: string; claim: string }[];
+      reviewComments?: AnswerReviewComment[];
+    } = {},
+  ) =>
+    read({
+      issueComments: [rowSummary(options.rows ?? [ROW_R001]), ...replies],
+      reviewComments: options.reviewComments ?? [],
+      ...(options.writers === undefined ? {} : { writers: options.writers }),
+    });
+
+  test("no reply: open", () => {
+    expect(rowRead([])).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an applied reply that names the row, at the reviewed head, from a writer: answered", () => {
+    expect(rowRead([rowReply(2, "R001", "applied")])).toEqual({
+      blocking: 1,
+      open: 0,
+    });
+  });
+
+  test("a reply at another head stays open, even when it is newer than the verdict", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "applied", { head: OLD, at: AFTER })]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a reply from a login without write access is dropped", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "applied", { user: STRANGER })], {
+        writers: { [AUTHOR]: true, [STRANGER]: false },
+      }),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a reply from a login whose permission was never read fails the whole read", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "applied", { user: STRANGER })], {
+        writers: { [AUTHOR]: true },
+      }),
+    ).toBeNull();
+  });
+
+  test("a reply that names another row does not answer this one", () => {
+    expect(rowRead([rowReply(2, "R002", "applied")])).toEqual({
+      blocking: 1,
+      open: 1,
+    });
+  });
+
+  test("a dismissed reply stays open: a row has no thread a CI ruling could sit on", () => {
+    expect(rowRead([rowReply(2, "R001", "dismissed")])).toEqual({
+      blocking: 1,
+      open: 1,
+    });
+  });
+
+  test("a deferred reply stays open", () => {
+    expect(rowRead([rowReply(2, "R001", "deferred")])).toEqual({
+      blocking: 1,
+      open: 1,
+    });
+  });
+
+  test("a top-level applied marker with no row answers nothing", () => {
+    expect(
+      rowRead([
+        {
+          id: 2,
+          user: AUTHOR,
+          body: `${triageMarker({ tag: "applied", headSha: REVIEWED, actor: "agent" })}\n\nreasoning`,
+        },
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("two rows, one answered", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "applied")], {
+        rows: [ROW_R001, ROW_R002],
+      }),
+    ).toEqual({ blocking: 2, open: 1 });
+  });
+
+  test("a row and a threaded finding, both answered", () => {
+    expect(
+      rowRead([rowReply(2, "R001", "applied")], {
+        rows: [ROW_R001, ROW_R002],
+        reviewComments: [finding(20, 40, CLAIM_B), reply(21, 20, "applied")],
+      }),
+    ).toEqual({ blocking: 2, open: 0 });
+  });
+
+  test("an applied reply followed by a newer dismissed one stays open", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "applied"),
+        rowReply(3, "R001", "dismissed"),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an applied reply followed by a newer deferred one stays open", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "applied"),
+        rowReply(3, "R001", "deferred"),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a marker on the second line of a comment answers nothing", () => {
+    expect(
+      rowRead([
+        {
+          id: 2,
+          user: AUTHOR,
+          body: `some text\n${triageMarker({ tag: "applied", headSha: REVIEWED, actor: "agent", row: "R001" })}\n\nreasoning`,
+        },
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a thread reply that names a row does not answer the threaded finding", () => {
+    expect(
+      read({
+        issueComments: [rowSummary([ROW_R001])],
+        reviewComments: [
+          finding(10, 10, CLAIM_A),
+          {
+            id: 11,
+            user: AUTHOR,
+            in_reply_to_id: 10,
+            body: `${triageMarker({ tag: "applied", headSha: REVIEWED, actor: "agent", row: "R009" })}\n\nreasoning`,
+          },
+        ],
+      }),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("the author of a row reply is among the logins whose permission is looked up", () => {
+    expect(
+      triageReplyAuthors([
+        rowSummary([ROW_R001]),
+        rowReply(2, "R001", "applied", { user: "someone" }),
+      ]),
+    ).toContain("someone");
   });
 });
 

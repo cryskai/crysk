@@ -988,6 +988,14 @@ export function enrichPriorsFromThreads(input: {
     body: string;
     created_at?: string;
   }[];
+  // The pull request's top-level comments. A prior with no comment of its own (a finding GitHub
+  // could not anchor) is answered there, by a reply whose marker names its row (triage/triage.ts
+  // `row`). Absent: such a prior reads no reply, as before.
+  rowReplies?: readonly {
+    id?: number;
+    body: string;
+    created_at?: string;
+  }[];
   summaryUpdatedAt: string | null;
   // In platform mode, the login the platform's token exchange returned (CRYSK_PLATFORM_ACTOR).
   platformActor?: string;
@@ -997,14 +1005,43 @@ export function enrichPriorsFromThreads(input: {
   const replies = withPlainAppliedReplies(input.replies);
   return input.priors.map((prior) => {
     const parent = bound.get(prior.id);
-    if (parent === undefined) return prior;
+    if (parent === undefined) {
+      // No comment, so no thread: the replies that name this prior's row answer it. The last one
+      // in comment order wins, as in a thread. No CI ruling is read here: the adjudicator answers
+      // on a review thread, and this prior has none.
+      const named = (input.rowReplies ?? []).filter(
+        (reply) => parseTriageMarker(reply.body)?.row === prior.id,
+      );
+      if (named.length === 0) return prior;
+      let rowTriage: PriorTriage | null = prior.triage;
+      for (const reply of named) {
+        const marker = parseTriageMarker(reply.body);
+        if (marker === null) continue;
+        rowTriage = {
+          tag: marker.tag,
+          verdict: marker.verdict ?? null,
+          createdAt: reply.created_at ?? null,
+          ...(reply.id === undefined ? {} : { replyId: reply.id }),
+          argument: reply.body.split("\n").slice(1).join("\n").trim(),
+          ciVerdict: null,
+        };
+      }
+      const newRowReply = named.some(
+        (reply) =>
+          reply.created_at !== undefined &&
+          input.summaryUpdatedAt !== null &&
+          reply.created_at > input.summaryUpdatedAt,
+      );
+      return { ...prior, triage: rowTriage, newThreadReply: newRowReply };
+    }
     const thread = replies.filter(
       (reply) => reply.in_reply_to_id === parent.id,
     );
     let triage: PriorTriage | null = prior.triage;
     for (const reply of thread) {
       const marker = parseTriageMarker(reply.body);
-      if (marker === null) continue;
+      // A reply that names a row answers a prior with no comment, never this thread's finding.
+      if (marker === null || marker.row !== undefined) continue;
       triage = {
         tag: marker.tag,
         verdict: marker.verdict ?? null,
