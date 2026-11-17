@@ -296,7 +296,6 @@ export function liveBlockingFindings(raw: PrStatusInput): PrStatusFinding[] {
 // the newest). Its head and completeness come from the marker; its reviews count and its
 // live rows come from the state block that the summary carries.
 function readSummary(comments: PrStatusComment[]): {
-  id: number | null;
   head: string | null;
   complete: boolean | null;
   reviews: number | null;
@@ -305,12 +304,11 @@ function readSummary(comments: PrStatusComment[]): {
   const id = findMarkedCommentId(comments);
   const body = comments.find((c) => c.id === id)?.body ?? null;
   if (id === null || body === null) {
-    return { id: null, head: null, complete: null, reviews: null, rows: [] };
+    return { head: null, complete: null, reviews: null, rows: [] };
   }
   const marker = parsePrCommentMarker(body);
   const state = parseStateBlock(body);
   return {
-    id,
     head: marker?.head ?? null,
     complete: marker?.complete ?? null,
     reviews: state?.reviews ?? null,
@@ -553,7 +551,9 @@ function repliesTo(
     for (const reply of input.reviewComments) {
       if (reply.in_reply_to_id !== source.id) continue;
       const marker = parseTriageMarker(reply.body);
-      if (marker !== null)
+      // A reply that names a row answers a finding with no comment, never the thread it was typed in
+      // (as rereview/prepare.ts reads it).
+      if (marker !== null && marker.row === undefined)
         out.push({ id: reply.id, marker, createdAt: reply.created_at });
     }
     return out;
@@ -700,8 +700,8 @@ function decideNext(
     };
   }
   if (gate.state === "success") {
-    // PR #472/#475: a finding that lives only in the summary (outside the diff) has no thread, so nothing
-    // can be owed on it, but a done that does not name it let the loop merge without reading it. Every
+    // PR #472/#475: a finding that lives only in the summary (outside the diff) has no thread and is never
+    // owed a reply (it can still be answered by its row id), but a done that does not name it let the loop merge without reading it. Every
     // done below carries this note.
     const summaryOnly = analyzed.filter(
       (a) => a.finding.comment_id === null,

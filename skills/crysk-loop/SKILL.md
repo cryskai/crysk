@@ -26,9 +26,11 @@ Do not use it for ordinary human review comments, or for Crysk's own summary com
 (`<!-- crysk-report head=<sha> -->`). That comment is a status roll-up plus, since W2
 (issues #16/#17), a `### Comments Outside Diff` bucket for findings GitHub would not
 anchor. Those bucket findings have **no** `<!-- crysk-finding` marker and **no**
-review thread. Do not reply on the summary. Do not invent a `gh` comment for them.
-This skill only answers findings that already have their own `<!-- crysk-finding`
-comment — almost always an inline review comment on Files changed.
+review thread; each shows its row id (`R003`) beside its location, and step 0 lists it with
+`comment_id: null`. You answer one like any other finding, by that id: the driver posts a
+top-level comment that names the row. Do not reply on the summary yourself and do not invent a
+`gh` comment for them. Every other finding has its own `<!-- crysk-finding` comment, almost
+always an inline review comment on Files changed.
 
 ## Running the CLI (no install needed)
 
@@ -190,8 +192,8 @@ done; exit 1
      triage batch below (steps 1–6), which judges every finding, applies real fixes in the tree, posts
      all replies, and either pushes the fixes or triggers `recheck` before looping back to step 0 with
      `--wait`.
-   - `fix`: a blocking finding is tagged `applied`, or a blocking finding has no comment thread
-     (`comment_id` is null: a summary-only row, or one never posted inline). Commit and `git push` the fix, then immediately run step 0 with `--wait` so the next review verifies it. A thread-less finding cannot be answered with `triage reply`, so fix it or ask a maintainer for `/crysk override`.
+   - `fix`: a blocking finding is tagged `applied`. Commit and `git push` the fix, then
+     immediately run step 0 with `--wait` so the next review verifies it.
    - `recheck`: blocking findings are answered `dismissed` (with no pending code fixes to push) and the CI adjudicator has not ruled on
      them on this head (or ruled `inconclusive`). Comment `gh pr comment <n> --body "/crysk recheck"`, then immediately run step 0 with `--wait` and follow "Closing a dismissal" below.
    - `override-or-fix`: the gate is red (or held for a manual review) and nothing is left for
@@ -212,7 +214,7 @@ done; exit 1
        description): read that description and act on what it says; when it names nothing you can
        fix, ask a maintainer.
    - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
-     finding posted on this head has a reply. When `findings` lists rows with `comment_id: null` (the `reason` says they "live only in the summary comment"), they are outside-diff findings with no thread: read each one in the summary, fix what is real before you report the PR ready, and name the rest in your report. A `fixes unverified` green (the `reason` says no review
+     finding posted on this head has a reply. When `findings` lists rows with `comment_id: null` (the `reason` says they "live only in the summary comment"), they are outside-diff findings with no thread: read each one in the summary, fix what is real and answer it by its `R###` id like any other finding, and name the ones you left unanswered in your report. A `fixes unverified` green (the `reason` says no review
      verified it) is done too: report the PR ready to merge and say the fixes were not verified by a review. Before exiting, check whether `report.head && report.head !== head` (a green status carried over an unreviewed push under `once_per_pr`, `thresholded`, or `risk_aware`): if `git diff <report.head>..<head>` contains non-trivial logic or risky changes ("Requesting or suggesting another review" above), recommend `/crysk review` naming those changes; otherwise exit the loop and report that the PR is ready to merge.
 
    **Bound the forced runs.** `/crysk review` and `/crysk recheck` each run a full paid review
@@ -232,8 +234,10 @@ done; exit 1
    `findings[]` lists each posted finding with its `id`, `path`, `line`, `head`, `live_on_head`, and
    its newest `triage` (`null` when none), and `ci_verdict`. `comment_id` can be null: a live row of
    the summary's state block that no comment carries (summary-only, or never posted inline). Its
-   `head` is null too, and it has no thread to reply in: the CI adjudicator's ruling on that newest
-   reply on this head (`upheld`, `rejected`, `inconclusive`, or `null`). `triage` is only the newest reply, so a finding can be
+   `head` is null too; it has no thread, and `triage reply --finding R###` answers it with a
+   top-level comment that names the row. `ci_verdict` is the CI adjudicator's ruling on that newest
+   reply on this head (`upheld`, `rejected`, `inconclusive`, or `null`); for a row with no comment
+   it is always `null`, since there is no thread a ruling could sit on. `triage` is only the newest reply, so a finding can be
    answered at its own head and then re-answered at a later head. The thread (step 2 below) settles
    the per-head question, and the escalation count still reads the thread's prior markers.
 
@@ -244,7 +248,8 @@ current head:
    text) and its GitHub comment id. New posts put that marker on an **inline review
    comment**. A leftover top-level issue comment with the same marker may still exist on
    an old PR (pre-W2); the driver still binds those by marker. A finding that appears
-   only under `Comments Outside Diff` in the summary is not in this list — skip it.
+   only under `Comments Outside Diff` in the summary has no comment to fetch: read it in the
+   summary, where its entry shows its row id.
 2. **Read the reviewed head.** It is `report.head` in step 0's JSON: the head the summary was written
    for. This IS the budget unit — see "One adjudication per finding per HEAD" below. If a triage
    reply already exists in this thread carrying that head, skip it: this review is already
@@ -267,7 +272,9 @@ current head:
    `R00N` is the finding's `id` in step 0's `findings[]`. It works for every posted finding,
    including one carried from an earlier review. With the run directory on the machine (a local
    review) you may pass `--from <run-dir> --finding F00N` instead, for a finding posted on this
-   head; for a carried finding the driver refuses and names the `R###` id to use.
+   head; for a carried finding the driver refuses and names the `R###` id to use. For a finding
+   with no comment (`comment_id: null`) the same command posts a top-level comment that names the
+   row; there is no thread to resolve.
 
    The driver resolves the parent from the posted `<!-- crysk-finding`
    marker (never a comment id, never the nearest line), prepends the triage
@@ -324,8 +331,8 @@ adjudicator. When step 0 says `recheck`:
 4. A ruling counts only on the head it was given. After any push, step 0 asks for a recheck again.
 
 Only an inline finding can be rechecked: the CI adjudicator answers on the finding's own review
-thread. A legacy top-level finding (no review thread) cannot be cleared by a dismissal; step 0 says
-`override-or-fix` for it.
+thread. A legacy top-level finding and a finding with no comment (a summary row) have no review thread,
+so neither can be cleared by a dismissal; step 0 says `override-or-fix` for it.
 
 ## The four tags
 
@@ -448,7 +455,7 @@ badge line in that file — the driver prepends both, picks the parent comment f
 table), and resolves the inline review thread when there is one.
 Passing a GitHub comment id, or posting with `gh api … in_reply_to`, is how replies landed
 under Greptile on Musive #1724. Do not do that. Do not reply on
-`<!-- crysk-report -->` either: that is the summary, including Outside Diff.
+`<!-- crysk-report -->` either: that is the summary. A finding listed only there is answered through the driver by its `R###` id, like the rest.
 
 `--from` is the Crysk run directory that produced these findings (`findings.json`). `--finding`
 is the finding id (`F001`, …) from that file — never a comment id. Without `--from`, `--finding`
@@ -530,9 +537,11 @@ this PR. The engine typed it wrong, not the code.
   `/crysk recheck` or `/crysk review` with `gh pr comment` is not a triage reply, and is how you ask for them.)
   If that command posted the reply and then failed to resolve, re-run the
   **same** command — same-head skip retries resolve only. Do not `gh`.
-- Never triage a finding that only exists under `### Comments Outside Diff` in the
-  summary. It has no thread this slice (W2). If `npx -y crysk@0.8.1 triage reply` reports no
-  matching marker, stop.
+- A finding that only exists under `### Comments Outside Diff` in the summary is answered by its
+  `R###` id: the driver posts a top-level comment that names the row. Only `applied` clears a
+  blocking one; a `dismissed` reply to it cannot get a CI ruling, so it stays counted until a fix
+  or `/crysk override`. If `npx -y crysk@0.8.1 triage reply` reports no matching marker, follow its
+  message.
 - `dismissed`, `deferred`, and `misclassified` without `--verdict` are malformed. `applied` WITH
   `--verdict` is equally malformed.
 - Never re-triage a finding whose reviewed head is unchanged since its last triage on this PR (the driver

@@ -426,6 +426,44 @@ describe("answeredBlockingFindings — a summary row with no comment", () => {
     ).toEqual({ blocking: 1, open: 1 });
   });
 
+  test("an applied reply followed by a newer deferred one stays open", () => {
+    expect(
+      rowRead([
+        rowReply(2, "R001", "applied"),
+        rowReply(3, "R001", "deferred"),
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a marker on the second line of a comment answers nothing", () => {
+    expect(
+      rowRead([
+        {
+          id: 2,
+          user: AUTHOR,
+          body: `some text\n${triageMarker({ tag: "applied", headSha: REVIEWED, actor: "agent", row: "R001" })}\n\nreasoning`,
+        },
+      ]),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a thread reply that names a row does not answer the threaded finding", () => {
+    expect(
+      read({
+        issueComments: [rowSummary([ROW_R001])],
+        reviewComments: [
+          finding(10, 10, CLAIM_A),
+          {
+            id: 11,
+            user: AUTHOR,
+            in_reply_to_id: 10,
+            body: `${triageMarker({ tag: "applied", headSha: REVIEWED, actor: "agent", row: "R009" })}\n\nreasoning`,
+          },
+        ],
+      }),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
   test("the author of a row reply is among the logins whose permission is looked up", () => {
     expect(
       triageReplyAuthors([

@@ -2242,6 +2242,37 @@ describe("buildPrStatus — answering a row with no comment", () => {
       "The gate is red with 1 live blocking finding(s), all triaged and none applied or pending a CI ruling (a rejected dismissal, or a deferred or misclassified tag, never leaves the count): fix and push, or override the gate.",
     );
   });
+
+  test("a thread reply that names a row does not answer its thread's finding", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [RED],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            id: 2,
+            in_reply_to_id: 1,
+            body: `${triageMarker({
+              tag: "applied",
+              headSha: CURRENT,
+              actor: "agent",
+              row: "R009",
+            })}\n\nreasoning`,
+          },
+        ],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+    const threaded = status.findings.find((f) => f.comment_id === 1);
+    expect(threaded?.triage).toBeNull();
+  });
 });
 
 describe("shouldWaitPrStatus", () => {

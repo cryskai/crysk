@@ -256,6 +256,21 @@ describe("existingTriageAtHead", () => {
       }),
     ).toBe(false);
   });
+
+  test("a thread reply that names a row is not this thread's reply", () => {
+    expect(
+      existingTriageAtHead({
+        parentId: 22,
+        headSha: HEAD,
+        replies: [
+          {
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\nok`,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("replyAnswersReview", () => {

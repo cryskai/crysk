@@ -152,7 +152,11 @@ export function existingTriageAtHead(input: {
   return input.replies.some((reply) => {
     if (reply.in_reply_to_id !== input.parentId) return false;
     const marker = parseTriageMarker(reply.body);
-    return marker !== null && marker.headSha === input.headSha;
+    return (
+      marker !== null &&
+      marker.row === undefined &&
+      marker.headSha === input.headSha
+    );
   });
 }
 
