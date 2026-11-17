@@ -30,6 +30,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
     domain: "rereview",
     files: [
       "adjudicate",
+      "base-merge-filter",
       "classify",
       "identity",
       "plan",
