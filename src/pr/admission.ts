@@ -829,6 +829,61 @@ async function reviewVerdictTime(input: {
   return null;
 }
 
+// When a review wrote its own verdict on this head, or null when the head's statuses hold none: a
+// status a skip, a carry or an override wrote is not one. No read: the caller already has the list.
+export function ownReviewVerdictTime(
+  statuses: readonly CommitStatusFact[],
+): string | null {
+  const own = newestStatusInContext(
+    statuses.filter((status) => finishedVerdict(status)),
+    COMMIT_STATUS_CONTEXT,
+  );
+  return own === undefined ? null : (own.created_at ?? null);
+}
+
+// Whether this head's newest crysk status is a red. With ownReviewVerdictTime null that is a red a
+// skip or a carry wrote: the one case where a reply stamped with the head its finding was posted on
+// is judged against a verdict on an earlier commit, so the one case worth the walk. A green, an
+// override, a pending status and no status at all judge no such reply. Lives here because only this
+// module may name the gate context.
+export function headStatusRed(statuses: readonly CommitStatusFact[]): boolean {
+  const newest = newestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);
+  return newest !== undefined && newest.state === "failure";
+}
+
+// When the review whose verdict a skip carried onto this head wrote that verdict, or null when none
+// reads. The same walk and the same cutoff the gate uses (findCarriedVerdict, reviewVerdictTime), so
+// `crysk status` and the gate cut stale replies at one instant. Never throws: a failed read is null,
+// which fails closed.
+export async function carriedReviewVerdictTime(input: {
+  operatorRoot: string;
+  prNumber: number;
+  headSha: string;
+  spawnFn?: typeof Bun.spawn;
+  listCommits?: typeof fetchPrCommitShas;
+  readStatuses?: typeof fetchCommitStatusList;
+}): Promise<string | null> {
+  try {
+    const readStatuses = input.readStatuses ?? fetchCommitStatusList;
+    const carried = await findCarriedVerdict({
+      operatorRoot: input.operatorRoot,
+      prNumber: input.prNumber,
+      headSha: input.headSha,
+      spawnFn: input.spawnFn,
+      listCommits: input.listCommits ?? fetchPrCommitShas,
+      readStatuses,
+    });
+    return await reviewVerdictTime({
+      operatorRoot: input.operatorRoot,
+      carried,
+      spawnFn: input.spawnFn,
+      readStatuses,
+    });
+  } catch {
+    return null;
+  }
+}
+
 // A verdict a review wrote itself: never a carried, skipped, or override text.
 function finishedVerdict(
   status: Pick<CommitStatusFact, "state" | "description">,

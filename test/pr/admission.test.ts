@@ -25,9 +25,12 @@ import {
   type AdmissionStatusInput,
   type CiAdmissionLedgerState,
   carriedBlockingDescription,
+  carriedReviewVerdictTime,
   carriedSuccessDescription,
+  headStatusRed,
   holdCiAdmissionLedger,
   isReviewVerdictStatus,
+  ownReviewVerdictTime,
   publishCiSkip,
   releaseCiAdmissionLedger,
   reserveCiAdmissionLedger,
@@ -1839,6 +1842,224 @@ describe("isReviewVerdictStatus: a review's verdict, by the writers that build i
     ["a verdict with a word added", "success", `${finished(true)} twice`],
   ])("%s is not a verdict", (_name, state, description) => {
     expect(isReviewVerdictStatus({ state, description })).toBe(false);
+  });
+});
+
+describe("the review's own verdict time", () => {
+  const C_SHA = "c".repeat(40);
+  const B_SHA = "b".repeat(40);
+  const A_SHA = "a".repeat(40);
+  const OWN_BLOCKING = blockingCommitStatusRequest({
+    blockingCount: 1,
+    targetUrl: undefined,
+    context: COMMIT_STATUS_CONTEXT,
+  }).description;
+  const statusRow = (
+    state: string,
+    description: string,
+    created_at: string,
+  ) => ({
+    state,
+    context: COMMIT_STATUS_CONTEXT,
+    created_at,
+    description,
+  });
+
+  describe("ownReviewVerdictTime", () => {
+    test("a review's own blocking verdict gives its time", () => {
+      expect(
+        ownReviewVerdictTime([
+          statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z"),
+        ]),
+      ).toBe("2026-11-10T10:00:00Z");
+    });
+
+    test("a carried blocking status alone gives null", () => {
+      expect(
+        ownReviewVerdictTime([
+          statusRow(
+            "failure",
+            carriedBlockingDescription(2, B_SHA),
+            "2026-11-10T12:00:00Z",
+          ),
+        ]),
+      ).toBeNull();
+    });
+
+    test("an own verdict at 10:00 beats a newer carried status at 12:00", () => {
+      expect(
+        ownReviewVerdictTime([
+          statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z"),
+          statusRow(
+            "failure",
+            carriedBlockingDescription(2, B_SHA),
+            "2026-11-10T12:00:00Z",
+          ),
+        ]),
+      ).toBe("2026-11-10T10:00:00Z");
+    });
+
+    test("an empty list gives null", () => {
+      expect(ownReviewVerdictTime([])).toBeNull();
+    });
+  });
+
+  describe("headStatusRed", () => {
+    test("a newest carried blocking red is red", () => {
+      expect(
+        headStatusRed([
+          statusRow(
+            "failure",
+            carriedBlockingDescription(1, B_SHA),
+            "2026-11-10T12:00:00Z",
+          ),
+        ]),
+      ).toBe(true);
+    });
+
+    test("a review's own blocking verdict is red", () => {
+      expect(
+        headStatusRed([
+          statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z"),
+        ]),
+      ).toBe(true);
+    });
+
+    test("a newest success is not red", () => {
+      expect(
+        headStatusRed([
+          statusRow(
+            "success",
+            "pr-hero: no blocking findings",
+            "2026-11-10T10:00:00Z",
+          ),
+        ]),
+      ).toBe(false);
+    });
+
+    test("a newest pending status is not red", () => {
+      expect(
+        headStatusRed([
+          statusRow(
+            "pending",
+            "pr-hero: review in progress",
+            "2026-11-10T10:00:00Z",
+          ),
+        ]),
+      ).toBe(false);
+    });
+
+    test("an empty list is not red", () => {
+      expect(headStatusRed([])).toBe(false);
+    });
+
+    test("an older failure followed by a newer success is not red", () => {
+      expect(
+        headStatusRed([
+          statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z"),
+          statusRow(
+            "success",
+            "pr-hero: no blocking findings",
+            "2026-11-10T12:00:00Z",
+          ),
+        ]),
+      ).toBe(false);
+    });
+  });
+
+  describe("carriedReviewVerdictTime", () => {
+    // Commits are listed oldest first, as the real lister returns them: [A, B, C], head C.
+    const commitsAbc = async () => [A_SHA, B_SHA, C_SHA];
+    const statusesBy = (bySha: Record<string, Row[] | null>) => {
+      return async (_root: string, sha: string) =>
+        sha in bySha ? (bySha[sha] ?? null) : [];
+    };
+    type Row = ReturnType<typeof statusRow>;
+
+    test("the head carries a verdict whose own review is on the previous commit", async () => {
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: commitsAbc,
+        readStatuses: statusesBy({
+          [C_SHA]: [
+            statusRow(
+              "failure",
+              carriedBlockingDescription(2, B_SHA),
+              "2026-11-10T11:00:00Z",
+            ),
+          ],
+          [B_SHA]: [statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z")],
+        }),
+      });
+      expect(time).toBe("2026-11-10T10:00:00Z");
+    });
+
+    test("a chained carry walks down to the commit with the review's own verdict", async () => {
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: commitsAbc,
+        readStatuses: statusesBy({
+          [C_SHA]: [
+            statusRow(
+              "failure",
+              carriedBlockingDescription(2, B_SHA),
+              "2026-11-10T12:00:00Z",
+            ),
+          ],
+          [B_SHA]: [
+            statusRow(
+              "failure",
+              carriedBlockingDescription(2, A_SHA),
+              "2026-11-10T11:00:00Z",
+            ),
+          ],
+          [A_SHA]: [statusRow("failure", OWN_BLOCKING, "2026-11-10T09:00:00Z")],
+        }),
+      });
+      expect(time).toBe("2026-11-10T09:00:00Z");
+    });
+
+    test("a failed status read gives null", async () => {
+      const rows: Row[] | null = null;
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: commitsAbc,
+        readStatuses: statusesBy({ [C_SHA]: rows }),
+      });
+      expect(time).toBeNull();
+    });
+
+    test("a commit lister that throws gives null instead of throwing", async () => {
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: async () => {
+          throw new Error("gh exploded");
+        },
+        readStatuses: statusesBy({}),
+      });
+      expect(time).toBeNull();
+    });
+
+    test("a head missing from the listed commits gives null", async () => {
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: async () => [A_SHA, B_SHA],
+        readStatuses: statusesBy({
+          [B_SHA]: [statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z")],
+        }),
+      });
+      expect(time).toBeNull();
+    });
   });
 });
 

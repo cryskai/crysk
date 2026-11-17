@@ -111,7 +111,7 @@ async function outsidePullUrl(
 }
 
 // triage-without-skill S2: the finding a reply answers, read off the PR alone. The summary's state block
-// names the id, the posted finding comment carries the head it was posted on, and the join is the one
+// names the id, the summary carries the head the review ran on, and the join is the one
 // `crysk status --pr` makes (pr/pr-status.ts), so an agent with no run directory replies by id.
 async function postedFindingFromPr(
   operatorRoot: string,
@@ -155,7 +155,11 @@ async function postedFindingFromPr(
       id: finding.comment_id,
       channel: finding.channel === "inline" ? "review" : "issue",
     },
-    headSha: finding.head,
+    // WHY the summary's head and not the comment's: a finding carried from an earlier review keeps the
+    // comment, and so the head, of the review that first posted it. A reply names the review it answers;
+    // stamped with the comment's head, a second round would find the first round's reply and skip, and
+    // the finding could never be answered again. With no summary there is only the comment's head.
+    headSha: status.report.head ?? finding.head,
   };
 }
 
@@ -173,6 +177,50 @@ async function readReasoning(bodyFile: string): Promise<string> {
     );
   }
   return reasoning;
+}
+
+// The summary's live rows with a comment on this path, for the message of a finding no comment of
+// this run carries. Best effort: the message stands without it.
+async function carriedRowsHint(input: {
+  operatorRoot: string;
+  prNumber: number;
+  findingPath: string;
+  spawnFn: typeof Bun.spawn | undefined;
+}): Promise<string> {
+  try {
+    const issueComments = await fetchPrComments(
+      input.operatorRoot,
+      input.prNumber,
+      {
+        spawnFn: input.spawnFn,
+      },
+    );
+    const reviewComments = await fetchPrReviewComments(
+      input.operatorRoot,
+      input.prNumber,
+      { spawnFn: input.spawnFn },
+    );
+    const status = buildPrStatus({
+      pr: input.prNumber,
+      head: "",
+      nowMs: Date.now(),
+      statuses: [],
+      issueComments,
+      reviewComments,
+      adjudicatorTrust: { kind: "local" },
+    });
+    const rows = status.findings
+      .filter(
+        (row) =>
+          row.id !== null &&
+          row.comment_id !== null &&
+          row.path === input.findingPath,
+      )
+      .map((row) => `${row.id} (${row.path}:${row.line})`);
+    return rows.length === 0 ? "" : ` On this path: ${rows.join(", ")}.`;
+  } catch {
+    return "";
+  }
 }
 
 // The posted finding a reply binds to and the head its marker names, read from a completed run
@@ -242,9 +290,18 @@ async function postedFindingFromRunDir(input: {
         ? `${finding.path}:${identity.line}`
         : `${finding.path}: post line ${identity.line} ` +
           `(findings.json:${findingsLine})`;
+    const carried = await carriedRowsHint({
+      operatorRoot,
+      prNumber,
+      findingPath: finding.path,
+      spawnFn,
+    });
     throw new CliError(
       `no posted <!-- crysk-finding (or <!-- pr-hero-finding) marker matches ${input.findingId} ` +
         `on PR #${prNumber} (${lineHint}, head ${doc.head_sha.slice(0, 8)}). ` +
+        "A finding carried from an earlier review keeps that review's comment and has none on " +
+        "this head: reply to it by its R### id, without --from " +
+        `(\`crysk status --pr ${prNumber} --json\` lists the ids).${carried} ` +
         "Bind by marker, never by a GitHub comment id or the nearest line",
     );
   }

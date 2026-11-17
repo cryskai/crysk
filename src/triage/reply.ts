@@ -109,9 +109,41 @@ export interface ReviewReplyRef {
   body: string;
 }
 
-// Same-head re-post guard: the finding marker's head is the budget unit
-// (SKILL.md "One adjudication per finding per HEAD"). A second `triage
-// reply` at that head must not create another comment.
+// Whether a triage reply answers the review of `reviewedHead`. A reply names the review it
+// answers, so one stamped with the reviewed head does. A reply stamped with the head its finding
+// was posted on comes from an older driver or a plain `applied` comment (triage/plain-reply.ts):
+// with no summary there is no later review it could have missed, and otherwise its time is the
+// only evidence, so it answers only when it is newer than the verdict. Unknown times fail closed.
+export function replyAnswersReview(input: {
+  replyHead: string;
+  replyCreatedAt: string | undefined;
+  // The head the finding's comment was posted on.
+  findingHead: string;
+  // The head the summary was written for, or null when the pull request has no summary.
+  reviewedHead: string | null;
+  // When the review's verdict was written, in ms, or null when unknown.
+  verdictAt: number | null;
+}): boolean {
+  if (input.reviewedHead !== null && input.replyHead === input.reviewedHead) {
+    return true;
+  }
+  if (input.replyHead !== input.findingHead) return false;
+  if (input.reviewedHead === null) return true;
+  const createdAt =
+    input.replyCreatedAt === undefined
+      ? Number.NaN
+      : Date.parse(input.replyCreatedAt);
+  return (
+    input.verdictAt !== null &&
+    !Number.isNaN(createdAt) &&
+    createdAt > input.verdictAt
+  );
+}
+
+// Same-review re-post guard: the head a reply carries names the review it
+// answers, and that is the budget unit (SKILL.md "One adjudication per
+// finding per HEAD"). A second `triage reply` to that review must not create
+// another comment.
 export function existingTriageAtHead(input: {
   parentId: number;
   headSha: string;

@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before. The run's `pipeline.json` records how many hunks were left out (`rereview.base_merge_hunks_dropped`),
   and `diff.raw.patch` keeps the unfiltered delta.
 
+- **A finding carried from an earlier review can be answered again.** A blocking finding that outlives its
+  review keeps the comment of the review that first posted it. `crysk triage reply` stamped its reply with that
+  comment's head, so in the next round it found the first round's reply and skipped, and `--from <run-dir>`
+  could not match the finding at all: the finding stayed open until a fix or an override. A reply now carries
+  the head of the review it answers (the summary's head), and the gate and `crysk status` count it. `--from`
+  with a carried finding names the `R###` id to reply with. Replies already on pull requests are read as
+  before. Reinstall the skills (`crysk skills install`) to get the updated triage instructions.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed

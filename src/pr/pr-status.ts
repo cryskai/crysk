@@ -45,6 +45,7 @@ import {
   trustedAdjudicator,
 } from "#triage/adjudication";
 import { withPlainAppliedReplies } from "#triage/plain-reply";
+import { replyAnswersReview } from "#triage/reply";
 import {
   type ParsedTriageMarker,
   parseTriageMarker,
@@ -163,6 +164,10 @@ export interface PrStatusInput {
   head: string;
   nowMs: number;
   statuses: CommitStatusFact[];
+  // When the review whose verdict stands on this head wrote it (admission.ts ownReviewVerdictTime,
+  // carriedReviewVerdictTime): the cutoff for a reply stamped with the head its finding was posted
+  // on. Absent or null: unknown, and such a reply on a carried finding does not count, as at the gate.
+  verdictAt?: string | null;
   issueComments: PrStatusComment[];
   reviewComments: PrStatusReviewComment[];
   // Whose CI ruling counts. Absent is a run's standalone read: only github-actions[bot].
@@ -173,18 +178,23 @@ export interface PrStatusInput {
 // the reason a stale pending reads as "review" never drifts from the watcher's own rule.
 const IN_FLIGHT_WINDOW_MINUTES = Math.round(IN_FLIGHT_TTL_MS / 60_000);
 
-// A finding as the decision needs it: the output row, plus whether a triage reply sits at
-// the head the finding was posted on (a reply at another head does not answer it).
+// A finding as the decision needs it: the output row, plus whether a triage reply answers the
+// review the summary was written for (triage/reply.ts replyAnswersReview).
 interface AnalyzedFinding {
   finding: PrStatusFinding;
-  triagedAtPostedHead: boolean;
+  answersReview: boolean;
 }
 
 export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
   const input = withPlainReplies(raw);
   const gate = readGate(input);
   const summary = readSummary(input.issueComments);
-  const analyzed = readFindings(input, summary.rows);
+  const analyzed = readFindings(
+    input,
+    summary.rows,
+    summary.head,
+    verdictMs(input),
+  );
   const liveBlocking = analyzed.filter(
     (a) => a.finding.blocking && a.finding.live_on_head,
   );
@@ -215,6 +225,13 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
 // The gate is crysk's own commit status on the head, read by its context alone (the legacy
 // pr-hero name counts as the same context), so a local run's crysk/local status never
 // answers for the gate.
+// The caller's verdict time in ms, or null when it is unknown or does not parse.
+function verdictMs(input: PrStatusInput): number | null {
+  if (input.verdictAt === undefined || input.verdictAt === null) return null;
+  const at = Date.parse(input.verdictAt);
+  return Number.isNaN(at) ? null : at;
+}
+
 function readGate(input: PrStatusInput): PrStatusGate {
   const latest = latestStatusInContext(input.statuses, COMMIT_STATUS_CONTEXT);
   if (latest === null) {
@@ -270,7 +287,7 @@ function withPlainReplies(input: PrStatusInput): PrStatusInput {
 export function liveBlockingFindings(raw: PrStatusInput): PrStatusFinding[] {
   const input = withPlainReplies(raw);
   const summary = readSummary(input.issueComments);
-  return readFindings(input, summary.rows)
+  return readFindings(input, summary.rows, summary.head, null)
     .filter((a) => a.finding.blocking && a.finding.live_on_head)
     .map((a) => a.finding);
 }
@@ -317,6 +334,8 @@ function outcomeCodeOf(comments: PrStatusComment[]): string | null {
 function readFindings(
   input: PrStatusInput,
   rows: StateFinding[],
+  reviewedHead: string | null,
+  verdictAt: number | null,
 ): AnalyzedFinding[] {
   const sources: {
     id: number;
@@ -411,10 +430,15 @@ function readFindings(
             ? ciVerdictOf(source.id, newest?.id ?? null, input)
             : null,
       },
-      // A reply at another head does not answer the finding, so only a reply carrying the
-      // posted head counts.
-      triagedAtPostedHead: replies.some(
-        (r) => r.marker.headSha === marker.headSha,
+      // A reply at another review's head does not answer this one (replyAnswersReview).
+      answersReview: replies.some((r) =>
+        replyAnswersReview({
+          replyHead: r.marker.headSha,
+          replyCreatedAt: r.createdAt,
+          findingHead: marker.headSha,
+          reviewedHead,
+          verdictAt,
+        }),
       ),
     });
   }
@@ -422,7 +446,7 @@ function readFindings(
   // gate counts. Without this row the status could not see a blocking finding the gate names.
   for (const row of rows) {
     if (bound.has(row.id)) continue;
-    out.push({ finding: unthreadedFinding(row), triagedAtPostedHead: false });
+    out.push({ finding: unthreadedFinding(row), answersReview: false });
   }
   return out;
 }
@@ -491,6 +515,7 @@ function ciVerdictOf(
 interface TriageReplyRow {
   id: number;
   marker: ParsedTriageMarker;
+  createdAt?: string;
 }
 
 // Every triage reply that answers one posted finding. An inline finding's replies sit in its
@@ -507,7 +532,8 @@ function repliesTo(
     for (const reply of input.reviewComments) {
       if (reply.in_reply_to_id !== source.id) continue;
       const marker = parseTriageMarker(reply.body);
-      if (marker !== null) out.push({ id: reply.id, marker });
+      if (marker !== null)
+        out.push({ id: reply.id, marker, createdAt: reply.created_at });
     }
     return out;
   }
@@ -515,7 +541,7 @@ function repliesTo(
   for (const comment of input.issueComments) {
     const marker = parseTriageMarker(comment.body);
     if (marker === null || !link.test(comment.body)) continue;
-    out.push({ id: comment.id, marker });
+    out.push({ id: comment.id, marker, createdAt: comment.created_at });
   }
   return out;
 }
@@ -669,7 +695,7 @@ function decideNext(
     // end while a finding posted on this head has no reply at that head. A finding posted on an
     // older head is not this head's to answer.
     const owed = analyzed.filter(
-      (a) => a.finding.head === head && !a.triagedAtPostedHead,
+      (a) => a.finding.head === head && !a.answersReview,
     );
     if (owed.length > 0) {
       return {
@@ -714,12 +740,12 @@ function decideNext(
   }
   // A row with no comment has no thread a triage reply could land in, so it is never "untriaged".
   const untriaged = liveBlocking.filter(
-    (a) => a.finding.comment_id !== null && !a.triagedAtPostedHead,
+    (a) => a.finding.comment_id !== null && !a.answersReview,
   );
   if (untriaged.length > 0) {
     return {
       next_action: "triage",
-      reason: `${untriaged.length} live blocking finding(s) on this head have no triage reply at the head they were posted on; triage them first.`,
+      reason: `${untriaged.length} live blocking finding(s) on this head have no triage reply that answers this review; triage them first.`,
     };
   }
   // WHY this precedes the upheld-dismissal review branch: a blocking row with no thread cannot be
@@ -748,14 +774,14 @@ function decideNext(
       CARRIED_BLOCKING_GATE.test(canonicalStatusText(gate.description ?? ""))
     ) {
       // The gate's own rules (admission.ts admissionSkipDecision, answered-findings.ts): a finding is
-      // answered only by its newest reply at the head it was posted on, and the gate must see at least as
-      // many blocking findings as the red counts. The stale-reply cutoff needs the carried verdict's time,
-      // which this read does not have, so the reason says the push can turn green, never that it will.
+      // answered only by its newest reply at the head it was posted on or at the reviewed head, and the gate must see at least as
+      // many blocking findings as the red counts. This count does not apply the stale-reply cutoff, so the reason says the push can turn green, never that it will.
       const open = liveBlocking.filter(
         (a) =>
           !(
             (a.finding.triage?.tag === "applied" &&
-              a.finding.triage.head === a.finding.head) ||
+              (a.finding.triage.head === a.finding.head ||
+                a.finding.triage.head === summary.head)) ||
             upheldDismissal(a)
           ),
       ).length;
