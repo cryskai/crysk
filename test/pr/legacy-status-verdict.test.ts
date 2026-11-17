@@ -11,6 +11,9 @@ import {
 import {
   blockingCommitStatusRequest,
   COMMIT_STATUS_CONTEXT,
+  heldVerdictSha,
+  isManualReviewHold,
+  manualReviewHoldDescription,
   partialReviewAgainDescription,
   partialReviewDescription,
 } from "#pr/preflight";
@@ -49,5 +52,24 @@ describe("a verdict an earlier release wrote, with the /pr-hero command, is stil
     expect(
       isReviewVerdictStatus({ state: "failure", description: current }),
     ).toBe(true);
+  });
+});
+
+// PR #549 review R004: a manual-review hold an earlier release wrote ends in `/pr-hero review or
+// /pr-hero override`; the carry walk still has to read the verdict it names.
+describe("a manual-review hold an earlier release wrote still names its carried verdict", () => {
+  const current = manualReviewHoldDescription("budget used up", "abc1234");
+
+  test.each([
+    ["the /pr-hero command", current.replace(/\/crysk /g, "/pr-hero ")],
+    [
+      "the /pr-hero lead and command",
+      current.replace(/^crysk/, "pr-hero").replace(/\/crysk /g, "/pr-hero "),
+    ],
+    ["the current text", current],
+  ])("%s", (_name, description) => {
+    const status = { state: "pending", description };
+    expect(isManualReviewHold(status)).toBe(true);
+    expect(heldVerdictSha(status)).toBe("abc1234");
   });
 });

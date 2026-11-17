@@ -31,6 +31,7 @@ import {
   type SizeGateVerdict,
 } from "#review/size-gate";
 import {
+  canonicalStatusText,
   isLegacyStatusContext,
   isStatusContext,
   LOCAL_STATUS_CONTEXT,
@@ -1057,7 +1058,7 @@ export function isManualReviewHold(
 ): boolean {
   return (
     status.state === "pending" &&
-    MANUAL_REVIEW_HOLD.test(status.description ?? "")
+    MANUAL_REVIEW_HOLD.test(canonicalStatusText(status.description ?? ""))
   );
 }
 
@@ -1067,7 +1068,9 @@ export function heldVerdictSha(
   status: Pick<CommitStatusFact, "state" | "description">,
 ): string | null {
   if (!isManualReviewHold(status)) return null;
-  const description = status.description ?? "";
+  // A hold an earlier release wrote names `/pr-hero …` (and, before the rename, leads with `pr-hero:`): read
+  // it as this version writes it, or the walk cannot jump over it (PR #549 R004).
+  const description = canonicalStatusText(status.description ?? "");
   const match = HELD_VERDICT.exec(description);
   if (match === null) return null;
   const [, label, sha] = match as unknown as [string, string, string];
