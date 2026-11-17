@@ -107,6 +107,8 @@ export function decideThreadResolve(input: {
 export interface ReviewReplyRef {
   in_reply_to_id: number | null;
   body: string;
+  // The GitHub login that wrote the reply.
+  user?: string;
 }
 
 // Whether a triage reply answers the review of `reviewedHead`. A reply names the review it
@@ -140,39 +142,46 @@ export function replyAnswersReview(input: {
   );
 }
 
-// Same-review re-post guard: the head a reply carries names the review it
-// answers, and that is the budget unit (SKILL.md "One adjudication per
-// finding per HEAD"). A second `triage reply` to that review must not create
-// another comment.
-export function existingTriageAtHead(input: {
+// The authors of the triage replies in this thread that already answer this review: the head a
+// reply carries names the review it answers, and that is the budget unit (SKILL.md "One
+// adjudication per finding per HEAD"). The caller decides whether one of them makes a second
+// reply a repeat: only a reply the gate would count does (see commands/triage.ts).
+export function triageAuthorsAtHead(input: {
   parentId: number;
   headSha: string;
   replies: ReviewReplyRef[];
-}): boolean {
-  return input.replies.some((reply) => {
-    if (reply.in_reply_to_id !== input.parentId) return false;
+}): (string | undefined)[] {
+  const authors: (string | undefined)[] = [];
+  for (const reply of input.replies) {
+    if (reply.in_reply_to_id !== input.parentId) continue;
     const marker = parseTriageMarker(reply.body);
-    return (
+    if (
       marker !== null &&
       marker.row === undefined &&
       marker.headSha === input.headSha
-    );
-  });
+    ) {
+      authors.push(reply.user);
+    }
+  }
+  return authors;
 }
 
-// The same guard for a finding with no comment: its replies are top-level comments that name its
-// row, so the row and the review's head are what a second reply would repeat.
-export function existingRowTriageAtHead(input: {
+// The same for a finding with no comment: its replies are top-level comments that name its row.
+export function rowTriageAuthorsAtHead(input: {
   rowId: string;
   headSha: string;
-  comments: readonly { body: string }[];
-}): boolean {
-  return input.comments.some((comment) => {
+  comments: readonly { body: string; user?: string }[];
+}): (string | undefined)[] {
+  const authors: (string | undefined)[] = [];
+  for (const comment of input.comments) {
     const marker = parseTriageMarker(comment.body);
-    return (
+    if (
       marker !== null &&
       marker.row === input.rowId &&
       marker.headSha === input.headSha
-    );
-  });
+    ) {
+      authors.push(comment.user);
+    }
+  }
+  return authors;
 }

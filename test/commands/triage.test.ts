@@ -135,6 +135,14 @@ function makeFakeGh(script: ScriptEntry[]): {
   return { spawnFn, calls };
 }
 
+// The collaborator-permission lookup a reply's author gets before it counts as an answer.
+function permissionEntry(
+  login: string,
+  response: ScriptedResponse,
+): ScriptEntry {
+  return { match: [`collaborators/${login}/permission`], response };
+}
+
 function ndjson(rows: unknown[]): string {
   return `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`;
 }
@@ -1021,8 +1029,8 @@ describe("runTriageReplyCommand — without a run directory", () => {
   test("a second reply to the same review is skipped", async () => {
     const { bodyFile, cleanup } = await bodyOnly();
     try {
-      const { spawnFn, calls } = makeFakeGh(
-        carriedScript([
+      const { spawnFn, calls } = makeFakeGh([
+        ...carriedScript([
           {
             id: 23,
             user: "dev",
@@ -1030,7 +1038,115 @@ describe("runTriageReplyCommand — without a run directory", () => {
             body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
           },
         ]),
+        permissionEntry("dev", { stdout: "write\n" }),
+      ]);
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(
+        calls.some(
+          (call) =>
+            call.argv.includes("--method") &&
+            call.argv.join(" ").includes("pulls/42/comments"),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a reply-shaped comment from a login without write access does not block the real reply", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        ...carriedScript([
+          {
+            id: 23,
+            user: "drive-by",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nfake`,
+          },
+        ]),
+        permissionEntry("drive-by", { stdout: "read\n" }),
+      ]);
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const posts = calls.filter(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
       );
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.stdin).toContain(`head=${HEAD}`);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a permission lookup that fails does not block the real reply", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        ...carriedScript([
+          {
+            id: 23,
+            user: "dev",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+          },
+        ]),
+        permissionEntry("dev", { stderr: "HTTP 500", exitCode: 1 }),
+      ]);
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const posts = calls.filter(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
+      );
+      expect(posts).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("an admin's earlier reply is a repeat", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        ...carriedScript([
+          {
+            id: 23,
+            user: "dev",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nthis round`,
+          },
+        ]),
+        permissionEntry("dev", { stdout: "admin\n" }),
+      ]);
       const exitCode = await runTriageReplyCommand({
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
@@ -1447,15 +1563,105 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
   test("a second reply to the same review is skipped", async () => {
     const { bodyFile, cleanup } = await bodyOnly();
     try {
-      const { spawnFn, calls } = makeFakeGh(
-        rowScript([
+      const { spawnFn, calls } = makeFakeGh([
+        ...rowScript([
           {
             id: 60,
             user: "dev",
             body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nearlier`,
           },
         ]),
-      );
+        permissionEntry("dev", { stdout: "write\n" }),
+      ]);
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(rowPosts(calls)).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a reply-shaped comment from a login without write access does not block the real reply", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        ...rowScript([
+          {
+            id: 60,
+            user: "drive-by",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nfake`,
+          },
+        ]),
+        permissionEntry("drive-by", { stdout: "read\n" }),
+      ]);
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const posts = rowPosts(calls);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.stdin).toContain(`head=${HEAD}`);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a permission lookup that fails does not block the real reply", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        ...rowScript([
+          {
+            id: 60,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nearlier`,
+          },
+        ]),
+        permissionEntry("dev", { stderr: "HTTP 500", exitCode: 1 }),
+      ]);
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(rowPosts(calls)).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("an admin's earlier reply is a repeat", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        ...rowScript([
+          {
+            id: 60,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nearlier`,
+          },
+        ]),
+        permissionEntry("dev", { stdout: "admin\n" }),
+      ]);
       const exitCode = await runTriageReplyCommand({
         operatorRoot: OPERATOR_ROOT,
         pr: 42,

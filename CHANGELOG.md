@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Comments Outside Diff entries show their row id. A `dismissed` reply to such a finding still cannot get a CI
   ruling. Reinstall the skills (`crysk skills install`) for the updated triage instructions.
 
+- **A reply-shaped comment from someone without write access no longer blocks a real reply.** `crysk triage
+  reply` skipped posting when a triage marker for the same review was already there, whoever wrote it, while the
+  gate counts a reply only from a login with write access. Anyone could post the marker first and leave the
+  finding with no reply the gate reads. The skip now counts only a reply whose author has write access.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed

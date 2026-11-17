@@ -7,6 +7,7 @@ import {
   fetchPostedFindingComments,
   fetchPrComments,
   fetchPrReviewComments,
+  ghCollaboratorPermission,
   ghCurrentBranchPr,
   ghPrWebUrl,
   ghRepoNameWithOwner,
@@ -22,10 +23,10 @@ import type { CliOptions } from "#review/preflight";
 import { openProductStore, recordFindingTriage } from "#store/store";
 import {
   decideThreadResolve,
-  existingRowTriageAtHead,
-  existingTriageAtHead,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
+  rowTriageAuthorsAtHead,
+  triageAuthorsAtHead,
 } from "#triage/reply";
 import {
   renderTriageReplyBody,
@@ -358,6 +359,28 @@ async function postedFindingFromRunDir(input: {
   };
 }
 
+// Whether one of these logins may answer a finding: the gate counts a triage reply only from a
+// login with write access (pr/answered-findings.ts trustedComments), so a marker-shaped comment
+// from anyone else is not an answer. Counting it would skip the real reply, and the finding would
+// stay open with no reply the gate reads and no way to post one. A lookup that does not read
+// counts as no access: a second comment is harmless, a skipped answer is not.
+async function someoneMayAnswer(
+  operatorRoot: string,
+  authors: readonly (string | undefined)[],
+  spawnFn: typeof Bun.spawn | undefined,
+): Promise<boolean> {
+  const logins = new Set(
+    authors.filter((login): login is string => login !== undefined),
+  );
+  for (const login of logins) {
+    const permission = await ghCollaboratorPermission(operatorRoot, login, {
+      spawnFn,
+    });
+    if (permission === "admin" || permission === "write") return true;
+  }
+  return false;
+}
+
 export async function runTriageReplyCommand(input: {
   operatorRoot: string;
   pr: number;
@@ -427,11 +450,15 @@ export async function runTriageReplyCommand(input: {
     const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
       spawnFn,
     });
-    already = existingTriageAtHead({
-      parentId: replyTarget.parent.id,
-      headSha,
-      replies: reviewComments,
-    });
+    already = await someoneMayAnswer(
+      operatorRoot,
+      triageAuthorsAtHead({
+        parentId: replyTarget.parent.id,
+        headSha,
+        replies: reviewComments,
+      }),
+      spawnFn,
+    );
   } else {
     // The row's replies are top-level comments, read with the summary, so no second fetch.
     if (issueComments === undefined) {
@@ -439,11 +466,15 @@ export async function runTriageReplyCommand(input: {
         "triage reply: a summary-row target carries the PR's comments",
       );
     }
-    already = existingRowTriageAtHead({
-      rowId: replyTarget.rowId,
-      headSha,
-      comments: issueComments,
-    });
+    already = await someoneMayAnswer(
+      operatorRoot,
+      rowTriageAuthorsAtHead({
+        rowId: replyTarget.rowId,
+        headSha,
+        comments: issueComments,
+      }),
+      spawnFn,
+    );
   }
   const resolveDecision = decideThreadResolve({
     channel: replyTarget.kind === "row" ? "issue" : replyTarget.parent.channel,
