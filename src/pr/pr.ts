@@ -2209,6 +2209,7 @@ export async function postIssueTriageComment(input: {
   pr: number;
   body: string;
   spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
 }): Promise<number> {
   const result = await gh(
     input.operatorRoot,
@@ -2222,6 +2223,7 @@ export async function postIssueTriageComment(input: {
     ],
     input.body,
     input.spawnFn,
+    input.timeoutMs,
   );
   if (!result.ok) {
     throw new CliError(

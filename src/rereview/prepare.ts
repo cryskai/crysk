@@ -939,6 +939,8 @@ function resolveRowTie<T extends PostedForPrior>(
 // dismissal can leave the gate count, so nothing else is worth a ruling.
 // WHY an "inconclusive" ruling stays pending: it counts as not upheld, and a
 // later recheck may retry the same dismissal and get a ruling.
+// A triage with a reply id and no thread answers a finding with no comment of its own;
+// its ruling is posted as a top-level comment.
 export function adjudicationQueue(
   priors: readonly PriorRecord[],
 ): AdjudicationSubject[] {
@@ -952,14 +954,13 @@ export function adjudicationQueue(
     if (
       triage?.tag !== "dismissed" ||
       triage.replyId === undefined ||
-      triage.threadId === undefined ||
       (triage.ciVerdict != null && triage.ciVerdict !== "inconclusive")
     ) {
       continue;
     }
     const subject: AdjudicationSubject = {
       priorId: prior.id,
-      threadId: triage.threadId,
+      ...(triage.threadId === undefined ? {} : { threadId: triage.threadId }),
       replyId: triage.replyId,
       sev: prior.sev,
       locs: prior.locs,
@@ -993,9 +994,13 @@ export function enrichPriorsFromThreads(input: {
   // `row`). Absent: such a prior reads no reply, as before.
   rowReplies?: readonly {
     id?: number;
+    user?: string;
     body: string;
     created_at?: string;
   }[];
+  // The login that posted the review summary. For a finding with no comment it stands where the
+  // finding's own author stands for a thread: only the bot that posted the review rules on it.
+  summaryAuthor?: string;
   summaryUpdatedAt: string | null;
   // In platform mode, the login the platform's token exchange returned (CRYSK_PLATFORM_ACTOR).
   platformActor?: string;
@@ -1007,8 +1012,7 @@ export function enrichPriorsFromThreads(input: {
     const parent = bound.get(prior.id);
     if (parent === undefined) {
       // No comment, so no thread: the replies that name this prior's row answer it. The last one
-      // in comment order wins, as in a thread. No CI ruling is read here: the adjudicator answers
-      // on a review thread, and this prior has none.
+      // in comment order wins, as in a thread. Its CI ruling is a top-level comment too, read below.
       const named = (input.rowReplies ?? []).filter(
         (reply) => parseTriageMarker(reply.body)?.row === prior.id,
       );
@@ -1025,6 +1029,30 @@ export function enrichPriorsFromThreads(input: {
           argument: reply.body.split("\n").slice(1).join("\n").trim(),
           ciVerdict: null,
         };
+      }
+      // The same trust and the same head rule as a thread's ruling (below): the marker names the
+      // reply it rules on, the last match wins, and the summary's author stands in for the
+      // finding's.
+      if (rowTriage?.replyId !== undefined && input.headSha !== undefined) {
+        for (const comment of input.rowReplies ?? []) {
+          if (
+            !trustedAdjudicator(comment.user, input.summaryAuthor, {
+              kind: "ci",
+              platformActor: input.platformActor,
+            })
+          ) {
+            continue;
+          }
+          const adjudication = parseAdjudicationMarker(comment.body);
+          if (
+            adjudication === null ||
+            adjudication.reply !== rowTriage.replyId ||
+            adjudication.head !== input.headSha
+          ) {
+            continue;
+          }
+          rowTriage = { ...rowTriage, ciVerdict: adjudication.verdict };
+        }
       }
       const newRowReply = named.some(
         (reply) =>

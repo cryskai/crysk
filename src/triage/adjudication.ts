@@ -121,8 +121,9 @@ export function parseAdjudicationMarker(
 // One pending dismissal the adjudicator rules on.
 export interface AdjudicationSubject {
   priorId: string;
-  // The finding's own review comment: the thread the verdict is posted on.
-  threadId: number;
+  // The finding's own review comment: the thread the verdict is posted on. Absent for a finding
+  // with no comment of its own (a summary row), whose verdict is posted as a top-level comment.
+  threadId?: number;
   // The author's `dismissed` reply the verdict names.
   replyId: number;
   sev: string;
@@ -134,7 +135,7 @@ export interface AdjudicationSubject {
 
 export interface AdjudicationOutcome {
   priorId: string;
-  threadId: number;
+  threadId?: number;
   replyId: number;
   verdict: AdjudicationVerdict;
   // path:line citations the adjudicator gave. Empty when it failed.

@@ -1199,7 +1199,7 @@ on, or `dismissed` with an upheld CI ruling, the head turns `success`
 and a later skip carries it with the same wording, never as a green a review earned. Only a reply from a login with
 write or admin access counts (looked up once per author, with one retry); a reply from anyone else is ignored, and a
 lookup that fails keeps the red. A truncated comment read, an unanswered, `deferred` or `misclassified` finding, a
-dismissal with no upheld ruling, a summary-only finding with no `applied` reply that names its row, or fewer blocking findings visible than the red
+dismissal with no upheld ruling, a summary-only finding with no reply that names its row, or fewer blocking findings visible than the red
 counts keeps the red too, and so does a finding whose tier cannot be read. A reply to a finding posted on an older
 head (still live through the summary) counts only when it is newer than the carried verdict: the review behind that
 verdict already saw any older reply and kept the finding. A partial review's red is never unlocked this way: answers
@@ -1255,10 +1255,12 @@ workflow run, so it gets no reaction and costs nothing. It does not cancel a rev
 **Rechecking a dismissal.** Comment exactly `/crysk recheck` on the pull request. It is `/crysk review` plus the CI adjudicator:
 the same write-access check and the same forced review of the head, and then the adjudicator rules on each pending `dismissed` reply
 to a blocking finding, at most 5 per run. Only a dismissal the adjudicator upholds leaves the gate count. A `deferred` or
-`misclassified` reply never does, and a rejected or inconclusive verdict keeps the finding counted. The verdict is posted as a reply
-on the finding's thread by `github-actions[bot]`, and only replies from that login count, so a run with a custom token fails closed.
-In [platform mode](#pr-comment-commands) the run posts as the Crysk App's bot, and its ruling counts when that same bot posted the
-finding; a person's login never does, nor another App's bot.
+`misclassified` reply never does, and a rejected or inconclusive verdict keeps the finding counted. The verdict is posted by
+`github-actions[bot]` as a reply on the finding's thread, or, for a finding with no comment of its own (one listed only in
+the summary), as a top-level comment that names the reply it rules on. Only verdicts from that login count, so a run with a
+custom token fails closed. In [platform mode](#pr-comment-commands) the run posts as the Crysk App's bot, and its ruling counts
+when that same bot posted the finding (the review summary, for a finding with no comment); a person's login never does, nor
+another App's bot.
 A new dismissal reply is pending again. A verdict counts only on the head it was given, so a push needs a new recheck. An adjudicator step that fails posts nothing for that dismissal: it prints a notice and stays pending for the next recheck. The recheck run itself never changes the count: an upheld verdict leaves it from the next review of the same head (`/crysk review`), which reads the reply back, and only when GitHub recorded the reply under `github-actions[bot]` (or the platform's bot in platform mode). If the reply did not land under that login, the recheck warns and the finding keeps counting. Dismissals never ruled on are adjudicated before retries of an inconclusive one. Not on fork pull requests: the adjudicator needs this repository's checkout of the head,
 so the comment is refused with a notice and a 👎 reaction.
 
@@ -1381,7 +1383,7 @@ crysk triage reply --pr <n> --finding R001 --tag applied --body-file reasoning.m
 A reply's marker carries the head of the review it answers (the summary's head), so a finding
 carried from an earlier review is answered with the same command after each review.
 
-A finding GitHub could not anchor has no comment: it is listed under `Comments Outside Diff` in the summary, with its row id beside its location. The same command answers it. The driver posts a top-level comment whose marker names the row (`row=R###`) and that links the summary; the gate counts an `applied` one from an account with write access, and the next review reads it.
+A finding GitHub could not anchor has no comment: it is listed under `Comments Outside Diff` in the summary, with its row id beside its location. The same command answers it. The driver posts a top-level comment whose marker names the row (`row=R###`) and that links the summary; the gate counts an `applied` one from an account with write access, a `dismissed` one is ruled on by `/crysk recheck` like any other, and the next review reads it.
 
 A plain reply in the finding's thread that starts with `applied`, from someone with write access,
 also counts as `applied` for the gate. `dismissed`, `deferred` and `misclassified` need the driver.
@@ -1508,9 +1510,9 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. A green over answered findings no review verified (`crysk: N answered finding(s), fixes unverified`) is `done` too, and its reason says so. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. A finding that lives only in the summary comment (outside the diff, `comment_id: null`) has no thread a reply could land in, so it is never owed, but the reason counts it ("N finding(s) live only in the summary comment … read them there before merging"). |
 | `triage` | The gate is red and a live blocking finding on this head has no triage reply that answers this review (a reply from an earlier review of a carried finding does not). A finding with no comment counts too: it is answered by a top-level reply that names its row. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
 | `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. When the red is carried (a review rule skipped the head), no review will run: the gate reads the replies on that push instead, and turns green marked unverified, or, under a used-up budget or `manual_only`, holds the head for a manual review. |
-| `recheck` | The gate is red and a live blocking inline finding is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. Comment `/crysk recheck`; the CI adjudicator rules on it. |
+| `recheck` | The gate is red and a live blocking finding with a review thread, or one listed only in the summary, is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |
-| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or a dismissed finding with no review thread, such as one listed only in the summary, which nothing can rule on). A size- or spend-ceiling-skipped review also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. The gate is also `pending` on a manual-review hold (`crysk: waiting for a manual review (<reason>)`, checked before `wait`): no review read the head and none will on its own, so comment `/crysk review` to verify it or `/crysk override` to merge it unverified. |
+| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or a dismissed legacy top-level finding comment, which nothing can rule on). A size- or spend-ceiling-skipped review also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. The gate is also `pending` on a manual-review hold (`crysk: waiting for a manual review (<reason>)`, checked before `wait`): no review read the head and none will on its own, so comment `/crysk review` to verify it or `/crysk override` to merge it unverified. |
 
 The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list, or a
 gate status it cannot read exits 1 with nothing on stdout, so a partial answer never looks like a clean PR.

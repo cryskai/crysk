@@ -650,6 +650,82 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
     expect(result.adjudicationQueue[0]?.threadId).toBe(POSTED_FINDING.id);
     expect(result.adjudicationQueue[0]?.replyId).toBe(200);
   });
+
+  // A blocking finding GitHub could not anchor: it is row R001 of the summary, and its
+  // dismissal is a top-level reply naming that row (reply 2).
+  function summaryRowRun(
+    extraIssueComments: readonly {
+      id: number;
+      user: string;
+      body: string;
+      created_at?: string;
+    }[],
+  ) {
+    const summary = `${markerCommentForHead(L, true).body}\n\n${renderStateBlock(
+      L,
+      [
+        stateFinding({
+          id: "R001",
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: ["src/a.ts:10"],
+          claim: "a finding GitHub could not anchor",
+        }),
+      ],
+      1,
+      1,
+    )}`;
+    return resolvePrDiscovery({
+      diffFromSha: B,
+      headSha: H,
+      full: false,
+      baseRef: B,
+      headLabel: "PR #1 head",
+      isCi: true,
+      sizeGateOverrides: {},
+      config: { suspicion_priors: [] },
+      prIgnore: { rules: [], found: false },
+      issueComments: [
+        { ...markerCommentForHead(L, true), body: summary },
+        ...extraIssueComments,
+      ],
+      postedFindings: [],
+      reviewComments: [],
+      git: baseGit(),
+      log: () => {},
+      adjudicate: true,
+    });
+  }
+
+  const ROW_DISMISSAL = {
+    id: 2,
+    user: "author",
+    body: `${triageMarker({ tag: "dismissed", headSha: H, actor: "human", verdict: "upheld", row: "R001" })}\n\nthe timer is cleared in the caller`,
+    created_at: "2026-01-02T00:00:00Z",
+  };
+
+  test("a dismissed reply to a prior with no comment is queued with --adjudicate", async () => {
+    const result = await summaryRowRun([ROW_DISMISSAL]);
+    expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+    expect(result.adjudicationQueue[0]?.replyId).toBe(2);
+    expect(
+      result.adjudicationQueue[0] && "threadId" in result.adjudicationQueue[0],
+    ).toBe(false);
+  });
+
+  test("a dismissed reply to a prior with no comment is not queued once the CI bot upheld it", async () => {
+    const result = await summaryRowRun([
+      ROW_DISMISSAL,
+      {
+        id: 3,
+        user: CI_ADJUDICATOR_LOGIN,
+        body: adjudicationMarker({ verdict: "upheld", reply: 2, head: H }),
+        created_at: "2026-01-03T00:00:00Z",
+      },
+    ]);
+    expect(result.adjudicationQueue).toEqual([]);
+  });
 });
 
 // Inline anchoring (the review payload's path/line) must see the FULL PR

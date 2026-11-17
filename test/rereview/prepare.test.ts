@@ -31,6 +31,7 @@ import {
 } from "#rereview/state";
 import type { Finding } from "#review/findings";
 import { renderInlineComment } from "#review/report";
+import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { triageMarker } from "#triage/triage";
 
 const B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -672,7 +673,7 @@ describe("enrichPriorsFromThreads — a prior with no comment", () => {
     expect(enriched?.triage).toBeNull();
   });
 
-  test("a dismissed row reply is not queued for adjudication", () => {
+  test("a dismissed row reply is queued for adjudication, with no thread", () => {
     const [dismissed] = enrichPriorsFromThreads({
       priors: [{ ...rowPrior, tier: "blocking" }],
       posted: [],
@@ -687,8 +688,164 @@ describe("enrichPriorsFromThreads — a prior with no comment", () => {
       ],
       summaryUpdatedAt: null,
     });
-    expect(dismissed?.triage?.tag).toBe("dismissed");
-    expect(adjudicationQueue([dismissed as PriorRecord])).toEqual([]);
+    const queue = adjudicationQueue([dismissed as PriorRecord]);
+    expect(queue).toHaveLength(1);
+    expect(queue[0]?.priorId).toBe("R001");
+    expect(queue[0]?.replyId).toBe(71);
+    expect(queue[0] && "threadId" in queue[0]).toBe(false);
+  });
+
+  function rowDismissal(
+    ciVerdict: "upheld" | "rejected" | "inconclusive" | null,
+    replyId: number | undefined,
+  ): PriorRecord {
+    return {
+      ...rowPrior,
+      tier: "blocking",
+      triage: {
+        tag: "dismissed",
+        verdict: "upheld",
+        createdAt: null,
+        ...(replyId === undefined ? {} : { replyId }),
+        argument: "",
+        ciVerdict,
+      },
+    } as PriorRecord;
+  }
+
+  test("adjudicationQueue skips a row dismissal with no reply id", () => {
+    expect(adjudicationQueue([rowDismissal(null, undefined)])).toEqual([]);
+  });
+
+  test("adjudicationQueue skips a row dismissal the CI bot already upheld", () => {
+    expect(adjudicationQueue([rowDismissal("upheld", 71)])).toEqual([]);
+  });
+
+  test("adjudicationQueue retries a row dismissal ruled inconclusive", () => {
+    const queue = adjudicationQueue([rowDismissal("inconclusive", 71)]);
+    expect(queue.map((subject) => subject.replyId)).toEqual([71]);
+  });
+
+  describe("the CI ruling on a row dismissal", () => {
+    const ruling = (
+      id: number,
+      user: string,
+      verdict: "upheld" | "rejected",
+      reply: number,
+      head: string = HEAD,
+    ) => ({ id, user, body: adjudicationMarker({ verdict, reply, head }) });
+
+    function ciVerdictOf(
+      rulings: readonly { id: number; user: string; body: string }[],
+      options: {
+        headSha?: string;
+        platformActor?: string;
+        summaryAuthor?: string;
+      } = { headSha: HEAD },
+    ) {
+      const [enriched] = enrichPriorsFromThreads({
+        priors: [rowPrior],
+        posted: [],
+        replies: [],
+        rowReplies: [
+          rowReply({
+            id: 71,
+            tag: "dismissed",
+            row: "R001",
+            verdict: "upheld",
+          }),
+          ...rulings,
+        ],
+        summaryUpdatedAt: null,
+        ...options,
+      });
+      return enriched?.triage?.ciVerdict;
+    }
+
+    test("a top-level ruling by the CI bot at this head sets the CI verdict", () => {
+      expect(
+        ciVerdictOf([ruling(72, CI_ADJUDICATOR_LOGIN, "upheld", 71)]),
+      ).toBe("upheld");
+    });
+
+    test("a ruling by anyone else is ignored", () => {
+      expect(ciVerdictOf([ruling(72, "someone", "upheld", 71)])).toBeNull();
+    });
+
+    test("a ruling that names another reply is ignored", () => {
+      expect(
+        ciVerdictOf([ruling(72, CI_ADJUDICATOR_LOGIN, "upheld", 99)]),
+      ).toBeNull();
+    });
+
+    test("a ruling at another head is ignored", () => {
+      expect(
+        ciVerdictOf([
+          ruling(72, CI_ADJUDICATOR_LOGIN, "upheld", 71, "b".repeat(40)),
+        ]),
+      ).toBeNull();
+    });
+
+    test("no ruling counts when no headSha is passed", () => {
+      expect(
+        ciVerdictOf([ruling(72, CI_ADJUDICATOR_LOGIN, "upheld", 71)], {}),
+      ).toBeNull();
+    });
+
+    test("the last CI ruling wins", () => {
+      expect(
+        ciVerdictOf([
+          ruling(72, CI_ADJUDICATOR_LOGIN, "rejected", 71),
+          ruling(73, CI_ADJUDICATOR_LOGIN, "upheld", 71),
+        ]),
+      ).toBe("upheld");
+    });
+
+    test("in platform mode the ruling counts only from the summary's bot", () => {
+      expect(
+        ciVerdictOf([ruling(72, "crysk-app[bot]", "upheld", 71)], {
+          headSha: HEAD,
+          platformActor: "crysk-app[bot]",
+          summaryAuthor: "crysk-app[bot]",
+        }),
+      ).toBe("upheld");
+      expect(
+        ciVerdictOf([ruling(72, "crysk-app[bot]", "upheld", 71)], {
+          headSha: HEAD,
+          platformActor: "crysk-app[bot]",
+          summaryAuthor: "other-app[bot]",
+        }),
+      ).toBeNull();
+    });
+
+    test("a thread prior ignores a top-level ruling that names its thread reply", () => {
+      const [enriched] = enrichPriorsFromThreads({
+        priors: [rowPrior],
+        posted: [
+          {
+            id: 22,
+            marker: {
+              path: "src/app.ts",
+              line: 10,
+              c: claimFingerprint(claim),
+            },
+          },
+        ],
+        replies: [
+          {
+            id: 80,
+            user: "author",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "dismissed", headSha: HEAD, actor: "human", verdict: "upheld" })}\n\nthe timer is cleared`,
+          },
+        ],
+        rowReplies: [ruling(90, CI_ADJUDICATOR_LOGIN, "upheld", 80)],
+        summaryUpdatedAt: null,
+        headSha: HEAD,
+      });
+      expect(enriched?.triage?.threadId).toBe(22);
+      expect(enriched?.triage?.ciVerdict).toBeNull();
+    });
   });
 });
 

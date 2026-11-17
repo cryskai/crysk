@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
+import { PR_COMMENT_MARKER_PREFIX } from "#pr/preflight";
 import { postAdjudicationReplies, recordPipelineOutcome } from "#pr/review-pr";
 
 const SHA = "a".repeat(40);
@@ -652,5 +653,111 @@ describe("postAdjudicationReplies", () => {
       }),
     );
     expect(out).not.toContain("was not recorded under");
+  });
+
+  // A finding with no comment of its own: the POST goes to the issue comments, the ruling's
+  // author is read from issues/comments/<id>, and the finding's author is the summary's.
+  // The POST answers id 300; the summary listing (issues/42/comments, one JSON object per line)
+  // answers one summary comment by `summaryLogin`.
+  function fakeIssueGh(rulingLogin: string, summaryLogin: string) {
+    const calls: {
+      argv: string[];
+      stdin: string | undefined;
+      timeout: number | undefined;
+    }[] = [];
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const spawnFn = ((
+      argv: string[],
+      opts?: { stdin?: Uint8Array; timeout?: number },
+    ) => {
+      calls.push({
+        argv,
+        stdin:
+          opts?.stdin === undefined ? undefined : decoder.decode(opts.stdin),
+        timeout: opts?.timeout,
+      });
+      let text = "";
+      if (argv.includes("POST")) text = JSON.stringify({ id: 300 });
+      else if (argv.some((a) => a.endsWith("/issues/comments/300")))
+        text = `${rulingLogin}\n`;
+      else if (argv.some((a) => a.endsWith("/issues/42/comments")))
+        text = `${JSON.stringify({ id: 10, user: summaryLogin, body: `${PR_COMMENT_MARKER_PREFIX}head=${HEAD} -->\n\nsummary` })}\n`;
+      const stream = (value: string) =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (value) controller.enqueue(encoder.encode(value));
+            controller.close();
+          },
+        });
+      return {
+        stdout: stream(text),
+        stderr: stream(""),
+        exited: Promise.resolve(0),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, calls };
+  }
+
+  const ROW_ADJUDICATION = {
+    priorId: "R001",
+    replyId: 71,
+    verdict: "rejected" as const,
+    evidence: [],
+  };
+
+  test("a ruling with no thread is posted as a top-level comment that names the finding", async () => {
+    const { spawnFn, calls } = fakeIssueGh("github-actions[bot]", "other[bot]");
+    await postAdjudicationReplies({
+      operatorRoot: "/repo",
+      pr: 42,
+      headSha: HEAD,
+      adjudications: [ROW_ADJUDICATION],
+      spawnFn,
+    });
+    const posts = calls.filter((c) => c.argv.includes("POST"));
+    expect(posts).toHaveLength(1);
+    const argv = posts[0]?.argv.join(" ") ?? "";
+    expect(argv).toContain("issues/42/comments");
+    expect(argv).not.toContain("pulls/42/comments");
+    const lines = (posts[0]?.stdin ?? "").split("\n");
+    expect(lines[0]).toBe(
+      `<!-- crysk-adjudication verdict=rejected reply=71 head=${HEAD} -->`,
+    );
+    expect(posts[0]?.stdin).toContain("Finding R001");
+    // Bounded like the thread reply (30 s), so a hung post cannot stall the run.
+    expect(posts[0]?.timeout).toBe(30_000);
+  });
+
+  test("an upheld ruling with no thread recorded under the CI bot landed: no warning", async () => {
+    const { spawnFn, calls } = fakeIssueGh("github-actions[bot]", "other[bot]");
+    const { out } = await captureStdout(() =>
+      postAdjudicationReplies({
+        operatorRoot: "/repo",
+        pr: 42,
+        headSha: HEAD,
+        adjudications: [{ ...ROW_ADJUDICATION, verdict: "upheld" as const }],
+        spawnFn,
+      }),
+    );
+    expect(
+      calls.some((c) => c.argv.some((a) => a.endsWith("/issues/comments/300"))),
+    ).toBe(true);
+    expect(out).not.toContain("was not recorded under");
+  });
+
+  test("an upheld ruling with no thread by a bot other than the summary's did not land: warned", async () => {
+    const { spawnFn } = fakeIssueGh("someone[bot]", "other[bot]");
+    const { out } = await captureStdout(() =>
+      postAdjudicationReplies({
+        operatorRoot: "/repo",
+        pr: 42,
+        headSha: HEAD,
+        adjudications: [{ ...ROW_ADJUDICATION, verdict: "upheld" as const }],
+        spawnFn,
+      }),
+    );
+    expect(out).toContain(UNLANDED_WARNING);
   });
 });

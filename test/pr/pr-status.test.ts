@@ -2103,17 +2103,58 @@ describe("buildPrStatus — answering a row with no comment", () => {
     };
   }
 
-  // The summary for CURRENT with one blocking row R001 and no finding comment.
+  // The summary for CURRENT with one blocking row R001 and no finding comment, posted by the CI bot.
   function rowSummary(
-    extra: { id: number; body: string; created_at?: string }[],
+    extra: { id: number; body: string; user?: string; created_at?: string }[],
   ) {
     return input({
       statuses: [RED],
       issueComments: [
-        { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        {
+          id: 100,
+          user: CI_ADJUDICATOR_LOGIN,
+          body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+        },
         ...extra,
       ],
     });
+  }
+
+  // The CI adjudicator's ruling on a row reply: a top-level comment that names the reply by its id.
+  function rowRuling(options: {
+    id: number;
+    reply: number;
+    verdict: "upheld" | "rejected" | "inconclusive";
+    user?: string;
+    head?: string;
+  }): { id: number; user: string; body: string } {
+    return {
+      id: options.id,
+      user: options.user ?? CI_ADJUDICATOR_LOGIN,
+      body: `${adjudicationMarker({
+        verdict: options.verdict,
+        reply: options.reply,
+        head: options.head ?? CURRENT,
+      })}\n\nruling`,
+    };
+  }
+
+  // The dismissal the author typed on R001 at CURRENT, comment id 60, by a person.
+  function rowDismissal(verdict: TriageVerdict = "upheld"): {
+    id: number;
+    user: string;
+    body: string;
+  } {
+    return {
+      ...rowReply({
+        id: 60,
+        row: "R001",
+        head: CURRENT,
+        tag: "dismissed",
+        verdict,
+      }),
+      user: "dev",
+    };
   }
 
   test("1: with no reply, the row is owed a triage and its triage is null", () => {
@@ -2179,7 +2220,7 @@ describe("buildPrStatus — answering a row with no comment", () => {
     expect(status.next_action).toBe("triage");
   });
 
-  test("6: with two row replies at the reviewed head, the newest one is the row's triage", () => {
+  test("6: with two row replies at the reviewed head, the newest dismissal is pending a CI ruling and needs a recheck", () => {
     const status = buildPrStatus(
       rowSummary([
         rowReply({ id: 200, row: "R001", head: CURRENT, tag: "applied" }),
@@ -2194,11 +2235,9 @@ describe("buildPrStatus — answering a row with no comment", () => {
     );
     const row = status.findings.find((f) => f.id === "R001");
     expect(row?.triage?.tag).toBe("dismissed");
-    // A row has no thread to rule on, so no recheck: the gate is red and every finding is triaged.
-    expect(status.next_action).toBe("override-or-fix");
-    expect(status.reason).toBe(
-      "The gate is red with 1 live blocking finding(s), all triaged and none applied or pending a CI ruling (a rejected dismissal, or a deferred or misclassified tag, never leaves the count): fix and push, or override the gate.",
-    );
+    // The row's ruling is a top-level comment that names its reply: none is posted, so recheck rules.
+    expect(status.next_action).toBe("recheck");
+    expect(status.reason).toMatch(/comment \/crysk recheck/);
   });
 
   test("7: a row reply does not answer a legacy top-level finding comment that links itself", () => {
@@ -2224,7 +2263,7 @@ describe("buildPrStatus — answering a row with no comment", () => {
     expect(legacy?.triage).toBeNull();
   });
 
-  test("8: a thread-less inline row answered dismissed upheld is never sent to recheck", () => {
+  test("8: a thread-less row dismissed upheld with no CI ruling is pending a ruling and needs a recheck", () => {
     const status = buildPrStatus(
       rowSummary([
         rowReply({
@@ -2236,11 +2275,209 @@ describe("buildPrStatus — answering a row with no comment", () => {
         }),
       ]),
     );
-    // A thread-less row has no CI ruling to wait for, so no recheck.
+    // The row's ruling is a top-level comment that names its reply, so recheck is what settles it.
+    expect(status.next_action).toBe("recheck");
+    expect(status.reason).toMatch(/comment \/crysk recheck/);
+  });
+
+  // A dismissed row under a gate that states no blocking count reviewed nothing, so its ruling is not owed.
+  function dismissedRowUnder(statusDescription: string) {
+    return input({
+      statuses: [gate("failure", statusDescription)],
+      issueComments: [
+        {
+          id: 100,
+          user: CI_ADJUDICATOR_LOGIN,
+          body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+        },
+        rowReply({
+          id: 200,
+          row: "R001",
+          head: CURRENT,
+          tag: "dismissed",
+          verdict: "upheld",
+        }),
+      ],
+    });
+  }
+
+  test("a dismissed row under a skipped gate is not a recheck", () => {
+    const status = buildPrStatus(dismissedRowUnder(SKIP_DESCRIPTION));
+    // The skip's own branch answers: the head was never reviewed, so a review comes first.
     expect(status.next_action).toBe("override-or-fix");
-    expect(status.reason).toBe(
-      "The gate is red with 1 live blocking finding(s), all triaged and none applied or pending a CI ruling (a rejected dismissal, or a deferred or misclassified tag, never leaves the count): fix and push, or override the gate.",
+  });
+
+  test("a dismissed row under a red partial-review gate is not a recheck", () => {
+    const status = buildPrStatus(
+      dismissedRowUnder(
+        "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /crysk review retries it",
+      ),
     );
+    // The partial review's own branch answers: the review is retried before any ruling.
+    expect(status.next_action).toBe("review");
+  });
+
+  test("(a) a dismissed row with no CI ruling has a null ci_verdict and needs a recheck", () => {
+    const status = buildPrStatus(rowSummary([rowDismissal()]));
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(b) an upheld ruling by the CI bot on the dismissal sets ci_verdict upheld, and the review runs", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "upheld" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "upheld",
+    );
+    expect(status.next_action).toBe("review");
+  });
+
+  test("(c) a rejected ruling sets ci_verdict rejected and the dismissal is overridden or fixed", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "rejected" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "rejected",
+    );
+    expect(status.next_action).toBe("override-or-fix");
+  });
+
+  test("(d) an inconclusive ruling leaves the dismissal pending and needs a recheck", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "inconclusive" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "inconclusive",
+    );
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(e) an upheld ruling written by a person is not a ruling and needs a recheck", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "upheld", user: "someone" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(f) an upheld ruling that names another reply is not a ruling on this dismissal", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 99, verdict: "upheld" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(g) an upheld ruling at another head is not a ruling at this head", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "upheld", head: EARLIER }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(h) of two rulings on the same reply, the highest comment id wins", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "rejected" }),
+        rowRuling({ id: 62, reply: 60, verdict: "upheld" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "upheld",
+    );
+  });
+
+  test("(i) a newer row reply after an upheld ruling leaves the ruling naming the older reply, so ci_verdict is null", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "upheld" }),
+        rowReply({ id: 63, row: "R001", head: CURRENT, tag: "applied" }),
+      ]),
+    );
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.triage?.tag).toBe("applied");
+    expect(row?.ci_verdict).toBeNull();
+  });
+
+  test("(j) local trust: an App bot's ruling on the App bot's summary counts; another App bot's does not", () => {
+    const local = { kind: "local" } as const;
+    const summaryBy = (author: string, ruler: string) =>
+      input({
+        statuses: [RED],
+        adjudicatorTrust: local,
+        issueComments: [
+          {
+            id: 100,
+            user: author,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+          rowDismissal(),
+          rowRuling({ id: 61, reply: 60, verdict: "upheld", user: ruler }),
+        ],
+      });
+    const same = buildPrStatus(
+      summaryBy("crysk-app[bot]", "crysk-app[bot]"),
+    ).findings.find((f) => f.id === "R001");
+    expect(same?.ci_verdict).toBe("upheld");
+    const other = buildPrStatus(
+      summaryBy("crysk-app[bot]", "other-app[bot]"),
+    ).findings.find((f) => f.id === "R001");
+    expect(other?.ci_verdict).toBeNull();
+  });
+
+  test("(l) a top-level ruling that names a thread reply does not set the threaded finding's ci_verdict", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [RED],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            user: CI_ADJUDICATOR_LOGIN,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+          rowRuling({ id: 61, reply: 2, verdict: "upheld" }),
+        ],
+      }),
+    );
+    const threaded = status.findings.find((f) => f.comment_id === 1);
+    expect(threaded?.ci_verdict).toBeNull();
   });
 
   test("a thread reply that names a row does not answer its thread's finding", () => {

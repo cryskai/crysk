@@ -30,8 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocking one could only be fixed or overridden. `triage reply --finding R###` now answers it with a top-level
   comment whose marker names the row; the gate counts an `applied` one, `crysk status` asks to triage a row with
   none, and the next review reads the reply, so an `applied` answer buys its verification. The summary's
-  Comments Outside Diff entries show their row id. A `dismissed` reply to such a finding still cannot get a CI
-  ruling. Reinstall the skills (`crysk skills install`) for the updated triage instructions.
+  Comments Outside Diff entries show their row id. A `dismissed` reply to one is ruled on by `/crysk recheck` like any other: the CI adjudicator posts its verdict as a
+  top-level comment that names the reply, and the gate, `crysk status` and the next review read it there. Reinstall the
+  skills (`crysk skills install`) for the updated triage instructions.
 
 - **A reply-shaped comment from someone without write access no longer blocks a real reply.** `crysk triage
   reply` skipped posting when a triage marker for the same review was already there, whoever wrote it, while the
