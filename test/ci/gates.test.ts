@@ -25,9 +25,13 @@ import {
 } from "#ci/gates";
 import { renderStepSummary } from "#ci/reporter";
 import {
+  modelRoleBilling,
   openCodeProvidersOfModels,
   openCodeRoutesBillMetered,
 } from "#ci/setup";
+import type { ModelsConfig } from "#model/model-name";
+import { FALLBACK_PROFILE } from "#model/profiles";
+import { buildResolvedRoutePlan, type ResolvedRoutePlan } from "#model/routing";
 import type { SizeGateVerdict } from "#review/size-gate";
 
 // cryskai/platform#12 item 5: the OpenCode half of the metered ceiling reads
@@ -202,6 +206,298 @@ describe("evaluatePlatformLimits", () => {
     expect(
       evaluatePlatformLimits({ billingMode: metered, limits: undefined }),
     ).toEqual({ allowed: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// evaluatePlatformLimits with the estimate split per model role — S17 (T14). A
+// review whose roles bill differently is compared on its API share: the sum of
+// the split over the roles the run bills on an API key, plus every key the run
+// cannot map to one of its roles.
+// ---------------------------------------------------------------------------
+
+describe("evaluatePlatformLimits with the estimate split per role", () => {
+  const metered = "metered" as const;
+  const split = {
+    "hunter.reliability": 0.9,
+    "hunter.resilience": 0.9,
+    "hunter.logic": 0.9,
+    refuter: 0.2,
+    consolidate: 0.02,
+    summary: 0.02,
+  };
+  // Hunters on a Claude subscription, the rest on an OpenCode API key.
+  const roleBilling = new Map<string, boolean>([
+    ["hunter.reliability", false],
+    ["hunter.resilience", false],
+    ["hunter.logic", false],
+    ["refuter", true],
+    ["consolidate", true],
+    ["summary", true],
+  ]);
+  const limits = {
+    reviewUsd: 1,
+    estimateUsd: 2.94,
+    estimateByRoleUsd: split,
+  };
+
+  test("the mixed setup runs: its API share ($0.24) is under the $1 limit", () => {
+    expect(
+      evaluatePlatformLimits({ billingMode: metered, limits, roleBilling }),
+    ).toEqual({ allowed: true });
+  });
+
+  test("the same limits without the split skip on the whole estimate", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { reviewUsd: 1, estimateUsd: 2.94 },
+        roleBilling,
+      }),
+    ).toEqual({ allowed: false, hit: "review-limit" });
+    expect(evaluatePlatformLimits({ billingMode: metered, limits })).toEqual({
+      allowed: false,
+      hit: "review-limit",
+    });
+  });
+
+  test("an API share over the limit skips and says the share was compared", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: {
+          ...limits,
+          estimateByRoleUsd: { ...split, refuter: 1.5 },
+        },
+        roleBilling,
+      }),
+    ).toEqual({ allowed: false, hit: "review-limit", apiShare: true });
+  });
+
+  test("the API share is also what is compared with the month's remainder", () => {
+    const withMonth = (monthLeftUsd: number) =>
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { ...limits, reviewUsd: 12, monthLeftUsd },
+        roleBilling,
+      });
+    expect(withMonth(0.5)).toEqual({ allowed: true });
+    expect(withMonth(0.2)).toEqual({
+      allowed: false,
+      hit: "month-left",
+      apiShare: true,
+    });
+  });
+
+  test("a share exactly at the limit passes (inclusive boundary)", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: {
+          reviewUsd: 0.5,
+          estimateUsd: 3,
+          estimateByRoleUsd: { "hunter.logic": 2.5, refuter: 0.5 },
+        },
+        roleBilling: new Map([
+          ["hunter.logic", false],
+          ["refuter", true],
+        ]),
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  test("a key the run cannot map to one of its roles counts as API", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: {
+          reviewUsd: 1,
+          estimateUsd: 2,
+          estimateByRoleUsd: { "hunter.logic": 0.5, "hunter.newcomer": 1.5 },
+        },
+        roleBilling: new Map([
+          ["hunter.logic", false],
+          ["refuter", true],
+        ]),
+      }),
+    ).toEqual({ allowed: false, hit: "review-limit", apiShare: true });
+  });
+
+  test("a run with no API-billed role in its map compares the whole estimate, as before", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits,
+        roleBilling: new Map([["hunter.logic", false]]),
+      }),
+    ).toEqual({ allowed: false, hit: "review-limit" });
+  });
+
+  test("the month used up still skips a run that bills an API key, whatever the split", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: metered,
+        limits: { ...limits, monthLeftUsd: 0 },
+        roleBilling,
+      }),
+    ).toEqual({ allowed: false, hit: "month-used-up" });
+  });
+
+  test("a pure subscription run is never skipped, split or not", () => {
+    expect(
+      evaluatePlatformLimits({
+        billingMode: "subscription",
+        limits: { ...limits, reviewUsd: 0.01, monthLeftUsd: 0 },
+        roleBilling: new Map([["hunter.logic", false]]),
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  test("the skip comment and the step summary name the API share, with no dollar figure", () => {
+    const skip = ciLimitsGateSkip({
+      isCi: true,
+      billingMode: metered,
+      limits: { ...limits, estimateByRoleUsd: { ...split, refuter: 1.5 } },
+      roleBilling,
+      prNumber: 56,
+    });
+    if (skip === null) throw new Error("unreachable");
+    expect(skip.comment).toContain("API share");
+    expect(skip.comment).not.toContain("$");
+    const summary = renderStepSummary(skip.summary);
+    expect(summary).toContain("API share");
+    expect(summary).not.toContain("$");
+    const whole = ciLimitsGateSkip({
+      isCi: true,
+      billingMode: metered,
+      limits: { reviewUsd: 1, estimateUsd: 2.94 },
+      roleBilling,
+      prNumber: 56,
+    });
+    expect(whole?.comment).not.toContain("API share");
+  });
+
+  test("the plan the shell publishes carries the split verdict", () => {
+    const plan = planCiLimitsSkip({
+      isCi: true,
+      ciMode: "gate",
+      billingMode: metered,
+      limits: { ...limits, estimateByRoleUsd: { ...split, refuter: 1.5 } },
+      roleBilling,
+      prNumber: 56,
+      force: false,
+    });
+    expect(plan?.outputs.status).toBe("skipped-budget");
+    expect(plan?.comment).toContain("API share");
+    expect(
+      planCiLimitsSkip({
+        isCi: true,
+        ciMode: "gate",
+        billingMode: metered,
+        limits,
+        roleBilling,
+        prNumber: 56,
+        force: false,
+      }),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// modelRoleBilling — which of the run's model roles bill an API key. The same
+// credential decisions the run binds with (credentialKindForRoute), per role.
+// ---------------------------------------------------------------------------
+
+describe("modelRoleBilling", () => {
+  const agents = [
+    { key: "reliability", role: "hunter" },
+    { key: "resilience", role: "hunter" },
+    { key: "logic", role: "hunter" },
+    { key: "refuter", role: "refuter" },
+  ];
+  const deepseek = "opencode:deepseek/deepseek-v4-flash";
+  const oauth = { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test" };
+
+  function billing(
+    models: ModelsConfig,
+    over: Partial<Parameters<typeof modelRoleBilling>[0]> = {},
+  ) {
+    const plan: ResolvedRoutePlan = buildResolvedRoutePlan({
+      agents,
+      models,
+      profile: FALLBACK_PROFILE,
+      summarizer: { bundled: true },
+      consolidate: { bundled: true },
+    });
+    return modelRoleBilling({
+      plan,
+      agents,
+      models,
+      profile: FALLBACK_PROFILE,
+      claudeEnv: oauth,
+      authFilePresent: true,
+      openCodeSecretNames: ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"],
+      ...over,
+    });
+  }
+
+  const mixed: ModelsConfig = {
+    default: ["claude:sonnet-latest"],
+    refuter: [deepseek],
+    summary: [deepseek],
+    consolidate: [deepseek],
+  };
+
+  test("hunters on a Claude subscription and the rest on an OpenCode API key", () => {
+    expect(Object.fromEntries(billing(mixed) ?? [])).toEqual({
+      "hunter.reliability": false,
+      "hunter.resilience": false,
+      "hunter.logic": false,
+      refuter: true,
+      summary: true,
+      consolidate: true,
+      judge: false,
+    });
+  });
+
+  test("the roles `models.default` covers take its route", () => {
+    const all = billing({ default: [deepseek] });
+    expect(all?.get("hunter.logic")).toBe(true);
+    expect(all?.get("refuter")).toBe(true);
+    // The judge is pinned to a measured model and never follows `default`.
+    expect(all?.get("judge")).toBe(false);
+  });
+
+  test("a Claude role bills an API key when the run's chosen Claude credential does", () => {
+    const keyed = billing(mixed, {
+      claudeEnv: { ANTHROPIC_API_KEY: "sk-test" },
+    });
+    expect(keyed?.get("hunter.logic")).toBe(true);
+    expect(keyed?.get("judge")).toBe(true);
+  });
+
+  test("a role with a fallback on an API key bills an API key", () => {
+    const withFallback = billing({
+      ...mixed,
+      "hunter.logic": ["claude:sonnet-latest", deepseek],
+    });
+    expect(withFallback?.get("hunter.logic")).toBe(true);
+    expect(withFallback?.get("hunter.reliability")).toBe(false);
+  });
+
+  test("an OpenCode subscription provider or a missing auth file bills no API key", () => {
+    const chatgpt = billing(
+      { default: ["opencode:openai/gpt-5.5"] },
+      { openCodeSecretNames: ["CRYSK_OPENCODE_OPENAI_OAUTH"] },
+    );
+    expect(chatgpt?.get("refuter")).toBe(false);
+    expect(billing(mixed, { authFilePresent: false })?.get("refuter")).toBe(
+      false,
+    );
+  });
+
+  test("a run whose routes could not be resolved has no role split", () => {
+    expect(billing(mixed, { plan: undefined })).toBeUndefined();
   });
 });
 

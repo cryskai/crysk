@@ -21,7 +21,11 @@
 // (src/pr/ci-admission-gate.ts), expressed so the type checker enforces it.
 
 import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
-import { type CiBillingMode, planCiLimitsSkip } from "#ci/gates";
+import {
+  type CiBillingMode,
+  type ModelRoleBilling,
+  planCiLimitsSkip,
+} from "#ci/gates";
 import { actionsRunUrl } from "#ci/outcome";
 import { readPlatformLimits } from "#ci/platform-limits";
 import type { ResolvedRoutePlan } from "#model/routing";
@@ -127,6 +131,9 @@ export async function resolvePrPlanAndConfirm(params: {
   statusContext: CommitStatusContext;
   // The run's credential class (resolvePrPromptSetAndBudget), resolved once.
   ciBillingMode: CiBillingMode;
+  // Which model roles bill an API key (resolvePrPromptSetAndBudget), resolved
+  // once beside the billing mode.
+  ciRoleBilling: ModelRoleBilling | undefined;
   // S5: the run's Claude credential, chosen once at run start (reviewPr).
   claudeRun: RunClaudeCredential;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
@@ -152,6 +159,9 @@ export async function resolvePrPlanAndConfirm(params: {
     const limitsPlan = planCiLimitsSkip({
       isCi: params.isCi,
       billingMode: params.ciBillingMode,
+      ...(params.ciRoleBilling === undefined
+        ? {}
+        : { roleBilling: params.ciRoleBilling }),
       limits: readPlatformLimits(process.env),
       prNumber: params.prNumber,
       force: params.options.force,

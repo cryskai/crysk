@@ -75,7 +75,17 @@ import {
   parseModelName,
   parseModelsConfig,
 } from "#model/model-name";
-import { MODEL_PROFILES, profileModels } from "#model/profiles";
+import {
+  MODEL_PROFILES,
+  type ModelProfile,
+  profileModels,
+} from "#model/profiles";
+import {
+  agentModelRole,
+  agentStepKey,
+  type ResolvedRoutePlan,
+  resolveMaterialityJudgeRoute,
+} from "#model/routing";
 import { parseGlobalConfig, parseLocalConfig } from "#review/preflight";
 import { commandForms } from "../brand";
 import {
@@ -870,6 +880,79 @@ export function openCodeRoutesBillMetered(input: {
         input.openCodeSecretNames,
       ) === "provider_api_token",
   );
+}
+
+// Which of the run's model roles bill an API key (S17), keyed like the engine's
+// `models` config (`hunter.<specialty>`, `refuter`, `summary`, `consolidate`,
+// `judge`). A role is the route its step resolved to, so what `models.default`
+// covers is already in it. A role bills an API key when any route it can take,
+// a fallback included, does: a Claude route when the run's chosen Claude
+// credential is an API key, an OpenCode route by the rule the run binds it
+// with (openCodeRoutesBillMetered). The platform prices each role and the
+// limits gate sums the ones that bill here, because only the engine knows how a
+// run is billed. Undefined when the plan could not be built: the gate then
+// compares the whole estimate.
+export function modelRoleBilling(input: {
+  plan: ResolvedRoutePlan | undefined;
+  agents: readonly {
+    readonly key: string;
+    readonly role: string;
+    readonly specialty?: string;
+  }[];
+  models: ModelsConfig | undefined;
+  profile: ModelProfile;
+  // The run's chosen Claude credential env (claudeRun.env).
+  claudeEnv: Readonly<Record<string, string | undefined>>;
+  authFilePresent: boolean;
+  openCodeSecretNames: readonly string[] | undefined;
+}): ReadonlyMap<string, boolean> | undefined {
+  if (input.plan === undefined) return undefined;
+  const routeBills = (route: { backend: string; provider: string }) =>
+    route.backend === "claude-code"
+      ? credentialKindForRoute(
+          "claude-code",
+          route.provider,
+          input.claudeEnv,
+        ) === "provider_api_token"
+      : openCodeRoutesBillMetered({
+          providers: [route.provider],
+          authFilePresent: input.authFilePresent,
+          openCodeSecretNames: input.openCodeSecretNames,
+        });
+  const billing = new Map<string, boolean>();
+  const add = (
+    role: string,
+    routes: readonly { backend: string; provider: string }[],
+  ) => {
+    billing.set(role, (billing.get(role) ?? false) || routes.some(routeBills));
+  };
+  for (const step of input.plan.steps) {
+    const role = stepModelRole(step.stepKey, input.agents);
+    if (role === undefined) continue;
+    add(
+      role,
+      [step, ...(step.fallbacks ?? [])].map((s) => s.route),
+    );
+  }
+  // The materiality judge joins the plan only when the gate is on; its route
+  // is the same either way.
+  if (!billing.has("judge")) {
+    const judge = resolveMaterialityJudgeRoute(input.models, input.profile);
+    if (judge !== undefined) add("judge", [judge.route]);
+  }
+  return billing;
+}
+
+// The `models` key a plan step reads, or undefined for a step no key covers.
+function stepModelRole(
+  stepKey: string,
+  agents: readonly { key: string; role: string; specialty?: string }[],
+): string | undefined {
+  if (stepKey === "summarizer") return "summary";
+  if (stepKey === "consolidate") return "consolidate";
+  if (stepKey === "materiality") return "judge";
+  const agent = agents.find((a) => agentStepKey(a) === stepKey);
+  return agent === undefined ? undefined : agentModelRole(agent);
 }
 
 interface OpenCodeAuthAssembly {

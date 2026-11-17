@@ -508,8 +508,8 @@ export async function runPlatformConnect(
         }
       }
     }
-    // Not a secret: up to three validated numbers. The run step's limits gate
-    // reads it as CRYSK_PLATFORM_LIMITS.
+    // Not a secret: validated numbers (the limits, and the estimate split per
+    // role). The run step's limits gate reads it as CRYSK_PLATFORM_LIMITS.
     if (result.limits !== undefined) {
       deps.appendOutput(`limits=${serializePlatformLimits(result.limits)}\n`);
     }

@@ -22,12 +22,14 @@ import {
   type CiBillingMode,
   type CiSizeLimits,
   deriveCiBillingMode,
+  type ModelRoleBilling,
   resolveCiSizeLimits,
   sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { formatWorkflowCommand } from "#ci/reporter";
-import { openCodeRoutesBillMetered } from "#ci/setup";
+import { modelRoleBilling, openCodeRoutesBillMetered } from "#ci/setup";
 import { resolveRepoRoot } from "#git/git";
+import { planRoutes, type ResolvedRoutePlan } from "#model/routing";
 import { ghCurrentBranchPr, ghPrView } from "#pr/pr";
 import {
   type PrTarget,
@@ -144,6 +146,10 @@ export interface ResolvedPrPromptSet {
   // How the run bills (the engine's own answer: the platform cannot see it).
   // The CI limits gate reads it (src/pr/plan.ts); the size limits resolve from it.
   ciBillingMode: CiBillingMode;
+  // Which of the run's model roles bill an API key, for the limits gate's
+  // comparison of a mixed setup (S17). Undefined when the routes could not be
+  // resolved here: the gate then compares the whole estimate.
+  ciRoleBilling: ModelRoleBilling | undefined;
   ciSizeLimits: CiSizeLimits | undefined;
   agents: AgentsDirResolution;
   spec: ReviewSpec;
@@ -153,25 +159,28 @@ export interface ResolvedPrPromptSet {
   gotchasPath: string | undefined;
 }
 
-// The OpenCode providers of every route the run resolves, fallbacks included,
-// from the same plan builder the run confirms with (buildCliRoutePlan), so each
-// source routing reads counts the way routing reads it. Undefined when the plan
-// cannot be built here; the run itself surfaces that error at confirm.
-async function openCodeRouteProviders(
+// The run's route plan, fallbacks included, from the same plan builder the run
+// confirms with (buildCliRoutePlan), so each source routing reads counts the way
+// routing reads it. Undefined when the plan cannot be built here; the run itself
+// surfaces that error at confirm.
+async function resolveRoutePlanForBilling(
   input: Parameters<typeof buildCliRoutePlan>[0],
-): Promise<string[] | undefined> {
-  let plan: Awaited<ReturnType<typeof buildCliRoutePlan>>;
+): Promise<ResolvedRoutePlan | undefined> {
   try {
-    plan = await buildCliRoutePlan(input);
+    return await buildCliRoutePlan(input);
   } catch {
     return undefined;
   }
+}
+
+// The OpenCode providers of every route of the plan, fallbacks included.
+function openCodeRouteProviders(
+  plan: ResolvedRoutePlan | undefined,
+): string[] | undefined {
+  if (plan === undefined) return undefined;
   const providers = new Set<string>();
-  for (const step of plan.steps) {
-    for (const route of [step, ...(step.fallbacks ?? [])]) {
-      if (route.route.backend === "opencode")
-        providers.add(route.route.provider);
-    }
+  for (const route of planRoutes(plan)) {
+    if (route.route.backend === "opencode") providers.add(route.route.provider);
   }
   return [...providers].sort();
 }
@@ -212,24 +221,36 @@ export async function resolvePrPromptSetAndBudget(params: {
   // invoices nothing for a run whose models do not bill per token. Not
   // envBillsMetered either: that predicate stamps Claude usage and must stay
   // Anthropic-env-only.
-  const billingMode = deriveCiBillingMode(
-    params.claudeRun?.env ?? process.env,
-    {
-      openCodeBillsMetered: openCodeRoutesBillMetered({
-        providers: await openCodeRouteProviders({
-          spec,
-          options: params.options,
-          agentFiles,
-          bundledAgents: isBundledAgentsDir(agents),
-          models: params.config.models,
-          summary: params.summary,
-          profile: params.profile,
-        }),
-        authFilePresent: existsSync(resolveOpenCodeAuthPath()),
-        openCodeSecretNames: readOpenCodeSecretNames(),
-      }),
-    },
-  );
+  const routePlan = await resolveRoutePlanForBilling({
+    spec,
+    options: params.options,
+    agentFiles,
+    bundledAgents: isBundledAgentsDir(agents),
+    models: params.config.models,
+    summary: params.summary,
+    profile: params.profile,
+  });
+  const claudeEnv = params.claudeRun?.env ?? process.env;
+  const authFilePresent = existsSync(resolveOpenCodeAuthPath());
+  const openCodeSecretNames = readOpenCodeSecretNames();
+  const billingMode = deriveCiBillingMode(claudeEnv, {
+    openCodeBillsMetered: openCodeRoutesBillMetered({
+      providers: openCodeRouteProviders(routePlan),
+      authFilePresent,
+      openCodeSecretNames,
+    }),
+  });
+  // The same routes, per model role: the platform prices each role and the
+  // limits gate compares the ones billed on an API key (S17).
+  const ciRoleBilling = modelRoleBilling({
+    plan: routePlan,
+    agents: spec.agents,
+    models: params.config.models,
+    profile: params.profile,
+    claudeEnv,
+    authFilePresent,
+    openCodeSecretNames,
+  });
   // Resolved ONCE, here: the size limits below and the platform limits gate
   // far below (src/pr/plan.ts's plan/confirm stage) read this same value.
   // The size gate's half of the same route policy (ci/gates.ts,
@@ -268,6 +289,7 @@ export async function resolvePrPromptSetAndBudget(params: {
   const gotchasPath = instructions.path;
   return {
     ciBillingMode: billingMode,
+    ciRoleBilling,
     ciSizeLimits,
     agents,
     spec,

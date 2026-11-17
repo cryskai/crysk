@@ -357,6 +357,7 @@ export async function reviewPr(
   }
   const {
     ciBillingMode,
+    ciRoleBilling,
     ciSizeLimits,
     agents,
     spec,
@@ -722,6 +723,7 @@ export async function reviewPr(
       ciMode,
       statusContext,
       ciBillingMode,
+      ciRoleBilling,
       claudeRun,
       ciAdmissionLedger,
       skipDiscovery,

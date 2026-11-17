@@ -247,6 +247,52 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     expect(step2.ciSizeLimits?.defaultedOff).toEqual(["lines"]);
   });
 
+  // S17: the same resolution says which roles bill an API key, for the limits
+  // gate's comparison of a mixed setup's API share.
+  test("S17: hunters on the Claude subscription and the refuter on an OpenCode API key split by role", async () => {
+    const authDir = path.join(dir, "xdg", "opencode");
+    mkdirSync(authDir, { recursive: true });
+    writeFileSync(path.join(authDir, "auth.json"), "{}");
+    const repo = path.join(dir, "repo");
+    // `models` is a per-person key: it lives in the home's config.
+    mkdirSync(path.join(dir, "home", ".crysk"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "home", ".crysk", "config.json"),
+      JSON.stringify({
+        models: {
+          default: ["claude:sonnet-latest"],
+          refuter: ["opencode:deepseek/deepseek-v4-flash"],
+        },
+      }),
+    );
+    const { options } = parseArgs(["review", "--pr", "1", "--ci"]);
+    const { loaded, config, summary, profile } = await loadRunConfig({
+      root: repo,
+      home: path.join(dir, "home"),
+      configFlag: undefined,
+      options,
+    });
+    const step2 = await resolvePrPromptSetAndBudget({
+      options,
+      loaded,
+      config,
+      summary,
+      profile,
+      isCi: true,
+      operatorRoot: repo,
+      claudeRun: resolveRunClaudeCredential({
+        credentials: undefined,
+        env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth" },
+        loginPresent: false,
+      }),
+    });
+    expect(step2.ciBillingMode).toBe("metered");
+    expect(step2.ciRoleBilling?.get("refuter")).toBe(true);
+    expect(step2.ciRoleBilling?.get("hunter.logic")).toBe(false);
+    expect(step2.ciRoleBilling?.get("hunter.reliability")).toBe(false);
+    expect(step2.ciRoleBilling?.get("summary")).toBe(false);
+  });
+
   test("S5: both Claude credentials, credentials.claude [api_key, subscription]: the key makes the run metered", async () => {
     const step2 = await step2With(["api_key", "subscription"]);
     expect(step2.ciBillingMode).toBe("metered");
