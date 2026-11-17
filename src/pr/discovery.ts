@@ -21,6 +21,7 @@ import type {
   fetchPrReviewComments,
 } from "#pr/pr";
 import { findMarkedCommentId } from "#pr/preflight";
+import { keepPrOwnedHunks } from "#rereview/base-merge-filter";
 import {
   adjudicationQueue,
   buildPhaseBQueue,
@@ -214,10 +215,35 @@ export async function resolvePrDiscovery(params: {
     prepared.plan.skipDiscovery || prepared.discoverySkippedEmptyDelta;
 
   let rawDiff = "";
+  let baseMergeHunksDropped = 0;
   if (!skipPlannedDiscovery) {
     const diff = await git.runGit(["diff", discoveryRange, ...pathArgs]);
     if (!diff.ok) throw new CliError(`git diff failed: ${diff.stderr}`);
     rawDiff = diff.stdout;
+    // WHY a second diff: a restricted re-review reads last-head..head, and when
+    // the author merged the base branch in between, that range also carries
+    // the base branch's own changes to every file the pull request touches.
+    // The merge base moves past the last reviewed head only through such a
+    // merge, so this probe leaves an ordinary push on the exact patch it
+    // always read. The size gate still measures the unfiltered range: it is a
+    // cost bound, and the unfiltered count is the upper one.
+    if (
+      prepared.discoveryPaths !== null &&
+      prepared.last.L !== null &&
+      !(await git.isAncestor(diffFromSha, prepared.last.L))
+    ) {
+      const prRange = await git.runGit([
+        "diff",
+        `${diffFromSha}..${headSha}`,
+        ...pathArgs,
+      ]);
+      if (!prRange.ok) {
+        throw new CliError(`git diff failed: ${prRange.stderr}`);
+      }
+      const owned = keepPrOwnedHunks(rawDiff, prRange.stdout);
+      rawDiff = owned.patch;
+      baseMergeHunksDropped = owned.droppedHunks;
+    }
   }
   if (shouldAbortEmptyDiscovery(prepared.plan, rawDiff)) {
     throw new CliError(emptyDiffMessage(baseRef, headLabel, false));
@@ -258,6 +284,13 @@ export async function resolvePrDiscovery(params: {
     ).patch;
   }
   const rereview = toRereviewProvenance(prepared, postedFindings.length);
+  if (rereview !== undefined && baseMergeHunksDropped > 0) {
+    rereview.base_merge_hunks_dropped = baseMergeHunksDropped;
+    const note =
+      `Re-review: left out ${baseMergeHunksDropped} hunk(s) that came from a ` +
+      "merge of the base branch, not from this pull request.";
+    log(isCi ? formatWorkflowCommand("notice", note) : note);
+  }
   if (rereview !== undefined && skipDiscovery) {
     rereview.discovery_skipped_empty_delta = true;
     // pr-hero review #286 finding: this flag alone cannot tell a reader WHY
