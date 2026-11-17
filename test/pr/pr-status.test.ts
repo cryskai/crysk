@@ -2541,6 +2541,7 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
           target_url: null,
         },
       ],
+      verdictAt: VERDICT_AT,
       issueComments: [
         { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
       ],
@@ -2609,7 +2610,7 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
   });
 
   // A skip carried the red onto a newer head. Its status is newer than the review's own verdict,
-  // so the verdict time is unread and a reply at the posted head counts.
+  // so the verdict time comes from the caller (`verdictAt`), as the status command reads it.
   const NEXT = "7".repeat(40);
   const carriedRed = (extra: Partial<PrStatusInput> = {}): PrStatusInput =>
     carried({
@@ -2658,6 +2659,62 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
             ...triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
             created_at: "2026-10-30T11:00:00Z",
           },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("on a head a skip carried, a reply from before the review's verdict does not answer", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T09:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("with no verdict time, a reply at the posted head on a carried finding does not answer", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        verdictAt: null,
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T11:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("with no verdict time, a reply stamped with the reviewed head still answers", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        verdictAt: null,
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
         ],
       }),
     );

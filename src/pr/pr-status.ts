@@ -18,7 +18,6 @@ import {
   REVIEW_COMMAND,
   REVIEW_FULL_COMMAND,
 } from "#ci/trigger";
-import { finishedVerdict } from "#pr/admission";
 import {
   COMMIT_STATUS_CONTEXT,
   type CommitStatusFact,
@@ -165,6 +164,10 @@ export interface PrStatusInput {
   head: string;
   nowMs: number;
   statuses: CommitStatusFact[];
+  // When the review whose verdict stands on this head wrote it (admission.ts ownReviewVerdictTime,
+  // carriedReviewVerdictTime): the cutoff for a reply stamped with the head its finding was posted
+  // on. Absent or null: unknown, and such a reply on a carried finding does not count, as at the gate.
+  verdictAt?: string | null;
   issueComments: PrStatusComment[];
   reviewComments: PrStatusReviewComment[];
   // Whose CI ruling counts. Absent is a run's standalone read: only github-actions[bot].
@@ -190,7 +193,7 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
     input,
     summary.rows,
     summary.head,
-    reviewVerdictAt(input),
+    verdictMs(input),
   );
   const liveBlocking = analyzed.filter(
     (a) => a.finding.blocking && a.finding.live_on_head,
@@ -222,15 +225,10 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
 // The gate is crysk's own commit status on the head, read by its context alone (the legacy
 // pr-hero name counts as the same context), so a local run's crysk/local status never
 // answers for the gate.
-// When the review of this head wrote its verdict, in ms; "unread" when the head's status is one a
-// skip, a carry or an override wrote, because the review's own verdict then sits on an earlier commit
-// that this read does not fetch (the gate walks to it: admission.ts reviewVerdictTime); null when
-// there is no status or its time does not parse.
-function reviewVerdictAt(input: PrStatusInput): number | "unread" | null {
-  const latest = latestStatusInContext(input.statuses, COMMIT_STATUS_CONTEXT);
-  if (latest === null) return null;
-  if (!finishedVerdict(latest)) return "unread";
-  const at = Date.parse(latest.created_at);
+// The caller's verdict time in ms, or null when it is unknown or does not parse.
+function verdictMs(input: PrStatusInput): number | null {
+  if (input.verdictAt === undefined || input.verdictAt === null) return null;
+  const at = Date.parse(input.verdictAt);
   return Number.isNaN(at) ? null : at;
 }
 
@@ -337,7 +335,7 @@ function readFindings(
   input: PrStatusInput,
   rows: StateFinding[],
   reviewedHead: string | null,
-  verdictAt: number | "unread" | null,
+  verdictAt: number | null,
 ): AnalyzedFinding[] {
   const sources: {
     id: number;
@@ -433,18 +431,14 @@ function readFindings(
             : null,
       },
       // A reply at another review's head does not answer this one (replyAnswersReview).
-      // WHY the posted head alone when the verdict is unread: cutting at a skip's time would send
-      // the loop to triage a reply the gate counts, since the gate cuts at the review's own verdict.
-      answersReview: replies.some(
-        (r) =>
-          (verdictAt === "unread" && r.marker.headSha === marker.headSha) ||
-          replyAnswersReview({
-            replyHead: r.marker.headSha,
-            replyCreatedAt: r.createdAt,
-            findingHead: marker.headSha,
-            reviewedHead,
-            verdictAt: verdictAt === "unread" ? null : verdictAt,
-          }),
+      answersReview: replies.some((r) =>
+        replyAnswersReview({
+          replyHead: r.marker.headSha,
+          replyCreatedAt: r.createdAt,
+          findingHead: marker.headSha,
+          reviewedHead,
+          verdictAt,
+        }),
       ),
     });
   }
@@ -781,8 +775,7 @@ function decideNext(
     ) {
       // The gate's own rules (admission.ts admissionSkipDecision, answered-findings.ts): a finding is
       // answered only by its newest reply at the head it was posted on or at the reviewed head, and the gate must see at least as
-      // many blocking findings as the red counts. The stale-reply cutoff needs the carried verdict's time,
-      // which this read does not have, so the reason says the push can turn green, never that it will.
+      // many blocking findings as the red counts. This count does not apply the stale-reply cutoff, so the reason says the push can turn green, never that it will.
       const open = liveBlocking.filter(
         (a) =>
           !(

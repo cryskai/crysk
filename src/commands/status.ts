@@ -10,6 +10,11 @@
 
 import { resolveRepoRoot } from "#git/git";
 import {
+  carriedReviewVerdictTime,
+  headStatusRed,
+  ownReviewVerdictTime,
+} from "#pr/admission";
+import {
   CommentsTruncatedError,
   fetchCommitStatuses,
   fetchPrComments,
@@ -86,6 +91,8 @@ export async function runStatusCommand(input: {
     (baseNowMs !== undefined ? () => baseNowMs + sleptMs : () => Date.now());
   const startMs = readNow();
   let lastHead: string | undefined;
+  // The walk to a carried review's verdict reads the pull request's commits, so a walk that found the verdict is kept for its head.
+  let walked: { head: string; at: string | null } | undefined;
   let headStartMs = startMs;
   let polls = 0;
   let consecutivePollErrors = 0;
@@ -110,6 +117,24 @@ export async function runStatusCommand(input: {
         spawnFn,
         failClosed: true,
       });
+      // When the review whose verdict stands on this head wrote it: the head's own verdict, or the
+      // one a skip carried onto a red head (admission.ts headStatusRed says why only a red). A walk
+      // that read nothing is not kept: the next poll reads again rather than hold a failed read.
+      let verdictAt = ownReviewVerdictTime(statuses);
+      if (verdictAt === null && headStatusRed(statuses)) {
+        if (walked?.head !== head || walked.at === null) {
+          walked = {
+            head,
+            at: await carriedReviewVerdictTime({
+              operatorRoot,
+              prNumber: pr,
+              headSha: head,
+              spawnFn,
+            }),
+          };
+        }
+        verdictAt = walked.at;
+      }
       issueComments = await fetchPrComments(operatorRoot, pr, {
         spawnFn,
         timeoutMs: commentTimeoutMs,
@@ -123,6 +148,7 @@ export async function runStatusCommand(input: {
         head,
         nowMs,
         statuses,
+        verdictAt,
         issueComments,
         reviewComments,
         // A developer's machine never learns the platform's login (src/triage/adjudication.ts).
