@@ -348,8 +348,12 @@ async function postedFindingFromRunDir(input: {
     sleepFn: input.sleepFn,
     memo: { writers: new Map() },
   });
+  // WHY the channel too: a review comment's id and an issue comment's id are different id spaces,
+  // so the bare number could name another finding's comment.
+  const postedChannel = match.posted.channel === "issue" ? "outside" : "inline";
   const postedRow = read.status.findings.find(
-    (row) => row.comment_id === match.posted.id,
+    (row) =>
+      row.comment_id === match.posted.id && row.channel === postedChannel,
   );
   const already =
     postedRow?.triage != null && postedRow.triage.head === doc.head_sha;

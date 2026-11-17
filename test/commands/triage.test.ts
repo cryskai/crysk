@@ -1040,6 +1040,108 @@ describe("runTriageReplyCommand — with a run directory, a reply already at the
     expect(postsOf(calls)).toHaveLength(1);
     expect(written).not.toContain("skip post");
   });
+
+  test("with a run directory, a reply to another finding whose comment shares the id is not a repeat", async () => {
+    // Issue comment 20 is the run's finding (outside channel); review comment 20 is another, inline,
+    // finding with a writer's applied reply at the run's head. Ids are per endpoint, so they collide.
+    const topLevel = findingMarker({
+      path: F001_PATH,
+      line: 144,
+      headSha: RUN_HEAD,
+      claim: F001_CLAIM,
+    });
+    const inlinePath = "src/other.ts";
+    const inlineClaim = "the cache is never invalidated";
+    const inlineMarker = findingMarker({
+      path: inlinePath,
+      line: 20,
+      headSha: RUN_HEAD,
+      claim: inlineClaim,
+    });
+    const summary = [
+      `<!-- pr-hero-report head=${RUN_HEAD} -->`,
+      "",
+      renderStateBlock(
+        RUN_HEAD,
+        [
+          stateFinding({
+            id: "R001",
+            sev: "CRITICAL",
+            tier: "blocking",
+            channel: "outside",
+            locs: [`${F001_PATH}:144`],
+            claim: F001_CLAIM,
+          }),
+          stateFinding({
+            id: "R002",
+            sev: "CRITICAL",
+            tier: "blocking",
+            channel: "inline",
+            locs: [`${inlinePath}:20`],
+            claim: inlineClaim,
+          }),
+        ],
+        undefined,
+        1,
+      ),
+    ].join("\n");
+    const reply = {
+      id: 30,
+      user: "dev",
+      in_reply_to_id: 20,
+      created_at: AFTER,
+      path: inlinePath,
+      line: 20,
+      original_line: 20,
+      body: `${triageMarker({ tag: "applied", headSha: RUN_HEAD, actor: "agent" })}\n\nfixed\n`,
+    };
+    // The PR head is the run head, so the reviewed head and the reply head agree and the reply counts.
+    const prViewAtRunHead: ScriptEntry = {
+      ...prViewScript(),
+      response: {
+        stdout: (prViewScript().response?.stdout ?? "").replace(HEAD, RUN_HEAD),
+      },
+    };
+    const script: ScriptEntry[] = [
+      {
+        match: ["repo", "view", "--json", "url"],
+        response: { stdout: "https://github.com/MusiveTech/musive\n" },
+      },
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            { id: 5, user: "pr-hero", body: summary },
+            { id: 20, user: "pr-hero", body: `${topLevel}\n${F001_CLAIM}` },
+          ]),
+        },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 20,
+              user: "pr-hero",
+              body: `${inlineMarker}\n${inlineClaim}`,
+              path: inlinePath,
+              line: 20,
+              original_line: 20,
+              in_reply_to_id: null,
+            },
+            reply,
+          ]),
+        },
+      },
+      permissionEntry("dev", { stdout: "write\n" }),
+      prViewAtRunHead,
+      commitStatusScript(),
+    ];
+    const { exitCode, calls } = await replyFromRunDir(script);
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(1);
+    expect(rowPosts(calls)).toHaveLength(1);
+  });
 });
 
 describe("runTriageReplyCommand — anchor.patch is the anchoring diff", () => {

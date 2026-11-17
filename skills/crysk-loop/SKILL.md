@@ -165,9 +165,11 @@ for f in crysk.yml pr-hero.yml; do
 done; exit 1
 ```
 
-Post a command as the first line of its comment. Text below it (a signature, a note) is ignored, and other
-words on the same line make it no command at all. An engine older than this rule reads a command only when it
-is the whole comment, so on a repository that has not updated, post the command alone.
+Post a command as the first line of its comment, with nothing before it: not a blank line, not a space. On a
+repository that runs Crysk from its own workflow, a comment that starts with anything else starts no run and
+gets no reaction. Text below the command (a signature, a note) is ignored, and other words on the same line
+make it no command at all. An engine older than this rule reads a command only when it is the whole comment,
+so on a repository that has not updated, post the command alone.
 
 ## The loop, end to end
 
