@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { runTriageReplyCommand, triageCommand } from "#commands/triage";
 import { findingMarker } from "#pr/preflight";
+import { renderStateBlock, stateFinding } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
 import { triageMarker } from "#triage/triage";
@@ -766,6 +767,109 @@ describe("runTriageReplyCommand — anchor.patch is the anchoring diff", () => {
         (error: unknown) => String(error),
       );
       expect(failure ?? "").not.toMatch(/diff\.patch/);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+// triage-without-skill S2: "estaría buenísimo que lo resuelva solo con el número de PR y el id del hallazgo".
+// Without --from the finding is read off the PR by its stable R### id (the one crysk status lists): the
+// summary's state block names it, the posted
+// finding comment carries its head, and the reply binds to that comment.
+describe("runTriageReplyCommand — without a run directory", () => {
+  function prScript(): ScriptEntry[] {
+    const summaryBody = [
+      `<!-- pr-hero-report head=${RUN_HEAD} -->`,
+      "",
+      renderStateBlock(
+        RUN_HEAD,
+        [
+          stateFinding({
+            id: "R001",
+            sev: "CRITICAL",
+            tier: "blocking",
+            channel: "inline",
+            locs: [`${F001_PATH}:144`],
+            claim: F001_CLAIM,
+          }),
+        ],
+        undefined,
+        1,
+      ),
+    ].join("\n");
+    const script = greptileCollisionScript();
+    script[0] = {
+      match: ["issues/42/comments", "--paginate"],
+      response: {
+        stdout: ndjson([{ id: 5, user: "pr-hero", body: summaryBody }]),
+      },
+    };
+    return script;
+  }
+
+  async function bodyOnly(): Promise<{
+    bodyFile: string;
+    cleanup: () => Promise<void>;
+  }> {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-pr-"));
+    const bodyFile = path.join(dir, "body.md");
+    await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+    return {
+      bodyFile,
+      cleanup: () => rm(dir, { recursive: true, force: true }),
+    };
+  }
+
+  test("binds R001 from the PR and writes the finding's head into the marker", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(prScript());
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const post = calls.find(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
+      );
+      expect(post?.argv.join(" ")).toContain("in_reply_to=22");
+      expect(post?.stdin).toContain(
+        `<!-- crysk-triage tag=applied head=${RUN_HEAD} actor=agent -->`,
+      );
+      expect(post?.stdin).toContain("Fixed by resetting the latch on unmount.");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("an id the PR does not carry is refused, naming the PR", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(prScript());
+      const error = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R009",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((error as Error).message).toContain(
+        "PR #42 has no posted finding R009",
+      );
+      expect(calls.some((call) => call.argv.includes("--method"))).toBe(false);
     } finally {
       await cleanup();
     }

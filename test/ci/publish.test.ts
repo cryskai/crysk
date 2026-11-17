@@ -3294,7 +3294,7 @@ describe("runPublish — the override (S8)", () => {
     expect(body).toContain("The `crysk` status on that head is now success");
     expect(body).not.toContain("pr-hero`");
     expect(body).toContain(
-      "A new push or a later `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) on this head replaces it",
+      "A new push or a later `/crysk review` on this head replaces it",
     );
     expect(run.stdout).toContain("::notice title=crysk::");
     expect(run.stdout).not.toContain("CRYSK-INSTALL-FAILED");

@@ -2,6 +2,7 @@ import { liveBlockingFindings } from "#pr/pr-status";
 import { parseFindingMarker } from "#pr/preflight";
 import { TIER_UNRECOVERABLE } from "#rereview/classify";
 import { CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
+import { withPlainAppliedReplies } from "#triage/plain-reply";
 import { parseTriageMarker } from "#triage/triage";
 import { parsePrCommentMarker } from "#watch/preflight";
 
@@ -35,12 +36,15 @@ function isTriageReply(body: string): boolean {
   return parseTriageMarker(body) !== null;
 }
 
-// The logins whose permission the gate must look up: every author of a triage reply.
+// The logins whose permission the gate must look up: every author of a triage reply, a plain `applied`
+// reply to a finding included (triage/plain-reply.ts).
 export function triageReplyAuthors(
-  comments: readonly AnswerIssueComment[],
+  comments: readonly (AnswerIssueComment & {
+    in_reply_to_id?: number | null;
+  })[],
 ): string[] {
   const authors = new Set<string>();
-  for (const comment of comments) {
+  for (const comment of withPlainAppliedReplies(comments)) {
     if (isTriageReply(comment.body)) authors.add(comment.user);
   }
   return [...authors];
@@ -137,7 +141,7 @@ export function answeredBlockingFindings(input: {
     verdictAt,
   );
   const reviewComments = trustedComments(
-    input.reviewComments,
+    withPlainAppliedReplies(input.reviewComments),
     input.writers,
     input.trustedActors,
     input.reviewedHead,

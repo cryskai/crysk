@@ -84,7 +84,7 @@ describe("gh rail: the sandbox repo is the only target", () => {
         "-R",
         SANDBOX_REPO,
         "--body",
-        "/pr-hero review",
+        "/crysk review",
       ]),
     ).not.toThrow();
     expect(() =>

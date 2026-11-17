@@ -1191,10 +1191,6 @@ const ENGINE_DEFECT_ISSUE =
   'gh issue create -R cryskai/crysk --title "CRYSK-ENGINE-DEFECT {detail}" --body "{runUrl}"';
 const RERUN_FAILED = "$ gh run rerun {runId} --failed";
 const REVIEW_AGAIN = '$ gh pr comment {pr} --body "/crysk review"';
-// A workflow set up before the rename filters only `/pr-hero`, and the
-// floating action tag still delivers this text to it.
-const LEGACY_REVIEW_NOTE =
-  "On a workflow set up before the rename, comment `/pr-hero review` instead.";
 // The OpenCode secrets (S8): one per provider, <PROVIDER> being the provider id
 // uppercased with `-` and `.` as `_` (opencodeSecretToken in crysk-secrets.ts,
 // which this module cannot import: see the builtins-only guard).
@@ -1390,11 +1386,7 @@ function single(
 
 const PROVIDER_LIMITED: CatalogVariant = {
   why: "the provider has throttled this account or key, so an immediate retry would fail the same way",
-  fixes: [
-    "Wait, or raise the quota, then ask for a new review:",
-    REVIEW_AGAIN,
-    LEGACY_REVIEW_NOTE,
-  ],
+  fixes: ["Wait, or raise the quota, then ask for a new review:", REVIEW_AGAIN],
   annotationFix: `wait for the limit to reset or raise the quota, then comment ${commandHint("/crysk review", "")} on the PR`,
 };
 
@@ -1535,7 +1527,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Or run on the subscription: set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order).",
           "Then ask for a new review:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
           "create a new key and run `gh secret set {secret}`, or set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order)",
@@ -1546,7 +1537,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "$ claude setup-token && gh secret set {secret}",
           "Then ask for a new review:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
           "log in again with `claude setup-token` and set `{secret}` (`gh secret set {secret}`)",
@@ -1560,7 +1550,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "$ gh secret set {secret}",
           "Then ask for a new review:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
           "create a new key with the provider and run `gh secret set {secret}`",
@@ -1575,7 +1564,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
           "Then ask for a new review:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
           "log in again with `opencode auth login`, choose ChatGPT and set {secret} from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} to bill per token",
@@ -1590,7 +1578,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           OPENCODE_API_KEY_SECRET,
           "Then ask for a new review:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
           "replace the credential in {secret} with a new one, then run `gh secret set {secret}`",
@@ -1866,7 +1853,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Add credit to the Anthropic account behind the API key (Claude Console → Plans & Billing), or run on the subscription: set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order).",
           "Then ask for a new review:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
           "add credit to the Anthropic account behind the API key (Claude Console → Plans & Billing), or set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order)",
@@ -1879,7 +1865,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         fixes: [
           "Re-run after the limit resets (the reset time is in the sentence above):",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
           "Or bill per token: set CRYSK_CLAUDE_API_KEY and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):",
           "$ gh secret set CRYSK_CLAUDE_API_KEY",
         ],
@@ -1894,7 +1879,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         fixes: [
           "Wait for the limit to reset, or add credit or raise the quota on the provider account behind the key, then ask for a new review:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
           "Or set a key from an account that has quota:",
           "$ gh secret set {secret}",
         ],
@@ -1907,7 +1891,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         fixes: [
           "Re-run after the limit resets:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
           OPENAI_API_KEY_INSTEAD,
           "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
         ],
@@ -1932,12 +1915,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "the request was refused",
     variants: single(
       PROVIDER_REFUSED_WHY,
-      [
-        "Ask for a new review once:",
-        REVIEW_AGAIN,
-        LEGACY_REVIEW_NOTE,
-        "If it repeats, report it.",
-      ],
+      ["Ask for a new review once:", REVIEW_AGAIN, "If it repeats, report it."],
       "ask for a new review once, and report it if the provider refuses again",
     ),
   },
@@ -1976,7 +1954,6 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         fixes: [
           "Lower `max-changed-lines` in the workflow's `with:` block (or `max_changed_lines` in the repo config), or exclude paths in `.cryskignore` (`.prheroignore` in a repo set up before the rename), then ask for a new review:",
           REVIEW_AGAIN,
-          LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
           "lower `max-changed-lines` (or `max_changed_lines` in the repo config) or exclude paths in `.cryskignore` (`.prheroignore` before the rename)",
@@ -2009,12 +1986,8 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "The review was cancelled or superseded by a newer push",
     variants: single(
       "a newer run replaces this one, so this result would describe an outdated head",
-      [
-        "Ask for a review of the current head:",
-        REVIEW_AGAIN,
-        LEGACY_REVIEW_NOTE,
-      ],
-      'ask for a review of the current head with `gh pr comment {pr} --body "/crysk review"` (or "/pr-hero review" on a workflow set up before the rename)',
+      ["Ask for a review of the current head:", REVIEW_AGAIN],
+      'ask for a review of the current head with `gh pr comment {pr} --body "/crysk review"`',
     ),
   },
 };

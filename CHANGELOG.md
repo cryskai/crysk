@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plain `applied` reply now counts.** After the automatic reviews end, a carried red turns `pending` when
+  every blocking finding is answered by someone with write access. Until now only a reply written by
+  `crysk triage reply` (with its hidden marker) counted, so a team without the crysk-loop skill that answered
+  `applied` by hand stayed red with `N blocking carried`. A reply in the finding's thread whose text starts
+  with `applied` (any case) now counts as the same answer, at the head the finding was posted on; `crysk status`
+  and the re-review read it the same way. `dismissed`, `deferred` and `misclassified` still need
+  `crysk triage reply`, because they carry the adjudicator's verdict. The gate's comment says so.
+  **What to check:** a reply that starts with `applied` from someone with write access now answers its finding;
+  write anything else first (for example `not applied yet`) when the fix has not landed.
+- **`crysk triage reply` works with only the PR number and the finding id.** `--from <run-dir>` is now
+  optional. Without it, `--finding` takes the finding's stable `R###` id (the `id` that
+  `crysk status --pr <n> --json` lists) and the driver reads the finding and its head off the pull
+  request, so an agent in the cloud no longer downloads the review's run artifact first. With `--from`,
+  `--finding` still takes the run's `F###` id, as before. An id the PR does not carry is refused with
+  `PR #<n> has no posted finding <id>`. `crysk post` still requires `--from`.
+  **What to check:** nothing for an existing call; a call without `--from` must pass an `R###` id.
+- **The shipped skills pin the crysk version.** Every `npx -y crysk` call in the crysk, crysk-loop, crysk-pr
+  and crysk-ci-setup skills now names the release it ships with (`npx -y crysk@0.7.0`), and each release
+  bumps it. A skills scanner flagged the unpinned call as a critical risk, because npx runs whatever version
+  is published next. **What to check:** reinstall the skills (`npx -y crysk skills install`) to get the
+  pinned calls; a copy you edited keeps your version.
+
 ### Removed
+
+- **The `/pr-hero` comment commands.** Only `/crysk review`, `/crysk review --full`, `/crysk recheck`,
+  `/crysk override` and `/crysk stop` start or steer a run now. A comment that starts with `/pr-hero` is
+  ignored like any other comment, the scaffolded workflow no longer lists the `/pr-hero` forms, and every
+  hint, commit status and skip comment names only the `/crysk` form (the status used to say
+  `/pr-hero override` while the comment said `/crysk override`).
+  **What to check:** (1) comment `/crysk …` instead of `/pr-hero …`; (2) a workflow set up before the rename
+  filters only `/pr-hero` in its `if:` and so starts on no command at all: re-scaffold it with
+  `npx -y crysk ci init --force` (it rewrites `pr-hero.yml` in place; without `--force` an existing file is
+  left alone).
 
 - **The scout stage** (#545). The diff-only pre-hunter stage never earned its place and was off by default,
   so no review changes unless it asked for it. `--scout`, `--no-scout`, `--scout-model <model>`, the `scout`

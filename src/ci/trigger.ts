@@ -3,7 +3,7 @@
 //
 // The consumer workflow calls the action on `pull_request` and
 // `issue_comment`, and its job `if:` already drops fork pull requests and
-// comments that do not start with `/crysk review` (or `/pr-hero review`). This module decides it
+// comments that do not start with `/crysk review`. This module decides it
 // all again anyway. A workflow is a file the consumer owns and edits, so a
 // prefix filter there is a cost saving, never the security boundary: the
 // command match, the commenter's permission and the credential check all
@@ -47,8 +47,7 @@ import {
   parseCryskSecrets,
 } from "./crysk-secrets";
 
-// Commands are written in the new `/crysk` form. The matchers in ../brand
-// also accept the legacy `/pr-hero` spelling for one version.
+// Commands are written in the `/crysk` form, the only one the matchers in ../brand accept.
 export const REVIEW_COMMAND = "/crysk review";
 export const REVIEW_FULL_COMMAND = "/crysk review --full";
 // The review, plus the CI adjudicator's rulings on pending dismissals (docs/github-actions.md,
@@ -257,8 +256,7 @@ export function parseReviewCommand(
 
 // A comment that asks for something. Both kinds are permission-gated, so the
 // comment kind (and not the command) decides whether the lookup runs.
-// `text` is what the commenter typed (trimmed), so a message that names the
-// command echoes the spelling they used, `/crysk` or the legacy `/pr-hero`.
+// `text` is what the commenter typed (trimmed).
 type CommentCommand =
   | { kind: "review"; full: boolean; adjudicate: boolean; text: string }
   | { kind: "override"; text: string };

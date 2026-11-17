@@ -414,7 +414,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: {
         state: "failure",
         description:
-          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+          "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override",
       },
     }),
   },
@@ -423,7 +423,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: {
         state: "failure",
         description:
-          "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+          "pr-hero skipped the review: diff over the size gate. /crysk review reviews it anyway",
       },
       comments: [{ source: "issue", kind: "skip", skip: "size" }],
       artifacts: [],
@@ -574,7 +574,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: {
         state: "failure",
         description:
-          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+          "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override",
       },
       comments: [
         { source: "issue", kind: "report", head: NEW },
@@ -628,7 +628,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: {
         state: "failure",
         description:
-          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+          "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override",
       },
       comments: [{ source: "issue", kind: "report", head: NEW }],
     }),
@@ -701,7 +701,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: {
         state: "failure",
         description:
-          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+          "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override",
       },
       comments: [
         {
@@ -736,7 +736,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: {
         state: "failure",
         description:
-          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+          "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override",
       },
       comments: [
         {
@@ -792,7 +792,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: {
         state: "failure",
         description:
-          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+          "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override",
       },
       comments: [
         { source: "issue", kind: "report", head: NEW },
@@ -1098,7 +1098,7 @@ describe("status-matches-findings: the status agrees with the blocking findings 
   const OUTSIDE_BLOCKING =
     "🔴 blocking · BLOCKER · introduced · reliability\n`src/app.ts:10` — run()\n\nThe claim.";
   const COUNTS_ONE =
-    "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override";
+    "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override";
 
   function reportWithOutside(entry: string): string {
     return `<!-- pr-hero-report head=${NEW} -->\n\n# pr-hero review\n\n### Comments Outside Diff (1)\n\n${entry}\n\n---\n\n<sub>footer</sub>`;
@@ -1132,11 +1132,11 @@ describe("status-matches-findings: the status agrees with the blocking findings 
 
   test("no blocking finding and a partial-review failure pass, finished or carried", () => {
     for (const description of [
-      "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
-      "pr-hero: review partial (1 of 4 hunters failed) carried from abc1234 — /pr-hero review retries it",
-      "pr-hero: review partial (1 of 4 hunters failed, set 3fa9c1) — /pr-hero review retries it",
-      "pr-hero: review partial (1 of 4 hunters failed, set 3fa9c1) carried from abc1234 — /pr-hero review retries it",
-      "pr-hero: review partial again (1 of 4 hunters failed, set 3fa9c1) — fix the failing route or /pr-hero override",
+      "pr-hero: review partial (1 of 4 hunters failed) — /crysk review retries it",
+      "pr-hero: review partial (1 of 4 hunters failed) carried from abc1234 — /crysk review retries it",
+      "pr-hero: review partial (1 of 4 hunters failed, set 3fa9c1) — /crysk review retries it",
+      "pr-hero: review partial (1 of 4 hunters failed, set 3fa9c1) carried from abc1234 — /crysk review retries it",
+      "pr-hero: review partial again (1 of 4 hunters failed, set 3fa9c1) — fix the failing route or /crysk override",
     ]) {
       const result = evaluateCheck(
         check,
@@ -1154,7 +1154,7 @@ describe("status-matches-findings: the status agrees with the blocking findings 
       withFindings(
         [],
         "failure",
-        "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override",
+        "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /crysk override",
       ),
     );
     expect(result.pass).toBe(true);
@@ -1167,7 +1167,7 @@ describe("status-matches-findings: the status agrees with the blocking findings 
       withFindings(
         [BLOCKING],
         "failure",
-        "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+        "pr-hero: review partial (1 of 4 hunters failed) — /crysk review retries it",
       ),
     );
     expect(result.pass).toBe(false);

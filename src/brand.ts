@@ -74,22 +74,18 @@ export function findMarker(
   return best;
 }
 
-// PR comment commands. Every command constant is written in the new form
-// (`/crysk review`); the legacy `/pr-hero` form is derived from it here, so
-// a maintainer's muscle memory and old docs keep working for one version.
+// PR comment commands. Only the `/crysk` form is a command: the legacy `/pr-hero` spelling is no longer
+// accepted (2026-11-17), because nobody can tell whether a workflow set up before the rename is still
+// out there, and keeping both forms meant every hint and status had to name the old one.
 const COMMAND_PREFIX = "/crysk";
-const LEGACY_COMMAND_PREFIX = "/pr-hero";
 
-// Both written forms of a command, new name first. The workflow template
-// lists each one, because an Actions expression cannot match a pattern.
+// The written forms of a command. One today; the workflow template lists each form, because an Actions
+// expression cannot match a pattern.
 export function commandForms(command: string): string[] {
   if (!command.startsWith(`${COMMAND_PREFIX} `)) {
     throw new Error(`not a crysk command: ${JSON.stringify(command)}`);
   }
-  return [
-    command,
-    LEGACY_COMMAND_PREFIX + command.slice(COMMAND_PREFIX.length),
-  ];
+  return [command];
 }
 
 // Exact match after trimming, and nothing else: no case folding, no inner
@@ -100,28 +96,16 @@ export function isCommand(text: string, command: string): boolean {
   return commandForms(command).includes(trimmed);
 }
 
-// For near-miss detection: the text begins like the command, in either name.
+// For near-miss detection: the text begins like the command.
 export function startsWithCommand(text: string, command: string): boolean {
   const trimmed = text.trim();
   return commandForms(command).some((form) => trimmed.startsWith(form));
 }
 
-// The legacy spelling of a command. Every workflow accepts it during the
-// rename, including one set up before it, which filters only `/pr-hero`, so it
-// is the one to name where there is room for a single spelling.
-export function legacyCommand(command: string): string {
-  return commandForms(command)[1] as string;
-}
-
-// Both spellings for a hint a person or an agent will act on. A workflow set
-// up before the rename ignores `/crysk`, and floating action tags deliver the
-// new hints to it, so a hint naming only `/crysk` would send the reader to a
-// command that starts nothing.
+// A command as a hint a person or an agent will act on.
 export function commandHint(command: string, quote = "`"): string {
-  return (
-    `${quote}${command}${quote} (or ${quote}${legacyCommand(command)}${quote} ` +
-    "on a workflow set up before the rename)"
-  );
+  commandForms(command);
+  return `${quote}${command}${quote}`;
 }
 
 // Commit status contexts. Every status is written on the crysk name only (#457
@@ -171,11 +155,17 @@ export function isLegacyStatusContext(context: string): boolean {
 // `pr-hero` instead. A reader rewrites a legacy lead into the new one and then
 // matches against the text this version writes, so one pattern serves both. Only a
 // lead followed by `:` or a space is the brand: `pr-heroic` is not.
+// The command a status names is rewritten the same way: a status an earlier release wrote ends in
+// `/pr-hero override` or `/pr-hero review`, and the readers that rebuild a verdict's text to
+// recognise it (pr/admission.ts) must still recognise that verdict, or the carry walk passes over it.
+const LEGACY_STATUS_COMMAND = /\/pr-hero (review|recheck|override|stop)\b/g;
+
 export function canonicalStatusText(text: string): string {
-  if (!text.startsWith(LEGACY_STATUS_CONTEXT)) return text;
-  const next = text.charAt(LEGACY_STATUS_CONTEXT.length);
-  if (next !== ":" && next !== " ") return text;
-  return STATUS_CONTEXT + text.slice(LEGACY_STATUS_CONTEXT.length);
+  const commands = text.replace(LEGACY_STATUS_COMMAND, "/crysk $1");
+  if (!commands.startsWith(LEGACY_STATUS_CONTEXT)) return commands;
+  const next = commands.charAt(LEGACY_STATUS_CONTEXT.length);
+  if (next !== ":" && next !== " ") return commands;
+  return STATUS_CONTEXT + commands.slice(LEGACY_STATUS_CONTEXT.length);
 }
 
 // The bundled agent skills, by role, in sync order. The role key joins a skill

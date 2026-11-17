@@ -735,7 +735,7 @@ async function perform(
   }
   if (action.kind === "dismiss-and-recheck") {
     await dismissBlockingFinding(deps, live, action.argument);
-    await postComment(deps, live, "/pr-hero recheck");
+    await postComment(deps, live, "/crysk recheck");
     return;
   }
   if (action.kind === "rerun-first") {

@@ -1501,7 +1501,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
             context: "pr-hero",
             created_at: T1,
             description:
-              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+              "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
           },
         ]),
       ),
@@ -1516,7 +1516,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes[0]).toContain("context=crysk");
     expect(legacyStatusWrites(calls)).toEqual([]);
     expect(writes[0]).toContain(
-      "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+      "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /crysk override",
     );
   });
 
@@ -1529,7 +1529,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
         context: "pr-hero",
         created_at: T1,
         description:
-          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
       },
     ]);
     const findingComment = (id: number, line: number, claim: string) => ({
@@ -1602,7 +1602,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
       expect(writes).toHaveLength(1);
       expect(writes[0]).toContain("state=failure");
       expect(writes[0]).toContain(
-        "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+        "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /crysk override",
       );
     });
 
@@ -1646,7 +1646,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
     expect(writes[0]).toContain("state=failure");
     expect(writes[0]).toContain(
-      "description=crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+      "description=crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /crysk review reviews it",
     );
   });
 
@@ -1674,7 +1674,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
             context: "pr-hero",
             created_at: T1,
             description:
-              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+              "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
           },
         ]),
         FORGED,
@@ -1692,7 +1692,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain("state=failure");
     expect(writes[0]).toContain(
-      "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+      "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /crysk override",
     );
   });
 
@@ -1718,7 +1718,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
             context: "pr-hero",
             created_at: T1,
             description:
-              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+              "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
           },
         ]),
         HEAD_A,
@@ -1741,7 +1741,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
             context: "pr-hero",
             created_at: T1,
             description:
-              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+              "pr-hero: 2 blocking finding(s) — fix and push, or /crysk override",
           },
         ]),
       ),
@@ -1895,7 +1895,7 @@ describe("recordCiConfigErrorSkip — a created reservation is always settled", 
   });
 });
 
-describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
+describe("evaluateCiAdmissionGate — /crysk stop", () => {
   // The prior review left 3 blocking findings (score 6, above the default
   // re-review floor of 4) and a code delta, so without a stop this head runs.
   const priorSummary = summaryComment(
@@ -1966,7 +1966,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
   }
 
   const STOP_REASON =
-    "a maintainer stopped automatic reviews; /pr-hero review reviews this head";
+    "a maintainer stopped automatic reviews; /crysk review reviews this head";
 
   test("without a stop, this head runs (the baseline every case below changes)", async () => {
     const result = await runGate([priorSummary], []);
@@ -1976,7 +1976,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
 
   test("a stop from a write-access maintainer skips the review and records why", async () => {
     const result = await runGate(
-      [priorSummary, comment(2, "maint", "/pr-hero stop")],
+      [priorSummary, comment(2, "maint", "/crysk stop")],
       [permission("maint", { stdout: "write\n" })],
     );
     expect(result.exitCode).toBe(0);
@@ -2015,7 +2015,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
 
   test("an admin's stop counts too", async () => {
     const result = await runGate(
-      [priorSummary, comment(2, "owner", "/pr-hero stop")],
+      [priorSummary, comment(2, "owner", "/crysk stop")],
       [permission("owner", { stdout: "admin\n" })],
     );
     expect(result.recorded).toEqual([STOP_REASON]);
@@ -2023,7 +2023,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
 
   test("a stop from a read-only user does not count, so the review runs", async () => {
     const result = await runGate(
-      [priorSummary, comment(2, "visitor", "/pr-hero stop")],
+      [priorSummary, comment(2, "visitor", "/crysk stop")],
       [permission("visitor", { stdout: "read\n" })],
     );
     expect(result.exitCode).toBeUndefined();
@@ -2032,7 +2032,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
 
   test("a stop from a non-collaborator (404) does not count", async () => {
     const result = await runGate(
-      [priorSummary, comment(2, "stranger", "/pr-hero stop")],
+      [priorSummary, comment(2, "stranger", "/crysk stop")],
       [permission("stranger", { stderr: "HTTP 404: Not Found", exitCode: 1 })],
     );
     expect(result.exitCode).toBeUndefined();
@@ -2043,7 +2043,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const sleeps: number[] = [];
     const calls: string[][] = [];
     const result = await runGate(
-      [priorSummary, comment(2, "maint", "/pr-hero stop")],
+      [priorSummary, comment(2, "maint", "/crysk stop")],
       [permission("maint", { stderr: "HTTP 502: Bad Gateway", exitCode: 1 })],
       EMPTY_LOCAL_CONFIG,
       calls,
@@ -2063,7 +2063,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
       {
         match: ["issues", "comments"],
         response: {
-          stdout: `${[priorSummary, comment(2, "maint", "/pr-hero stop")].map((c) => JSON.stringify(c)).join("\n")}\n`,
+          stdout: `${[priorSummary, comment(2, "maint", "/crysk stop")].map((c) => JSON.stringify(c)).join("\n")}\n`,
         },
       },
       EMPTY_REVIEW_COMMENTS,
@@ -2111,8 +2111,8 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const result = await runGate(
       [
         priorSummary,
-        comment(2, "maint", "/pr-hero stop"),
-        comment(3, "stranger", "/pr-hero stop"),
+        comment(2, "maint", "/crysk stop"),
+        comment(3, "stranger", "/crysk stop"),
       ],
       [
         permission("stranger", { stdout: "read\n" }),
@@ -2126,8 +2126,8 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const result = await runGate(
       [
         priorSummary,
-        comment(2, "maint", "/pr-hero stop"),
-        comment(3, "maint", "/pr-hero review"),
+        comment(2, "maint", "/crysk stop"),
+        comment(3, "maint", "/crysk review"),
       ],
       [permission("maint", { stdout: "write\n" })],
     );
@@ -2139,8 +2139,8 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const result = await runGate(
       [
         priorSummary,
-        comment(2, "maint", "/pr-hero stop"),
-        comment(3, "visitor", "/pr-hero review"),
+        comment(2, "maint", "/crysk stop"),
+        comment(3, "visitor", "/crysk review"),
       ],
       [
         permission("visitor", { stdout: "read\n" }),
@@ -2154,8 +2154,8 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const result = await runGate(
       [
         priorSummary,
-        comment(2, "maint", "/pr-hero stop"),
-        comment(3, "someone", "/pr-hero review"),
+        comment(2, "maint", "/crysk stop"),
+        comment(3, "someone", "/crysk review"),
       ],
       [
         permission("someone", { stderr: "HTTP 502", exitCode: 1 }),
@@ -2170,8 +2170,8 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const result = await runGate(
       [
         priorSummary,
-        comment(2, "visitor", "/pr-hero review"),
-        comment(3, "maint", "/pr-hero recheck"),
+        comment(2, "visitor", "/crysk review"),
+        comment(3, "maint", "/crysk recheck"),
       ],
       [],
       EMPTY_LOCAL_CONFIG,
@@ -2187,8 +2187,8 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const result = await runGate(
       [
         priorSummary,
-        comment(2, "maint", "/pr-hero stop"),
-        comment(3, "maint", "/pr-hero recheck"),
+        comment(2, "maint", "/crysk stop"),
+        comment(3, "maint", "/crysk recheck"),
       ],
       [permission("maint", { stdout: "write\n" })],
     );
@@ -2199,17 +2199,17 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const result = await runGate(
       [
         priorSummary,
-        comment(2, "maint", "/pr-hero review"),
-        comment(3, "maint", "/pr-hero stop"),
+        comment(2, "maint", "/crysk review"),
+        comment(3, "maint", "/crysk stop"),
       ],
       [permission("maint", { stdout: "write\n" })],
     );
     expect(result.recorded).toEqual([STOP_REASON]);
   });
 
-  test("only the exact command stops: '/pr-hero stop please' does not", async () => {
+  test("only the exact command stops: '/crysk stop please' does not", async () => {
     const result = await runGate(
-      [priorSummary, comment(2, "maint", "/pr-hero stop please")],
+      [priorSummary, comment(2, "maint", "/crysk stop please")],
       [permission("maint", { stdout: "write\n" })],
     );
     expect(result.exitCode).toBeUndefined();
@@ -2219,7 +2219,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     const result = await runGate(
       [
         summaryComment(1, HEAD_A, { blocking: 3, advisory: 0 }, 2),
-        comment(2, "maint", "/pr-hero stop"),
+        comment(2, "maint", "/crysk stop"),
       ],
       [permission("maint", { stdout: "write\n" })],
     );
@@ -2229,7 +2229,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
 
   test("observe-only mode still honours a stop", async () => {
     const result = await runGate(
-      [priorSummary, comment(2, "maint", "/pr-hero stop")],
+      [priorSummary, comment(2, "maint", "/crysk stop")],
       [permission("maint", { stdout: "write\n" })],
       { ...EMPTY_LOCAL_CONFIG, ci_admission_observe_only: true },
     );

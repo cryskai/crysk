@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { claimFingerprint } from "#pr/preflight";
+import { claimFingerprint, findingMarker } from "#pr/preflight";
 import {
   classifyPrior,
   type PhaseBContext,
@@ -370,5 +370,46 @@ describe("assembleLive — ci-dismissed", () => {
     expect(assembled.live).toHaveLength(1);
     expect(assembled.live[0]?.status).toBe("suppressed");
     expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(0);
+  });
+});
+
+// triage-without-skill S1: a plain `applied` reply in the finding's thread is the triage it implies.
+describe("enrichPriorsFromThreads — plain applied reply", () => {
+  const findingComment = {
+    id: FINDING,
+    user: CI_ADJUDICATOR_LOGIN,
+    in_reply_to_id: null,
+    body: `${findingMarker({ path: "src/app.ts", line: 10, headSha: HEAD, claim })}\n\n${claim}`,
+  };
+
+  test("reads as applied, with the plain text as the argument", () => {
+    const [out] = enrich([
+      findingComment,
+      {
+        id: 13,
+        user: "author",
+        in_reply_to_id: FINDING,
+        body: "Applied — the guard now returns early.",
+        created_at: "2026-08-21T12:10:00Z",
+      },
+    ]);
+    expect(out?.triage?.tag).toBe("applied");
+    expect(out?.triage?.replyId).toBe(13);
+    expect(out?.triage?.argument).toBe(
+      "Applied — the guard now returns early.",
+    );
+  });
+
+  test("a plain comment that does not start with applied is no triage", () => {
+    const [out] = enrich([
+      findingComment,
+      {
+        id: 13,
+        user: "author",
+        in_reply_to_id: FINDING,
+        body: "why is this blocking?",
+      },
+    ]);
+    expect(out?.triage ?? null).toBeNull();
   });
 });
