@@ -1,6 +1,6 @@
 {
   "name": "crysk",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": false,
   "license": "Apache-2.0",
   "repository": {
@@ -64,6 +64,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "bun build src/cli.ts src/index.ts --target=bun --outdir=dist",
+    "prepack": "rm -rf dist && bun run build",
     "review": "bun run src/cli.ts",
     "fixture-eval": "bun run scripts/fixture-eval.ts",
     "refuter-probe": "bun run scripts/refuter-probe.ts",

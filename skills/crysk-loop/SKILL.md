@@ -35,14 +35,14 @@ comment — almost always an inline review comment on Files changed.
 Every command below runs through `npx`, so nothing has to be installed on the machine first:
 
 ```bash
-npx -y crysk@0.8.0 <command> ...
+npx -y crysk@0.8.1 <command> ...
 ```
 
 `npx` needs only Node. Crysk's package brings its own Bun runtime, and when that is
 unavailable it uses a `bun` already on PATH. `-y` skips npx's install prompt, which an agent
 cannot answer. If `crysk` is already on PATH (a global install), `crysk <command>` is the
 same command. Do not install Crysk just to triage a PR. To put these skills into another coding
-agent on the machine, run `npx -y crysk@0.8.0 skills install` (non-interactive; `--force` overwrites local edits).
+agent on the machine, run `npx -y crysk@0.8.1 skills install` (non-interactive; `--force` overwrites local edits).
 
 You also need `gh`, authenticated as a user with write access to the repository: the driver posts
 through it, and you comment `/crysk recheck` and `/crysk review` through it.
@@ -131,7 +131,7 @@ The opposite happens when a repository's workflow policy (`once_per_pr`, `thresh
 
 Whenever `report.head !== head`, inspect `git diff <report.head>..<head>`:
 - If that unreviewed delta introduced **new business logic, state-machine or concurrency changes, auth/security/isolation edits, or a non-trivial refactor** (for example, fixing a finding required redesigning a function rather than adding a guard), an extra review **is** justified:
-  - When `next_action` is `"review"` or `"override-or-fix"` (and within the forced-run bound below), trigger `gh pr comment <n> --body "/crysk review"` and subscribe with `npx -y crysk@0.8.0 status --pr <n> --wait --json` — or, if `next_action` is `"done"` on a carried green status (or the forced-run bound is reached), explicitly **recommend running `/crysk review`** to the user and name the exact files/changes in `report.head..head` that warrant a fresh pass before merging.
+  - When `next_action` is `"review"` or `"override-or-fix"` (and within the forced-run bound below), trigger `gh pr comment <n> --body "/crysk review"` and subscribe with `npx -y crysk@0.8.1 status --pr <n> --wait --json` — or, if `next_action` is `"done"` on a carried green status (or the forced-run bound is reached), explicitly **recommend running `/crysk review`** to the user and name the exact files/changes in `report.head..head` that warrant a fresh pass before merging.
 
 ### C. Suspecting a flawed integration or design (stop patching, rethink the root cause)
 
@@ -153,7 +153,7 @@ Post the `/crysk` form: `/crysk review`, `/crysk recheck`, `/crysk override`, `/
 legacy `/pr-hero …` spelling is no longer a command, and a comment that uses it starts nothing. A
 workflow set up before the rename (`pr-hero.yml`) may still filter only `/pr-hero` in its `if:`, so a
 `/crysk` comment starts nothing there either: check the workflow once per PR, and when it lacks
-`'/crysk review'`, tell the maintainer to re-scaffold it with `npx -y crysk@0.8.0 ci init --force`
+`'/crysk review'`, tell the maintainer to re-scaffold it with `npx -y crysk@0.8.1 ci init --force`
 instead of posting any command.
 
 ```bash
@@ -169,7 +169,7 @@ done; exit 1
 0. **Subscribe to and read the PR's settled state.** Run:
 
    ```bash
-   npx -y crysk@0.8.0 status --pr <n> --wait --json
+   npx -y crysk@0.8.1 status --pr <n> --wait --json
    ```
 
    It is read-only (reads GitHub through `gh`, writes nothing) and **deterministic**:
@@ -254,7 +254,7 @@ current head:
    file and run:
 
    ```bash
-   npx -y crysk@0.8.0 triage reply --pr <n> --from <run-dir> --finding F00N \
+   npx -y crysk@0.8.1 triage reply --pr <n> --from <run-dir> --finding F00N \
      --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
    ```
 
@@ -274,13 +274,13 @@ current head:
    `--verdict` from the adjudicator. `--issue` is optional and only valid
    with `--tag deferred`.
 6. **Advance the loop in one batch once all findings on this head are answered:**
-   - **If you made clean code fixes (`applied` or unthreaded blocking fixes):** if you decided this push needs no further review ("Stopping diminishing returns", rule 4), post `/crysk stop` before pushing, and after the push do **not** wait for a re-review: none will run. Report that the fixes are pushed and the PR is ready to merge: the gate carries the last verdict, and every blocking finding you answered before the push turns a carried red green, marked `fixes unverified`. Only a finding left `deferred` or `misclassified` still needs a maintainer's `/crysk override`. Otherwise, commit and `git push` all fixes in a single push, then immediately run `npx -y crysk@0.8.0 status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/crysk recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
-   - **If no code changes were needed:** run `npx -y crysk@0.8.0 status --pr <n> --wait --json` and execute its `next_action` (`recheck` when blocking findings were `dismissed`, or `done` when the gate is already green).
+   - **If you made clean code fixes (`applied` or unthreaded blocking fixes):** if you decided this push needs no further review ("Stopping diminishing returns", rule 4), post `/crysk stop` before pushing, and after the push do **not** wait for a re-review: none will run. Report that the fixes are pushed and the PR is ready to merge: the gate carries the last verdict, and every blocking finding you answered before the push turns a carried red green, marked `fixes unverified`. Only a finding left `deferred` or `misclassified` still needs a maintainer's `/crysk override`. Otherwise, commit and `git push` all fixes in a single push, then immediately run `npx -y crysk@0.8.1 status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/crysk recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
+   - **If no code changes were needed:** run `npx -y crysk@0.8.1 status --pr <n> --wait --json` and execute its `next_action` (`recheck` when blocking findings were `dismissed`, or `done` when the gate is already green).
 
    *(Note: The MCP server is strictly read-only for querying runs, findings, and
    past triage records via `crysk_get_triage` and `crysk_get_findings`. All
    mutations — posting comments, resolving threads, and updating the database —
-   must be performed via `npx -y crysk@0.8.0 triage reply`.)*
+   must be performed via `npx -y crysk@0.8.1 triage reply`.)*
 
    **Greptile re-review:** Greptile updates its existing PR comment in place —
    it does not post a second one. Do not wait for a new Greptile comment to
@@ -296,13 +296,13 @@ adjudicator. When step 0 says `recheck`:
    blocking finding whose newest reply is `dismissed` (at most 5 per run), an adjudicator in CI that
    reads your argument and the repository at that head. You may comment it yourself: you only supply
    the argument, the CI adjudicator rules. (`/crysk override` is the opposite: never yours to post.)
-2. Wait with `npx -y crysk@0.8.0 status --pr <n> --wait --json` until the run settles. Each ruling is a reply on the finding's thread,
+2. Wait with `npx -y crysk@0.8.1 status --pr <n> --wait --json` until the run settles. Each ruling is a reply on the finding's thread,
    from `github-actions[bot]` (the Crysk App's bot on a platform-managed repository), whose first line is
    `<!-- crysk-adjudication verdict=<v> reply=<your reply's id> head=<sha> -->`. Step 0's
    `ci_verdict` reads it for you.
 3. Act on the verdict:
    - `upheld`: the dismissal stands. The recheck run itself does not change its own count; step 0
-     now says `review`. Comment `/crysk review`, then run `npx -y crysk@0.8.0 status --pr <n> --wait --json`, and that review no longer counts the finding.
+     now says `review`. Comment `/crysk review`, then run `npx -y crysk@0.8.1 status --pr <n> --wait --json`, and that review no longer counts the finding.
    - `rejected`: the finding stands. Re-read the adjudicator's evidence. Fix it, or, if you still hold
      it is wrong, ask a human (they may override). Do not re-post the same argument.
    - `inconclusive`: the repository did not settle it either way. On the same head you cannot post
@@ -401,7 +401,7 @@ adjudicator that inherited your context would simply agree with itself.
 
 The adjudicator returns exactly one of `upheld`, `rejected`, or `inconclusive` — see
 `adjudicator.md` for what each means and the burden-of-proof rule behind them. Pass that
-exact word as `--verdict` on `npx -y crysk@0.8.0 triage reply` (and mention it in the reasoning
+exact word as `--verdict` on `npx -y crysk@0.8.1 triage reply` (and mention it in the reasoning
 prose). The driver writes it on the marker; the escalation rule reads it back from there.
 
 ## One adjudication per finding per HEAD
@@ -448,11 +448,11 @@ is the PR's stable `R###` id instead (below).
 
 **When the review ran in CI, that directory is not on your machine: leave `--from` out.** The
 driver then reads the finding off the pull request itself, and `--finding` is the finding's stable
-`R###` id: the `id` of the row in `npx -y crysk@0.8.0 status --pr <n> --json` (`findings[]`), which
+`R###` id: the `id` of the row in `npx -y crysk@0.8.1 status --pr <n> --json` (`findings[]`), which
 the summary comment shows too. Nothing has to be downloaded:
 
 ```bash
-npx -y crysk@0.8.0 triage reply --pr <n> --finding R00N \
+npx -y crysk@0.8.1 triage reply --pr <n> --finding R00N \
   --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
 ```
 
@@ -518,12 +518,12 @@ this PR. The engine typed it wrong, not the code.
   never does.
 - The adjudicator never sees your reasoning context — only the finding, your argument, and the
   repo.
-- Never call `gh` to post or resolve a triage reply. Run `npx -y crysk@0.8.0 triage reply`. (Commenting
+- Never call `gh` to post or resolve a triage reply. Run `npx -y crysk@0.8.1 triage reply`. (Commenting
   `/crysk recheck` or `/crysk review` with `gh pr comment` is not a triage reply, and is how you ask for them.)
   If that command posted the reply and then failed to resolve, re-run the
   **same** command — same-head skip retries resolve only. Do not `gh`.
 - Never triage a finding that only exists under `### Comments Outside Diff` in the
-  summary. It has no thread this slice (W2). If `npx -y crysk@0.8.0 triage reply` reports no
+  summary. It has no thread this slice (W2). If `npx -y crysk@0.8.1 triage reply` reports no
   matching marker, stop.
 - `dismissed`, `deferred`, and `misclassified` without `--verdict` are malformed. `applied` WITH
   `--verdict` is equally malformed.
