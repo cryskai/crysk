@@ -110,8 +110,9 @@ export type ModelRoleBilling = ReadonlyMap<string, boolean>;
 // The part of the estimate that runs on an API key (S17): the platform's split
 // summed over the roles the run bills on one, plus every key the run cannot map
 // to one of its roles (an unknown role may bill, so it counts). Undefined means
-// there is no usable split, and the whole estimate is compared: no split sent,
-// the run's routes unresolved, or no role of the run billing an API key.
+// there is no usable split, and the whole estimate is compared: no split sent
+// or the run's routes unresolved (a run whose roles bill no API key never gets
+// here: evaluatePlatformLimits lets it run).
 // Rounded to the platform's 6 decimals so a sum of its parts sits on a limit
 // instead of a hair over it.
 function apiShareUsd(
@@ -120,12 +121,17 @@ function apiShareUsd(
 ): number | undefined {
   const split = limits.estimateByRoleUsd;
   if (split === undefined || roleBilling === undefined) return undefined;
-  if (![...roleBilling.values()].some(Boolean)) return undefined;
+  if (!hasApiBilledRole(roleBilling)) return undefined;
   let share = 0;
   for (const [role, usd] of Object.entries(split)) {
     if (roleBilling.get(role) !== false) share += usd;
   }
   return Math.round(share * 1e6) / 1e6;
+}
+
+// True when at least one resolved role bills an API key.
+function hasApiBilledRole(roleBilling: ModelRoleBilling): boolean {
+  return [...roleBilling.values()].some(Boolean);
 }
 
 // Inclusive boundary: an estimate exactly AT a limit passes, matching
@@ -148,6 +154,16 @@ export function evaluatePlatformLimits(input: {
 }): PlatformLimitsVerdict {
   const { limits } = input;
   if (input.billingMode !== "metered" || limits === undefined) {
+    return { allowed: true };
+  }
+  // Metered by the Claude env alone (an API key present) while no resolved role
+  // routes to it: the run bills no API spend, so it is never skipped (#551 R001).
+  // No role map (routes unresolved) keeps the conservative whole-estimate path.
+  if (
+    input.roleBilling !== undefined &&
+    input.roleBilling.size > 0 &&
+    !hasApiBilledRole(input.roleBilling)
+  ) {
     return { allowed: true };
   }
   const { reviewUsd, monthLeftUsd, estimateUsd } = limits;

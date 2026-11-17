@@ -245,8 +245,6 @@ export async function resolvePrPromptSetAndBudget(params: {
   const ciRoleBilling = modelRoleBilling({
     plan: routePlan,
     agents: spec.agents,
-    models: params.config.models,
-    profile: params.profile,
     claudeEnv,
     authFilePresent,
     openCodeSecretNames,

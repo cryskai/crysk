@@ -323,14 +323,33 @@ describe("evaluatePlatformLimits with the estimate split per role", () => {
     ).toEqual({ allowed: false, hit: "review-limit", apiShare: true });
   });
 
-  test("a run with no API-billed role in its map compares the whole estimate, as before", () => {
-    expect(
-      evaluatePlatformLimits({
-        billingMode: metered,
-        limits,
-        roleBilling: new Map([["hunter.logic", false]]),
-      }),
-    ).toEqual({ allowed: false, hit: "review-limit" });
+  // #551 R001: a Claude API key in the env makes the run "metered", but when no
+  // role of the run routes to it (every role on a subscription or a free route),
+  // the run bills no API spend and is never skipped, month used up included.
+  test("a run whose resolved roles bill no API key is never skipped, even metered by env", () => {
+    for (const over of [
+      {},
+      { monthLeftUsd: 0 },
+      { estimateByRoleUsd: undefined },
+    ]) {
+      expect(
+        evaluatePlatformLimits({
+          billingMode: metered,
+          limits: { ...limits, ...over },
+          roleBilling: new Map([
+            ["hunter.logic", false],
+            ["refuter", false],
+          ]),
+        }),
+      ).toEqual({ allowed: true });
+    }
+  });
+
+  test("routes that could not be resolved (no role map) still compare the whole estimate", () => {
+    expect(evaluatePlatformLimits({ billingMode: metered, limits })).toEqual({
+      allowed: false,
+      hit: "review-limit",
+    });
   });
 
   test("the month used up still skips a run that bills an API key, whatever the split", () => {
@@ -432,8 +451,6 @@ describe("modelRoleBilling", () => {
     return modelRoleBilling({
       plan,
       agents,
-      models,
-      profile: FALLBACK_PROFILE,
       claudeEnv: oauth,
       authFilePresent: true,
       openCodeSecretNames: ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"],
@@ -456,7 +473,6 @@ describe("modelRoleBilling", () => {
       refuter: true,
       summary: true,
       consolidate: true,
-      judge: false,
     });
   });
 
@@ -464,8 +480,6 @@ describe("modelRoleBilling", () => {
     const all = billing({ default: [deepseek] });
     expect(all?.get("hunter.logic")).toBe(true);
     expect(all?.get("refuter")).toBe(true);
-    // The judge is pinned to a measured model and never follows `default`.
-    expect(all?.get("judge")).toBe(false);
   });
 
   test("a Claude role bills an API key when the run's chosen Claude credential does", () => {
@@ -473,7 +487,39 @@ describe("modelRoleBilling", () => {
       claudeEnv: { ANTHROPIC_API_KEY: "sk-test" },
     });
     expect(keyed?.get("hunter.logic")).toBe(true);
-    expect(keyed?.get("judge")).toBe(true);
+  });
+
+  // #551 R001: the judge runs only with the materiality gate on, so a judge
+  // left out of the plan bills nothing; counting it would mark a run whose
+  // every role is on a subscription as API-billed through an idle Claude key.
+  test("a run with a Claude API key but every role on an OpenCode subscription bills no API key", () => {
+    const chatgptOnly = billing(
+      { default: ["opencode:openai/gpt-5.5"] },
+      {
+        claudeEnv: { ANTHROPIC_API_KEY: "sk-test" },
+        openCodeSecretNames: ["CRYSK_OPENCODE_OPENAI_OAUTH"],
+      },
+    );
+    expect(chatgptOnly?.size).toBeGreaterThan(0);
+    expect([...(chatgptOnly?.values() ?? [])].some(Boolean)).toBe(false);
+  });
+
+  // A plan step no `models` key covers still bills: if it runs on an API key the
+  // map must not read all-false, or a run spending API money would get past a
+  // used-up month through the no-API-role shortcut.
+  test("a plan step with no model role that bills an API key keeps the run API-billed", () => {
+    const unmapped = billing(
+      { default: ["claude:sonnet-latest"], refuter: [deepseek] },
+      { agents: agents.filter((a) => a.key !== "refuter") },
+    );
+    expect([...(unmapped?.values() ?? [])].some(Boolean)).toBe(true);
+    expect(
+      evaluatePlatformLimits({
+        billingMode: "metered",
+        limits: { reviewUsd: 12, monthLeftUsd: 0, estimateUsd: 1 },
+        ...(unmapped === undefined ? {} : { roleBilling: unmapped }),
+      }),
+    ).toEqual({ allowed: false, hit: "month-used-up" });
   });
 
   test("a role with a fallback on an API key bills an API key", () => {

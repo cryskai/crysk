@@ -75,16 +75,11 @@ import {
   parseModelName,
   parseModelsConfig,
 } from "#model/model-name";
-import {
-  MODEL_PROFILES,
-  type ModelProfile,
-  profileModels,
-} from "#model/profiles";
+import { MODEL_PROFILES, profileModels } from "#model/profiles";
 import {
   agentModelRole,
   agentStepKey,
   type ResolvedRoutePlan,
-  resolveMaterialityJudgeRoute,
 } from "#model/routing";
 import { parseGlobalConfig, parseLocalConfig } from "#review/preflight";
 import { commandForms } from "../brand";
@@ -882,6 +877,10 @@ export function openCodeRoutesBillMetered(input: {
   );
 }
 
+// The key modelRoleBilling records a plan step under when no `models` key covers
+// it. Not a role name the platform sends, so it never adds to the API share.
+const UNMAPPED_STEP = "(unmapped step)";
+
 // Which of the run's model roles bill an API key (S17), keyed like the engine's
 // `models` config (`hunter.<specialty>`, `refuter`, `summary`, `consolidate`,
 // `judge`). A role is the route its step resolved to, so what `models.default`
@@ -899,8 +898,6 @@ export function modelRoleBilling(input: {
     readonly role: string;
     readonly specialty?: string;
   }[];
-  models: ModelsConfig | undefined;
-  profile: ModelProfile;
   // The run's chosen Claude credential env (claudeRun.env).
   claudeEnv: Readonly<Record<string, string | undefined>>;
   authFilePresent: boolean;
@@ -927,19 +924,17 @@ export function modelRoleBilling(input: {
     billing.set(role, (billing.get(role) ?? false) || routes.some(routeBills));
   };
   for (const step of input.plan.steps) {
-    const role = stepModelRole(step.stepKey, input.agents);
-    if (role === undefined) continue;
-    add(
-      role,
-      [step, ...(step.fallbacks ?? [])].map((s) => s.route),
-    );
+    const routes = [step, ...(step.fallbacks ?? [])].map((s) => s.route);
+    // A step no `models` key covers still spends: recorded under a key the
+    // platform never sends, so an API-billed one keeps the run API-billed (the
+    // gate's no-API-role shortcut cannot fire) without adding to the share.
+    add(stepModelRole(step.stepKey, input.agents) ?? UNMAPPED_STEP, routes);
   }
-  // The materiality judge joins the plan only when the gate is on; its route
-  // is the same either way.
-  if (!billing.has("judge")) {
-    const judge = resolveMaterialityJudgeRoute(input.models, input.profile);
-    if (judge !== undefined) add("judge", [judge.route]);
-  }
+  // The materiality judge is counted only when it is in the plan (the gate on,
+  // its `materiality` step above): an idle judge bills nothing, and counting its
+  // Claude route would mark a run whose roles are all on a subscription as
+  // API-billed through an unused Claude key (#551 R001). A `judge` key the
+  // platform still sends then has no role here and counts as API.
   return billing;
 }
 
