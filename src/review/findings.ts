@@ -112,10 +112,6 @@ export interface Telemetry {
   tokens_in: number;
   tokens_out: number;
   tokens_total: number;
-  cost_usd_est: number;
-  // True when at least one spend reservation ended unresolved_remote — the
-  // reported cost is a floor of known spend, not a closed total.
-  cost_usd_est_is_floor?: boolean;
   // Engine v2 populates this per step (it runs one session per agent). The
   // original best-effort caveat (reconciliation R3) still applies to v1
   // documents: absence must never fail validation.

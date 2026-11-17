@@ -234,7 +234,7 @@ describe("setup --ci review choices (CLI)", () => {
     try {
       expect(r.code).toBe(0);
       expect(r.workflow).toContain("mode: gate");
-      expect(r.workflow).not.toContain("budget-usd:");
+      expect(r.workflow).not.toContain("budget-usd");
       expect(r.config).toEqual({
         ci_review_policy: "risk_aware",
         ci_max_attempts: 2,
@@ -249,14 +249,12 @@ describe("setup --ci review choices (CLI)", () => {
     }
   });
 
-  test("flags: the level, mode and subscription reach the workflow and the config", async () => {
+  test("flags: the level and mode reach the workflow and the config", async () => {
     const r = await runSetup([
       "--level",
       "thorough",
       "--ci-mode",
       "advisory",
-      "--billing",
-      "subscription",
       "--max-changed-lines",
       "2500",
     ]);
@@ -280,11 +278,14 @@ describe("setup --ci review choices (CLI)", () => {
     }
   });
 
-  test("an API key with a ceiling writes it", async () => {
+  test("the retired --billing and --budget-usd are accepted, write nothing and choose nothing", async () => {
     const r = await runSetup(["--billing", "api", "--budget-usd", "7.5"]);
     try {
-      expect(r.workflow).toContain("budget-usd: 7.5\n");
-      expect(r.output).toContain("$7.5 per review");
+      expect(r.code).toBe(0);
+      expect(r.workflow).not.toContain("budget-usd");
+      expect(r.workflow).toContain("mode: gate");
+      expect(r.output).toContain("defaults: nobody chose them");
+      expect(r.output).not.toContain("$7.5");
     } finally {
       await rm(r.dir, { recursive: true, force: true });
     }
@@ -359,17 +360,18 @@ describe("setup --ci review choices (CLI)", () => {
     }
   });
 
-  test("--force with no flags keeps the old workflow's mode and ceiling", async () => {
+  test("--force with no flags keeps the old workflow's mode and drops its retired budget-usd line", async () => {
     const r = await runSetup(["--force"], async (dir) => {
       await Bun.write(
         path.join(dir, ".github", "workflows", "pr-hero.yml"),
-        "jobs:\n  review:\n    steps:\n      - with:\n          budget-usd: 7.5\n          mode: advisory\n",
+        "jobs:\n  review:\n    steps:\n      - with:\n          max-changed-lines: 8000\n          budget-usd: 7.5\n          mode: advisory\n",
       );
     });
     try {
       expect(r.code).toBe(0);
       expect(r.workflow).toContain("mode: advisory");
-      expect(r.workflow).toContain("budget-usd: 7.5\n");
+      expect(r.workflow).toContain("max-changed-lines: 8000\n");
+      expect(r.workflow).not.toContain("budget-usd");
       expect(r.workflow).toContain("issue_comment");
     } finally {
       await rm(r.dir, { recursive: true, force: true });
@@ -456,39 +458,24 @@ describe("setup --ci review choices (CLI)", () => {
   });
 });
 
-describe("parseArgs: --level and --billing", () => {
+describe("parseArgs: --level", () => {
   test("accepted on setup --ci and ci init", () => {
     expect(
       parseArgs(["setup", "--ci", "--level", "manual"]).options.reviewLevel,
     ).toBe("manual");
-    expect(parseArgs(["ci", "init", "--billing", "api"]).options.billing).toBe(
-      "api",
-    );
+    expect(
+      parseArgs(["ci", "init", "--level", "thorough"]).options.reviewLevel,
+    ).toBe("thorough");
   });
   test("an unknown value fails loud", () => {
     expect(() => parseArgs(["setup", "--ci", "--level", "max"])).toThrow(
       /--level must be/,
     );
-    expect(() => parseArgs(["setup", "--ci", "--billing", "free"])).toThrow(
-      /--billing must be/,
-    );
   });
   test("rejected outside the scaffold commands", () => {
     expect(() => parseArgs(["review", "--level", "manual"])).toThrow(
-      /only apply with setup --ci or ci init/,
+      /only applies with setup --ci or ci init/,
     );
-  });
-  test("a subscription with a ceiling is a contradiction, rejected", () => {
-    expect(() =>
-      parseArgs([
-        "setup",
-        "--ci",
-        "--billing",
-        "subscription",
-        "--budget-usd",
-        "5",
-      ]),
-    ).toThrow(/does not apply with --billing subscription/);
   });
 });
 
@@ -497,7 +484,7 @@ describe("ciSetupCommand at a terminal", () => {
     const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-tty-"));
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
-      const answers = ["manual", "advisory", "api", "3", "1200", "n"];
+      const answers = ["manual", "advisory", "1200", "n"];
       const asked: string[] = [];
       const take = (q: string) => {
         asked.push(q);
@@ -521,12 +508,12 @@ describe("ciSetupCommand at a terminal", () => {
         },
       );
       expect(code).toBe(0);
-      expect(asked).toHaveLength(6);
+      expect(asked).toHaveLength(4);
       const workflow = await Bun.file(
         path.join(dir, ".github", "workflows", "crysk.yml"),
       ).text();
       expect(workflow).toContain("mode: advisory");
-      expect(workflow).toContain("budget-usd: 3\n");
+      expect(workflow).not.toContain("budget-usd");
       expect(
         JSON.parse(
           await Bun.file(path.join(dir, ".crysk", "config.json")).text(),
@@ -550,7 +537,6 @@ describe("ciSetupCommand with a broken .cryskignore", () => {
       const answers = [
         "balanced",
         "gate",
-        "subscription",
         "",
         "y",
         "",

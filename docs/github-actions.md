@@ -175,7 +175,7 @@ does, when the CLI reports an error or every review hunter fails; if the CLI tak
 stops before it reports an outcome, Crysk posts the comment, and its `error` status on the head that lock is on, when that head's `crysk` status is still `pending` or cannot be read. A review cancelled mid-review sets `error` `CRYSK-CANCELLED: not reviewed — /crysk review reviews this head` on its head, so a cancelled gate never stays pending. The `pending` status names its run: in Actions it links to that run's attempt, so the status's link opens the Actions run, and a cancel settles only the pending that names its own run. A `pending` from an older pr-hero, with no run link, is matched by its creation time instead. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
 or unclassified) and the command that fixes it.
 A newer comment replaces the older one from the same author. Crysk removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/crysk review`
-comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or budget skip sets a `failure`
+comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or limits skip sets a `failure`
 status in gate mode and none in advisory (see [Gate mode](#gate-mode-the-status-is-the-check)).
 
 ### Scaffolding with `crysk ci init`
@@ -184,7 +184,7 @@ status in gate mode and none in advisory (see [Gate mode](#gate-mode-the-status-
 commands that put your setup where the workflow reads it. It reads your person config
 (`~/.crysk/config.json`) first, and prints, never runs:
 
-- `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY` with `--billing api`);
+- `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY` to bill per token);
 - one `gh secret set CRYSK_OPENCODE_<P>_API_KEY` per OpenCode provider your `models` or your `profile` name
   (fallbacks included, the judge's list skipped), and for `openai` also the line that sets
   `CRYSK_OPENCODE_OPENAI_OAUTH` from your OpenCode login for a ChatGPT subscription;
@@ -471,8 +471,8 @@ OpenCode-only `CRYSK_MODELS` included.
 
 | Secret | CI outcome |
 |---|---|
-| A non-openai `CRYSK_OPENCODE_<P>_API_KEY` (tested: **deepseek**) | Metered. The OpenCode auth file applies the default spend ceiling: this is an invoice route, not an unlimited subscription. |
-| `CRYSK_OPENCODE_OPENAI_API_KEY` | Metered, billed per token like any API key. |
+| A non-openai `CRYSK_OPENCODE_<P>_API_KEY` (tested: **deepseek**) | Metered: an invoice route, not an unlimited subscription, so the platform's dollar limits (Review > Limits) can skip it. |
+| `CRYSK_OPENCODE_OPENAI_API_KEY` | Metered, billed per token like any API key; the platform's dollar limits apply. |
 | `CRYSK_OPENCODE_OPENAI_OAUTH` | The ChatGPT subscription. With both OpenAI secrets set, the subscription is used. |
 | An `_OAUTH` secret for another provider your models use | **Refused**, naming the secret: only OpenAI's subscription can be projected. Set that provider's `_API_KEY`. |
 | Several OpenCode providers in one run | Supported: each model runs through its own OpenCode server, projected with only its provider's record ([configuration.md](configuration.md), "Several OpenCode providers in one review"). |
@@ -629,7 +629,7 @@ the `config` in their response. Standalone runs never reach any of this.
 
 ### Run reports
 
-In platform mode every finished run is also reported to the platform, so it is recorded with its cost. The
+In platform mode every finished run is also reported to the platform, so it is recorded and priced there. The
 `Connect to Crysk` step and each refresh step also output the exchange's `run-token` (masked like the
 installation token). A `Report to Crysk` step right after `Publish Crysk outcome` posts to
 `https://api.crysk.dev/runs/report` with the newest run token (the refresh step's, else the first
@@ -637,22 +637,24 @@ exchange's). It runs unless the job was cancelled, so a failed or skipped review
 only when the run is platform-dispatched and a run token exists; a standalone run never reaches it.
 
 The report body is metadata only: the action's `status` as `outcome`, the PR number, the head and base shas, the
-run status, schema and engine versions, the model, the blocking and advisory counts, the token, cost
-and wall-time totals (`cost_is_floor` when the cost is a floor of known spend), and one row per agent (key,
-model, tokens, cost, duration, attempts, status). It never carries findings, claims, summary text, hop trails
-or any other text that can quote your code.
+run status, schema and engine versions, the model, the blocking and advisory counts, the token and wall-time
+totals, and one row per agent (key, model, tokens, duration, attempts, status). It never carries findings,
+claims, summary text, hop trails or any other text that can quote your code. It carries **no dollar figure**:
+the engine computes none, and the platform prices the run from the facts below.
 
-The run's `usage` and each agent row also carry, when `pipeline.json` has them, the token split and the
-list-price cost. `tokens` is `{ input_uncached, input_cache_read, input_cache_write, output }`, where
-`output` includes reasoning tokens, and each key is sent only when the engine measured it. `list_cost_usd` is
-what those tokens cost at list price: the notional cost on a Claude subscription, the cash cost on a per-token
-key. `cost_usd` keeps its meaning, the cash cost, which is 0 on a subscription. The run's `usage` also says
-`billing`, `subscription` or `metered`, and omits it when the run's steps billed differently or on a free
-route. A run whose steps billed differently still gets a list cost, summed from each step's own, when
-every step can be priced. An agent row sums the steps it owns: every `refuter-<id>` step goes to `refuter`,
-`summarizer` to `summary`, `verify-<id>` to `verifier`, `adjudicate-<id>` to `adjudicator` and
-`hunter-<key>` to `<key>`. Steps no row owns, such as the warmups, count only in the run's totals. A missing
-or malformed figure leaves out that field and nothing else. A review whose run directory the action never published
+The run's `usage` and each agent row also carry, when `pipeline.json` has them, the token split `tokens`:
+`{ input_uncached, input_cache_read, input_cache_write, output }`, where `output` includes reasoning tokens, and
+each key is sent only when the engine measured it. An agent row sums the steps it owns: every `refuter-<id>` step
+goes to `refuter`, `summarizer` to `summary`, `verify-<id>` to `verifier`, `adjudicate-<id>` to `adjudicator` and
+`hunter-<key>` to `<key>`. Steps no row owns, such as the warmups, count only in the run's totals.
+
+The body always carries `usage_facts`, what each model request measured, for the platform to price: a table of
+steps, a table of routes (provider, the model id exactly as the provider reported it, and the credential kind
+`api`, `subscription` or `free`), one tuple per request with its disjoint token counts (uncached input, cache
+read, cache write at the default lifetime, cache write at the one-hour lifetime, visible output, reasoning),
+`remainders` for what the provider's own summary counts beyond those requests, and `gaps` for attempts whose
+per-request facts could not be read. It holds identifiers and integers only, so it travels in metadata-only
+mode too. A missing or malformed figure leaves out that field and nothing else. A review whose run directory the action never published
 (skipped, size-gated, failed before writing, and the cases in the known gap under "Downloading the run
 directory": every hunter died, a fatal error, a cancelled job) is reported with zero counts and usage, even
 if the CLI wrote a `findings.json` that run, from the head the trigger resolved; an empty status
@@ -713,13 +715,13 @@ still in Development, so the engine pins that version and records it as `crysk.g
 - a `chat <model>` span per attempt, with `gen_ai.provider.name`, `gen_ai.request.model`,
   `gen_ai.response.model`, `gen_ai.response.finish_reasons`, the token usage (`gen_ai.usage.input_tokens`
   including the cache, `gen_ai.usage.output_tokens` including reasoning, the cache read and creation and the
-  reasoning tokens apart), `gen_ai.usage.cost` (list price in USD: the notional cost on a subscription, the
-  cash cost on a per-token key) and the attempt's evidence and settlement as `crysk.attempt.*`;
+  reasoning tokens apart) and the attempt's evidence and settlement as `crysk.attempt.*`. The trace carries
+  no dollar figure: the platform prices the run from the report's usage facts;
 - for an OpenCode attempt, whose capture records each model turn, an `attempt <step>#<n>` span instead,
   carrying the attempt's status, evidence and total usage as `crysk.*` attributes only, and under it one
-  `chat <model>` span per turn with that turn's own times, response model, finish reason, token usage and
-  cost, and `crysk.turn.number`. Only the turns are generations, so a backend counts the attempt's cost once
-  and can attribute time and money to single turns. The first turn carries the prompt, each turn its own
+  `chat <model>` span per turn with that turn's own times, response model, finish reason and token usage,
+  and `crysk.turn.number`. Only the turns are generations, so a backend can attribute time and tokens to
+  single turns. The first turn carries the prompt, each turn its own
   answer;
 - an `execute_tool <tool>` span per tool call the model made, read from the Claude CLI session transcript
   or the OpenCode capture, with `gen_ai.tool.name`, the call id, its timing and whether it failed, under
@@ -885,51 +887,54 @@ they are today, but receive no further updates. New workflows should target `@v0
 
 ## Spend controls
 
-Two independent gates run **before** any agent is spawned, so an oversized or over-budget PR costs
-nothing:
+Gates run **before** any agent is spawned, so an oversized or over-limit PR costs nothing:
 
-| Gate | Input | Default | Disable |
+| Gate | Where it is set | Default | Disable |
 |---|---|---|---|
 | Size | `max-changed-lines` / `max-changed-files` | route-derived (see below) | `0` |
-| Budget | `budget-usd` | route-derived (see below) | any value `<= 0` |
+| Dollar limits | the Crysk platform dashboard (Review > Limits) | set by the platform | set in the dashboard |
 
 Both gates exit 0 and leave a courteous PR comment plus step-summary note when they trip — they are cost
 gates, not quality gates, and never fail the job. The comment names the one-shot override: comment
 `/crysk review` on the pull request (see [Re-review on demand](#re-review-on-demand)). That runs the review on
-GitHub Actions. It does not change the ceilings for later pushes, and it does not review on the machine
+GitHub Actions. It does not change the limits for later pushes, and it does not review on the machine
 of whoever comments.
 
-**Leaving `budget-usd` unset resolves the ceiling from how the run is billed.** A run uses one Claude
-credential, the first one in `credentials.claude` that is set (default `["subscription", "api_key"]`, see
+**The dollar limits are the Crysk platform's, and the engine shows no dollar figure.** The `budget-usd` input,
+the `--budget-usd` flag, the estimate band, the default ceiling on an API key and the confirm line that showed
+a cost range are gone. The platform owns the per-review limit, the per-month limit and the month's spend (see
+the platform's Review > Limits page), and prices every run from the usage facts the engine reports (see
+[Run reports](#run-reports)). A standalone run (no platform) has no dollar limit.
+
+**What the engine still does with them.** At the token exchange the first connect step declares the `limits`
+capability (`X-Crysk-Capabilities: profile,limits`), and the platform answers with
+`{ "limits": { "review_usd"?, "month_left_usd"?, "estimate_usd"? } }`: the per-review limit in effect, what is
+left of this organization's month limit after this calendar month's API spend (UTC), and the platform's
+estimate for this review. The field is absent when the dispatch was forced (`/crysk review`, a re-check) and
+for a platform that does not send it, and the connect step hands the validated numbers to the run step. The
+engine keeps one comparison, because only it knows whether the run bills an API key: a run that **does** is
+skipped (status `skipped-budget`, the skip comment, and a `failure` commit status in gate mode, as before) when
+the month's limit is used up (`month_left_usd <= 0`), or when the estimate is over the per-review limit or
+over what is left of the month. The skip comment names the limit that was hit and points at the dashboard
+setting; it prints no dollar figure. With no estimate and a month that still has money left the review runs:
+a model the platform cannot price is not capped per review. A run on a subscription, or on a free route, is
+never skipped for cost: only API spend counts toward the limits.
+
+How a run bills is decided by the run itself. A run uses one Claude credential, the first one in
+`credentials.claude` that is set (default `["subscription", "api_key"]`, see
 [Configuration, Credentials](configuration.md#credentials)). A run on the subscription
-(`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its real cash cost is `$0.00`
-and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
-A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or a model on an OpenCode provider whose
-`CRYSK_OPENCODE_*` secret is an API key, on any route the run resolves: any role or fallback of `models`,
-`--model`, a spec agent, a prompt's frontmatter or an engine default) gets a `12.00` default, because that is the
-case where a runaway PR really does produce an invoice. An OpenCode auth file alone (a ChatGPT
-subscription, `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered. Setting
-`budget-usd` explicitly is honoured verbatim on either route.
+(`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice. A metered run is one on the API
+key (`CRYSK_CLAUDE_API_KEY`) or on a model of an OpenCode provider whose `CRYSK_OPENCODE_*` secret is an API
+key, on any route the run resolves: any role or fallback of `models`, `--model`, a spec agent, a prompt's
+frontmatter or an engine default. An OpenCode auth file alone (a ChatGPT subscription,
+`CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered.
 
-The default was `10.00` until the security hunter joined the default set. The estimate prices every hunter,
-so with that set and the summary on (the default) its upper bound is above `$10` even for a small pull
-request. A workflow that sets `budget-usd: 10`, which is what `setup --ci --billing api` wrote when nobody
-chose another value, keeps that value and then skips every review until the line says `12` or more, or is
-removed.
+**Retired, and still accepted.** A workflow that sets `budget-usd`, a command line that passes `--budget-usd` or
+`--billing`, keeps working: the value has no effect and one warning says so (`budget-usd input is ignored:
+dollar limits moved to the Crysk platform (Review > Limits in the dashboard)`). Remove them to silence it. The
+`cost-usd-est` output stays declared and is always empty. The engine has no budget config key.
 
-**In platform mode the Crysk platform's estimate replaces the cost band.** The connect step asks for it
-(`X-Crysk-Capabilities: estimate`) and the budget gate compares its high end to the ceiling: an estimate
-from the setup's recent reviews scaled to the pull request, or from the catalog prices of its models. The
-plan prints it as `estimate $X – $Y (platform: history)` or `(platform: catalog)`. The platform prices the
-whole pull request, so a re-review whose discovery reads only what changed since the last review, or one
-that only verifies earlier findings, scales that figure by the share of a full review it does (the band
-measures the share; it never supplies the price). Without one (an older
-platform, a model with no catalog price) the band decides as before. On a platform repository every skip
-comment names only `/crysk review` (no legacy spelling, force workflow or re-scaffold), and the budget
-and size skips point at the model setup and the size limits in the Crysk dashboard, since its workflow
-has no `budget-usd` or `max-changed-*` inputs to raise.
-
-**Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
+**Leaving `max-changed-lines` / `max-changed-files` unset resolves them from how the run bills.** On a Claude
 subscription route there is no size limit, so large pull requests are reviewed instead of skipped, and
 the run emits a `::notice::` saying so. A metered route keeps `4000` lines / `50` files. A value set in
 the workflow, or `max_changed_lines` / `max_changed_files` in `.crysk/config.json`, is honoured on
@@ -937,20 +942,13 @@ either route, and `0` disables that limit.
 
 If **both** Claude credentials are set, the run uses the one `credentials.claude` puts first, and the
 other never reaches the Claude CLI. With the default order that is the subscription, so the review draws on
-quota with no ceiling. **This is a billing change** for repositories that hold both secrets: before
-`credentials.claude`, the Claude CLI preferred the key and the review billed per token with the default
-ceiling. Put `api_key` first to keep that (`credentials: ${{ vars.CRYSK_CREDENTIALS }}`, with
+quota and the platform's dollar limits do not skip it. **This is a billing change** for repositories that hold
+both secrets: before `credentials.claude`, the Claude CLI preferred the key and the review billed per token.
+Put `api_key` first to keep that (`credentials: ${{ vars.CRYSK_CREDENTIALS }}`, with
 `CRYSK_CREDENTIALS` set to `{"claude": ["api_key", "subscription"]}`). The OpenCode auth file keeps the
-conservative rule: when it is present, CI treats the run as able to invoice (metered ceiling) even if a
+conservative rule: when it is present, CI treats the run as able to invoice (metered) even if a
 Claude subscription token is also set. That does **not** stamp Claude CLI usage as metered solely
 because OpenCode auth is present — OpenCode API-token billing is beside Claude's subscription quota.
-
-**A `budget-usd` of `0` or below does not mean "spend nothing" — it disables the ceiling.** This
-matches the sibling size-gate knobs' documented convention (`<= 0` disables the limit). Reading it the
-other way ("always skip") would make Crysk silently stop reviewing every PR while the job still shows
-green. Because a disabled ceiling is otherwise indistinguishable from a passing one, a disabled budget
-emits a `::warning::` workflow annotation on every run — check your job logs if you did not mean to
-disable it.
 
 ## CI review admission
 
@@ -960,7 +958,7 @@ and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: wri
 
 ### Review levels (what setup --ci asks)
 
-`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode`, `--billing`, `--max-changed-lines` and `--budget-usd`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
+`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode` and `--max-changed-lines`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them. The retired `--billing` and `--budget-usd` flags are still accepted, do nothing and warn once: the dollar limits are set in the Crysk dashboard (Review > Limits).
 
 | Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` | `max_verification_steps` |
 |---|---|---|---|---|
@@ -969,11 +967,9 @@ and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: wri
 | `thorough` | `every_push` | 4 | (unset) | 8 |
 | `manual` | `manual_only` | 1 | (unset) | 8 |
 
-Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and no `CRYSK_OPENCODE_*` secret builds an OpenCode auth file; a run on the API key, which `credentials.claude` decides, is metered; an explicit 0 would warn on every run and outlive a later move to the API key); `--billing api` writes `--budget-usd` or the $12 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` unless a flag names it, drops a `budget-usd` line it finds (the input is retired), and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
 
-Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` and `budget-usd` unless a flag names them, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
-
-Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). Unlike the budget it applies on any billing: left unset, a subscription route reviews a PR of any size.
+Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). It applies on any route: left unset, a subscription route reviews a PR of any size.
 
 Posting floor: setup writes `post_min_severity: "warning"` only when the repo config has no value, so a re-run never replaces a chosen floor. `warning` hides advisory suggestions, `blocking` hides every advisory finding, `suggestion` (or unset) posts everything. Hidden findings are counted in the summary comment. The gate is unchanged, since a blocking finding always posts; admission scores only posted findings, so a hidden one never triggers a re-review.
 
@@ -1020,7 +1016,7 @@ Example:
 
 ### Re-review on demand
 
-When CI skips a pull request — size gate, admission policy, or budget ceiling — comment on the pull
+When CI skips a pull request — size gate, admission policy, or the platform's limits — comment on the pull
 request:
 
 ```text
@@ -1042,7 +1038,7 @@ gh pr comment <number> --body "/crysk review"
 
 It must not run `crysk review --pr <n> --force` when the goal is a CI review.
 
-The comment run passes `--force`. That bypasses the size gate, admission, and the budget ceiling for
+The comment run passes `--force`. That bypasses the size gate, admission, and the platform's limits for
 that run only. It does not reset the durable ledger. An empty effective diff (everything excluded)
 still does not review.
 
@@ -1114,7 +1110,7 @@ Check Run ledger is authoritative.
 An attempt counts toward `ci_max_attempts` when its run reached the provider (completed, failed, or
 still in progress) or when admission itself skipped it. Two outcomes spend nothing and do not count: a
 run that stood down for a review already in flight on the same head, and a run the size gate or the
-budget ceiling skipped before any agent started. A run that stopped on a configuration error (a bad gotchas file or prompt set) before it reviewed anything spends nothing either, and so do forced comment runs (`/crysk review`, `/crysk recheck`): the budget bounds automatic reviews, and a deliberate comment is a spend outside it. A cancelled row does not count either, but it is not
+platform's limits skipped before any agent started. A run that stopped on a configuration error (a bad gotchas file or prompt set) before it reviewed anything spends nothing either, and so do forced comment runs (`/crysk review`, `/crysk recheck`): the budget bounds automatic reviews, and a deliberate comment is a spend outside it. A cancelled row does not count either, but it is not
 proof that nothing was spent: a cancel signal can arrive after the provider started, so a run that
 GitHub concludes as `failure` (for example one killed by `timeout-minutes`) still counts. A skipped run
 still shows as a skipped check on the commit.
@@ -1139,7 +1135,7 @@ full table is in the README's "Exit codes" section.
 
 The action's `mode` input picks what the status says. It defaults to `gate`:
 
-- **`gate`** (the default): a finished review with blocking findings sets `failure`. A size or budget
+- **`gate`** (the default): a finished review with blocking findings sets `failure`. A size or limits
   skip also sets `failure`, so an unreviewed head cannot read as a clean one. A clean review, or one with
   only advisory findings, sets `success`.
 - **`advisory`**: the status is `success` for every finished review, whatever it finds. This is the
@@ -1153,9 +1149,9 @@ The table shows the status and the job exit for each case:
 | Finished review with unresolved blocking findings (see below) | `failure`: `crysk: N blocking finding(s) — fix and push, or /crysk override` | `success` | `0`, or `3` when a step also failed (the blocking count wins the status, not the exit) |
 | Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/crysk override`) | `failure`: `crysk: review partial (N of M hunters failed, set abc123) — /crysk review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `3` |
 | Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `crysk: review partial again (N of M hunters failed, set abc123) — fix the failing route or /crysk override` | `success` | `3` |
-| Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `1` |
+| Finished pipeline in which no hunter ran on a review meant to run them (the limits skip or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `1` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
-| Size or budget skip (`/crysk review` reviews it anyway) | `failure`: `crysk skipped the review: … /crysk review reviews it anyway` | none | `0` |
+| Size or limits skip (`/crysk review` reviews it anyway) | `failure`: `crysk skipped the review: … /crysk review reviews it anyway` | none | `0` |
 | Admission skip by any review rule: a low-risk or below-threshold delta, once per PR, a `/crysk stop`, the attempt budget used up (`ci_max_attempts`), or `manual_only` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /crysk override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /crysk review retries it`; a carried blocking failure whose blocking findings are all answered becomes `success` `crysk: N answered finding(s), fixes unverified (<reason>); carried from <sha>` (see below); with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /crysk review reviews it`. Under the attempt budget used up or `manual_only`, either green is held instead: `pending` `crysk: waiting for a manual review (<reason>); carried from <sha> — /crysk review or /crysk override` (see below) | none | `0` |
 | Same head, already reviewed | none (that head's own status already exists) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
@@ -1227,7 +1223,7 @@ names was deleted. A dismissed, deferred or misclassified finding is re-verified
 **Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
 clears its own finding once the re-review verifies it gone. `/crysk override` from a user with write access
 turns the status green for that head with no new review. The re-review does not clear it by itself: a same-head
-`/crysk review` runs the same count, so the `failure` stays. The size and budget `failure` is the one that
+`/crysk review` runs the same count, so the `failure` stays. The size and limits `failure` is the one that
 `/crysk review` clears, because that run passes both gates. `/crysk override` is described next.
 
 **Stopping automatic reviews.** Comment exactly `/crysk stop` on the pull request **before** the push that
@@ -1327,11 +1323,11 @@ PR that came back clean.
 
 | Output | Meaning |
 |---|---|
-| `status` | `reviewed`, `skipped-size`, `skipped-budget`, `skipped-excluded`, or `error` — see the caveat below. `skipped-excluded` means every changed file is excluded by the ignore rules, so there was nothing to review: exit 0, a green `crysk` status in gate mode, no PR comment, nothing spent. |
+| `status` | `reviewed`, `skipped-size`, `skipped-budget`, `skipped-excluded`, or `error` — see the caveat below. `skipped-budget` is the name kept for a run the Crysk platform's cost limits skipped (see [Spend controls](#spend-controls)); the engine itself has no budget. `skipped-excluded` means every changed file is excluded by the ignore rules, so there was nothing to review: exit 0, a green `crysk` status in gate mode, no PR comment, nothing spent. |
 | `findings-count` | Total verified findings. |
 | `blocking-count` | Blocking-tier findings. |
 | `advisory-count` | Advisory-tier findings. |
-| `cost-usd-est` | Estimated review cost in USD, e.g. `"2.45"`. |
+| `cost-usd-est` | Retired: always empty. The engine reports no dollar figure; the Crysk platform shows what a review cost. |
 | `run-dir` | Path to the run directory containing `findings.json` and `report.md`. |
 
 A **clean** review (nothing found) still reports `status=reviewed`, just with `findings-count=0` — there
@@ -1421,7 +1417,7 @@ Three properties of the action's upload step are load-bearing:
 
 - **`if: always()`** — a *failed* review is when this directory matters most. When every hunter dies
   (e.g. bad credentials), the per-attempt logs under `steps/logs/` are the only record naming the cause.
-- **`if-no-files-found: warn`** — a size-gated, budget-gated, or concurrent review writes no run
+- **`if-no-files-found: warn`** — a size-gated, limits-gated, or concurrent review writes no run
   directory. That is correct behavior and must never turn the job red.
 - **`overwrite: true`** — artifact names are unique per workflow *run*, and `gh run rerun` reuses the run
   id, so a re-run's upload would otherwise conflict.
@@ -1505,8 +1501,8 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | Input | Default | Purpose |
 |---|---|---|
 | `pr-number` | resolved from the triggering event | Override when triggering from an event that carries no pull request. Only a legacy `pr-hero-force.yml` sets it, from its dispatch input; the current workflow passes nothing. |
-| `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. A `/crysk review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. A forced run that reviews a head clears a size or budget skip's `failure` status. |
-| `mode` | `gate` | The commit status the review sets: `gate` turns it `failure` on blocking findings and on a size or budget skip, `advisory` keeps it `success` for a finished review. See [Gate mode](#gate-mode-the-status-is-the-check). |
+| `force` | `false` | Bypass the size gate, CI admission, and the platform's limits for this run. A `/crysk review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. A forced run that reviews a head clears a size or limits skip's `failure` status. |
+| `mode` | `gate` | The commit status the review sets: `gate` turns it `failure` on blocking findings and on a size or limits skip, `advisory` keeps it `success` for a finished review. See [Gate mode](#gate-mode-the-status-is-the-check). |
 | `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). A `/crysk review --full` comment sets it on its own; a legacy `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
 | `model` | empty | One model for every step but the materiality judge's (`claude:opus-latest`, `opencode:<provider>/<model>`; a bare `sonnet`, `opus`, `haiku` or `fable` means its `-latest` model), outranking `models`. No effort and no fallbacks. It builds no OpenCode auth file: name an OpenCode model in `models`. |
 | `scout` | empty | Removed: the scout stage no longer exists. The input is still declared and is ignored, with a warning (`the scout input is ignored: the scout stage was removed`). |
@@ -2535,7 +2531,7 @@ On a workflow set up before the rename, comment `/crysk review` instead.
 - **`crysk doctor`** locally reports whether `.github/workflows/crysk.yml` (or the pre-rename
   `pr-hero.yml`) exists, and is degraded if both do; inside Actions it
   reports whether the required secrets (or OpenCode auth file) are present (never their values).
-- **The review was skipped** (size, budget, or admission) — comment `/crysk review` on the pull
+- **The review was skipped** (size, limits, or admission) — comment `/crysk review` on the pull
   request. `gh run rerun` on the workflow re-evaluates the gates and skips again. On a workflow
   scaffolded before the comment trigger, run `gh workflow run pr-hero-force.yml -f pr=<n>` instead.
 - **A `/crysk review` comment did nothing** — the comment trigger reads the workflow file from the

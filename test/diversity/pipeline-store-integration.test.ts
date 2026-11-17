@@ -3,7 +3,6 @@ import { validateReviewSpec } from "#review/spec";
 import {
   appendAttempt,
   emptyDiversityLedger,
-  summarizeDiversityAccounting,
 } from "../../src/diversity/accounting";
 import { buildDiversityPlan } from "../../src/diversity/identity";
 import { normalizeInclusiveUsage } from "../../src/execution/usage-normalized";
@@ -15,7 +14,6 @@ describe("pipeline and store diversity integration", () => {
         enabled: true,
         armId: "arm",
         maxLegs: 2,
-        cashCapUsd: 10,
       },
       agents: [
         {
@@ -46,15 +44,11 @@ describe("pipeline and store diversity integration", () => {
           inputTotal: 1,
           outputTotal: 1,
           billingMode: "metered",
-          costSource: "provider",
-          cashCostUsd: 0.1,
-          notionalCostUsd: 0.05,
         }),
       });
     }
-    const totals = summarizeDiversityAccounting(ledger);
-    expect(totals.failureCount).toBe(1);
-    expect(totals.attemptCount).toBe(2);
-    expect(totals.observationCount).toBe(0);
+    expect(ledger.failures).toHaveLength(1);
+    expect(ledger.attempts).toHaveLength(2);
+    expect(ledger.observations).toHaveLength(0);
   });
 });

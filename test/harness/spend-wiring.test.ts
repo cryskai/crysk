@@ -45,8 +45,6 @@ const USAGE: NormalizedUsage = {
   tokens: { inputUncached: 1 },
   completeness: "complete",
   billingMode: "subscription",
-  costSource: "provider",
-  cashCostUsd: 0,
 };
 
 function capabilities(
@@ -71,7 +69,7 @@ function capabilities(
       usageMode: "snapshot",
     },
     cancellation: { deadlineMs: 7500, conformance: "passed" },
-    billing: { mode: "subscription", pricingReady: true },
+    billing: { mode: "subscription" },
     issues: [],
     ...overrides,
   };
@@ -115,6 +113,16 @@ async function makeStep(
     parse: (text) => JSON.parse(text),
     ...overrides,
   };
+}
+
+// The first attempt's persisted usage: the harness writes the transport's
+// normalized outcome into the attempt evidence, so token identity (replay
+// dedupe) stays observable now that no dollar figure rides on a reservation.
+async function attemptTotalKnown(dir: string): Promise<number | undefined> {
+  const evidence = await Bun.file(
+    path.join(dir, "evidence.hunter-reliability.attempt1.json"),
+  ).json();
+  return evidence.outcome.usage.tokens.totalKnown;
 }
 
 async function tempDir(): Promise<string> {
@@ -161,15 +169,10 @@ class SpyLedger implements SpendLedger {
 
   async markUnresolvedRemote(
     reservationId: string,
-    knownUsd: number | undefined,
     idempotencyKey: string,
   ): Promise<void> {
     this.markUnresolvedCalls++;
-    return this.inner.markUnresolvedRemote(
-      reservationId,
-      knownUsd,
-      idempotencyKey,
-    );
+    return this.inner.markUnresolvedRemote(reservationId, idempotencyKey);
   }
 }
 
@@ -209,8 +212,7 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
       },
       settle: (id, decision, key) => inner.settle(id, decision, key),
       releaseUnstarted: (id, key) => inner.releaseUnstarted(id, key),
-      markUnresolvedRemote: (id, known, key) =>
-        inner.markUnresolvedRemote(id, known, key),
+      markUnresolvedRemote: (id, key) => inner.markUnresolvedRemote(id, key),
     };
     const harness = new StepExecutionHarness({
       transport,
@@ -273,9 +275,9 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
     expect(ledger.settleCalls).toBe(2);
   });
 
-  // Martian `opencode` arm: a rate-limit prompt refusal before any provider
-  // event provably never started ($0 complete usage), and the metered-zero
-  // rule settles it — so the bucket never fences and the retry is admitted.
+  // Martian `opencode` arm: a rate-limit prompt refusal after the prompt was
+  // dispatched has no usage proof, so it lands unresolved and fences the
+  // bucket — the retry is never admitted.
   test("a dispatched refusal without billing proof remains unresolved and fences retry", async () => {
     const dir = await tempDir();
     const REFUSAL =
@@ -294,7 +296,6 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
             mode: "snapshot",
             inputTokens: 10,
             outputTokens: 5,
-            costUsd: 0.01,
           };
           yield {
             kind: "delta",
@@ -360,8 +361,7 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
       },
       settle: (id, decision, key) => ledger.settle(id, decision, key),
       releaseUnstarted: (id, key) => ledger.releaseUnstarted(id, key),
-      markUnresolvedRemote: (id, knownUsd, key) =>
-        ledger.markUnresolvedRemote(id, knownUsd, key),
+      markUnresolvedRemote: (id, key) => ledger.markUnresolvedRemote(id, key),
     };
     const step = await makeStep(dir);
     const harness = new StepExecutionHarness({
@@ -430,8 +430,6 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
       tokens: { providerReportedTotal: 100 },
       completeness: "partial",
       billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0.05,
     };
     const transport: ProviderTransport = {
       backend: "claude-code",
@@ -452,34 +450,28 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
     expect(result.status).toBe("ok");
     expect(result.reservations?.length).toBe(1);
     expect(result.reservations?.[0]?.state).toBe("unresolved_remote");
-    expect(result.reservations?.[0]?.knownUsd).toBe(0.05);
     expect(ledger.settleCalls).toBe(0);
     expect(ledger.markUnresolvedCalls).toBe(1);
   });
 
-  // 2026-09-02, the metered-zero rule reaching the ledger. `settlementFromUsage`
-  // is the only producer of a SettlementDecision, so this is the harness-
-  // observable half of the same fact `spend-limiter.test.ts` asserts purely:
-  // the CAS transition the harness applies changes with the billing mode, not
-  // just the decision object.
-  //
-  // The pair is the discriminator. A rule that refused every $0 would pass
-  // the first arm and fail the second, and a run under a subscription
-  // credential would fence its own bucket on the first genuinely free step.
-  test("a metered attempt reporting $0 with output tokens lands unresolved_remote, not settled", async () => {
+  // `settlementFromUsage` is the only producer of a SettlementDecision, so this
+  // is the harness-observable half of the same fact `spend-limiter.test.ts`
+  // asserts purely. COMPLETE usage settles on a metered credential whatever
+  // the token mix: the engine holds no price, so there is no "$0 that cannot
+  // be trusted" rule any more — only completeness decides, and a settled
+  // reservation leaves the bucket admissible.
+  test("a metered attempt with complete usage settles and leaves its bucket unfenced", async () => {
     const dir = await tempDir();
-    const meteredZero: NormalizedUsage = {
+    const meteredComplete: NormalizedUsage = {
       wallMs: 500,
       tokens: { outputVisible: 120, outputKnown: 120, totalKnown: 300 },
       completeness: "complete",
       billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0,
     };
     const transport: ProviderTransport = {
       backend: "opencode",
       capabilities: async () => capabilities({ backend: "opencode" }),
-      execute: async () => okOutcome(meteredZero),
+      execute: async () => okOutcome(meteredComplete),
       classifyFailure: () => undefined,
     };
     const ledger = new SpyLedger();
@@ -489,117 +481,38 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
       spawnFn: fakeSpawn,
     });
 
-    const result = await harness.run(await makeStep(dir));
+    const first = await harness.run(await makeStep(dir));
 
-    expect(result.status).toBe("ok");
-    expect(result.reservations?.[0]?.state).toBe("unresolved_remote");
-    // Not 0: a zero that cannot be trusted is not a known cost, and carrying
-    // it would print "$0 known" beside the fenced bucket.
-    expect(result.reservations?.[0]?.knownUsd).toBeUndefined();
-    expect(ledger.settleCalls).toBe(0);
-    expect(ledger.markUnresolvedCalls).toBe(1);
-  });
+    expect(first.status).toBe("ok");
+    expect(first.reservations?.length).toBe(1);
+    expect(first.reservations?.[0]?.state).toBe("settled");
+    expect(ledger.settleCalls).toBe(1);
+    expect(ledger.markUnresolvedCalls).toBe(0);
 
-  // #182 follow-up: the free-nonzero fail-fast. Unresolved alone only fences
-  // the bucket while the retry loop keeps spending attempts on a flipped
-  // model, so a decision carrying reason `free_nonzero_cost` fails the step
-  // CLOSED with no retry — `legacy_terminal` breaks the loop before
-  // `decideRetryDisposition` can resurrect it. The fence is still applied
-  // (the spend may be real).
-  //
-  // The pair below is the discriminator. The first arm proves fail-closed: a
-  // parse failure classified `network_transient` with maxAttempts 3 would
-  // otherwise retry twice, but the flip ends the step on attempt 1. The
-  // second arm proves restraint: free usage with NO cash figure releases
-  // WITHOUT fencing (free-route fence scope) — no evidence of billing, no
-  // fail-fast.
-  test("a free attempt reporting priced cost fails the step with no retry and fences its bucket", async () => {
-    const dir = await tempDir();
-    let transportCalls = 0;
-    const flipped: NormalizedUsage = {
-      wallMs: 500,
-      tokens: { outputVisible: 120, outputKnown: 120, totalKnown: 300 },
-      completeness: "complete",
-      billingMode: "free",
-      costSource: "provider",
-      cashCostUsd: 0.06,
-    };
-    const transport: ProviderTransport = {
-      backend: "opencode",
-      capabilities: async () => capabilities({ backend: "opencode" }),
-      execute: async () => {
-        transportCalls++;
-        return {
-          completion: "failed" as const,
-          protocolIntegrity: "verified" as const,
-          finalText: "not json",
-          usage: flipped,
-          stderrTail: "boom",
-        };
-      },
-      // Transient would normally buy two more attempts under maxAttempts 3 —
-      // the flip must deny them all.
-      classifyFailure: (outcome) =>
-        outcome.stderrTail.includes("boom") ? "network_transient" : undefined,
-    };
-    const ledger = new SpyLedger();
-    const harness = new StepExecutionHarness({
-      transport,
-      spendLedger: ledger,
-      spawnFn: fakeSpawn,
-    });
-
-    const result = await harness.run(await makeStep(dir, { maxAttempts: 3 }));
-
-    expect(result.status).toBe("failed");
-    expect(result.attempts).toBe(1);
-    expect(transportCalls).toBe(1);
-    expect(result.reservations?.length).toBe(1);
-    expect(result.reservations?.[0]?.state).toBe("unresolved_remote");
-    expect(result.reservations?.[0]?.knownUsd).toBe(0.06);
-    expect(ledger.settleCalls).toBe(0);
-    expect(ledger.markUnresolvedCalls).toBe(1);
-    expect(result.stderrTail).toContain("free-route cost flip");
-    expect(result.stderrTail).toContain("$0.06");
-    expect(result.stderrTail).toContain("re-probe");
-
-    // The bucket is fenced for the rest of the run: a second step on the same
-    // ledger is refused before its transport is ever invoked.
-    let secondTransportCalls = 0;
-    const secondTransport: ProviderTransport = {
-      backend: "opencode",
-      capabilities: async () => capabilities({ backend: "opencode" }),
-      execute: async () => {
-        secondTransportCalls++;
-        return okOutcome();
-      },
-      classifyFailure: () => undefined,
-    };
-    const secondHarness = new StepExecutionHarness({
-      transport: secondTransport,
-      spendLedger: ledger,
-      spawnFn: fakeSpawn,
-    });
-    const second = await secondHarness.run(
+    const second = await harness.run(
       await makeStep(dir, { name: "hunter-resilience" }),
     );
-    expect(second.status).toBe("failed");
-    expect(secondTransportCalls).toBe(0);
+    expect(second.status).toBe("ok");
+    expect(second.reservations?.[0]?.state).toBe("settled");
   });
 
-  test("a free attempt with undefined cash releases without fencing: delivered, no flip note, no fail-fast", async () => {
+  // Free-route fence scope: a free route bills nothing, so an attempt whose
+  // usage is NOT complete has no credential worth protecting. It releases
+  // instead of fencing — collectUnresolvedSpend/renderResult only read
+  // unresolved_remote, so this reservation is invisible to both. The
+  // coupling-1 rule still holds: incomplete usage never settles.
+  test("a free attempt with incomplete usage releases without fencing: delivered, no fail-fast", async () => {
     const dir = await tempDir();
-    const freeUnknownCash: NormalizedUsage = {
+    const freeIncomplete: NormalizedUsage = {
       wallMs: 500,
       tokens: { outputVisible: 120, outputKnown: 120, totalKnown: 300 },
-      completeness: "complete",
+      completeness: "partial",
       billingMode: "free",
-      costSource: "provider",
     };
     const transport: ProviderTransport = {
       backend: "opencode",
       capabilities: async () => capabilities({ backend: "opencode" }),
-      execute: async () => okOutcome(freeUnknownCash),
+      execute: async () => okOutcome(freeIncomplete),
       classifyFailure: () => undefined,
     };
     const ledger = new SpyLedger();
@@ -612,25 +525,19 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
     const result = await harness.run(await makeStep(dir));
 
     expect(result.status).toBe("ok");
-    // #182 follow-up, free-route fence scope: no cash figure means no spend
-    // evidence on a free route, so the attempt releases instead of fencing —
-    // collectUnresolvedSpend/renderResult only read unresolved_remote, so this
-    // reservation is invisible to both (no floor marker, no unresolved row).
     expect(result.reservations?.[0]?.state).toBe("released_unstarted");
-    expect(result.reservations?.[0]?.knownUsd).toBeUndefined();
+    expect(ledger.settleCalls).toBe(0);
     expect(ledger.markUnresolvedCalls).toBe(0);
     expect(ledger.releaseUnstartedCalls).toBe(1);
-    expect(result.stderrTail).not.toContain("free-route cost flip");
   });
 
   test("a free transient failure retries on the same ledger: no fence, sibling steps unaffected", async () => {
     const dir = await tempDir();
-    const freeUnknownCash: NormalizedUsage = {
+    const freeIncomplete: NormalizedUsage = {
       wallMs: 500,
       tokens: { outputVisible: 120, outputKnown: 120, totalKnown: 300 },
-      completeness: "complete",
+      completeness: "partial",
       billingMode: "free",
-      costSource: "provider",
     };
     let transportCalls = 0;
     const transport: ProviderTransport = {
@@ -643,13 +550,13 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
             completion: "failed" as const,
             protocolIntegrity: "verified" as const,
             finalText: "not json",
-            usage: freeUnknownCash,
+            usage: freeIncomplete,
             stderrTail: "boom",
           };
         }
         return okOutcome({
-          ...freeUnknownCash,
-          cashCostUsd: 0,
+          ...freeIncomplete,
+          completeness: "complete",
         });
       },
       classifyFailure: (outcome) =>
@@ -688,8 +595,6 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
       tokens: { outputVisible: 120, outputKnown: 120, totalKnown: 300 },
       completeness: "complete",
       billingMode: "free",
-      costSource: "provider",
-      cashCostUsd: 0,
     };
     const transport: ProviderTransport = {
       backend: "opencode",
@@ -754,8 +659,6 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
       tokens: { providerReportedTotal: 100 },
       completeness: "partial",
       billingMode: "metered",
-      costSource: "provider",
-      cashCostUsd: 0.05,
     };
     let transportCalls = 0;
     const transport: ProviderTransport = {
@@ -800,60 +703,13 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
     expect(transportCalls).toBe(1);
   });
 
-  test("a delivered free attempt reporting priced cost stays delivered with the flip note appended", async () => {
-    const dir = await tempDir();
-    const flipped: NormalizedUsage = {
-      wallMs: 500,
-      tokens: { outputVisible: 120, outputKnown: 120, totalKnown: 300 },
-      completeness: "complete",
-      billingMode: "free",
-      costSource: "provider",
-      cashCostUsd: 0.06,
-    };
-    const transport: ProviderTransport = {
-      backend: "opencode",
-      capabilities: async () => capabilities({ backend: "opencode" }),
-      execute: async () => okOutcome(flipped),
-      classifyFailure: () => undefined,
-    };
-    const ledger = new SpyLedger();
-    const harness = new StepExecutionHarness({
-      transport,
-      spendLedger: ledger,
-      spawnFn: fakeSpawn,
-    });
-
-    const result = await harness.run(await makeStep(dir));
-
-    // Delivered, not failed: the parsed output was already persisted and the
-    // loop returns ok on delivered — rewriting it would claim an artifact was
-    // never written. The fence is still applied and the note still lands.
-    expect(result.status).toBe("ok");
-    expect(result.reservations?.[0]?.state).toBe("unresolved_remote");
-    expect(result.reservations?.[0]?.knownUsd).toBe(0.06);
-    expect(result.stderrTail).toContain("free-route cost flip");
-    expect(result.stderrTail).toContain("$0.06");
-
-    // The bucket is still fenced for the rest of the run: fail-closed is not
-    // weakened by preserving the kind.
-    const sibling = await new StepExecutionHarness({
-      transport,
-      spendLedger: ledger,
-      spawnFn: fakeSpawn,
-    }).run(await makeStep(dir, { name: "hunter-resilience" }));
-    expect(sibling.status).toBe("failed");
-    expect(sibling.stderrTail).toContain("fenced");
-  });
-
-  test("a subscription attempt reporting $0 with output tokens still settles, leaving its bucket unfenced", async () => {
+  test("a subscription attempt with output tokens and complete usage settles, leaving its bucket unfenced", async () => {
     const dir = await tempDir();
     const subscriptionZero: NormalizedUsage = {
       wallMs: 500,
       tokens: { outputVisible: 120, outputKnown: 120, totalKnown: 300 },
       completeness: "complete",
       billingMode: "subscription",
-      costSource: "provider",
-      cashCostUsd: 0,
     };
     const transport: ProviderTransport = {
       backend: "claude-code",
@@ -930,7 +786,6 @@ const telemetry: Telemetry = {
   tokens_in: 1,
   tokens_out: 1,
   tokens_total: 2,
-  cost_usd_est: 1.23,
 };
 
 const finding = (over: Partial<Finding> = {}): Finding => ({
@@ -969,9 +824,7 @@ const doc = (over: Partial<FindingsDocument> = {}): FindingsDocument => ({
 
 const resultInput = (over: Partial<ResultInput> = {}): ResultInput => ({
   doc: doc(),
-  costUsd: 1.23,
   wallMs: 60_000,
-  estimate: { low: 1.0, high: 2.0 },
   runDir: "/tmp/pr-hero-runs/pr-6-abc123",
   artifacts: ["report.md", "findings.json"],
   sessionFailed: false,
@@ -991,7 +844,6 @@ describe("PR5b — D8: renderResult surfaces unresolved spend", () => {
               step: "hunter-reliability",
               bucketId: "bucket-fenced",
               reservationId: "resv-1",
-              knownUsd: 0.1,
             },
           ],
         }),
@@ -1004,27 +856,6 @@ describe("PR5b — D8: renderResult surfaces unresolved spend", () => {
   test("no unresolved reservations means no unresolved row at all", () => {
     const text = joined(renderResult(resultInput()));
     expect(text).not.toContain("unresolved");
-  });
-
-  // 5b.6 RED→GREEN
-  test("the header's cost figure is marked as a floor (not a bare total) when unresolved is non-empty", () => {
-    const clean = stripAnsi(renderResult(resultInput())[1] ?? "");
-    const withUnresolved = stripAnsi(
-      renderResult(
-        resultInput({
-          unresolved: [
-            {
-              step: "hunter-reliability",
-              bucketId: "bucket-fenced",
-              reservationId: "resv-1",
-            },
-          ],
-        }),
-      )[1] ?? "",
-    );
-    expect(clean).toContain("$1.23");
-    expect(clean).not.toContain("≥$1.23");
-    expect(withUnresolved).toContain("≥$1.23");
   });
 });
 
@@ -1055,7 +886,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
           mode: "snapshot",
           inputTokens: 100,
           outputTokens: 20,
-          costUsd: 0.05,
         },
         { kind: "delta", text: JSON.stringify({ findings: [] }) },
         // Replayed snapshot for same step-1
@@ -1065,7 +895,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
           mode: "snapshot",
           inputTokens: 100,
           outputTokens: 20,
-          costUsd: 0.05,
         },
         {
           kind: "terminal",
@@ -1090,7 +919,7 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
 
     expect(result.status).toBe("ok");
     expect(result.reservations?.[0]?.state).toBe("settled");
-    expect(result.reservations?.[0]?.settledUsd).toBe(0.05);
+    expect(await attemptTotalKnown(dir)).toBe(120);
   });
 
   // BE2a: Delta replay
@@ -1104,7 +933,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
           mode: "delta",
           inputTokens: 100,
           outputTokens: 20,
-          costUsd: 0.05,
         },
         { kind: "delta", text: JSON.stringify({ findings: [] }) },
         // Replayed delta-1 with identical contribution ID
@@ -1114,7 +942,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
           mode: "delta",
           inputTokens: 100,
           outputTokens: 20,
-          costUsd: 0.05,
         },
         // Distinct delta-2
         {
@@ -1123,7 +950,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
           mode: "delta",
           inputTokens: 50,
           outputTokens: 10,
-          costUsd: 0.025,
         },
         {
           kind: "terminal",
@@ -1148,7 +974,7 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
 
     expect(result.status).toBe("ok");
     expect(result.reservations?.[0]?.state).toBe("settled");
-    expect(result.reservations?.[0]?.settledUsd).toBeCloseTo(0.075);
+    expect(await attemptTotalKnown(dir)).toBe(180);
   });
 
   // BE2b: Absent usage retains uncertainty
@@ -1180,7 +1006,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
 
     expect(result.status).toBe("ok");
     expect(result.reservations?.[0]?.state).toBe("unresolved_remote");
-    expect(result.reservations?.[0]?.knownUsd).toBeUndefined();
 
     // Bucket is fenced for siblings
     const sibling = await harness.run(
@@ -1202,7 +1027,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
             mode: "snapshot",
             inputTokens: 50,
             outputTokens: 10,
-            costUsd: 0.03,
           };
           // Provider hangs; harness watchdog triggers abort
           await new Promise<void>(() => {});
@@ -1225,7 +1049,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
 
     expect(result.status).toBe("failed");
     expect(result.reservations?.[0]?.state).toBe("unresolved_remote");
-    expect(result.reservations?.[0]?.knownUsd).toBe(0.03);
 
     // Sibling step is fenced
     const sibling = await harness.run(
@@ -1245,7 +1068,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
           mode: "snapshot",
           inputTokens: 100,
           outputTokens: 20,
-          costUsd: 0.04,
         },
         // Conflicting delta mode
         {
@@ -1253,7 +1075,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
           mode: "delta",
           inputTokens: 10,
           outputTokens: 5,
-          costUsd: 0.01,
         },
       ]),
       billingMode: "metered",
@@ -1270,11 +1091,10 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
 
     expect(result.status).toBe("failed");
     expect(result.reservations?.[0]?.state).toBe("unresolved_remote");
-    expect(result.reservations?.[0]?.knownUsd).toBe(0.04);
   });
 
   // BE2: Capped usage remains incomplete
-  test("BE2: capped usage reports partial completeness and lands unresolved_remote with known floor", async () => {
+  test("BE2: capped usage reports partial completeness and lands unresolved_remote", async () => {
     const dir = await tempDir();
     const transport = new OpenCodeSdkTransport({
       client: makeMockClient([
@@ -1283,7 +1103,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
           mode: "snapshot",
           inputTokens: 100,
           outputTokens: 20,
-          costUsd: 0.05,
           incomplete: true,
         },
         { kind: "delta", text: JSON.stringify({ findings: [] }) },
@@ -1310,7 +1129,6 @@ describe("PR5b — BE2: Usage identity (cumulative/delta replay, missing/conflic
 
     expect(result.status).toBe("ok");
     expect(result.reservations?.[0]?.state).toBe("unresolved_remote");
-    expect(result.reservations?.[0]?.knownUsd).toBe(0.05);
   });
 
   // BE2: Ambiguous prompt failure after events observed keeps fail-closed unavailable

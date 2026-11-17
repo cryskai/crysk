@@ -853,7 +853,6 @@ class TraceRunner implements StepRunner {
         tokens_in: 1,
         tokens_out: 1,
         tokens_total: 2,
-        cost_usd_est: 0,
       },
       attempts: spec.name === "hunter-reliability" ? 2 : 1,
       stderrTail: "",

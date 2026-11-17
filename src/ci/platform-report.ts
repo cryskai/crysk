@@ -1,5 +1,5 @@
 // The action's report step: tell the Crysk platform how a run ended, so every
-// run is recorded (#157) with its cost attributed (#139), then hand it the
+// run is recorded (#157) with its usage attributed (#139), then hand it the
 // run's findings so the dashboard can show them.
 //
 // It runs only in platform mode (action.yml gates the step on
@@ -7,7 +7,7 @@
 // after the publish step. Standalone use never reaches it.
 //
 // WHY THE REPORT IS METADATA ONLY: the body carries counts, token totals,
-// costs, model names and shas. It never carries a finding, a claim, a summary,
+// model names and shas. It never carries a finding, a claim, a summary,
 // a hop trail or any other text that can quote the customer's code. The
 // builder below COPIES the numeric fields it names out of the run directory
 // instead of forwarding a document, so a field added to findings.json tomorrow
@@ -81,11 +81,8 @@ interface ReportTokens {
   output?: number;
 }
 
-// Added beside the legacy fields, never replacing them: `cost_usd` stays the cash cost (0 on a
-// subscription), and `list_cost_usd` is what the same tokens cost at list price whatever paid for them.
 interface ReportUsageSplit {
   tokens?: ReportTokens;
-  list_cost_usd?: number;
 }
 
 export interface RunReportAgent extends ReportUsageSplit {
@@ -93,8 +90,6 @@ export interface RunReportAgent extends ReportUsageSplit {
   model?: string;
   tokens_in: number;
   tokens_out: number;
-  // Absent when the platform prices the run (`usage_facts`).
-  cost_usd?: number;
   duration_ms?: number;
   attempts?: number;
   status?: string;
@@ -121,20 +116,16 @@ export interface RunReportBody {
   usage: ReportUsageSplit & {
     tokens_in: number;
     tokens_out: number;
-    // The four dollar fields are absent when the platform prices the run (`usage_facts`).
-    cost_usd?: number;
-    cost_is_floor?: boolean;
     wall_ms?: number;
     index_ms?: number;
     sync_ms?: number;
-    billing?: "subscription" | "metered";
   };
   agents: RunReportAgent[];
   // Which findings stay open, under ids that last across runs. Absent when the run recorded none.
   finding_states?: FindingStateRecord;
-  // What the run measured per model request, for the platform to price. Present exactly when the
-  // platform accepted the `usage-facts` capability, and then the body carries no dollar figure.
-  usage_facts?: ReportUsageFacts;
+  // What the run measured per model request: the platform prices the run from it, so the body
+  // carries no dollar figure anywhere.
+  usage_facts: ReportUsageFacts;
 }
 
 export type ReportCredential = "api" | "subscription" | "free";
@@ -169,9 +160,6 @@ export interface BuildRunReportInput {
   // The trigger's resolved head, the fallback when no findings were written.
   triggerHeadSha: string;
   run: RunDirFacts;
-  // Whether the platform accepted the `usage-facts` capability at the token exchange: the body then
-  // carries `usage_facts` and no dollar figure anywhere. Absent means it did not.
-  usageFacts?: boolean;
 }
 
 // null when the run has no usable head: the platform requires a 40-hex sha, so
@@ -194,23 +182,16 @@ export function buildRunReport(
   );
   if (headSha === undefined) return null;
 
-  const dollars = input.usageFacts !== true;
   if (doc === undefined) {
     return {
       outcome: input.outcome === "" ? "error" : input.outcome,
       pr_number: input.prNumber,
       head_sha: headSha,
       counts: { blocking: 0, advisory: 0 },
-      usage: {
-        tokens_in: 0,
-        tokens_out: 0,
-        ...(dollars ? { cost_usd: 0 } : {}),
-      },
+      usage: { tokens_in: 0, tokens_out: 0 },
       agents: [],
       // A run that wrote no findings can still have spent tokens before it died.
-      ...(dollars
-        ? {}
-        : { usage_facts: buildUsageFacts(input.run.pipeline, new Map()) }),
+      usage_facts: buildUsageFacts(input.run.pipeline, new Map()),
     };
   }
 
@@ -252,10 +233,6 @@ export function buildRunReport(
     usage: {
       tokens_in: count(telemetry.tokens_in),
       tokens_out: count(telemetry.tokens_out),
-      ...(dollars ? { cost_usd: cost(telemetry.cost_usd_est) } : {}),
-      ...(dollars && telemetry.cost_usd_est_is_floor === true
-        ? { cost_is_floor: true }
-        : {}),
       wall_ms: count(telemetry.wall_ms),
       // Zero means no index was built, so there is no time to report.
       ...(count(telemetry.index_ms) > 0
@@ -264,18 +241,14 @@ export function buildRunReport(
       ...(telemetry.sync_ms === undefined
         ? {}
         : { sync_ms: count(telemetry.sync_ms) }),
-      ...runUsageSplit(input.run.pipeline, dollars),
+      ...runUsageSplit(input.run.pipeline),
     },
-    agents: buildAgents(rows, steps, owned, dollars),
+    agents: buildAgents(rows, steps, owned),
     ...findingStates(input.run.findingStates),
-    ...(dollars
-      ? {}
-      : {
-          usage_facts: buildUsageFacts(
-            input.run.pipeline,
-            ownerOfStep(owned, rows.slice(0, MAX_AGENTS)),
-          ),
-        }),
+    usage_facts: buildUsageFacts(
+      input.run.pipeline,
+      ownerOfStep(owned, rows.slice(0, MAX_AGENTS)),
+    ),
   };
 }
 
@@ -380,12 +353,6 @@ function count(value: unknown): number {
     : 0;
 }
 
-function cost(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? value
-    : 0;
-}
-
 // `telemetry.per_agent` is declared with the lab-shared minimum (tokens_total +
 // duration_ms) but this engine writes the richer PerAgentUsage, so each field
 // is read through a runtime check, as review/report.ts does. `detail` is never
@@ -408,7 +375,6 @@ function buildAgents(
   rows: ReadonlyArray<AgentRow>,
   steps: ReadonlyArray<PipelineStep>,
   owned: ReadonlyMap<string, PipelineStep[]>,
-  dollars: boolean,
 ): RunReportAgent[] {
   return rows.slice(0, MAX_AGENTS).map(([key, row]) => {
     const model = modelOf(steps, key);
@@ -417,25 +383,23 @@ function buildAgents(
       ...(model === undefined ? {} : { model }),
       tokens_in: count(row.tokens_in),
       tokens_out: count(row.tokens_out),
-      ...(dollars ? { cost_usd: cost(row.cost_usd_est) } : {}),
       duration_ms: count(row.duration_ms),
       ...(typeof row.attempts === "number" && row.attempts > 0
         ? { attempts: count(row.attempts) }
         : {}),
       ...(typeof row.status === "string" ? { status: row.status } : {}),
-      ...agentUsageSplit(owned.get(key) ?? [], dollars),
+      ...agentUsageSplit(owned.get(key) ?? []),
     };
   });
 }
 
-// pipeline.json's `steps[]` rows are `{ name, model, usage_v2, model_attempts, ... }`.
+// pipeline.json's `steps[]` rows are `{ name, model, usage_v2, usage_facts, ... }`.
 // Only what this file reads is kept, and `usage_v2` and `usage_facts` stay
 // unread until the code that sends them checks each of their fields.
 interface PipelineStep {
   name: string;
   model?: string;
   usage?: unknown;
-  modelUsages?: unknown[];
   usageFacts?: unknown;
 }
 
@@ -446,20 +410,15 @@ function pipelineSteps(pipeline: unknown): PipelineStep[] {
   const rows: PipelineStep[] = [];
   for (const step of steps) {
     if (typeof step !== "object" || step === null) continue;
-    const { name, model, usage_v2, model_attempts, usage_facts } =
-      step as Record<string, unknown>;
+    const { name, model, usage_v2, usage_facts } = step as Record<
+      string,
+      unknown
+    >;
     if (typeof name !== "string") continue;
     rows.push({
       name,
       ...(typeof model === "string" && model !== "" ? { model } : {}),
       usage: usage_v2,
-      ...(Array.isArray(model_attempts)
-        ? {
-            modelUsages: model_attempts.map(
-              (entry) => (entry as { usage_v2?: unknown } | null)?.usage_v2,
-            ),
-          }
-        : {}),
       ...(usage_facts === undefined ? {} : { usageFacts: usage_facts }),
     });
   }
@@ -575,95 +534,18 @@ function tokenSplit(usage: UsageRecord | undefined): ReportTokens {
   );
 }
 
-// The list price of what one usage record consumed. The Claude CLI files the
-// CLI's list total in exactly one field (transports/claude-code-cli.ts,
-// `costFor`): `notionalCostUsd` on a subscription, which charges nothing, and
-// `cashCostUsd` on a per-token key, where list price is the charge. Any other
-// billing (free, or unknown because attempts disagreed) names no field that
-// holds a list price, so it has none rather than a guessed one.
-function listCost(usage: UsageRecord | undefined): number | undefined {
-  switch (usage?.billingMode) {
-    case "subscription":
-      return amount(usage.notionalCostUsd);
-    case "metered":
-      return amount(usage.cashCostUsd);
-    default:
-      return undefined;
-  }
+function splitFields(tokens: ReportTokens): ReportUsageSplit {
+  return Object.keys(tokens).length === 0 ? {} : { tokens };
 }
 
-// A step whose models billed differently reads `unknown` once summed, so its
-// list cost is each model's own (`model_attempts[].usage_v2`, kept for exactly
-// this). Unknown when any model that reported usage cannot be priced.
-function stepListCost(step: PipelineStep): number | undefined {
-  const usage = usageRecord(step.usage);
-  const own = listCost(usage);
-  if (own !== undefined || step.modelUsages === undefined) return own;
-  return sumAll(
-    step.modelUsages.map(usageRecord).filter((entry) => entry !== undefined),
-    listCost,
-  );
-}
-
-// A sum only when every record that reported usage has a value: one unpriced
-// part would make the total look smaller than what was spent.
-function sumAll<T>(
-  items: readonly T[],
-  value: (item: T) => number | undefined,
-): number | undefined {
-  if (items.length === 0) return undefined;
-  let total = 0;
-  for (const item of items) {
-    const part = value(item);
-    if (part === undefined) return undefined;
-    total += part;
-  }
-  return total;
-}
-
-function splitFields(
-  tokens: ReportTokens,
-  listUsd: number | undefined,
-): ReportUsageSplit {
-  return {
-    ...(Object.keys(tokens).length === 0 ? {} : { tokens }),
-    ...(listUsd === undefined ? {} : { list_cost_usd: listUsd }),
-  };
-}
-
-// The run's tokens and billing come from its own `usage_v2`. Its list cost is the
-// sum of every step's, by the rule an agent row uses: the rolled-up notional total
-// counts only the steps that filed one while the tokens count them all, so a step
-// with no list price drops the run's list cost rather than leaving it short. A
-// pipeline with no per-step usage falls back to the run's own figure. With
-// `dollars` false (the platform prices the run) only the tokens are sent.
-function runUsageSplit(
-  pipeline: unknown,
-  dollars: boolean,
-): ReportUsageSplit & { billing?: "subscription" | "metered" } {
+// The run's token split comes from its own `usage_v2`.
+function runUsageSplit(pipeline: unknown): ReportUsageSplit {
   const usage = usageRecord(usageRecord(pipeline)?.usage_v2);
-  if (usage === undefined) return {};
-  if (!dollars) return splitFields(tokenSplit(usage), undefined);
-  const billing = usage.billingMode;
-  // Every step that filed usage, a malformed record included: one that cannot be
-  // read cannot be priced, so it drops the sum rather than shrinking it.
-  const priced = pipelineSteps(pipeline).filter(
-    (step) => step.usage !== undefined,
-  );
-  return {
-    ...splitFields(
-      tokenSplit(usage),
-      priced.length > 0 ? sumAll(priced, stepListCost) : listCost(usage),
-    ),
-    ...(billing === "subscription" || billing === "metered" ? { billing } : {}),
-  };
+  return usage === undefined ? {} : splitFields(tokenSplit(usage));
 }
 
 // A row's split is the sum of the steps it owns, refuter fan-out included.
-function agentUsageSplit(
-  steps: ReadonlyArray<PipelineStep>,
-  dollars: boolean,
-): ReportUsageSplit {
+function agentUsageSplit(steps: ReadonlyArray<PipelineStep>): ReportUsageSplit {
   const usages = steps.filter((step) => usageRecord(step.usage) !== undefined);
   if (usages.length === 0) return {};
   const splits = usages.map((step) => tokenSplit(usageRecord(step.usage)));
@@ -680,10 +562,7 @@ function agentUsageSplit(
       return total === undefined ? [] : [[key, total]];
     }),
   );
-  return splitFields(
-    tokens,
-    dollars ? sumAll(usages, stepListCost) : undefined,
-  );
+  return splitFields(tokens);
 }
 
 // Which `per_agent` row owns each step, among the rows the report sends, so a
@@ -1090,8 +969,6 @@ export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
       prNumber,
       triggerHeadSha: deps.env.TRIGGER_HEAD_SHA ?? "",
       run,
-      // The connect step's echo of the `usage-facts` capability (action.yml).
-      usageFacts: deps.env.CRYSK_PLATFORM_USAGE_FACTS === "true",
     });
     if (body === null) {
       warn("the run resolved no head sha.");

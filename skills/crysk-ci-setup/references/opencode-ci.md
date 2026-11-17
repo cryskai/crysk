@@ -53,7 +53,7 @@ Every step runs on DeepSeek. Without a Claude secret, keep `materiality_gate` of
 gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash", "claude:sonnet-latest"], "refuter": ["claude:opus-latest"], "summary": ["claude:haiku-latest"]}'
 ```
 
-Keep `CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY`) beside the DeepSeek secret. The OpenCode auth file still applies the metered ceiling.
+Keep `CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY`) beside the DeepSeek secret. The OpenCode auth file makes the run count as metered, so the platform's dollar limits (dashboard, Review > Limits) can skip it.
 
 ### Two OpenCode providers
 
@@ -103,4 +103,4 @@ The Action installs OpenCode CLI **1.18.30** in its **own** step when the setup 
 
 ## After setting DATA
 
-Open a **same-repo** PR (fork pushes skip). In the review job's log, the setup step prints one notice per OpenCode provider naming the secret it used, and the spend notices show metered when the OpenCode auth file is present.
+Open a **same-repo** PR (fork pushes skip). In the review job's log, the setup step prints one notice per OpenCode provider naming the secret it used. A run that bills an API key is the one the platform's dollar limits can skip; what it cost is in the platform dashboard.

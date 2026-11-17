@@ -6,11 +6,9 @@ export interface SessionUsage {
   tokens_in: number;
   tokens_out: number;
   tokens_total: number;
-  cost_usd_est: number;
 }
 
 interface RawSessionResult {
-  total_cost_usd?: number;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -19,7 +17,7 @@ interface RawSessionResult {
   };
 }
 
-// Session-total tokens/cost is the MUST (Rec-R3); per-agent attribution is a
+// Session-total tokens is the MUST (Rec-R3); per-agent attribution is a
 // documented SHOULD/best-effort gap — `--output-format json` only exposes the
 // session aggregate (verified against a live headless run), never a
 // per-hunter/refuter breakdown, so this slice does not populate it.
@@ -35,7 +33,6 @@ export function parseUsage(rawStdout: string, wall_ms: number): SessionUsage {
       tokens_in: 0,
       tokens_out: 0,
       tokens_total: 0,
-      cost_usd_est: 0,
     };
   }
   const usage = parsed.usage ?? {};
@@ -49,7 +46,6 @@ export function parseUsage(rawStdout: string, wall_ms: number): SessionUsage {
     tokens_in,
     tokens_out,
     tokens_total: tokens_in + tokens_out,
-    cost_usd_est: parsed.total_cost_usd ?? 0,
   };
 }
 
@@ -59,7 +55,6 @@ export function zeroUsage(): SessionUsage {
     tokens_in: 0,
     tokens_out: 0,
     tokens_total: 0,
-    cost_usd_est: 0,
   };
 }
 
@@ -72,6 +67,5 @@ export function sumUsage(a: SessionUsage, b: SessionUsage): SessionUsage {
     tokens_in: a.tokens_in + b.tokens_in,
     tokens_out: a.tokens_out + b.tokens_out,
     tokens_total: a.tokens_total + b.tokens_total,
-    cost_usd_est: a.cost_usd_est + b.cost_usd_est,
   };
 }

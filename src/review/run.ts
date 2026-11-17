@@ -16,11 +16,7 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import {
-  type EffectiveConfig,
-  loadEffectiveConfig,
-  notionalCostInput,
-} from "#config/config";
+import { type EffectiveConfig, loadEffectiveConfig } from "#config/config";
 import type { ModelsConfig } from "#model/model-name";
 import { type ModelProfile, resolveProfile } from "#model/profiles";
 import { type ResolvedRoutePlan, removedHunterRoles } from "#model/routing";
@@ -252,10 +248,9 @@ export function selectActiveHunters(agents: readonly AgentSpec[]): AgentSpec[] {
 // must not consume the budget, and a file whose every change is whitespace
 // drops out of that numstat entirely (verified: git emits no row for it).
 //
-// The COST BAND counts from the plain numstat, exclusions applied. The
-// hunters are handed diff.patch verbatim, whitespace hunks included, so
-// those bytes are genuinely billed — pricing them at zero would be the same
-// class of lie the exclusion bug was.
+// The report's DIFF STAT counts from the plain numstat, exclusions applied.
+// The hunters are handed diff.patch verbatim, whitespace hunks included, so
+// the stat describes what they actually read.
 //
 // `runGit` arrives as a callback, not an import of `git()` from `#git/git`:
 // this module's import surface is deliberately narrowed to review-domain
@@ -322,8 +317,6 @@ export function buildTelemetry(
     tokens_in: result.usage.tokens_in,
     tokens_out: result.usage.tokens_out,
     tokens_total: result.usage.tokens_total,
-    cost_usd_est: result.usage.cost_usd_est,
-    ...(result.unresolved.length > 0 ? { cost_usd_est_is_floor: true } : {}),
     per_agent: result.perAgent,
   };
 }
@@ -399,8 +392,6 @@ export async function writeRunReport(params: {
       head: params.head,
       diffStat: params.diffStat,
       excludedPaths: params.droppedPaths,
-      costUsd: params.result.usage.cost_usd_est,
-      ...notionalCostInput(params.result),
       wallMs: params.wallMs,
       ...(params.ciMode === undefined ? {} : { ciMode: params.ciMode }),
     }),

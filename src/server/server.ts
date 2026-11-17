@@ -31,6 +31,16 @@ import {
   type UsageResponse,
 } from "./preflight";
 
+// The store keeps `cost_usd_est` as a legacy column (0 on every run since the platform prices runs,
+// odd/tasks/platform-owned-cost.md S3): no dollar leaves the engine through this API, where a 0
+// would read as a free run.
+function withoutLegacyCost(row: CanonicalRunRow): CanonicalRunRow {
+  const { cost_usd_est: _legacy, ...rest } = row as CanonicalRunRow & {
+    cost_usd_est?: unknown;
+  };
+  return rest;
+}
+
 export interface ServerOptions {
   dbPath: string;
   socketPath?: string;
@@ -121,7 +131,9 @@ export function startProductStoreServer(
             params.push(query.limit);
           }
 
-          const runs = db.query(sql).all(...params) as CanonicalRunRow[];
+          const runs = (db.query(sql).all(...params) as CanonicalRunRow[]).map(
+            withoutLegacyCost,
+          );
           const response: ListRunsResponse = { runs };
           return Response.json(response);
         }
@@ -132,7 +144,7 @@ export function startProductStoreServer(
           if (!run) {
             return Response.json({ error: "Run not found" }, { status: 404 });
           }
-          return Response.json({ run });
+          return Response.json({ run: withoutLegacyCost(run) });
         }
 
         case "get_run_findings_doc": {
@@ -186,19 +198,18 @@ export function startProductStoreServer(
           }
           sql += " ORDER BY generated_at DESC;";
 
-          const rows = db.query(sql).all(...params) as CanonicalRunRow[];
+          const rows = (db.query(sql).all(...params) as CanonicalRunRow[]).map(
+            withoutLegacyCost,
+          );
           let total_tokens = 0;
-          let total_cost_usd = 0;
 
           for (const r of rows) {
             total_tokens += r.tokens_total;
-            total_cost_usd += r.cost_usd_est;
           }
 
           const response: UsageResponse = {
             rows,
             total_tokens,
-            total_cost_usd,
           };
           return Response.json(response);
         }

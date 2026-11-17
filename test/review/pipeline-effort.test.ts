@@ -41,7 +41,6 @@ function envelope(result: string): string {
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
     },
-    total_cost_usd: 0.001,
   });
 }
 
@@ -318,7 +317,7 @@ function capableOpenCode(): ProviderTransport {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async () => {
@@ -332,7 +331,6 @@ const READY: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 async function openCodeRun(
@@ -353,7 +351,6 @@ async function openCodeRun(
             tokens_out: 1,
             tokens_total: 2,
             wall_ms: 1,
-            cost_usd_est: 0,
           },
           attempts: 1,
           stderrTail: "",

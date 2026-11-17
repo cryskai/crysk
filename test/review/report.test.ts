@@ -17,7 +17,6 @@ import {
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import {
   envelopeModel,
-  estimateCost,
   formatElapsed,
   formatStepRoute,
   incompleteReviewAnnotation,
@@ -68,7 +67,6 @@ const TELEMETRY: Telemetry = {
   tokens_in: 100,
   tokens_out: 20,
   tokens_total: 120,
-  cost_usd_est: 12.9,
   per_agent: {
     reliability: { tokens_total: 60, duration_ms: 1000 },
     lifecycle: { tokens_total: 60, duration_ms: 1000 },
@@ -99,7 +97,6 @@ const META: ReportMeta = {
   base: "main",
   head: "feature",
   diffStat: { files: 3, insertions: 120, deletions: 45 },
-  costUsd: 12.9,
   wallMs: 754_000,
 };
 
@@ -230,29 +227,8 @@ describe("renderReport", () => {
     expect(markdown).toContain(
       "Nothing was refuted, and nothing was merged as a duplicate.",
     );
-    expect(markdown).toContain("3 files, +120 −45 · run complete · $12.90");
-  });
-
-  // #173 (§8: "Artifacts and reports show cash and notional totals
-  // separately"). report.md is the artifact half of that sentence; the
-  // terminal's own row is asserted in test/ui/result.test.ts.
-  describe("cash and notional in the run line", () => {
-    test("a notional figure is appended as its own labelled segment", () => {
-      const markdown = renderReport(doc(), {
-        ...META,
-        costUsd: 0,
-        notionalUsd: 0.0455,
-      });
-      expect(markdown).toContain("run complete · $0.00");
-      expect(markdown).toContain("$0.05 at list price, not charged");
-    });
-
-    test("no notional figure leaves the run line byte-identical", () => {
-      expect(renderReport(doc(), { ...META, notionalUsd: undefined })).toBe(
-        renderReport(doc(), META),
-      );
-      expect(renderReport(doc(), META)).not.toContain("list price");
-    });
+    expect(markdown).toContain("3 files, +120 −45 · run complete · 12m 34s");
+    expect(markdown).not.toContain("$");
   });
 
   test("advisory-only documents leave blocking empty", () => {
@@ -459,7 +435,7 @@ describe("renderReport", () => {
     const markdown = renderReport(doc(), META);
     expect(markdown).toBe(
       "# Review — musive main..feature\n\n" +
-        "3 files, +120 −45 · run complete · $12.90 · 12m 34s\n\n" +
+        "3 files, +120 −45 · run complete · 12m 34s\n\n" +
         "Agents: reliability ran · lifecycle ran\n\n" +
         "## Blocking (0 findings, 0 root causes)\n\n" +
         "_Nothing blocking._\n\n" +
@@ -1119,12 +1095,16 @@ describe("renderPrComment", () => {
     expect(body).toContain("crysk (version not recorded)");
   });
 
-  // The no-economics contract: the fixture telemetry carries cost_usd_est
-  // 12.9 and token counts, and none of it may reach a public comment — a
-  // "$" anywhere in the body means the contract broke.
+  // The no-economics contract: an older document's telemetry still carries a
+  // `cost_usd_est` of 12.9 beside its token counts, and none of it may reach a
+  // public comment — a "$" anywhere in the body means the contract broke.
   test("no cost and no token counts anywhere", () => {
+    const legacy = doc({
+      telemetry: { ...TELEMETRY, cost_usd_est: 12.9 } as Telemetry,
+    });
     const bodies = [
       renderPrComment(doc(), undefined, undefined, [], undefined),
+      renderPrComment(legacy, undefined, undefined, [], undefined),
       renderPrComment(
         doc({ findings: [finding({ id: "F001" })] }),
         WEB_URL,
@@ -2525,95 +2505,6 @@ describe("renderIssueFindingComment", () => {
     expect(body).toContain(
       `[\`src/a.ts:10\`](${WEB_URL}/blob/${HEAD}/src/a.ts#L10)`,
     );
-  });
-});
-
-describe("estimateCost", () => {
-  const SMALL = { files: 3, insertions: 120, deletions: 45 };
-  const LARGE = { files: 45, insertions: 2775, deletions: 1237 };
-
-  test("returns a band, never a point", () => {
-    const estimate = estimateCost(SMALL, 4);
-    expect(estimate.low).toBeLessThan(estimate.high);
-    expect(estimate.basis).toContain("band");
-  });
-
-  // The two measured calibration points must land inside the band they were
-  // fitted from, or the fit is decoration.
-  test("brackets the measured 45-file run", () => {
-    const estimate = estimateCost(LARGE, 5);
-    expect(estimate.low).toBeLessThanOrEqual(11);
-    expect(estimate.high).toBeGreaterThanOrEqual(14.78);
-  });
-
-  // PR 1682's tree, run twice (2026-08-10/11): $4.74 and $3.92. The band
-  // must bracket BOTH — this is the per-agent-floor evidence that retired
-  // the legacy ~$2.61 point (two same-engine runs of a comparable tree both
-  // landed far above it; a point the instrument contradicts is decoration).
-  test("brackets both measured runs of the 1682 tree", () => {
-    const estimate = estimateCost(
-      { files: 7, insertions: 21, deletions: 8 },
-      3,
-    );
-    expect(estimate.low).toBeLessThanOrEqual(3.92);
-    expect(estimate.high).toBeGreaterThanOrEqual(4.74);
-  });
-
-  test("brackets the first B0 local run", () => {
-    const estimate = estimateCost(
-      { files: 5, insertions: 484, deletions: 0 },
-      4,
-    );
-    expect(estimate.low).toBeLessThanOrEqual(3.68);
-    expect(estimate.high).toBeGreaterThanOrEqual(3.68);
-  });
-
-  test("grows with diff size", () => {
-    expect(estimateCost(LARGE, 4).high).toBeGreaterThan(
-      estimateCost(SMALL, 4).high,
-    );
-    expect(estimateCost(LARGE, 4).low).toBeGreaterThan(
-      estimateCost(SMALL, 4).low,
-    );
-  });
-
-  test("grows with hunter count", () => {
-    expect(estimateCost(SMALL, 5).high).toBeGreaterThan(
-      estimateCost(SMALL, 3).high,
-    );
-  });
-
-  test("accounts for the optional summarizer without changing legacy callers", () => {
-    const without = estimateCost(SMALL, 4);
-    const withSummary = estimateCost(SMALL, 4, true);
-    expect(withSummary.high).toBeGreaterThan(without.high);
-    expect(withSummary.low).toBeGreaterThan(without.low);
-    expect(withSummary.basis).toContain("summarizer");
-  });
-
-  test("O-5a — verification-step count is its own term: 2 vs 40 moves the band", () => {
-    const two = estimateCost(SMALL, 4, false, 2);
-    const forty = estimateCost(SMALL, 4, false, 40);
-    expect(forty.high).toBeGreaterThan(two.high);
-    expect(forty.low).toBeGreaterThan(two.low);
-    expect(two.basis).toContain("2 verification step");
-    expect(forty.basis).toContain("40 verification step");
-    expect(estimateCost(SMALL, 4)).toEqual(estimateCost(SMALL, 4, false, 0));
-  });
-
-  test("a zero diff is non-negative and still a band", () => {
-    const estimate = estimateCost({ files: 0, insertions: 0, deletions: 0 }, 4);
-    expect(estimate.low).toBeGreaterThanOrEqual(0);
-    expect(estimate.low).toBeLessThan(estimate.high);
-  });
-
-  test("negative inputs and a zero hunter count cannot produce a bad band", () => {
-    const estimate = estimateCost(
-      { files: -5, insertions: -10, deletions: -10 },
-      0,
-    );
-    expect(estimate.low).toBeGreaterThanOrEqual(0);
-    expect(estimate.low).toBeLessThan(estimate.high);
   });
 });
 

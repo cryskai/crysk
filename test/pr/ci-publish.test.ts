@@ -91,7 +91,6 @@ describe("publishCiReviewIfEligible — eligibility guard", () => {
         prNumber: PR,
         headSha: HEAD,
         findings: [finding({ id: "F001" })],
-        costUsdEst: 1.23,
         wallMs: 5000,
         model: "sonnet",
         webUrl: undefined,
@@ -119,7 +118,6 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
           finding({ id: "F001", tier: "blocking" }),
           finding({ id: "F002", tier: "advisory" }),
         ],
-        costUsdEst: 1.23,
         wallMs: 5000,
         model: "sonnet",
         webUrl: undefined,
@@ -138,7 +136,6 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
         "findings_count=2\n" +
         "blocking_count=1\n" +
         "advisory_count=1\n" +
-        "cost_usd_est=1.23\n" +
         "run_dir=/runs/1\n",
     );
   });
@@ -153,7 +150,6 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
         prNumber: PR,
         headSha: HEAD,
         findings: [],
-        costUsdEst: 0,
         wallMs: 1000,
         model: "sonnet",
         webUrl: undefined,
@@ -170,7 +166,6 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
         "findings_count=0\n" +
         "blocking_count=0\n" +
         "advisory_count=0\n" +
-        "cost_usd_est=0.00\n" +
         "run_dir=/runs/1\n",
     );
   });
@@ -185,7 +180,6 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
         prNumber: PR,
         headSha: HEAD,
         findings: [],
-        costUsdEst: 0,
         wallMs: 1000,
         model: "sonnet",
         webUrl: undefined,
@@ -209,7 +203,6 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
         prNumber: PR,
         headSha: HEAD,
         findings: [],
-        costUsdEst: 0,
         wallMs: 1000,
         model: "sonnet",
         webUrl: undefined,
@@ -244,7 +237,6 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
               prNumber: PR,
               headSha: HEAD,
               findings: [],
-              costUsdEst: 0,
               wallMs: 1000,
               model: "sonnet",
               webUrl: undefined,

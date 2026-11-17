@@ -369,7 +369,7 @@ describe("docs/benchmarks/m6-floor-cases.json matches §2.4septies", () => {
 });
 
 describe("d3 benchmark scorer hooks", () => {
-  test("offline scorer reports cash per unique TP and excludes invalid runs", async () => {
+  test("offline scorer excludes invalid runs from the promotion metrics", async () => {
     const { scoreBenchmarkRuns, validateBenchmarkPlan } = await import(
       "../../src/diversity/benchmark"
     );
@@ -397,8 +397,6 @@ describe("d3 benchmark scorer hooks", () => {
           treatmentCompleted: true,
           blindingIntact: true,
           interleavingIntact: true,
-          cashCostUsd: 9,
-          notionalCostUsd: 8,
           uniqueTruePositives: 3,
           recall: 1,
           cleanPrRestraint: 0,
@@ -414,8 +412,6 @@ describe("d3 benchmark scorer hooks", () => {
           treatmentCompleted: true,
           blindingIntact: true,
           interleavingIntact: true,
-          cashCostUsd: 4,
-          notionalCostUsd: 2,
           uniqueTruePositives: 2,
           recall: 0.5,
           cleanPrRestraint: 1,
@@ -425,7 +421,8 @@ describe("d3 benchmark scorer hooks", () => {
       plan,
     );
     expect(report.invalidRuns).toBe(1);
-    expect(report.cashCostPerUniqueTp).toBe(2);
+    expect(report.validRuns).toBe(1);
+    expect(report.recall).toBe(0.5);
     expect(report.blindSpots).toBe(1);
   });
 });

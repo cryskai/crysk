@@ -48,7 +48,6 @@ const STEP_TOKENS = [
 ];
 const TURN_INPUT = 600;
 const TURN_OUTPUT = 60;
-const TURN_COST = 0.06;
 const COMPLETED_AT = 1_787_811_448_694;
 
 const TOOL_IDS = [
@@ -499,7 +498,6 @@ describe("a multi-step turn ends once, at session.idle (#127)", () => {
     if (outcome === undefined) throw new Error("the attempt never settled");
     expect(outcome.usage.tokens.inputKnown).toBe(TURN_INPUT);
     expect(outcome.usage.tokens.outputKnown).toBe(TURN_OUTPUT);
-    expect(outcome.usage.cashCostUsd).toBeCloseTo(TURN_COST, 10);
   });
 });
 
@@ -793,7 +791,6 @@ describe("bounded turns preserve usage and overflow fails closed", () => {
   function runOverflowTurn(): Array<{
     inputTokens?: number;
     outputTokens?: number;
-    costUsd?: number;
   }> {
     const state = createTurnState(
       SESSION_ID,
@@ -803,7 +800,6 @@ describe("bounded turns preserve usage and overflow fails closed", () => {
     const snapshots: Array<{
       inputTokens?: number;
       outputTokens?: number;
-      costUsd?: number;
     }> = [];
     for (let index = 0; index < OVERFLOW_STEPS; index += 1) {
       for (const event of mapOpenCodeEvents(
@@ -819,7 +815,6 @@ describe("bounded turns preserve usage and overflow fails closed", () => {
             ...(event.outputTokens !== undefined
               ? { outputTokens: event.outputTokens }
               : {}),
-            ...(event.costUsd !== undefined ? { costUsd: event.costUsd } : {}),
           });
         }
       }
@@ -837,7 +832,6 @@ describe("bounded turns preserve usage and overflow fails closed", () => {
       FIRST_STEP_INPUT + (OVERFLOW_STEPS - 1) * LATER_STEP_INPUT,
     );
     expect(last.outputTokens).toBe(OVERFLOW_STEPS * STEP_OUTPUT);
-    expect(last.costUsd).toBeCloseTo(OVERFLOW_STEPS * STEP_COST, 10);
   });
 
   test("the running total never decreases within the memory bound", () => {
@@ -845,21 +839,17 @@ describe("bounded turns preserve usage and overflow fails closed", () => {
 
     let previousInput = 0;
     let previousOutput = 0;
-    let previousCost = 0;
     for (const [index, snapshot] of snapshots.entries()) {
       const input = snapshot.inputTokens ?? 0;
       const output = snapshot.outputTokens ?? 0;
-      const cost = snapshot.costUsd ?? 0;
       if (input < previousInput || output < previousOutput) {
         throw new Error(
           `usage went backwards at step ${index}: ` +
             `${previousInput}/${previousOutput} -> ${input}/${output}`,
         );
       }
-      expect(cost).toBeGreaterThanOrEqual(previousCost - 1e-12);
       previousInput = input;
       previousOutput = output;
-      previousCost = cost;
     }
   });
 });

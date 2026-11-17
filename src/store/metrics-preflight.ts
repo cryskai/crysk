@@ -103,7 +103,6 @@ export interface RunRow {
   tokens_in: number;
   tokens_out: number;
   tokens_total: number;
-  cost_usd_est: number;
   blocking: number;
   advisory: number;
 }
@@ -114,7 +113,6 @@ export interface RunAgentRow {
   duration_ms: number;
   tokens_in: number;
   tokens_out: number;
-  cost_usd_est: number;
   attempts: number;
   status: string;
 }
@@ -160,7 +158,6 @@ export function projectRunRow(input: {
     tokens_in: input.doc.telemetry.tokens_in,
     tokens_out: input.doc.telemetry.tokens_out,
     tokens_total: input.doc.telemetry.tokens_total,
-    cost_usd_est: input.doc.telemetry.cost_usd_est,
     blocking,
     advisory,
   };
@@ -171,7 +168,6 @@ export function projectRunRow(input: {
       duration_ms: usage.duration_ms,
       tokens_in: usage.tokens_in,
       tokens_out: usage.tokens_out,
-      cost_usd_est: usage.cost_usd_est,
       attempts: usage.attempts,
       status: usage.status,
     }),
@@ -201,29 +197,23 @@ export function renderUsage(
   const out: string[] = [];
   out.push(
     "| generated_at | repo_id | pr | status | blocking | advisory | " +
-      "tokens | cost | run_dir |",
+      "tokens | run_dir |",
   );
-  out.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+  out.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const row of rows) {
     const status =
       row.run_status + (row.session_failed ? " (session failed)" : "");
     out.push(
       `| ${row.generated_at} | ${row.repo_id} | ${row.pr ?? "local"} | ` +
         `${status} | ${row.blocking} | ${row.advisory} | ` +
-        `${row.tokens_total} | $${row.cost_usd_est.toFixed(2)} | ` +
-        `${row.run_dir} |`,
+        `${row.tokens_total} | ${row.run_dir} |`,
     );
   }
-  let totalCost = 0;
   let totalTokens = 0;
   for (const row of rows) {
-    totalCost += row.cost_usd_est;
     totalTokens += row.tokens_total;
   }
   out.push("");
-  out.push(
-    `${rows.length} run(s) — $${totalCost.toFixed(2)} total, ` +
-      `${totalTokens} tokens.`,
-  );
+  out.push(`${rows.length} run(s) — ${totalTokens} tokens.`);
   return out;
 }

@@ -41,7 +41,6 @@ function usage(overrides: Partial<SessionUsage> = {}): SessionUsage {
     tokens_in: 100,
     tokens_out: 10,
     tokens_total: 110,
-    cost_usd_est: 0.01,
     ...overrides,
   };
 }

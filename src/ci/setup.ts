@@ -114,43 +114,19 @@ export const LEGACY_CI_WORKFLOW_RELATIVE_PATH = LEGACY_WORKFLOW_RELATIVE_PATH;
 // PR that changes it.
 export interface CiWorkflowTemplateOptions {
   actionRef?: string;
-  // Repo-local override for the action's own `budget-usd` default. Omitted
-  // means "say nothing and inherit the action's default", which is what every
-  // scaffolded repo gets: raising a stranger's spend ceiling from a template
-  // they did not choose is not ours to do.
+  // Repo-local override for the action's own `max-changed-lines` default.
+  // Omitted means "say nothing and inherit the route-derived limit" (none on a
+  // subscription, 4000 on a metered key; resolveCiSizeLimits), which every
+  // scaffolded repo gets and decides for itself.
   //
-  // Since issue #156 that inherited default is a POLICY, not a number:
-  // action.yml's `budget-usd` default is empty, and the CLI resolves the
-  // ceiling from the route's billing mode (ci/gates.ts's
-  // `resolveCiBudgetCeiling`) — no ceiling on a Claude subscription, a default
-  // ceiling on a metered ANTHROPIC_API_KEY route. Inheriting is therefore
-  // strictly better than it was: a scaffolded repo now gets a ceiling exactly
-  // when a ceiling means something.
-  //
-  // NOTHING sets this today, this repo included — see OWN_CI_WORKFLOW_OPTIONS
-  // for why the one override that existed went away. The knob stays because a
-  // repo that genuinely wants a fixed ceiling on a subscription route needs a
-  // way to say so, and that is the only thing an explicit value now means.
-  budgetUsd?: string;
-  // Repo-local override for the action's own `max-changed-lines` default, and
-  // omitted for the same reason as `budgetUsd`: a scaffolded repo inherits
-  // the route-derived limit (none on a subscription, 4000 on a metered key;
-  // resolveCiSizeLimits) and decides for itself. THIS repo raises it because its
-  // own slices routinely land near the line — D1-10c was skipped at 1023,
-  // twenty-three lines over, and a skipped review is indistinguishable from a
-  // clean one to anyone reading the checks.
+  // THIS repo raises it because its own slices routinely land near the line:
+  // D1-10c was skipped at 1023, twenty-three lines over, and a skipped review is
+  // indistinguishable from a clean one to anyone reading the checks.
   //
   // Raising it costs little and risks little HERE. It is a COST gate, never a
   // quality one — the size<->quality question is unmeasured in this project
   // (`scripts/scope-probe.ts`), so this number is not a claim that pr-hero
   // reviews a 1500-line diff as well as a 300-line one.
-  //
-  // Since issue #156 it is also the ONLY gate bounding a self-review's scope
-  // here, which is what the number has to be read against: this comment used
-  // to lean on `budget-usd` as "the real spend ceiling, which still refuses
-  // the work outright". On this repo's subscription route it never was — it
-  // gated `estimate.high`, a token-derived figure, against $0.00 of real
-  // cash.
   maxChangedLines?: string;
   // The files half of the size gate, emitted right after the lines input.
   maxChangedFiles?: string;
@@ -189,17 +165,7 @@ export const DEFAULT_CI_ACTION_REF = "cryskai/crysk@v0";
 // leave the committed workflow and the tests disagreeing about what "ours"
 // means. Nothing a scaffolded repo receives passes through here.
 //
-// `budgetUsd` is "0": the explicit, loud DISABLE, not a ceiling. History:
-// it used to be "15.00", because a self-review's diff grows against the base
-// every time a finding is answered, so an iterating PR walked toward the
-// ceiling exactly when the check mattered most. Issue #156 dropped it on the
-// promise that the route's billing mode would apply no ceiling on this repo's
-// Claude subscription. That promise did not hold here: the route resolved as
-// metered, and #326 (and earlier PRs) skipped at the $10 metered default on
-// an `estimate.high` that is not this route's cash cost. A subscription has
-// no dollar cost to cap, so this repo opts out explicitly; fixing the
-// billing-mode resolution itself is a separate issue. `maxChangedLines`
-// stays: that gate is real on any route.
+// `maxChangedLines` stays: that gate is real on any route.
 //
 // `cryskSecrets` names the Claude pair (U5): the action stops a run that passes the
 // removed inputs, so this repo's own review passes CRYSK_* secrets. The repository
@@ -207,7 +173,6 @@ export const DEFAULT_CI_ACTION_REF = "cryskai/crysk@v0";
 export const OWN_CI_WORKFLOW_OPTIONS: CiWorkflowTemplateOptions = {
   actionRef: "./",
   maxChangedLines: "5000",
-  budgetUsd: "0",
   mode: "gate",
   forceEngineFromPr: true,
   cryskSecrets: ["CRYSK_CLAUDE_OAUTH_TOKEN", "CRYSK_CLAUDE_API_KEY"],
@@ -294,12 +259,6 @@ export function generateCiWorkflowTemplate(
 ): string {
   const actionRef = options.actionRef ?? DEFAULT_CI_ACTION_REF;
   const pinEngine = options.forceEngineFromPr === true;
-  const budgetLine =
-    options.budgetUsd === undefined
-      ? ""
-      : `\n          budget-usd: ${options.budgetUsd}`;
-  // Emitted before `budget-usd` to mirror action.yml's own declaration order,
-  // so the generated file reads in the same sequence as the inputs it sets.
   const sizeGateLine =
     options.maxChangedLines === undefined
       ? ""
@@ -555,7 +514,7 @@ ${gateStep}      - name: Checkout${checkoutGate}
         uses: ${actionRef}
         with:
           github-token: \${{ secrets.GITHUB_TOKEN }}
-${credentialWithLines(options)}${sizeGateLine}${filesGateLine}${budgetLine}${modeLine}
+${credentialWithLines(options)}${sizeGateLine}${filesGateLine}${modeLine}
 `;
 }
 
@@ -566,7 +525,7 @@ export interface RunCiSetupOptions {
   // What the person chose in setup --ci; absent keeps the template's defaults.
   template?: Pick<
     CiWorkflowTemplateOptions,
-    "mode" | "budgetUsd" | "maxChangedLines" | "maxChangedFiles"
+    "mode" | "maxChangedLines" | "maxChangedFiles"
   >;
 }
 
@@ -890,7 +849,7 @@ export function openCodeProvidersOfPerson(person: {
 // so every source routing reads counts (`models`, `--model`, a
 // spec model, a prompt's frontmatter, the engine's defaults). Undefined means the
 // routes could not be resolved here: the auth file decides, the old rule, which
-// keeps the ceiling. The file alone is not enough otherwise: it also exists for a
+// keeps the route metered. The file alone is not enough otherwise: it also exists for a
 // ChatGPT subscription, after an earlier run on a runner whose HOME persists, or
 // from a local `opencode auth login`. And no file means no credential for a
 // per-token route, as before: a free `opencode/*` model stays unmetered.

@@ -51,8 +51,7 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    `crysk-loop` answers the findings. `crysk` covers the local CLI, which this path does not use.
 
 2. **Ask your agent to set up Crysk CI** in the repository. `crysk-ci-setup` first asks you how
-   re-reviews should work: a level (minimal, balanced, thorough or manual), gate or advisory, how CI
-   pays (a subscription gets no spend ceiling, an API key gets one you choose), the changed-lines
+   re-reviews should work: a level (minimal, balanced, thorough or manual), gate or advisory, the changed-lines
    threshold above which a PR is skipped (default 4000, on any billing), and whether to tune the
    advanced settings (score weights, observe-only, trusted actors, files limit, exclusions). Then it runs
    `npx -y crysk setup --ci` with your answers (writes `.github/workflows/crysk.yml`, or updates an existing `pr-hero.yml` in place, and the
@@ -117,10 +116,10 @@ not used: on macOS a Claude login always counts. To bill the key, put it first i
 `{"credentials": {"claude": ["api_key", "subscription"]}}`. The Claude CLI child sees only the chosen
 credential.
 
-The dollar figures Crysk prints — the cost band before a run, `crysk usage` after one — are
-always a **token-derived estimate**, because that is the only unit comparable across both models. On
-a subscription, read them as "how much of my window will this consume", not as a bill. A step on an
-OpenCode model bills to that provider's credential instead (see [`docs/configuration.md`](docs/configuration.md)).
+Crysk prints no dollar figure: neither the plan before a run nor the result after one shows a cost. The Crysk
+platform prices every run from the tokens and models the engine reports, and owns the dollar limits (see
+[`docs/github-actions.md`](docs/github-actions.md#spend-controls)). A step on an OpenCode model bills to that
+provider's credential instead (see [`docs/configuration.md`](docs/configuration.md)).
 
 ## Installation
 
@@ -217,7 +216,7 @@ crysk review --pr 123            # any PR by number
 
 > **Breaking change in v2.0**: Invoking `crysk` with zero arguments in a TTY now opens the **interactive TUI menu** instead of implicitly starting a local `review`. In non-interactive environments, it prints the help text and exits with code 2. Set `CRYSK_NO_TUI=1` (`PRHERO_NO_TUI=1` still works) to bypass the TUI in automation.
 
-Every paid run prints a plan and a cost band, then asks for confirmation (`--yes` skips the prompt).
+Every run prints a plan, then asks for confirmation (`--yes` skips the prompt).
 
 ### For AI agents
 
@@ -307,7 +306,7 @@ resolver checks the config value *before* the remote head. A global `default_bas
 preempt autodetection on every repo that stays quiet, so the first repo whose default branch differs
 would silently review the wrong commit range — with a plausible branch name on the plan card.
 
-**Flags always win, and may exceed a cap.** A flag is you typing an intent in front of the cost band,
+**Flags always win, and may exceed a cap.** A flag is you typing an intent in front of the plan,
 which is a different thing from a committed file asking on your behalf. `--agents` overrides
 `agents_dir` (then the repo file, then the global, then `CRYSK_AGENTS_DIR`, or `PRHERO_AGENTS_DIR` on an install from before the rename); `--base` overrides
 `default_base`; `--summary` / `--no-summary` and `--model` override the summary keys.
@@ -369,9 +368,9 @@ default branch.
 | `crysk gc install` | Install the macOS launchd agent that runs `crysk gc` every `--interval` minutes (default 360 = 6h). No reviews, no `watch.json`, no daily cap — the $0 sweeper so trees do not wait for a review or the watcher. |
 | `crysk gc uninstall` | Unload and remove that GC agent. |
 | `crysk gc status` | Read-only, $0: whether the GC agent is installed, its interval, plist, and tick log. |
-| `crysk usage [--all]` | Read-only, $0: print the observability store's per-run rows (cost, tokens, findings) — every completed review, local and PR, auto-ingests into one global `~/.crysk/metrics.db`. Scoped to the current checkout's origin by default; `--all` shows every origin instead. |
+| `crysk usage [--all]` | Read-only, $0: print the observability store's per-run rows (tokens, findings) — every completed review, local and PR, auto-ingests into one global `~/.crysk/metrics.db`. Scoped to the current checkout's origin by default; `--all` shows every origin instead. |
 
-Flags worth knowing: `--dry-run` (plan + cost band, creates nothing), `--yes`, `--model <m>`,
+Flags worth knowing: `--dry-run` (the plan, creates nothing), `--yes`, `--model <m>`,
 `--scout`, `--no-scout` and `--scout-model` (accepted and ignored, with a warning: the scout stage was removed),
 `--no-shared-prefix` (turn off the default shared hunter prefix: hunters share one cached system prompt
 holding the patch, their roles move to the user message and a one-turn warm-up writes the cache first; Anthropic routes only,
@@ -537,10 +536,15 @@ A script that merges on success should treat only `0` as a finished review.
 
 ## Cost and expectations
 
+The figures in this section are **measured history**, kept as the evidence behind the size gate. The engine
+no longer prints, stores or limits dollars: the Crysk platform prices a platform run from the usage the
+engine reports and shows what a review cost (dashboard, per pull request and in insights).
+
 - **$2–5 per review** of a typical PR-sized diff — the floor is real, because hunters read the tree,
   not just the diff — and larger trees cost more (a 45-file tree measured $11–15). Wall time is
-  minutes, not seconds: ~10 for a small diff, up to ~25 measured on a large tree. The printed band
-  is an order-of-magnitude guide, not a quote — the same tree has billed 34% apart across runs.
+  minutes, not seconds: ~10 for a small diff, up to ~25 measured on a large tree. These are an
+  order-of-magnitude guide, not a quote — the same tree has billed 34% apart across runs.
+
 ### The size gate — a cost gate, not a quality gate
 
 Past a size threshold Crysk **skips the review** instead of running it. Small trees bill $1.9–$4.8;
@@ -554,7 +558,7 @@ miss came from a 7-file PR. If a large diff is worth its price, review it anyway
 Locally that is `--force`. In GitHub Actions it is a pull request comment, `/crysk review`,
 from a user with write access (a workflow scaffolded before the comment trigger uses
 `gh workflow run pr-hero-force.yml -f pr=<n>` instead). The comment does not review on your
-machine; the Actions runner does. It also clears the CI admission rules and the budget ceiling for
+machine; the Actions runner does. It also clears the CI admission rules and the platform's dollar limits for
 that one run. `gh run rerun` on a skipped run does not: it measures the gates again and skips again.
 
 The gate counts **effective** changed lines (insertions + deletions) and files — excluded content is
@@ -619,7 +623,7 @@ only ever over-count, never under-count.
 
 ```bash
 crysk review --pr 42 --dry-run            # prints the gate verdict, spends nothing
-crysk review --pr 42 --force              # local: review it anyway (does NOT skip the cost prompt)
+crysk review --pr 42 --force              # local: review it anyway (does NOT skip the confirmation prompt)
 gh pr comment 42 --body "/crysk review"  # CI: same forced re-review, on the Actions runner
 gh pr comment 42 --body "/crysk override"  # CI: unlock a red gate on this head, no review, $0
 gh pr comment 42 --body "/crysk stop"      # CI: skip automatic reviews on later pushes, until /crysk review

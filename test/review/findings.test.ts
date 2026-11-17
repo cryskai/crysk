@@ -55,7 +55,6 @@ function baseDocument(findings: Finding[] = [baseFinding()]): FindingsDocument {
       tokens_in: 100,
       tokens_out: 50,
       tokens_total: 150,
-      cost_usd_est: 0.5,
     },
     findings,
     debug: { refuted: [] },
@@ -333,7 +332,6 @@ describe("mergeRunEnvelope — sessionFailed persistence", () => {
       tokens_in: 100,
       tokens_out: 50,
       tokens_total: 150,
-      cost_usd_est: 0.5,
     },
   };
   function skillOutput(runStatus: "complete" | "partial", withSummary = false) {

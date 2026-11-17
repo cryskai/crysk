@@ -137,7 +137,7 @@ function mockOpencodeTransport() {
         usageMode: "snapshot" as const,
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" as const },
-      billing: { mode: "subscription" as const, pricingReady: true },
+      billing: { mode: "subscription" as const },
       issues: [],
     }),
     execute: async () => {
@@ -591,12 +591,12 @@ describe("#182 wiring: bindings, server, gates", () => {
         expect(binding.credential.broker).toBeInstanceOf(OpenCodeFreeBroker);
         const report = await binding.capabilities();
         expect(report.auth.kind).toBe("provider_free");
-        expect(report.billing.pricingApplicability).toBe("not_applicable");
-        expect(report.billing.mode).toBe("subscription");
-        expect(report.billing.cashCostAccountingValid).toBe(true);
+        expect(report.billing).toEqual({
+          mode: "subscription",
+          modeKnown: true,
+        });
         const evidence = d1_11EvidenceFromExactBinding(report, true);
         expect(evidence.credentialAuthority).toBe(true);
-        expect(evidence.pricingReady).toBe(true);
         const blocking = exactBindingCapabilityIssues(report).filter(
           (i) => i.blocking,
         );

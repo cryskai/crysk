@@ -43,9 +43,6 @@ function usage(over: Record<string, unknown> = {}) {
     },
     completeness: "complete",
     billingMode: "subscription",
-    costSource: "subscription",
-    cashCostUsd: 0,
-    notionalCostUsd: 0.0881657,
     ...over,
   };
 }
@@ -228,7 +225,7 @@ const REFUTER_STEP = {
   outPath: "/runner/runs/pr-7/steps/refuter-F001.result.json",
   status: "ok",
   attempts: 1,
-  usage_v2: usage({ billingMode: "metered", cashCostUsd: 0.25 }),
+  usage_v2: usage({ billingMode: "metered" }),
 };
 
 function reviewedRun(): TraceRunInput {
@@ -519,7 +516,7 @@ describe("buildTraceBundle: a reviewed run", () => {
     ).toBe(false);
   });
 
-  test("a chat span carries the model, provider, inclusive usage and list cost", () => {
+  test("a chat span carries the model, provider and inclusive usage, and no cost", () => {
     expect(attr(chat, "gen_ai.provider.name")).toBe("anthropic");
     expect(attr(chat, "gen_ai.request.model")).toBe("sonnet");
     expect(attr(chat, "gen_ai.response.model")).toBe("claude-sonnet-4-5");
@@ -530,12 +527,12 @@ describe("buildTraceBundle: a reviewed run", () => {
     expect(attr(chat, "gen_ai.usage.cache_read.input_tokens")).toBe(47217);
     expect(attr(chat, "gen_ai.usage.cache_creation.input_tokens")).toBe(14487);
     expect(attr(chat, "gen_ai.usage.reasoning.output_tokens")).toBe(100);
-    expect(attr(chat, "gen_ai.usage.cost")).toBe(0.0881657);
+    expect(attr(chat, "gen_ai.usage.cost")).toBeUndefined();
     expect(attr(chat, "crysk.attempt.number")).toBe(1);
     expect(attr(chat, "crysk.attempt.status")).toBe("success");
   });
 
-  test("a metered attempt's cost is its cash cost", () => {
+  test("no span carries a cost attribute, on a subscription or a metered attempt", () => {
     const opencode = buildTraceBundle(
       {
         ...reviewedRun(),
@@ -549,7 +546,7 @@ describe("buildTraceBundle: a reviewed run", () => {
                   ...evidence("refuter-F001", 1, "gpt", "success", 1, 2),
                   outcome: {
                     completion: "success",
-                    usage: usage({ billingMode: "metered", cashCostUsd: 0.25 }),
+                    usage: usage({ billingMode: "metered" }),
                   },
                 },
               },
@@ -559,13 +556,20 @@ describe("buildTraceBundle: a reviewed run", () => {
       },
       false,
     );
-    expect(attr(named(opencode, "chat gpt"), "gen_ai.usage.cost")).toBe(0.25);
+    expect(attr(named(opencode, "chat gpt"), "gen_ai.usage.input_tokens")).toBe(
+      8 + 47217 + 14487,
+    );
+    for (const candidate of [bundle, opencode]) {
+      const keys = spans(candidate).flatMap((span) =>
+        span.attributes.map((item) => item.key),
+      );
+      expect(keys.filter((key) => /cost/.test(key))).toEqual([]);
+    }
   });
 
-  test("usage and cost sit on the chat span only, never on its step or the root", () => {
+  test("usage sits on the chat span only, never on its step or the root", () => {
     for (const span of [root, hunter, read]) {
       expect(attr(span, "gen_ai.usage.input_tokens")).toBeUndefined();
-      expect(attr(span, "gen_ai.usage.cost")).toBeUndefined();
     }
   });
 
@@ -718,14 +722,14 @@ describe("buildTraceBundle: trace_content false", () => {
 
   // Through the production path: the run directory's files, read the way the
   // trace step reads them for a metadata trace.
-  test("the metadata stays: models, tokens, cost, times and tool calls", () => {
+  test("the metadata stays: models, tokens, times and tool calls", () => {
     const fromDisk = buildTraceBundle(reviewedRunFromDisk(), false);
     const chat = named(fromDisk, "chat sonnet");
     expect(attr(chat, "gen_ai.request.model")).toBe("sonnet");
     expect(attr(chat, "gen_ai.response.model")).toBe("claude-sonnet-4-5");
     expect(attr(chat, "gen_ai.response.finish_reasons")).toEqual(["end_turn"]);
     expect(attr(chat, "gen_ai.usage.input_tokens")).toBe(8 + 47217 + 14487);
-    expect(attr(chat, "gen_ai.usage.cost")).toBe(0.0881657);
+    expect(attr(chat, "gen_ai.usage.cost")).toBeUndefined();
     const read = named(fromDisk, "execute_tool Read");
     expect(attr(read, "gen_ai.tool.name")).toBe("Read");
     expect([read.startTimeUnixNano, read.endTimeUnixNano]).toEqual([
@@ -1509,7 +1513,7 @@ describe("contract: a built bundle passes the platform's traceBundleSchema", () 
 });
 
 // #511: an OpenCode attempt is many model turns, one assistant message each,
-// and each message records its own times, tokens and cost.
+// and each message records its own times, tokens and cost (the cost is not traced).
 describe("buildTraceBundle: an OpenCode attempt's turns", () => {
   const PROMPT = "PLANTED-PROMPT find the race";
   const turn = (
@@ -1627,7 +1631,7 @@ describe("buildTraceBundle: an OpenCode attempt's turns", () => {
                   ),
                   outcome: {
                     completion: "success",
-                    usage: usage({ billingMode: "metered", cashCostUsd: 0.07 }),
+                    usage: usage({ billingMode: "metered" }),
                   },
                 },
                 openCodeCapture: capture,
@@ -1712,9 +1716,13 @@ describe("buildTraceBundle: an OpenCode attempt's turns", () => {
     expect(
       turns.map((span) => attr(span, "gen_ai.usage.reasoning.output_tokens")),
     ).toEqual([5, 7, 0]);
-    expect(turns.map((span) => attr(span, "gen_ai.usage.cost"))).toEqual([
-      0.01, 0.02, 0.04,
-    ]);
+    // OpenCode records a `cost` on each assistant message; the trace carries
+    // none of it, whatever the message says.
+    expect(
+      turns
+        .flatMap((span) => span.attributes.map((item) => item.key))
+        .filter((key) => /cost/.test(key)),
+    ).toEqual([]);
     expect(turns.map((span) => attr(span, "crysk.turn.number"))).toEqual([
       1, 2, 3,
     ]);
@@ -1736,7 +1744,7 @@ describe("buildTraceBundle: an OpenCode attempt's turns", () => {
     }
     expect(attr(attempt, "crysk.attempt.number")).toBe(1);
     expect(attr(attempt, "crysk.attempt.status")).toBe("success");
-    expect(attr(attempt, "crysk.usage.cash_cost_usd")).toBe(0.07);
+    expect(attr(attempt, "crysk.usage.billing_mode")).toBe("metered");
     expect(attempt.startTimeUnixNano).toBe(nanos(0));
     expect(attempt.endTimeUnixNano).toBe(nanos(13));
   });
@@ -1776,7 +1784,6 @@ describe("buildTraceBundle: an OpenCode attempt's turns", () => {
         start: span.startTimeUnixNano,
         end: span.endTimeUnixNano,
         input: attr(span, "gen_ai.usage.input_tokens"),
-        cost: attr(span, "gen_ai.usage.cost"),
       }));
     expect(shape(run(false))).toEqual(shape(bundle));
   });

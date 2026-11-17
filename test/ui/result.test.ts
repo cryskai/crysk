@@ -4,12 +4,11 @@
 //
 // The load-bearing one is `prints the claim`: for the whole of Phase B this
 // block reported counts and file paths and never said what the run found, so
-// the payload of a five-minute $4 review could only be read by opening a file.
+// the payload of a five-minute review could only be read by opening a file.
 // Every assertion about a claim below is there to keep that from coming back.
 
 import { describe, expect, test } from "bun:test";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
-import { planEstimateLine } from "#ui/plan";
 import { type ResultInput, renderResult } from "#ui/result";
 
 const ESC = String.fromCharCode(27);
@@ -25,7 +24,6 @@ const telemetry: Telemetry = {
   tokens_in: 1,
   tokens_out: 1,
   tokens_total: 2,
-  cost_usd_est: 4.09,
 };
 
 const finding = (over: Partial<Finding> = {}): Finding => ({
@@ -66,9 +64,7 @@ const doc = (over: Partial<FindingsDocument> = {}): FindingsDocument => ({
 
 const input = (over: Partial<ResultInput> = {}): ResultInput => ({
   doc: doc(),
-  costUsd: 4.09,
   wallMs: 327_000,
-  estimate: { low: 3.5, high: 5.25 },
   runDir: "/tmp/pr-hero-runs/pr-6-17069c75-1",
   artifacts: ["report.md", "findings.json"],
   sessionFailed: false,
@@ -78,11 +74,12 @@ const input = (over: Partial<ResultInput> = {}): ResultInput => ({
 });
 
 describe("renderResult header", () => {
-  test("counts and money on one rule, tiers derived from the document", () => {
+  test("counts and elapsed time on one rule, tiers derived from the document", () => {
     const lines = renderResult(input());
     const rule = stripAnsi(lines[1] ?? "");
     expect(rule).toContain("╭─ 1 blocking · 0 advisory · 0 refuted");
-    expect(rule).toContain("$4.09 · 5m27s");
+    expect(rule).toContain("5m27s");
+    expect(rule).not.toContain("$");
     expect(rule.endsWith("─╮")).toBe(true);
     expect(rule.length).toBe(80);
   });
@@ -119,21 +116,21 @@ describe("renderResult header", () => {
   test("a terminal too narrow for both halves keeps the counts", () => {
     const rule = stripAnsi(renderResult(input({ width: 20 }))[1] ?? "");
     expect(rule).toContain("blocking");
-    expect(rule).not.toContain("$4.09");
+    expect(rule).not.toContain("5m27s");
   });
 
-  test("the spend that comes off a narrow rule is relocated, never dropped", () => {
+  test("the elapsed time that comes off a narrow rule is relocated, never dropped", () => {
     // Width is clamped to MIN_WIDTH (40), which is still too narrow for both
-    // halves — so the actual spend must reappear as its own footer row.
+    // halves — so the elapsed time must reappear as its own footer row.
     const text = joined(renderResult(input({ width: 20 })));
-    expect(text).toContain("spent");
-    expect(text).toContain("$4.09 · 5m27s");
+    expect(text).toContain("elapsed");
+    expect(text).toContain("5m27s");
   });
 
-  test("a wide rule carries the spend itself and adds no spent row", () => {
+  test("a wide rule carries the elapsed time itself and adds no elapsed row", () => {
     const text = joined(renderResult(input({ width: 80 })));
-    expect(text).toContain("$4.09 · 5m27s");
-    expect(text).not.toContain("spent");
+    expect(text).toContain("5m27s");
+    expect(text).not.toContain("elapsed");
   });
 });
 
@@ -382,80 +379,37 @@ describe("renderResult footer", () => {
     }
   });
 
-  test("the estimate band survives, because an overrun is only visible against it", () => {
-    expect(joined(renderResult(input()))).toContain("$3.50–$5.25");
+  test("no dollar figure or estimate row anywhere, and every non-cost footer row survives", () => {
+    const text = joined(renderResult(input()));
+    expect(text).not.toContain("$");
+    expect(text).not.toContain("estimate");
+    expect(text).not.toContain("notional");
+    expect(text).toContain("run dir");
+    expect(text).toContain("report.md");
+    expect(text).toContain("findings.json");
+    expect(text).toContain("5m27s");
   });
 
-  // #173 (§8: "Artifacts and reports show cash and notional totals
-  // separately. Budget enforcement uses cash only; research comparisons may
-  // use notional only when clearly labelled.").
-  //
-  // The header's figure is CASH, and on a subscription route cash is $0.00 —
-  // truthfully, but uselessly on its own. Without this row a subscription run
-  // would print `$0.00` and the list-basis figure the operator has been
-  // reading for months would simply vanish from the terminal. The row is what
-  // makes the change a relocation rather than a loss, and its wording is what
-  // keeps the two numbers from being read as one.
-  describe("cash and notional are shown apart (#173)", () => {
-    test("a notional total is its own labelled row, never folded into the header figure", () => {
-      const text = joined(
-        renderResult(input({ costUsd: 0, notionalUsd: 0.0455 })),
-      );
-      expect(text).toContain("notional");
-      expect(text).toContain("$0.05");
-      // Labelled as not-cash, per §8's "only when clearly labelled".
-      expect(text).toContain("list price");
-      expect(text).toContain("not charged");
-      // The header keeps reporting cash, and cash alone.
-      const rule = stripAnsi(
-        renderResult(input({ costUsd: 0, notionalUsd: 0.0455 }))[1] ?? "",
-      );
-      expect(rule).toContain("$0.00");
-      expect(rule).not.toContain("$0.05");
-    });
-
-    // The legacy path — a runner reporting no normalized usage at all — must
-    // stay byte-identical, which an always-present row with a `$0.00` default
-    // would break while still passing the assertion above.
-    test("no notional figure means no row at all, not a zero one", () => {
-      const text = joined(renderResult(input()));
-      expect(text).not.toContain("notional");
-      expect(renderResult(input({ notionalUsd: undefined }))).toEqual(
-        renderResult(input()),
-      );
-    });
-
-    test("a metered run with real cash and no notional keeps a single figure", () => {
-      const text = joined(renderResult(input({ costUsd: 4.09 })));
-      expect(text).toContain("$4.09");
-      expect(text).not.toContain("notional");
-    });
-
-    // The row's value is the longest in the footer, so it is the one that
-    // would overrun a narrow terminal if it ever bypassed `row()`'s wrapping.
-    //
-    // Asserted over the lines this row ADDS, not over the whole render: the
-    // block already emits lines longer than the width for reasons that predate
-    // it and are not wrapping failures — an unbreakable run-dir path, and
-    // finding prose. Asserting every line would have been a false premise that
-    // fails against correct code.
-    test("the row wraps to the value column instead of overrunning a narrow terminal", () => {
-      const width = 20; // clamped to MIN_WIDTH (40) by the renderer
-      const without = renderResult(input({ costUsd: 0, width }));
-      const added = renderResult(
-        input({ costUsd: 0, notionalUsd: 0.0455, width }),
-      ).filter((line, i) => line !== without[i]);
-      expect(added.length).toBeGreaterThan(1); // it really did wrap
-      for (const line of added) expect(line.length).toBeLessThanOrEqual(40);
-    });
-
-    test("the row emits no escape sequences with styles off", () => {
-      for (const line of renderResult(
-        input({ costUsd: 0, notionalUsd: 0.0455, styles: false }),
-      )) {
-        expect(line).not.toContain(ESC);
-      }
-    });
+  test("a fenced bucket is named in the footer, with no amount", () => {
+    const text = joined(
+      renderResult(
+        input({
+          unresolved: [
+            {
+              step: "hunter-logic",
+              bucketId: "anthropic:api",
+              reservationId: "r1",
+            },
+          ],
+        }),
+      ),
+    ).replace(/\s+/g, " ");
+    expect(text).toContain("unresolved");
+    expect(text).toContain("1 attempt(s) whose usage could not be confirmed");
+    expect(text).toContain("anthropic:api");
+    expect(text).toContain("pipeline.json");
+    expect(text).not.toContain("$");
+    expect(text).not.toContain("floor");
   });
 
   test("no `posted:` line — step 14 already printed one during the run", () => {
@@ -861,72 +815,5 @@ describe("renderResult styling", () => {
     expect(Array.isArray(lines)).toBe(true);
     // Leading blank: the block separates itself from the progress panel above.
     expect(lines[0]).toBe("");
-  });
-});
-
-// W3-FOOTER: a free OpenCode route is not billed, so the footer must not say
-// it was "not charged on a subscription" (false there), and a mixed route must
-// name its free share. Rows wrap at the value column, so the wording is read
-// with whitespace collapsed; the wrapping itself has its own tests above.
-describe("renderResult footer on a free route (W3-FOOTER)", () => {
-  const flat = (lines: string[]): string => joined(lines).replace(/\s+/g, " ");
-  const notional = { notionalUsd: 0.0455 };
-
-  test("billing free: the notional row names a free route, never a subscription", () => {
-    const text = flat(renderResult(input({ ...notional, billing: "free" })));
-    expect(text).toContain(
-      "$0.05 at list price — not charged on a free route; budget limits read the cash figure above",
-    );
-    expect(text).not.toContain("subscription");
-  });
-
-  test("billing mixed: the estimate row appends the free-steps note", () => {
-    const text = flat(renderResult(input({ ...notional, billing: "mixed" })));
-    expect(text).toContain("$3.50–$5.25 (free steps not billed)");
-    // The notional row keeps today's wording: only the free share changed.
-    expect(text).toContain("not charged on a subscription");
-  });
-
-  test("billing free: the estimate row carries the plan card's free wording, never a bare band", () => {
-    const text = flat(renderResult(input({ ...notional, billing: "free" })));
-    // The plan card prints this line for the same band and the same free
-    // route; the footer must read the same verdict, not its own rewording.
-    const planCard = planEstimateLine({
-      estimate: { low: 3.5, high: 5.25 },
-      hunterCount: 1,
-      summarizer: true,
-      freeRoute: { free: 5, total: 5 },
-    });
-    expect(planCard).toBe(
-      "estimate: free route (token-derived $3.50 – $5.25, not billed)",
-    );
-    expect(text).toContain(
-      "estimate free route (token-derived $3.50 – $5.25, not billed)",
-    );
-    expect(text).not.toContain("estimate $3.50–$5.25");
-  });
-
-  test("billing undefined: the estimate row keeps the bare band", () => {
-    const text = flat(renderResult(input({ ...notional, billing: undefined })));
-    expect(text).toContain("estimate $3.50–$5.25");
-    expect(text).not.toContain("token-derived");
-  });
-
-  test("billing undefined: byte-identical to a run that never heard of billing", () => {
-    expect(renderResult(input({ ...notional }))).toEqual(
-      renderResult(input({ ...notional, billing: undefined })),
-    );
-    expect(flat(renderResult(input({ ...notional })))).toContain(
-      "not charged on a subscription",
-    );
-  });
-
-  test("styles off: a free-route footer carries no escape bytes", () => {
-    for (const billing of ["free", "mixed"] as const) {
-      const lines = renderResult(
-        input({ ...notional, billing, styles: false }),
-      );
-      expect(lines.join("\n")).not.toContain("\x1b");
-    }
   });
 });

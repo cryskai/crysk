@@ -12,7 +12,7 @@
 // inside a 400-line async shell. The mode-specific parts (worktree hint, links,
 // extra artifacts) are optional inputs, not a second renderer.
 //
-// WHY it prints the FINDINGS: after five minutes and $4 the terminal used to
+// WHY it prints the FINDINGS: after five minutes the terminal used to
 // report counts and file paths and never once said what was found — the
 // payload was the one thing you had to leave the terminal to read. Everything
 // below the header exists to end that.
@@ -25,7 +25,6 @@ import {
   movedHeadSentence,
 } from "#review/report";
 import type { UnresolvedSpend } from "../execution/spend-limiter";
-import { freeRouteEstimateText } from "./plan";
 import {
   cyan,
   dim,
@@ -39,7 +38,6 @@ import {
   wrapText,
   yellow,
 } from "./primitives";
-import { FREE_STEPS_NOTE, type FreeBillingMode } from "./select";
 
 interface ResultWorktree {
   gitDirOwner: string;
@@ -82,27 +80,7 @@ export interface ResultInput {
   // derived here, from the same bytes that were just written to disk, so the
   // terminal and findings.json cannot disagree about what the run found.
   doc: FindingsDocument;
-  // CASH, and only cash — the figure the header's `$X.XX` reports and the one
-  // budget enforcement is allowed to read (§8: "Budget enforcement uses cash
-  // only"). On a Claude subscription or a free route this is a truthful $0.00.
-  costUsd: number;
-  // #173 (§8: "Artifacts and reports show cash and notional totals
-  // separately"). The list-basis figure a subscription run was NOT charged,
-  // kept strictly apart from `costUsd` and rendered with its own label — the
-  // design's "research comparisons may use notional only when clearly
-  // labelled" is a rendering obligation, not just a storage one.
-  //
-  // Optional, and absent means NO ROW rather than a `$0.00` one: a runner that
-  // reports no normalized usage has no list figure to show, and printing one
-  // it never produced is the fabrication the whole usage slice exists to
-  // prevent.
-  notionalUsd?: number;
-  // W3-FOOTER: the route's billing, derived by freeBillingMode from the same
-  // free-step count the plan card prints. Absent means no free share, and the
-  // footer keeps its subscription wording byte for byte.
-  billing?: FreeBillingMode;
   wallMs: number;
-  estimate: { low: number; high: number };
   // One directory plus the basenames written inside it. The full paths still
   // go to pipeline.json — three absolute paths sharing a 60-char prefix cost
   // three lines and carry one bit each (the shortPath rule, applied to the
@@ -124,10 +102,8 @@ export interface ResultInput {
   movedHeadSha?: string;
   sessionFailed: boolean;
   // D1-08 PR5b (D8): present and non-empty exactly when at least one spend
-  // reservation ended `unresolved_remote` this run. Its presence is what
-  // marks the header's `$X.XX` figure as a FLOOR rather than a total (the
-  // known cost is real; the unresolved bucket's true cost is not) and what
-  // earns the run a footer row naming the fenced bucket(s).
+  // reservation ended `unresolved_remote` this run. Its presence earns the
+  // run a footer row naming the fenced bucket(s).
   unresolved?: ResultUnresolved;
   styles: boolean;
   width?: number;
@@ -138,23 +114,22 @@ const MAX_WIDTH = 96;
 // Body indents: the marker column, then the prose column under it.
 const MARKER_INDENT = "  ";
 const PROSE_INDENT = "     ";
-// Wide enough for the longest footer label ("estimate", "worktree") plus a gap.
+// Wide enough for the longest footer label ("unresolved", "worktree") plus a gap.
 const FOOTER_LABEL_WIDTH = 12;
 
 // Deliberately NOT ui/primitives.ts's box(): box truncates every body line to fit its
 // border, and the one thing this block must never truncate away is a claim.
 // So the card is a RULE — the top edge only — and the body below it is plain
 // indented text that wraps. Shape: `╭─ left ───── right ─╮`.
-// `spentDropped` is not cosmetic bookkeeping: when the terminal is too narrow
-// for both halves the counts win and the spend comes OFF the rule, so the
-// caller has to put it back as its own row. Reported rather than assumed,
-// because "the money is never dropped" is only true if somebody relocates it.
+// `rightDropped` is not cosmetic bookkeeping: when the terminal is too narrow
+// for both halves the counts win and the elapsed time comes OFF the rule, so
+// the caller has to put it back as its own row.
 function headerRule(
   left: string,
   right: string,
   width: number,
   styles: boolean,
-): { line: string; spentDropped: boolean } {
+): { line: string; rightDropped: boolean } {
   // 8 = "╭─ " + " " around the fill + " ─╮".
   const fill = width - left.length - right.length - 8;
   if (fill < 1) {
@@ -164,7 +139,7 @@ function headerRule(
         dim("╭─ ", styles) +
         shown +
         dim(` ${"─".repeat(Math.max(width - 5 - shown.length, 1))}╮`, styles),
-      spentDropped: true,
+      rightDropped: true,
     };
   }
   return {
@@ -174,7 +149,7 @@ function headerRule(
       dim(` ${"─".repeat(fill)} `, styles) +
       right +
       dim(" ─╮", styles),
-    spentDropped: false,
+    rightDropped: false,
   };
 }
 
@@ -403,13 +378,8 @@ export function renderResult(input: ResultInput): string[] {
   const left =
     `${status}${blocking} blocking · ${advisory} advisory · ` +
     `${refuted} refuted`;
-  // D8: a bucket fenced by an unresolved_remote reservation means the real
-  // cost of that bucket's attempt is UNKNOWN — printing a bare `$X.XX` there
-  // is the exact "$0 on parse failure" collapse this slice exists to kill,
-  // just relocated to the terminal's header line. `≥` marks it a floor.
   const hasUnresolved = (input.unresolved?.length ?? 0) > 0;
-  const costLabel = `${hasUnresolved ? "≥" : ""}$${input.costUsd.toFixed(2)}`;
-  const right = `${costLabel} · ${formatElapsed(input.wallMs)}`;
+  const right = formatElapsed(input.wallMs);
   const header = headerRule(left, right, width, styles);
   // The PR's own url, directly under the rule rather than down in the artifact
   // footer, for two reasons. It is the WHERE of everything above and below it,
@@ -470,36 +440,7 @@ export function renderResult(input: ResultInput): string[] {
           : ` · ${input.artifacts.join(" · ")}`),
       footer,
     ),
-    // The band is kept because it is the only thing that makes an overrun
-    // visible: both recorded cost incidents were under-estimates, and rule 6
-    // says every live run lands in a ledger.
-    ...row(
-      "estimate",
-      input.billing === "free"
-        ? freeRouteEstimateText(input.estimate)
-        : input.billing === "mixed"
-          ? `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)} ${FREE_STEPS_NOTE}`
-          : `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)}`,
-      footer,
-    ),
   );
-  // #173: the second half of the §8 cash/notional split, and the reason the
-  // header's `$0.00` on a subscription run is informative rather than broken.
-  // Its own row, its own label, and wording that names the basis — a bare
-  // second dollar figure beside the first is exactly the mixing §8 forbids.
-  if (input.notionalUsd !== undefined) {
-    lines.push(
-      ...row(
-        "notional",
-        input.billing === "free"
-          ? `$${input.notionalUsd.toFixed(2)} at list price — not charged on a free route; ` +
-              "budget limits read the cash figure above"
-          : `$${input.notionalUsd.toFixed(2)} at list price — not charged on a ` +
-              "subscription; budget limits read the cash figure above",
-        footer,
-      ),
-    );
-  }
   // D8: naming the fenced bucket(s) HERE, not only in pipeline.json, is the
   // whole point of this row — see the module-level ResultUnresolved comment.
   if (hasUnresolved) {
@@ -509,18 +450,18 @@ export function renderResult(input: ResultInput): string[] {
     lines.push(
       ...row(
         "unresolved",
-        `${input.unresolved?.length} spend reservation(s) unresolved in ` +
-          `bucket(s) ${buckets.join(", ")} — cost above is a floor; see ` +
-          "pipeline.json",
+        `${input.unresolved?.length} attempt(s) whose usage could not be ` +
+          `confirmed in bucket(s) ${buckets.join(", ")} — no further ` +
+          "attempt ran on them this run; see pipeline.json",
         footer,
       ),
     );
   }
   // The relocation headerRule reported: on a terminal too narrow for the rule
-  // to carry both halves, what this run actually cost gets its own row instead
-  // of disappearing with the rule's right-hand segment.
-  if (header.spentDropped) {
-    lines.push(...row("spent", right, footer));
+  // to carry both halves, the elapsed time gets its own row instead of
+  // disappearing with the rule's right-hand segment.
+  if (header.rightDropped) {
+    lines.push(...row("elapsed", right, footer));
   }
   if (input.worktree) {
     lines.push(

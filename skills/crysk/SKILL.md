@@ -12,7 +12,7 @@ metadata:
 Load when the user wants to **operate or configure Crysk on their machine or repo**:
 - Change which model or backend a step runs on (per role, with fallbacks: OpenCode, DeepSeek, a pinned Claude version).
 - Tune effort, caps, the size gate, `.cryskignore`, `REVIEW.md` / `gotchas.md`, or any `config.json` key.
-- Run a review (local branch or `--pr <n>`), understand its cost, or read its artifacts.
+- Run a review (local branch or `--pr <n>`) or read its artifacts. The engine prints no dollar figure; cost and cost limits live in the Crysk platform dashboard.
 - Set up the watcher (`crysk watch`) or worktree GC (`crysk gc`).
 - Diagnose a broken install or a refused run (`crysk doctor`, `crysk config`).
 
@@ -61,7 +61,7 @@ If Crysk is not on `PATH`, run every command as `npx -y crysk@0.7.0 <command>` (
 
 **REVIEW.md / gotchas.md** — [REVIEW.md and gotchas.md](https://github.com/cryskai/crysk/blob/main/README.md#reviewmd-and-gotchasmd): optional; a root `REVIEW.md` wins over `.crysk/gotchas.md`. A file that exists must be real: read the code and write the actual traps, then delete the `human-attention-required` marker line, or `review` and `doctor` refuse it. With neither file the review runs on the default guidance.
 
-**Running a review** — [Commands](https://github.com/cryskai/crysk/blob/main/README.md#commands): `.crysk/` must be committed or gitignored (clean-tree gate). Expect roughly $2–5 and ~10 minutes per typical PR; the printed band ignores billing mode. Artifacts land in `~/.crysk/repos/<origin>/runs/<run>/`. To check or wait on a PR's CI review state deterministically ($0, via `gh`), run `pr-hero status --pr <n> [--wait] [--json]`.
+**Running a review** — [Commands](https://github.com/cryskai/crysk/blob/main/README.md#commands): `.crysk/` must be committed or gitignored (clean-tree gate). Expect roughly ten minutes per typical PR. The plan and the result print no dollar figure and there is no budget flag (`--budget-usd` and `--billing` are retired: accepted, no effect, one warning): the Crysk platform prices a platform run from the usage the engine reports and owns the per-review and per-month cost limits (dashboard, Review > Limits). A standalone run has no dollar limit, so "confirming spend" is about which credential the run bills (`doctor` / `--dry-run` say so). Artifacts land in `~/.crysk/repos/<origin>/runs/<run>/`. To check or wait on a PR's CI review state deterministically ($0, via `gh`), run `pr-hero status --pr <n> [--wait] [--json]`.
 
 **Watcher / GC** — [crysk watch](https://github.com/cryskai/crysk/blob/main/README.md#watching-prs-automatically--crysk-watch): `watch add [--post]`, preview with `watch --once --dry-run`, and only then `watch install`. `daily_cap` and `window` live in `~/.crysk/watch.json`. GC is separate: `crysk gc install`.
 

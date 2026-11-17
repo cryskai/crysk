@@ -7,7 +7,6 @@ import {
   opencodeSecretToken,
 } from "#ci/crysk-secrets";
 import {
-  budgetInput,
   type CiSetupChoices,
   type CurrentSettings,
   configPlan,
@@ -302,15 +301,6 @@ async function resolveChoices(
   if (!choices.chosen.mode && current.workflow.mode !== undefined) {
     choices.mode = current.workflow.mode;
   }
-  const oldBudget = Number(current.workflow.budgetUsd);
-  if (
-    !choices.chosen.billing &&
-    current.workflow.budgetUsd !== undefined &&
-    Number.isFinite(oldBudget)
-  ) {
-    choices.billing = "api";
-    choices.budgetUsd = oldBudget;
-  }
   return choices;
 }
 
@@ -380,7 +370,6 @@ export async function ciSetupCommand(
 
   const current = await readCurrentSettings(repoRoot, target);
   const choices = await resolveChoices(options, deps, current);
-  const budget = budgetInput(choices);
   // The config first: it is the write that can refuse (an invalid existing
   // file, a value the review parser rejects), and refusing before the workflow
   // is written leaves the repository as it was.
@@ -403,7 +392,6 @@ export async function ciSetupCommand(
     force: options.force,
     template: {
       mode: choices.mode,
-      ...(budget === undefined ? {} : { budgetUsd: budget }),
       // Size inputs a person set by hand in the old workflow. setup never
       // writes them (it writes the config keys), so a refresh carries them
       // over; the action gives a workflow input precedence over the config.
@@ -467,21 +455,9 @@ export async function ciSetupCommand(
   log(`${next()} Commit ${workflowRelative} and ${repoDirName}/config.json`);
   // The CRYSK_* names the scaffolded workflow reads (S8); gh asks for the value.
   log(
-    `${next()} Add a repository secret: ${
-      choices.billing === "subscription"
-        ? "CRYSK_CLAUDE_OAUTH_TOKEN (create the value with `claude setup-token`)"
-        : choices.billing === "api"
-          ? "CRYSK_CLAUDE_API_KEY (or the CRYSK_OPENCODE_* key of the OpenCode provider your models use)"
-          : "CRYSK_CLAUDE_OAUTH_TOKEN (create the value with `claude setup-token`) or CRYSK_CLAUDE_API_KEY"
-    }`,
+    `${next()} Add a repository secret: CRYSK_CLAUDE_OAUTH_TOKEN (create the value with \`claude setup-token\`) or CRYSK_CLAUDE_API_KEY`,
   );
-  log(
-    `     $ gh secret set ${
-      choices.billing === "api"
-        ? "CRYSK_CLAUDE_API_KEY"
-        : "CRYSK_CLAUDE_OAUTH_TOKEN"
-    }`,
-  );
+  log("     $ gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
   if (variables.openCodeTokens.length > 0) {
     log(
       `${next()} Add the API key of each OpenCode provider your models in ${variables.configLabel} use:`,

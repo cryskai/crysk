@@ -63,6 +63,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **What to check:** (1) a config file, a person profile or a custom prompt directory that still carries any
   of the above keeps working and now logs the warning: remove the key, the role or the file to silence it;
   (2) a tool that reads `parity_hunter_fired` still finds it, always `false`.
+- **Dollar figures and the dollar ceiling** (platform-owned-cost). The engine no longer computes, shows,
+  stores or decides on dollars; the Crysk platform prices every run from the usage the engine reports and
+  owns the limits. Gone: the cost band (plan card, `--dry-run`, the confirm line), the default `$12` ceiling
+  on an API key and the engine's own budget gate, cost in the result box, the CI step summary, the findings
+  telemetry (`cost_usd_est`, `cost_usd_est_is_floor`), `pipeline.json` and the `crysk usage` rows (the
+  local store stops writing its cost columns; existing rows keep theirs), the legacy platform report shape
+  (the report always carries `usage_facts` and no `cost_usd`, `list_cost_usd`, `billing` or `cost_is_floor`;
+  the `estimate` and `usage-facts` capabilities and `CRYSK_PLATFORM_ESTIMATE` go with it), and
+  `gen_ai.usage.cost` and the cash and notional cost attributes in the platform trace. The spend ledger keeps
+  its fence without an amount: an attempt on a metered credential whose usage the engine could not confirm
+  still fences that credential for the rest of the run. Its dollar rules (a metered attempt that reports
+  `$0` after producing output, a free route that reports a priced cost) are removed. The local store's API
+  (the one `crysk mcp` reads: runs, a single run and usage) no longer returns the legacy `cost_usd_est`
+  column (it is `0` on every new run, which would read as a free run), and the MCP run and usage tools no
+  longer advertise a cost breakdown; they report tokens.
+  **New:** the first connect step declares the `limits` capability. A platform that supports it answers with
+  `{ "limits": { "review_usd"?, "month_left_usd"?, "estimate_usd"? } }` (absent for a forced `/crysk review`),
+  and the run step applies one comparison: a run that bills an API key is skipped, with today's
+  `skipped-budget` status and skip comment (which now names the limit that was hit and the dashboard
+  setting, Review > Limits; the gate commit status reads `over a cost limit set in Crysk` where it used to
+  read `estimated cost over the CI budget`), when the month's limit is used up or the platform's estimate is over the
+  per-review limit or over what is left of the month. A subscription or free run is never skipped for cost,
+  and `/crysk review` still forces. With no estimate and a month with money left the review runs.
+  **Retired, still accepted, no effect, one warning each:** the `budget-usd` action input, the `--budget-usd`
+  flag and `--billing` (which only chose whether `setup --ci` wrote a budget); the warnings contain
+  `is ignored: dollar limits moved to the Crysk platform`. `setup --ci` no longer writes `budget-usd` and
+  drops it from a workflow it refreshes. The `cost-usd-est` action output stays declared and is always
+  empty (removed in a later release). The engine had no budget config key.
+  **What to check:** (1) a workflow that sets `budget-usd`, or a script that passes `--budget-usd` or
+  `--billing`, keeps working and logs the warning: remove it to silence it; (2) anything that reads
+  `cost-usd-est`, `telemetry.cost_usd_est` in `findings.json`, `cost_usd_est` in `pipeline.json` or
+  `usage.cost_usd_est` from `runPipeline` finds no figure any more; the platform's dashboards show the cost;
+  (3) a script that read `cost_usd_est` from the store API, or matched the old gate status text, reads the
+  new shape and wording. The README, `docs/github-actions.md`, `docs/configuration.md` and the `crysk`,
+  `crysk-ci-setup`, `crysk-loop` and `martian-bench` skills now describe this behaviour: `setup --ci` no
+  longer asks how CI pays or for a spend ceiling, and measured dollar figures (README "Cost and
+  expectations", benchmark bands) are kept as history only.
+  Release order: the platform's limits must be deployed before an engine with this change is released.
 
 ### Security
 

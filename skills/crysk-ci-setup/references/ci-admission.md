@@ -32,7 +32,7 @@ Read this when configuring `.crysk/config.json` during CI setup. Full operator d
 
 ## Review levels (what setup --ci asks)
 
-`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode`, `--billing`, `--max-changed-lines` and `--budget-usd`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
+`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode` and `--max-changed-lines`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
 
 | Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` | `max_verification_steps` |
 |---|---|---|---|---|
@@ -41,11 +41,11 @@ Read this when configuring `.crysk/config.json` during CI setup. Full operator d
 | `thorough` | `every_push` | 4 | (unset) | 8 |
 | `manual` | `manual_only` | 1 | (unset) | 8 |
 
-Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and no `CRYSK_OPENCODE_*` secret builds an OpenCode auth file; a run on `CRYSK_CLAUDE_API_KEY`, which `credentials.claude` decides, or with an OpenCode auth file is metered; an explicit 0 would warn on every run and outlive a later move to an API key); `--billing api` writes `--budget-usd` or the $12 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+Dollar limits: setup does not ask how CI pays and writes no `budget-usd`. The per-review and per-month cost limits belong to the Crysk platform (dashboard, Review > Limits); the engine only skips a run that bills an API key (`CRYSK_CLAUDE_API_KEY`, which `credentials.claude` decides, or an OpenCode API-key provider) when the platform's estimate is over them, and a subscription run is never skipped for cost. `--billing` and `--budget-usd` are retired: accepted, no effect, one warning each, and `--billing` no longer implies anything about the workflow.
 
-Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` and `budget-usd` unless a flag names them, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
+Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` unless a flag names it and drops a `budget-usd` line it still carried, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
 
-Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). Unlike the budget it applies on any billing: left unset, a subscription route reviews a PR of any size.
+Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). It applies on any route: left unset, a subscription route reviews a PR of any size.
 
 Posting floor: setup writes `post_min_severity: "warning"` only when the repo config has no value, so a re-run never replaces a chosen floor. `warning` hides advisory suggestions, `blocking` hides every advisory finding, `suggestion` (or unset) posts everything. Hidden findings are counted in the summary comment. The gate is unchanged, since a blocking finding always posts; admission scores only posted findings, so a hidden one never triggers a re-review.
 
@@ -111,7 +111,7 @@ gh pr comment <n> --body "/crysk review"
 
 `/crysk review --full` also re-discovers the whole range. The comment must be exactly one of those two, and it works only once the workflow file (`crysk.yml`, or `pr-hero.yml` in a repo set up before the rename; with its `issue_comment` trigger) is on the default branch.
 
-It bypasses the size gate, the admission rules (same commit, `once_per_pr`, score, low-risk delta, exhausted attempts, `manual_only`), and the budget ceiling. It does not reset the ledger.
+It bypasses the size gate, the admission rules (same commit, `once_per_pr`, score, low-risk delta, exhausted attempts, `manual_only`), and the platform's cost limits (the platform sends none for a forced run). It does not reset the ledger.
 
 Who can force: anyone with write access to the repository; a comment from anyone else is refused. A fork PR is reviewed only this way, since its own pushes are skipped. `gh run rerun` on a skipped run re-evaluates the gates and does not force.
 

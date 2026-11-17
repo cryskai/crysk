@@ -254,7 +254,6 @@ const TELEMETRY: Telemetry = {
   tokens_in: 10,
   tokens_out: 10,
   tokens_total: 20,
-  cost_usd_est: 1,
 };
 
 function doc(overrides: Partial<FindingsDocument> = {}): FindingsDocument {

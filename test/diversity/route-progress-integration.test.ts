@@ -18,7 +18,6 @@ describe("route and progress integration", () => {
       enabled: true,
       armId: "bench",
       maxLegs: 2,
-      cashCapUsd: 12,
     },
     agents: [
       {

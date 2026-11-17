@@ -1323,7 +1323,7 @@ describe("skipCommitStatusRequest (S4 size and budget skips)", () => {
     });
     expect(request.state).toBe("failure");
     expect(request.description).toContain("skipped");
-    expect(request.description).toContain("CI budget");
+    expect(request.description).toContain("cost limit");
     expect(request.description).toContain("/crysk review reviews it anyway");
     expect(request.description.length).toBeLessThanOrEqual(
       COMMIT_STATUS_DESCRIPTION_MAX,

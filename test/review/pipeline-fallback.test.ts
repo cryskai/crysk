@@ -35,7 +35,6 @@ const USAGE: NormalizedUsage = {
   tokens: { inputKnown: 8, outputKnown: 2, totalKnown: 10 },
   completeness: "complete",
   billingMode: "subscription",
-  costSource: "subscription",
 };
 
 const GPT: ResolvedModelRoute = {
@@ -67,7 +66,7 @@ function capableOpenCode(): ProviderTransport {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async () => {
@@ -81,7 +80,6 @@ const READY: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 async function setup() {
@@ -168,7 +166,6 @@ function fellBack(
         tokens_out: 4,
         tokens_total: 20,
         wall_ms: 10,
-        cost_usd_est: 0,
       },
       attempts: 2,
       ...(status === "ok"

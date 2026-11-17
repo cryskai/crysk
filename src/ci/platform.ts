@@ -39,11 +39,11 @@ import {
 } from "../model/profiles";
 // A sibling with no imports of its own, so the builtins-only rule still holds.
 import {
-  PLATFORM_ESTIMATE_CAPABILITY,
-  type PlatformEstimate,
-  parsePlatformEstimate,
-  serializePlatformEstimate,
-} from "./platform-estimate";
+  PLATFORM_LIMITS_CAPABILITY,
+  type PlatformLimits,
+  parsePlatformLimits,
+  serializePlatformLimits,
+} from "./platform-limits";
 
 export const PLATFORM_API_URL = "https://api.crysk.dev";
 
@@ -52,20 +52,17 @@ export const PLATFORM_API_URL = "https://api.crysk.dev";
 // profile only to a run that names this capability.
 export const PLATFORM_PROFILE_CAPABILITY = "profile";
 
-// platform-owned-cost T6: this engine can report what each model request
-// measured, with no dollar (odd/tasks/platform-owned-cost-contract.md,
-// section 4). The platform echoes it in the token response's `capabilities`
-// when it will price the run; only then does the report step send
-// `usage_facts` and drop its dollar fields. An old platform sends no echo and
-// gets today's report.
-export const PLATFORM_USAGE_FACTS_CAPABILITY = "usage-facts";
+// platform-owned-cost T7 (L55): this engine applies the platform's limits. Only
+// a run that names the capability gets `limits` in the token response: the
+// per-review limit, what is left of the month's, and the platform's estimate.
+// There is no capability for the usage facts any more: the report always
+// carries them (src/ci/platform-report.ts).
 
 // What this engine reads from the `/runs/token` response, as the platform's
 // comma-separated `X-Crysk-Capabilities` list.
 export const PLATFORM_CAPABILITIES = [
-  PLATFORM_ESTIMATE_CAPABILITY,
   PLATFORM_PROFILE_CAPABILITY,
-  PLATFORM_USAGE_FACTS_CAPABILITY,
+  PLATFORM_LIMITS_CAPABILITY,
 ].join(",");
 
 // The audience the platform verifies. An OIDC token minted for any other
@@ -183,8 +180,8 @@ export type PlatformTokenResult =
   // `full` or `metadata_only`; the connect step reads absence as metadata_only.
   // `traceContent` is present, and true, only when the platform sent exactly
   // `true`; the connect step reads absence as false.
-  // `estimate` is present only for the first connect step (refresh steps do not
-  // ask for one) and only when the platform sent a usable range.
+  // `limits` is present only for the first connect step (refresh steps do not
+  // ask for it) and only when the platform sent at least one usable number.
   | {
       ok: true;
       githubToken: string;
@@ -193,10 +190,7 @@ export type PlatformTokenResult =
       dataMode?: PlatformDataMode;
       traceContent?: true;
       config?: PlatformConfig;
-      estimate?: PlatformEstimate;
-      // Present, and true, only when the first connect step's exchange echoed
-      // the `usage-facts` capability.
-      usageFacts?: true;
+      limits?: PlatformLimits;
       command?: PlatformCommandAnswer;
     }
   // `message` names the HTTP status and the API's own `message` when there was
@@ -319,9 +313,9 @@ export async function exchangePlatformToken(
       headers: {
         Authorization: `Bearer ${oidc}`,
         "X-Crysk-Dispatch-Id": dispatchId,
-        // Only the first connect step asks: its estimate is the one the budget
-        // gate reads, the platform records each estimate it sends, and only
-        // that step reads the config a profile arrives in.
+        // Only the first connect step asks: its limits are the ones the run
+        // step's gate reads, and only that step reads the config a profile
+        // arrives in.
         ...(deps.ignoreConfig === true
           ? {}
           : { "X-Crysk-Capabilities": PLATFORM_CAPABILITIES }),
@@ -342,8 +336,7 @@ export async function exchangePlatformToken(
       data_mode?: unknown;
       trace_content?: unknown;
       config?: unknown;
-      estimate?: unknown;
-      capabilities?: unknown;
+      limits?: unknown;
       command?: unknown;
     };
     const {
@@ -378,13 +371,11 @@ export async function exchangePlatformToken(
         [...secrets, githubToken, runToken],
       );
     }
-    // An estimate is advice: one that does not parse is dropped and the
-    // engine's own band decides, never a failed exchange.
+    // Limits are advice: ones that do not parse are dropped and the review
+    // runs, never a failed exchange.
     const command = parsePlatformCommand(body.command);
-    const estimate =
-      deps.ignoreConfig === true
-        ? undefined
-        : parsePlatformEstimate(body.estimate);
+    const limits =
+      deps.ignoreConfig === true ? undefined : parsePlatformLimits(body.limits);
     return {
       ok: true,
       githubToken,
@@ -400,14 +391,7 @@ export async function exchangePlatformToken(
       // an absent or malformed value sends metadata only.
       ...(body.trace_content === true ? { traceContent: true as const } : {}),
       ...(config.config === undefined ? {} : { config: config.config }),
-      ...(estimate === undefined ? {} : { estimate }),
-      // Only the first connect step declared the capability, so only its
-      // answer can accept it.
-      ...(deps.ignoreConfig !== true &&
-      Array.isArray(body.capabilities) &&
-      body.capabilities.includes(PLATFORM_USAGE_FACTS_CAPABILITY)
-        ? { usageFacts: true as const }
-        : {}),
+      ...(limits === undefined ? {} : { limits }),
       ...(command === undefined ? {} : { command }),
     };
   } catch (error) {
@@ -524,17 +508,10 @@ export async function runPlatformConnect(
         }
       }
     }
-    // Not a secret: two validated numbers and a basis. The run step's budget
-    // gate reads it as CRYSK_PLATFORM_ESTIMATE in place of the engine's band.
-    if (result.estimate !== undefined) {
-      deps.appendOutput(
-        `estimate=${serializePlatformEstimate(result.estimate)}\n`,
-      );
-    }
-    // Not a secret: whether the platform prices this run from its usage facts.
-    // The report step reads it as CRYSK_PLATFORM_USAGE_FACTS (action.yml).
-    if (result.usageFacts === true) {
-      deps.appendOutput("usage-facts=true\n");
+    // Not a secret: up to three validated numbers. The run step's limits gate
+    // reads it as CRYSK_PLATFORM_LIMITS.
+    if (result.limits !== undefined) {
+      deps.appendOutput(`limits=${serializePlatformLimits(result.limits)}\n`);
     }
     // Present only when there is configuration to apply: the setup step and the
     // run step are gated on it, so a standalone run (no platform step, no

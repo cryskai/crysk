@@ -408,21 +408,24 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     expect(generateCiWorkflowTemplate()).toBe(generateCiWorkflowTemplate());
   });
 
-  // A scaffolded repo must inherit action.yml's spend ceiling, never one this
-  // repo chose for itself. `budget-usd` is a real money cap on someone else's
-  // account; raising it from a template they did not read is not ours to do.
-  //
-  // This repo DISABLES the ceiling instead (`budget-usd: 0`). It reviews
-  // itself on a Claude subscription, where a dollar ceiling means nothing,
-  // and the billing-mode policy that was supposed to apply no ceiling there
-  // (#156) resolved this repo's route as metered and skipped #326 and its
-  // predecessors at the $10 default. 0 is the operator's explicit, loud
-  // disable; it never imposes a ceiling, so #156's objection to a fixed
-  // value does not apply. The scaffolded template still says nothing.
-  test("the scaffolded template sets no budget-usd, and this repo's own disables it", () => {
-    expect(generateCiWorkflowTemplate()).not.toContain("budget-usd:");
-    expect(generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS)).toContain(
-      "budget-usd: 0\n",
+  // The `budget-usd` input is retired: dollar limits live in the platform
+  // dashboard, so no workflow this tool generates carries it. Every other
+  // input still reaches the file.
+  test("neither the scaffolded template nor this repo's own sets budget-usd, and both keep their other inputs", () => {
+    const scaffold = generateCiWorkflowTemplate();
+    const own = generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
+    expect(scaffold).not.toContain("budget-usd");
+    expect(own).not.toContain("budget-usd");
+    expect(own).toContain("max-changed-lines: 5000\n");
+    expect(own).toContain("mode: gate\n");
+    expect(
+      generateCiWorkflowTemplate({
+        mode: "advisory",
+        maxChangedLines: "9000",
+        maxChangedFiles: "30",
+      }),
+    ).toMatch(
+      /max-changed-lines: 9000\n\s+max-changed-files: 30\n\s+mode: advisory\n/,
     );
   });
 

@@ -108,13 +108,10 @@ export type ProviderEvent =
       readonly mode: "snapshot" | "delta";
       readonly final: boolean;
       // D1-08 PR2 (§8): a streamed usage UPDATE, not a full snapshot — only
-      // the leaves this event actually reports are present. cashCostUsd
-      // carries a per-event cost delta/snapshot alongside the token leaves;
+      // the leaves this event actually reports are present.
       // `applyUsageUpdate` (usage-normalized.ts) folds a sequence of these
-      // through the same snapshot/delta state machine as the tokens.
-      readonly usage: Partial<NormalizedTokens> & {
-        readonly cashCostUsd?: number;
-      };
+      // through the same snapshot/delta state machine.
+      readonly usage: Partial<NormalizedTokens>;
     })
   | (ProviderEventBase & {
       readonly type: "diagnostic";
@@ -436,9 +433,12 @@ export interface ExactBindingCapabilityReport {
   readonly usage: UsageFacts;
   readonly billing: {
     readonly mode: BillingMode;
-    readonly pricingApplicability: "required" | "not_applicable";
-    readonly tokenPricingAvailable: boolean;
-    readonly cashCostAccountingValid: boolean;
+    // False when the credential class could not be determined. The exact
+    // contract's `mode` is binary, so an unknown class narrows into
+    // "subscription" there; this flag is what keeps that narrowing honest
+    // (an unknown class is a blocking preflight result,
+    // `exactBindingCapabilityIssues`).
+    readonly modeKnown: boolean;
   };
 }
 

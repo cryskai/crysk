@@ -110,8 +110,8 @@ export interface StepResult {
   usage: SessionUsage;
   // D1-08 PR2: the normalized disjoint leaves this step's attempts actually
   // reported, summed across attempts. Absent when no attempt ever spawned
-  // (a pre-spawn denial, a construction failure) — those cases are genuine
-  // zero cost, not "unavailable", and carry no v2 record at all.
+  // (a pre-spawn denial, a construction failure) — those cases genuinely
+  // used nothing, are not "unavailable", and carry no v2 record at all.
   usageV2?: NormalizedUsage;
   // D1-08 PR5b (§9.1): one entry per attempt that reached `runAttempt`'s
   // reserve step, each carrying its own `reservationId` and TERMINAL state
@@ -133,7 +133,7 @@ export interface StepResult {
   // cause, so after one this is the cause of the attempt before it.
   finalCause?: FailureCause;
   // The final attempt was refused by a fenced spend bucket (an earlier
-  // attempt on it left a cost nobody knows), before the transport was called.
+  // attempt on it left usage nobody could confirm), before the transport was called.
   // That attempt is counted in `attempts` but wrote no log or receipt. Read
   // only by the fallback (model-fallback.ts); never recorded.
   spendFenced?: true;
@@ -250,7 +250,7 @@ export interface ClaudeCodeRunnerOptions {
   //
   // It stopped being cosmetic when the Claude CLI transport began reading
   // that projected env to decide whether an attempt bills metered: two tests
-  // here assert the subscription cost shape, and without this they assert it
+  // here assert the subscription billing mode, and without this they assert it
   // against whatever credentials the developer's own shell carries. Verified,
   // not assumed — `ANTHROPIC_API_KEY=sk-probe bun test` reddened exactly those
   // two before this landed. That is #174's defect, and it cost this repo two

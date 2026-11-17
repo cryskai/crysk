@@ -132,7 +132,6 @@ describe("renderStepSummary — completed review with findings", () => {
         claim: "unused import left behind",
       }),
     ],
-    costUsdEst: 12.9,
     wallMs: 754_000,
     model: "haiku+sonnet",
     repoWebUrl: "https://github.com/juanmaagd/pr-hero",
@@ -144,9 +143,10 @@ describe("renderStepSummary — completed review with findings", () => {
     expect(out).toContain("### 🔍 Crysk Review — PR #123");
   });
 
-  test("renders the metrics table with findings/cost/duration/model chips", () => {
+  test("renders the metrics table with findings/duration/model chips and no dollar figure", () => {
     expect(out).toContain("| Findings | 2 (1 blocking · 1 advisory) |");
-    expect(out).toContain("| Estimated cost | $12.90 |");
+    expect(out).not.toContain("Estimated cost");
+    expect(out).not.toContain("$");
     expect(out).toContain("| Duration | 12m34s |");
     expect(out).toContain("| Model | haiku+sonnet |");
   });
@@ -194,7 +194,6 @@ describe("renderStepSummary — model text is safe to publish", () => {
       findings: [
         finding({ id: "F001", claim: hostile, path: `src/x ${hostile}.ts` }),
       ],
-      costUsdEst: 1,
       wallMs: 1000,
       model: "sonnet",
     });
@@ -210,7 +209,6 @@ describe("renderStepSummary — a model-written path", () => {
     kind: "reviewed" as const,
     prNumber: 123,
     headSha: HEAD_SHA,
-    costUsdEst: 1,
     wallMs: 1000,
     model: "sonnet",
     repoWebUrl: "https://github.com/acme/app",
@@ -241,7 +239,6 @@ describe("renderStepSummary — clean review (no findings)", () => {
     prNumber: 7,
     headSha: HEAD_SHA,
     findings: [],
-    costUsdEst: 3.68,
     wallMs: 45_000,
     model: "haiku+sonnet",
   };
@@ -270,7 +267,6 @@ describe("renderStepSummary — the footer follows the gate mode (S4)", () => {
     prNumber: 7,
     headSha: HEAD_SHA,
     findings: [],
-    costUsdEst: 3.68,
     wallMs: 45_000,
     model: "haiku+sonnet",
   };
@@ -334,27 +330,29 @@ describe("renderStepSummary — skipped, size gate limit exceeded", () => {
   });
 });
 
-describe("renderStepSummary — skipped, budget ceiling exceeded", () => {
-  const data: CiSummaryData = {
-    kind: "skipped-budget",
-    prNumber: 56,
-    estimatedCostUsd: 12.5,
-    budgetUsd: 10,
-  };
-  const out = renderStepSummary(data);
+describe("renderStepSummary — skipped, platform limit hit", () => {
+  const data = (limit: "month-used-up" | "review-limit" | "month-left") =>
+    ({
+      kind: "skipped-budget",
+      prNumber: 56,
+      limit,
+    }) satisfies CiSummaryData;
+  const out = renderStepSummary(data("review-limit"));
 
   test("renders the skipped-review header with the PR number", () => {
     expect(out).toContain("### ⚠️ Crysk Review Skipped — PR #56");
   });
 
-  test("states the budget gate reason", () => {
-    expect(out).toContain(
-      "the estimated cost exceeds the configured budget ceiling",
+  test("names the limit that was hit and the dashboard setting, with no dollar figure", () => {
+    expect(out).toContain("the estimated cost is over the per-review limit.");
+    expect(out).toContain("(Review > Limits)");
+    expect(out).not.toContain("$");
+    expect(renderStepSummary(data("month-used-up"))).toContain(
+      "the organization's monthly review limit is used up.",
     );
-  });
-
-  test("reports estimated cost against the configured budget", () => {
-    expect(out).toContain("| Estimated cost | $12.50 (budget $10.00) |");
+    expect(renderStepSummary(data("month-left"))).toContain(
+      "more than what is left of the monthly limit",
+    );
   });
 
   test("does not mention the size gate, keeping the two skip reasons distinct", () => {
@@ -364,13 +362,12 @@ describe("renderStepSummary — skipped, budget ceiling exceeded", () => {
 });
 
 describe("formatCiOutputs", () => {
-  test("formats every key-value pair on its own line, cost fixed to 2 decimals", () => {
+  test("formats every key-value pair on its own line", () => {
     const outputs: CiOutputs = {
       status: "reviewed",
       findings_count: 2,
       blocking_count: 1,
       advisory_count: 1,
-      cost_usd_est: 12.9,
       run_dir: ".pr-hero/runs/2026-08-24T12-00-00Z",
     };
     expect(formatCiOutputs(outputs)).toBe(
@@ -379,7 +376,6 @@ describe("formatCiOutputs", () => {
         "findings_count=2",
         "blocking_count=1",
         "advisory_count=1",
-        "cost_usd_est=12.90",
         "run_dir=.pr-hero/runs/2026-08-24T12-00-00Z",
       ].join("\n")}\n`,
     );
@@ -391,7 +387,6 @@ describe("formatCiOutputs", () => {
       findings_count: 0,
       blocking_count: 0,
       advisory_count: 0,
-      cost_usd_est: 0,
       run_dir: "",
     };
     expect(formatCiOutputs(outputs)).toBe(
@@ -400,7 +395,6 @@ describe("formatCiOutputs", () => {
         "findings_count=0",
         "blocking_count=0",
         "advisory_count=0",
-        "cost_usd_est=0.00",
         "run_dir=",
       ].join("\n")}\n`,
     );
@@ -453,7 +447,6 @@ describe("appendCiOutputs (impure edge)", () => {
       findings_count: 1,
       blocking_count: 1,
       advisory_count: 0,
-      cost_usd_est: 4.5,
       run_dir: ".pr-hero/runs/latest",
     };
 
@@ -472,7 +465,6 @@ describe("appendCiOutputs (impure edge)", () => {
       findings_count: 0,
       blocking_count: 0,
       advisory_count: 0,
-      cost_usd_est: 0,
       run_dir: "run-1",
     };
     const second: CiOutputs = {
@@ -480,7 +472,6 @@ describe("appendCiOutputs (impure edge)", () => {
       findings_count: 0,
       blocking_count: 0,
       advisory_count: 0,
-      cost_usd_est: 0,
       run_dir: "run-2",
     };
 

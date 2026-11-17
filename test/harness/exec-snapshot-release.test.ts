@@ -46,8 +46,6 @@ const SUCCESS: TransportOutcome = {
     tokens: {},
     completeness: "complete",
     billingMode: "subscription",
-    costSource: "provider",
-    cashCostUsd: 0,
   },
   stderrTail: "",
 };

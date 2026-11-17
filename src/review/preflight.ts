@@ -104,9 +104,11 @@ export interface CliOptions {
   // Summary activation is tri-state at parse time: undefined means no flag,
   // so review can apply flag > config > the default-on setting.
   summary?: boolean;
-  // Flags of the removed scout stage that the command line still carried, once
-  // each, in first-seen order. They are accepted and have no effect; the shell
-  // prints one warning per entry (removedFlagWarnings).
+  // Flags of removed features that the command line still carried, once each,
+  // in first-seen order: the scout stage, and the dollar limits that moved to
+  // the Crysk platform (`--budget-usd`, `--billing`). They are accepted and
+  // have no effect; the shell prints one warning per entry
+  // (removedFlagWarnings).
   removedFlags?: string[];
   // `--shared-prefix` / `--no-shared-prefix`. Undefined means the default,
   // which is ON (see resolveSharedPrefix).
@@ -239,19 +241,19 @@ export interface CliOptions {
   repoExplicit?: boolean;
   // ROADMAP Pillar 3 (GitHub Actions CI). `ci` is the EXPLICIT flag only —
   // `isCiEnvironment()` ORs it with the GITHUB_ACTIONS/CI env vars, which
-  // parseArgs (pure, no process.env read) cannot see. Both `budgetUsd` and
-  // `stepSummary` require `--ci` at parse time (the `--post`-requires-`--pr`
-  // precedent above): a spend ceiling or a summary toggle for a mode that
-  // never activates would be exactly the "silently dropped intention" the
-  // --bug-labels guard already refuses elsewhere in this file.
+  // parseArgs (pure, no process.env read) cannot see. `stepSummary` requires
+  // `--ci` at parse time (the `--post`-requires-`--pr` precedent above): a
+  // summary toggle for a mode that never activates would be exactly the
+  // "silently dropped intention" the --bug-labels guard already refuses
+  // elsewhere in this file.
   //
   // Phase 4 (CI Scaffolding) gave `--ci` a SECOND, command-scoped meaning:
   // on `review` it activates the CI headless shell (requires --pr); on
   // `setup` it means "scaffold .github/workflows/crysk.yml instead of
   // running the interactive wizard" — see `ci init`'s dedicated command
   // below for the same scaffolding without touching `setup`'s wizard
-  // default. `budgetUsd`/`stepSummary` still require the REVIEW reading of
-  // `--ci` specifically (checked below), since neither means anything to
+  // default. `stepSummary` still requires the REVIEW reading of
+  // `--ci` specifically (checked below), since it means nothing to
   // scaffolding.
   ci?: boolean;
   // `ci init` — the same scaffolding as `setup --ci`, as its own command.
@@ -259,25 +261,19 @@ export interface CliOptions {
   // as a literal union (not a bare boolean) so a future `ci status` has
   // somewhere to go without a breaking change.
   ciSubcommand?: "init";
-  // Unset means "no ceiling configured" (no gate, no disabled-ceiling
-  // warning — there is nothing to disable). <= 0, GIVEN explicitly, disables
-  // the ceiling too, but DOES warn: see ci/gates.ts's
-  // budgetDisabledWarningMessage for why the two are not the same state.
-  budgetUsd?: number;
   // Tri-state like `summary`: unset means "the shell's own default
   // (on)", so `--step-summary` and `--no-step-summary` stay distinguishable
   // from "nobody said".
   stepSummary?: boolean;
   // S4: the commit-status gate for a `review --ci` run, required at parse time
-  // like budgetUsd. `gate` (the CI default) turns the pr-hero commit status red
-  // on blocking findings, a size or budget skip, and a crash; `advisory` keeps
+  // like stepSummary. `gate` (the CI default) turns the pr-hero commit status red
+  // on blocking findings, a size or limits skip, and a crash; `advisory` keeps
   // today's posture. Unset means the run resolves it (resolveCiMode, pr/preflight).
   ciMode?: "gate" | "advisory";
-  // `setup --ci` / `ci init` only: the re-review preset and how CI pays, for an
-  // agent that already asked the person. --ci-mode and --budget-usd also apply
-  // there; together they replace the questions setup asks in a terminal.
+  // `setup --ci` / `ci init` only: the re-review preset, for an agent that
+  // already asked the person. --ci-mode also applies there; together they
+  // replace the questions setup asks in a terminal.
   reviewLevel?: "minimal" | "balanced" | "thorough" | "manual";
-  billing?: "subscription" | "api";
 }
 
 // design.md 3.1's literal formula: Boolean(GITHUB_ACTIONS || CI || --ci).
@@ -329,15 +325,14 @@ Usage:
   crysk review [options]   Review a branch (zero flags inside a configured repo)
   crysk init [options]     Scaffold <repo>/.crysk/config.json, and a root REVIEW.md when the repo has no review instructions
   crysk setup [options]    Run interactive onboarding wizard
-  crysk setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
+  crysk setup --ci [--force] [--level <l>] [--ci-mode <m>]
                              Scaffold .github/workflows/crysk.yml (or update
                              an existing pr-hero.yml) instead
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed. Asks how CI
                              re-reviews (in a terminal) or takes the flags:
                              --level minimal|balanced|thorough|manual,
-                             --ci-mode gate|advisory, --billing
-                             subscription|api, --budget-usd (api only),
+                             --ci-mode gate|advisory,
                              --max-changed-lines (default 4000).
                              Writes the level to .crysk/config.json and
                              prints a summary. Then checks gh and, in a
@@ -433,7 +428,7 @@ Usage:
   crysk gc uninstall       Unload and remove that launchd agent
   crysk gc status          Read-only: whether the GC agent is installed
   crysk usage [--all]      Print the observability store's per-run rows
-                             (cost, tokens, findings) for the current
+                             (tokens, findings) for the current
                              checkout's origin — every review, local and
                              PR, auto-ingests into it. --all shows every
                              origin instead of just this one. Read-only, $0
@@ -561,7 +556,7 @@ Options:
   --interval <min>    watch install and gc install: minutes between launchd
                       ticks (watch default: ${DEFAULT_WATCH_INTERVAL_MIN};
                       gc default: ${DEFAULT_GC_INTERVAL_MIN})
-  --dry-run           Resolve, preflight, print the plan and the cost band,
+  --dry-run           Resolve, preflight, print the plan,
                       then exit without spawning anything. For watch --once:
                       print what would be skipped/launched and why, touching
                       nothing
@@ -578,16 +573,16 @@ Options:
   --ci-mode <gate|advisory>
                       With review --ci only. gate (the default): the
                       crysk commit status is failure on blocking findings
-                      and on a size or budget skip, and error on a crash.
+                      and on a size or limits skip, and error on a crash.
                       advisory: the status stays success whatever the
                       findings, as before
   --force             Review even when CI would skip: the size gate, the
-                      review-policy admission rules, and the budget ceiling.
+                      review-policy admission rules, and the platform limits.
                       On GitHub, comment /crysk review on the PR to pass
                       this flag from Actions. An interactive TTY already
                       offers the size-gate choice as a menu; this flag is
                       the unattended hatch. Does NOT imply --yes — the
-                      cost-band prompt still asks. With setup --ci /
+                      confirmation prompt still asks. With setup --ci /
                       ci init: overwrite the existing review workflow
                       (.github/workflows/crysk.yml or pr-hero.yml) instead
                       of refusing
@@ -626,12 +621,24 @@ const SCOUT_REMOVED = "is ignored: the scout stage was removed";
 // custom prompt directory are still accepted, do nothing, and say so once.
 export const PARITY_REMOVED = "is ignored: the parity hunter was removed";
 
-// What the shell prints, as `warning: <line>`, for every flag of the removed
-// stage a command line carried. Pure: the shells decide where it goes.
+// The dollar limits moved to the Crysk platform (platform-owned-cost S7), so
+// the flags that set them are retired the same way: `--budget-usd` set a
+// ceiling, and `--billing` only chose whether setup wrote one.
+const REMOVED_FLAG_NOTES: Readonly<Record<string, string>> = {
+  "--budget-usd":
+    "is ignored: dollar limits moved to the Crysk platform (Review > Limits in the dashboard)",
+  "--billing":
+    "is ignored: dollar limits moved to the Crysk platform, so setup no longer asks how the review is paid",
+};
+
+// What the shell prints, as `warning: <line>`, for every flag of a removed
+// feature a command line carried. Pure: the shells decide where it goes.
 export function removedFlagWarnings(
   options: Pick<CliOptions, "removedFlags">,
 ): string[] {
-  return (options.removedFlags ?? []).map((flag) => `${flag} ${SCOUT_REMOVED}`);
+  return (options.removedFlags ?? []).map(
+    (flag) => `${flag} ${REMOVED_FLAG_NOTES[flag] ?? SCOUT_REMOVED}`,
+  );
 }
 
 function noteRemovedFlag(options: CliOptions, flag: string): void {
@@ -1086,28 +1093,18 @@ export function parseArgs(argv: string[]): ParsedCli {
     );
   }
   // The adjudicator's verdicts are posted only by the CI shell, so the flag is a
-  // no-op anywhere else. Same reasoning as --budget-usd below.
+  // no-op anywhere else. Same reasoning as --step-summary below.
   if (options.adjudicate && !(options.ci && command === "review")) {
     throw new CliUsageError("--adjudicate only applies with review --ci");
   }
   // Same "silently dropped intention" reasoning as --post/--pr above: a
-  // spend ceiling or a summary toggle for a mode that never turns on would
-  // be a flag the operator believes changed a run it did not. Scoped to
-  // `review`'s reading of --ci specifically now that `setup --ci` exists —
-  // neither flag means anything to scaffolding.
-  // `setup --ci` and `ci init` read both too: they write the gate mode and
-  // the ceiling into the workflow they scaffold.
+  // summary toggle for a mode that never turns on would be a flag the
+  // operator believes changed a run it did not. Scoped to `review`'s reading
+  // of --ci specifically now that `setup --ci` exists — it means nothing to
+  // scaffolding. `setup --ci` and `ci init` read the gate mode too: they
+  // write it into the workflow they scaffold.
   const scaffolding = (options.ci && command === "setup") || command === "ci";
-  if (
-    options.budgetUsd !== undefined &&
-    !(options.ci && command === "review") &&
-    !scaffolding
-  ) {
-    throw new CliUsageError(
-      "--budget-usd only applies with review --ci, setup --ci or ci init",
-    );
-  }
-  // S4: the gate mode is a review reading of --ci, like budgetUsd. Without
+  // S4: the gate mode is a review reading of --ci, like stepSummary. Without
   // it the flag would name a mode that never runs.
   if (
     options.ciMode !== undefined &&
@@ -1118,18 +1115,8 @@ export function parseArgs(argv: string[]): ParsedCli {
       "--ci-mode only applies with review --ci, setup --ci or ci init",
     );
   }
-  if (
-    (options.reviewLevel !== undefined || options.billing !== undefined) &&
-    !scaffolding
-  ) {
-    throw new CliUsageError(
-      "--level and --billing only apply with setup --ci or ci init",
-    );
-  }
-  if (options.billing === "subscription" && options.budgetUsd !== undefined) {
-    throw new CliUsageError(
-      "--budget-usd does not apply with --billing subscription: a subscription review spends quota, not dollars",
-    );
+  if (options.reviewLevel !== undefined && !scaffolding) {
+    throw new CliUsageError("--level only applies with setup --ci or ci init");
   }
   if (
     options.stepSummary !== undefined &&
@@ -1445,18 +1432,12 @@ function applyValueFlag(
     case "--max-changed-files":
       options.maxChangedFiles = parseLimit(flag, value);
       return;
-    // Unlike parseLimit (integer-only, size-gate's line/file counts):
-    // spend is a float ($7.50), and <= 0 is a real, meaningful value (see
-    // ci/gates.ts's evaluateBudgetGate) rather than a rejected input, so this
-    // only refuses non-numbers, never negatives.
-    case "--budget-usd": {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) {
-        throw new CliUsageError(`--budget-usd must be a number, got: ${value}`);
-      }
-      options.budgetUsd = parsed;
+    // Retired with the dollar limits (platform-owned-cost S7): the value is
+    // read and dropped, whatever it is, and the flag is announced once.
+    case "--budget-usd":
+    case "--billing":
+      noteRemovedFlag(options, flag);
       return;
-    }
     case "--ci-mode": {
       if (value !== "gate" && value !== "advisory") {
         throw new CliUsageError(
@@ -1478,15 +1459,6 @@ function applyValueFlag(
         );
       }
       options.reviewLevel = value;
-      return;
-    }
-    case "--billing": {
-      if (value !== "subscription" && value !== "api") {
-        throw new CliUsageError(
-          `--billing must be subscription or api, got: ${value}`,
-        );
-      }
-      options.billing = value;
       return;
     }
     case "--finding":

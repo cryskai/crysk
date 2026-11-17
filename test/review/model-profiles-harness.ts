@@ -125,7 +125,6 @@ const USAGE = {
   tokens_in: 1,
   tokens_out: 1,
   tokens_total: 2,
-  cost_usd_est: 0,
 };
 
 function ok(spec: StepSpec, output: unknown): StepResult {
@@ -262,7 +261,7 @@ function capableOpenCode(): ProviderTransport {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async () => {
@@ -276,7 +275,6 @@ const READY: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 // Rewrites `model:`/`effort:` lines of a prompt's frontmatter, dropping a

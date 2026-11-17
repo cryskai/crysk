@@ -42,8 +42,6 @@ describe("diversity benchmark", () => {
           treatmentCompleted: true,
           blindingIntact: true,
           interleavingIntact: true,
-          cashCostUsd: 5,
-          notionalCostUsd: 4,
           uniqueTruePositives: 2,
           recall: 1,
           cleanPrRestraint: 1,
@@ -59,8 +57,6 @@ describe("diversity benchmark", () => {
           treatmentCompleted: true,
           blindingIntact: true,
           interleavingIntact: true,
-          cashCostUsd: 2,
-          notionalCostUsd: 1,
           uniqueTruePositives: 1,
           recall: 0.5,
           cleanPrRestraint: 1,
@@ -71,7 +67,7 @@ describe("diversity benchmark", () => {
     );
     expect(report.invalidRuns).toBe(1);
     expect(report.validRuns).toBe(1);
-    expect(report.cashCostPerUniqueTp).toBe(2);
+    expect(report.recall).toBe(0.5);
     expect(report.blindSpots).toBe(1);
   });
 
@@ -91,8 +87,6 @@ describe("diversity benchmark", () => {
           treatmentCompleted: false,
           blindingIntact: true,
           interleavingIntact: true,
-          cashCostUsd: 1,
-          notionalCostUsd: 1,
           uniqueTruePositives: 0,
           recall: 0,
           cleanPrRestraint: 1,
@@ -119,8 +113,6 @@ describe("diversity benchmark", () => {
           treatmentCompleted: true,
           blindingIntact: true,
           interleavingIntact: true,
-          cashCostUsd: 1,
-          notionalCostUsd: 1,
           uniqueTruePositives: 1,
           recall: 1,
           cleanPrRestraint: 1,

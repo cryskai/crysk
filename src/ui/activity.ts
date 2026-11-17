@@ -22,10 +22,6 @@ export function formatDuration(wallMs: number): string {
   return `${String(mins).padStart(2, "0")}m ${String(secs).padStart(2, "0")}s`;
 }
 
-export function formatCost(costUsd: number): string {
-  return `$${costUsd.toFixed(2)}`;
-}
-
 export function formatFindingsSummary(
   blocking: number,
   advisory: number,
@@ -110,9 +106,8 @@ export function renderRunHistory(
         : "Branch review";
     const findings = formatFindingsSummary(item.blocking, item.advisory);
     const duration = formatDuration(item.wall_ms);
-    const cost = formatCost(item.cost_usd_est);
 
-    const line = `  ${statusIcon} ${bold(target, st)} · ${findings} · Duration: ${duration} · Cost: ${cost}`;
+    const line = `  ${statusIcon} ${bold(target, st)} · ${findings} · Duration: ${duration}`;
     lines.push(line);
   }
 

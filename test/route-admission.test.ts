@@ -64,7 +64,6 @@ function createMockTransport(
       },
       billing: {
         mode: "subscription",
-        pricingReady: true,
       },
       issues: [],
       ...reportOverrides,
@@ -78,8 +77,6 @@ function createMockTransport(
         tokens: { totalKnown: 10 },
         completeness: "complete",
         billingMode: "subscription",
-        costSource: "provider",
-        cashCostUsd: 0,
       },
       stderrTail: "",
     }),
@@ -180,7 +177,7 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
       registry.register(
         "opencode",
         createMockTransport("opencode", {
-          billing: { mode: "subscription", pricingReady: true },
+          billing: { mode: "subscription" },
         }),
       );
 
@@ -217,7 +214,6 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
         sdkAvailable: true,
         credentialAuthority: true,
         workspaceBroker: true,
-        pricingReady: true,
       };
 
       const admission = await admitRoutePlan(plan, registry, {
@@ -278,19 +274,16 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
         sdkAvailable: true,
         credentialAuthority: false,
         workspaceBroker: true,
-        pricingReady: false,
       };
 
       const incompleteResult = checkD1_11Readiness(incomplete);
       expect(incompleteResult.ready).toBe(false);
       expect(incompleteResult.missing).toContain("credentialAuthority");
-      expect(incompleteResult.missing).toContain("pricingReady");
 
       const complete: D1_11ReadinessEvidence = {
         sdkAvailable: true,
         credentialAuthority: true,
         workspaceBroker: true,
-        pricingReady: true,
       };
 
       const completeResult = checkD1_11Readiness(complete);
@@ -303,7 +296,6 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
         sdkAvailable: true,
         credentialAuthority: true,
         workspaceBroker: true,
-        pricingReady: true,
       };
 
       const registry = createDefaultTransportRegistry({
@@ -373,7 +365,7 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
           usageMode: "snapshot",
         },
         cancellation: { deadlineMs: 5000, conformance: "passed" },
-        billing: { mode: "subscription", pricingReady: true },
+        billing: { mode: "subscription" },
         issues: [],
       };
 
@@ -412,13 +404,11 @@ describe("admitDiversityRoutePlan independent contract (#142 item 4)", () => {
     sdkAvailable: true,
     credentialAuthority: true,
     workspaceBroker: true,
-    pricingReady: true,
   };
   const INCOMPLETE_EVIDENCE: D1_11ReadinessEvidence = {
     sdkAvailable: true,
     credentialAuthority: false,
     workspaceBroker: true,
-    pricingReady: false,
   };
 
   // An opencode-routed plan is the only shape that makes forwarding OBSERVABLE.
@@ -570,7 +560,6 @@ describe("admitDiversityRoutePlan independent contract (#142 item 4)", () => {
 
       expect(gated).toBeInstanceOf(OpenCodeProductionGatedError);
       expect((gated as Error).message).toContain("credentialAuthority");
-      expect((gated as Error).message).toContain("pricingReady");
     });
 
     test("3-arg shape: absent evidence stays fail-closed", async () => {

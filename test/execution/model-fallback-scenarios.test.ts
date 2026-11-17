@@ -73,17 +73,14 @@ const SUBSCRIPTION: NormalizedUsage = {
   tokens: { totalKnown: 1 },
   completeness: "complete",
   billingMode: "subscription",
-  costSource: "subscription",
 };
 
-function metered(cashCostUsd: number): NormalizedUsage {
+function metered(): NormalizedUsage {
   return {
     wallMs: 10,
     tokens: { outputVisible: 10, outputKnown: 10, totalKnown: 20 },
     completeness: "complete",
     billingMode: "metered",
-    costSource: "provider",
-    cashCostUsd,
   };
 }
 
@@ -124,7 +121,6 @@ function scriptedTransport(
   requests: TransportRequest[],
   billing: ProviderCapabilityReport["billing"] = {
     mode: "subscription",
-    pricingReady: true,
   },
 ): ProviderTransport {
   return {
@@ -172,7 +168,6 @@ const READY_OPENCODE_EVIDENCE: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 async function writeFixture(
@@ -378,27 +373,24 @@ describe("fallback scenarios: numbering, spend, cancellation and the recorded mo
         "opencode",
         (r) =>
           r.route.modelSnapshot === "gpt-4o"
-            ? fail("quota_exhausted", metered(0.1))
-            : ok(metered(0.2)),
+            ? fail("quota_exhausted", metered())
+            : ok(metered()),
         requests,
-        { mode: "metered", pricingReady: true },
+        { mode: "metered" },
       ),
     });
     try {
       const result = await runtime.runner.run(stepFor(route));
       expect(sent(requests)).toEqual(["opencode:gpt-4o", "opencode:gpt-4.1"]);
       expect(result.status).toBe("ok");
-      expect(
-        result.reservations?.map((r) => [r.attempt, r.state, r.settledUsd]),
-      ).toEqual([
-        [1, "settled", 0.1],
-        [2, "settled", 0.2],
+      expect(result.reservations?.map((r) => [r.attempt, r.state])).toEqual([
+        [1, "settled"],
+        [2, "settled"],
       ]);
-      expect(result.usageV2?.cashCostUsd).toBeCloseTo(0.3, 10);
-      expect(result.usage.cost_usd_est).toBeCloseTo(0.3, 10);
       expect(result.usage.tokens_total).toBe(40);
-      expect(result.modelAttempts?.map((a) => a.usageV2?.cashCostUsd)).toEqual([
-        0.1, 0.2,
+      expect(result.modelAttempts?.map((a) => a.usageV2?.billingMode)).toEqual([
+        "metered",
+        "metered",
       ]);
       console.log(
         "R2 buckets",
@@ -570,9 +562,9 @@ describe("fallback scenarios: numbering, spend, cancellation and the recorded mo
         (r) =>
           r.route.modelSnapshot === "gpt-4o"
             ? fail("rate_limit", UNKNOWN_COST)
-            : ok(metered(0.2)),
+            : ok(metered()),
         requests,
-        { mode: "metered", pricingReady: true },
+        { mode: "metered" },
       ),
     });
     try {
@@ -622,9 +614,9 @@ describe("fallback scenarios: numbering, spend, cancellation and the recorded mo
         (r) =>
           r.route.modelSnapshot === "gpt-4o"
             ? fail("rate_limit", UNKNOWN_COST)
-            : ok(metered(0.2)),
+            : ok(metered()),
         openRequests,
-        { mode: "metered", pricingReady: true },
+        { mode: "metered" },
       ),
       "claude-code": scriptedTransport(
         "claude-code",
@@ -671,7 +663,7 @@ describe("fallback scenarios: numbering, spend, cancellation and the recorded mo
         "opencode",
         () => fail("rate_limit", UNKNOWN_COST),
         openRequests,
-        { mode: "metered", pricingReady: true },
+        { mode: "metered" },
       ),
       "claude-code": scriptedTransport(
         "claude-code",
@@ -717,7 +709,7 @@ describe("fallback scenarios: numbering, spend, cancellation and the recorded mo
         "opencode",
         () => ({ ...ok(UNKNOWN_COST), finalText: "not json" }),
         openRequests,
-        { mode: "metered", pricingReady: true },
+        { mode: "metered" },
       ),
       "claude-code": scriptedTransport(
         "claude-code",

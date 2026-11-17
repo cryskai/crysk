@@ -37,12 +37,11 @@ function scripted(answers: string[]): {
 }
 
 describe("askChoices", () => {
-  test("subscription: no budget question, explains why, skips advanced", async () => {
+  test("asks the level, the gate and the size, never how the review is paid, and skips advanced", async () => {
     const lines: string[] = [];
     const { prompter, asked } = scripted([
       "thorough",
       "advisory",
-      "subscription",
       "", // max changed lines: default 4000
       "n",
     ]);
@@ -50,49 +49,36 @@ describe("askChoices", () => {
     expect(c).toEqual({
       level: "thorough",
       mode: "advisory",
-      billing: "subscription",
       maxChangedLines: 4000,
       advanced: {},
       defaulted: false,
-      chosen: { level: true, maxChangedLines: true, mode: true, billing: true },
+      chosen: { level: true, maxChangedLines: true, mode: true },
     });
+    expect(asked).toHaveLength(4);
     expect(asked.some((q) => /changed lines/i.test(q))).toBe(true);
-    expect(asked.some((q) => /ceiling/i.test(q))).toBe(false);
-    expect(lines.join("\n")).toContain("CRYSK_CLAUDE_API_KEY");
-    // S5: a key alone no longer brings the ceiling back; the order decides.
-    expect(lines.join("\n")).toContain("credentials.claude");
-    expect(lines.join("\n")).not.toContain("budget-usd: 0");
+    expect(asked.some((q) => /pay|ceiling|billing|budget/i.test(q))).toBe(
+      false,
+    );
+    expect(lines.join("\n")).not.toMatch(/ceiling|budget|billing|\$12/i);
     // The advanced settings are named up front even when skipped.
     expect(lines.join("\n")).toContain("trusted actors");
   });
 
-  test("api: asks the ceiling, re-asks on a non-number, empty takes the default", async () => {
-    const { prompter } = scripted([
-      "",
-      "",
-      "api",
-      "lots",
-      "-5",
-      "7.5",
-      "2000",
-      "n",
-    ]);
+  test("empty answers take the defaults: balanced, gate, 4000 lines", async () => {
+    const { prompter } = scripted(["", "", "2000", "n"]);
     const c = await askChoices(prompter, () => {});
-    expect(c.billing).toBe("api");
-    expect(c.budgetUsd).toBe(7.5);
     expect(c.level).toBe("balanced");
     expect(c.mode).toBe("gate");
     expect(c.maxChangedLines).toBe(2000);
 
-    const { prompter: p2 } = scripted(["", "", "api", "", "", "n"]);
-    expect((await askChoices(p2, () => {})).budgetUsd).toBe(12);
+    const { prompter: p2 } = scripted(["", "", "", "n"]);
+    expect((await askChoices(p2, () => {})).maxChangedLines).toBe(4000);
   });
 
   test("advanced: every answer is written, the default ones included", async () => {
     const { prompter } = scripted([
       "balanced",
       "gate",
-      "subscription",
       "0", // no line limit, said explicitly
       "y",
       "", // blocking weight: Enter takes the default 2, still written
@@ -137,15 +123,13 @@ describe("askChoices", () => {
         ci_max_attempts: 5,
         max_changed_lines: 9000,
       },
-      workflow: { mode: "advisory", budgetUsd: "7" },
+      workflow: { mode: "advisory" },
     });
     expect(asked[0]?.def).toContain(
       "keep of minimal|balanced|thorough|manual|keep",
     );
     expect(c.chosen.level).toBe(false);
     expect(c.mode).toBe("advisory");
-    expect(c.billing).toBe("api");
-    expect(c.budgetUsd).toBe(7);
     expect(c.maxChangedLines).toBe(9000);
   });
 
@@ -177,19 +161,13 @@ describe("choicesFromFlags", () => {
   });
 
   test("any flag is a choice; the rest fall back to balanced and gate", () => {
-    expect(choicesFromFlags({ billing: "subscription" })).toEqual({
+    expect(choicesFromFlags({ ciMode: "advisory" })).toEqual({
       level: "balanced",
-      mode: "gate",
-      billing: "subscription",
+      mode: "advisory",
       maxChangedLines: 4000,
       advanced: {},
       defaulted: false,
-      chosen: {
-        level: false,
-        maxChangedLines: false,
-        mode: false,
-        billing: true,
-      },
+      chosen: { level: false, maxChangedLines: false, mode: true },
     });
   });
 
@@ -200,7 +178,6 @@ describe("choicesFromFlags", () => {
       level: false,
       maxChangedLines: true,
       mode: false,
-      billing: false,
     });
   });
 
@@ -209,7 +186,6 @@ describe("choicesFromFlags", () => {
       level: true,
       maxChangedLines: false,
       mode: false,
-      billing: false,
     });
   });
 
@@ -217,9 +193,5 @@ describe("choicesFromFlags", () => {
     expect(
       choicesFromFlags({ maxChangedFiles: 30 })?.advanced.max_changed_files,
     ).toBe(30);
-  });
-
-  test("--budget-usd alone implies an API key", () => {
-    expect(choicesFromFlags({ budgetUsd: 5 })?.billing).toBe("api");
   });
 });

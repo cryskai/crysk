@@ -112,7 +112,6 @@ class RecordingStepRunner implements StepRunner {
         tokens_total: 100,
         tokens_in: 80,
         tokens_out: 20,
-        cost_usd_est: 0.001,
         wall_ms: 50,
       },
       stderrTail: "",
@@ -126,7 +125,6 @@ const READY_OPENCODE_EVIDENCE: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 // A registered, already-capable opencode transport. Overriding the backend
@@ -155,7 +153,7 @@ function createCapableOpenCodeTransport(): ProviderTransport {
         usageMode: "snapshot",
       },
       cancellation: { deadlineMs: 5000, conformance: "passed" },
-      billing: { mode: "subscription", pricingReady: true },
+      billing: { mode: "subscription" },
       issues: [],
     }),
     execute: async (_request: TransportRequest): Promise<TransportOutcome> => ({
@@ -167,8 +165,6 @@ function createCapableOpenCodeTransport(): ProviderTransport {
         tokens: { totalKnown: 1 },
         completeness: "complete",
         billingMode: "subscription",
-        costSource: "provider",
-        cashCostUsd: 0,
       },
       stderrTail: "",
     }),
@@ -729,7 +725,6 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
         enabled: true,
         armId: "arm",
         maxLegs: 3,
-        cashCapUsd: 10,
       },
       agents: [
         {
@@ -775,7 +770,6 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
           tokens_total: 10,
           tokens_in: 8,
           tokens_out: 2,
-          cost_usd_est: 0.001,
           wall_ms: 1,
         },
         attempts: 1,
@@ -831,7 +825,6 @@ describe("a pipeline whose hunters all fail with model_unavailable", () => {
             tokens_out: 0,
             tokens_total: 0,
             wall_ms: 1,
-            cost_usd_est: 0,
           },
           attempts: 1,
           stderrTail: "",
@@ -888,7 +881,6 @@ describe("a pipeline whose hunters all fail with a missing provider record", () 
             tokens_out: 0,
             tokens_total: 0,
             wall_ms: 1,
-            cost_usd_est: 0,
           },
           attempts: 1,
           stderrTail: "",
@@ -945,7 +937,6 @@ describe("a pipeline whose hunters all fail with a provider API error", () => {
             tokens_out: 0,
             tokens_total: 0,
             wall_ms: 1,
-            cost_usd_est: 0,
           },
           attempts: 1,
           stderrTail: "",

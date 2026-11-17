@@ -40,7 +40,6 @@ describe("diversity identity", () => {
         enabled: true,
         armId: "arm-a",
         maxLegs: 2,
-        cashCapUsd: 5,
       },
       agents: [
         {

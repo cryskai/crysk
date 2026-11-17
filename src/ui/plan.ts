@@ -6,11 +6,9 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { PlatformEstimateBasis } from "#ci/platform-estimate";
 import type { EffectiveConfig } from "#config/config";
 import { exclusionLines } from "#git/git";
 import { isFullCommitId } from "#git/refs";
-import type { FreeRouteBilling } from "#model/free-discovery";
 import type { ResolvedRoutePlan } from "#model/routing";
 import type { PrTarget } from "#pr/preflight";
 import {
@@ -24,15 +22,10 @@ import {
   type SummarySettings,
 } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
-import {
-  type DiffStat,
-  type estimateCost,
-  formatStepRoute,
-} from "#review/report";
+import { type DiffStat, formatStepRoute } from "#review/report";
 import { type SizeGateVerdict, sizeGateLine } from "#review/size-gate";
 import type { ReviewSpec } from "#review/spec";
 import {
-  bold,
   box,
   green,
   labelColumnWidth,
@@ -45,7 +38,6 @@ import {
   terminalWidth,
   yellow,
 } from "#ui/primitives";
-import { FREE_STEPS_NOTE, freeBillingMode } from "#ui/select";
 
 // C5 O-7's payload for both plan surfaces: everything the card and the
 // details view need to name a value the operator cannot see by opening their
@@ -226,11 +218,9 @@ export interface PlanContext {
   config: LocalConfig;
   summary: SummarySettings;
   codegraphAvailable: boolean;
-  estimate: ReturnType<typeof estimateCost>;
-  hunterCount: number;
   // The gate's ALREADY-EVALUATED verdict, carried in so the plan can print
-  // it last. The gate is still decided by the shell, before the cost band's
-  // confirm() — this only moves where the line lands on screen.
+  // it last. The gate is still decided by the shell, before the confirm
+  // prompt — this only moves where the line lands on screen.
   sizeGate: SizeGateVerdict;
   droppedPaths: string[];
   // C5 O-7. Optional for the reason `resolved`/`rereview` are on the PR
@@ -238,9 +228,6 @@ export interface PlanContext {
   configProvenance?: ConfigProvenance;
   // D2 PR3: Optional resolved route plan for model routing display
   routePlan?: ResolvedRoutePlan;
-  // Free verdicts of the admitted route plan, read off the admission that already
-  // decided them. Absent means unknown, and the estimate line keeps its band.
-  freeRoute?: FreeRouteBilling;
   // The terminal width every row and card below is laid out against, carried
   // in exactly as ui/result.ts's ResultInput carries it. Optional so the shell
   // may leave the one sniff to the renderer's entry point; the tests ALWAYS
@@ -364,11 +351,10 @@ export function reviewingLine(
 }
 
 // The last block on screen and the only one an operator must read: the gate
-// verdict, then the money. Both used to sit mid-list, where the eye that had
-// already given up on the plan never reached them.
+// verdict. It used to sit mid-list, where the eye that had already given up
+// on the plan never reached it.
 interface PlanDecision {
   sizeGate: SizeGateVerdict;
-  freeRoute?: FreeRouteBilling;
   // Set only where the verdict is an ESTIMATE rather than the gate's own
   // answer (the PR dry run's aggregate counters); printed beside it so
   // nobody reads a guess as the verdict.
@@ -379,9 +365,6 @@ interface PlanDecision {
   // "review anyway" at the size-gate menu. The plan names which hatch
   // opened so a log cannot be read as "they passed --force".
   sizeGateConfirmed?: boolean;
-  estimate: ReturnType<typeof estimateCost>;
-  hunterCount: number;
-  summarizer: boolean;
 }
 
 function decisionLines(
@@ -425,64 +408,7 @@ function decisionLines(
       ),
     );
   }
-  lines.push(
-    ...markerRowLines(
-      "$",
-      planEstimateLine({
-        estimate: d.estimate,
-        hunterCount: d.hunterCount,
-        summarizer: d.summarizer,
-        ...(d.freeRoute === undefined ? {} : { freeRoute: d.freeRoute }),
-      }),
-      bold,
-      styles,
-      width,
-    ),
-  );
   return lines;
-}
-
-// The free-route wording of the estimate, shared by the plan card and the result
-// footer's estimate row so both print one verdict. A free route bills nothing,
-// so the band is relabelled as token-derived instead of read as a cost.
-export function freeRouteEstimateText(estimate: {
-  low: number;
-  high: number;
-}): string {
-  const low = `$${estimate.low.toFixed(2)}`;
-  const high = `$${estimate.high.toFixed(2)}`;
-  return `free route (token-derived ${low} – ${high}, not billed)`;
-}
-
-// The estimate row's text, shared by both plan cards. The band is token-derived
-// whatever the route; the free verdict changes only the claim made about it. A
-// free route bills nothing, so a dollar figure would read as a cost, and the
-// band is relabelled as token-derived instead. A mix keeps the band and names
-// the free share. No free step (metered or subscription) is today's line,
-// byte-identical. The band never reads $0 – $0 here: estimateCost clamps the
-// hunter seats (report.ts), so a free route is "not billed", never a zero estimate.
-export function planEstimateLine(input: {
-  estimate: { low: number; high: number; platform?: PlatformEstimateBasis };
-  hunterCount: number;
-  summarizer: boolean;
-  freeRoute?: FreeRouteBilling;
-}): string {
-  const low = `$${input.estimate.low.toFixed(2)}`;
-  const high = `$${input.estimate.high.toFixed(2)}`;
-  // The mode is the prompt's too (ui/select.ts freeBillingMode): the card and
-  // the confirm read one verdict, so they cannot disagree about what is billed.
-  const billing = freeBillingMode(input.freeRoute);
-  if (billing === "free") {
-    return `estimate: ${freeRouteEstimateText(input.estimate)}`;
-  }
-  // The platform's range is not the band, so the line says where it came from
-  // instead of the agent count the band is built on (cryskai/platform#12).
-  const line =
-    input.estimate.platform === undefined
-      ? `estimate ${low} – ${high} (${input.hunterCount} hunter(s) + refuter ` +
-        `${input.summarizer ? "+ summarizer" : "+ summarizer disabled"})`
-      : `estimate ${low} – ${high} (platform: ${input.estimate.platform})`;
-  return billing === "mixed" ? `${line} ${FREE_STEPS_NOTE}` : line;
 }
 
 // Both details views' rows, with a label column DERIVED from their own labels
@@ -561,7 +487,6 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
           "review runs on Read/Grep/Glob alone",
   );
   push("priors", `${ctx.config.suspicion_priors.length} suspicion prior(s)`);
-  push("estimate", ctx.estimate.basis);
   push("permissions", PERMISSIONS_NOTE);
   return [section("details", styles), ...detailRows(pairs, styles, width)];
 }
@@ -623,10 +548,6 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
         sizeGate: ctx.sizeGate,
         droppedPaths: ctx.droppedPaths,
         force: ctx.options.force,
-        estimate: ctx.estimate,
-        hunterCount: ctx.hunterCount,
-        summarizer: ctx.summary.enabled,
-        ...(ctx.freeRoute === undefined ? {} : { freeRoute: ctx.freeRoute }),
       },
       styles,
       width,
@@ -647,8 +568,6 @@ export interface PrPlanContext {
   spec: ReviewSpec;
   config: LocalConfig;
   summary: SummarySettings;
-  estimate: ReturnType<typeof estimateCost>;
-  hunterCount: number;
   // Same contract as PlanContext: the verdict is decided by the shell (and
   // in PR mode enforced before the run dir even exists), printed here.
   sizeGate: SizeGateVerdict;
@@ -658,9 +577,6 @@ export interface PrPlanContext {
   configProvenance?: ConfigProvenance;
   // D2 PR3: Optional resolved route plan for model routing display
   routePlan?: ResolvedRoutePlan;
-  // Free verdicts of the admitted route plan, read off the admission that already
-  // decided them. Absent means unknown, and the estimate line keeps its band.
-  freeRoute?: FreeRouteBilling;
   // Set when this plan follows an interactive "Review anyway" at the
   // size-gate menu. Distinct from options.force so the decision block can
   // say "confirmed" rather than lie that --force was passed.
@@ -674,7 +590,7 @@ export interface PrPlanContext {
   };
   // Same contract, same reason as PlanContext.width.
   width?: number;
-  // Item 7: queued verify steps shown as their own cost-band term (O-5a).
+  // Queued verify steps, shown as their own row (item 7 O-5a).
   verificationSteps?: number;
   rereview?: {
     case: string;
@@ -706,14 +622,6 @@ function prBaseSourceTag(target: PrTarget): string {
   return target.baseSource === "merge-commit-parent"
     ? "merge commit parent"
     : "PR base tip";
-}
-
-// A dry run has no diff and no review supplies trigger paths, so the hunters
-// that run are the unconditional ones.
-export function dryRunHunterCount(spec: ReviewSpec): number {
-  return spec.agents.filter(
-    (a) => a.role === "hunter" && a.trigger === undefined,
-  ).length;
 }
 
 // Predicted, not decided: the ensure step runs only after the confirm gate,
@@ -842,7 +750,6 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
   }
   push("codegraph", codegraphPlanNote(ctx.worktreePath));
   push("priors", `${ctx.config.suspicion_priors.length} suspicion prior(s)`);
-  push("estimate", ctx.estimate.basis);
   push("permissions", PERMISSIONS_NOTE);
   return [section("details", styles), ...detailRows(pairs, styles, width)];
 }
@@ -970,10 +877,6 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
         droppedPaths: ctx.droppedPaths,
         force: ctx.options.force,
         ...(ctx.sizeGateConfirmed === true ? { sizeGateConfirmed: true } : {}),
-        estimate: ctx.estimate,
-        hunterCount: ctx.hunterCount,
-        summarizer: ctx.summary.enabled,
-        ...(ctx.freeRoute === undefined ? {} : { freeRoute: ctx.freeRoute }),
       },
       styles,
       width,

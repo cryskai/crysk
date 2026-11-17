@@ -313,7 +313,6 @@ class ScriptedRunner implements StepRunner {
         tokens_in: 100,
         tokens_out: 10,
         tokens_total: 110,
-        cost_usd_est: 0.01,
       },
       attempts: 1,
       stderrTail: "",

@@ -126,13 +126,10 @@ export function actionRefFor(ref: string): string {
 }
 
 // The product's own scaffold renderer, with the published action ref. Only the
-// two options a consumer sets: the forceEngineFromPr path is `uses: ./`-only and
+// option a consumer sets: the forceEngineFromPr path is `uses: ./`-only and
 // would be wrong for a published tag.
 export function workflowFor(ref: string): string {
-  return generateCiWorkflowTemplate({
-    actionRef: actionRefFor(ref),
-    budgetUsd: "0",
-  });
+  return generateCiWorkflowTemplate({ actionRef: actionRefFor(ref) });
 }
 
 // The whole main, keyed by repo-relative path. The fixture's correct volume

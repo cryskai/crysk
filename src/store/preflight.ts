@@ -397,7 +397,6 @@ export interface CanonicalRunRow {
   tokens_in: number;
   tokens_out: number;
   tokens_total: number;
-  cost_usd_est: number;
   blocking: number;
   advisory: number;
   root_causes_json: string | null;
@@ -474,7 +473,6 @@ export interface RunAgentRow {
   duration_ms: number;
   tokens_in: number;
   tokens_out: number;
-  cost_usd_est: number;
   attempts: number;
   status: string;
 }
@@ -506,8 +504,6 @@ export interface DiversityAttemptRow {
   replicate: number;
   attempt: number;
   status: string;
-  cash_cost_usd: number | null;
-  notional_cost_usd: number | null;
 }
 
 export interface DiversityObservationRow {
@@ -581,7 +577,6 @@ export function projectCompleteRun(input: {
     tokens_in: input.doc.telemetry.tokens_in,
     tokens_out: input.doc.telemetry.tokens_out,
     tokens_total: input.doc.telemetry.tokens_total,
-    cost_usd_est: input.doc.telemetry.cost_usd_est,
     blocking,
     advisory,
     root_causes_json: input.doc.debug.root_causes
@@ -676,7 +671,6 @@ export function projectCompleteRun(input: {
         duration_ms: usage.duration_ms,
         tokens_in: usage.tokens_in,
         tokens_out: usage.tokens_out,
-        cost_usd_est: usage.cost_usd_est,
         attempts: usage.attempts,
         status: usage.status,
       }))
@@ -687,7 +681,6 @@ export function projectCompleteRun(input: {
           duration_ms: usage.duration_ms,
           tokens_in: 0,
           tokens_out: 0,
-          cost_usd_est: 0,
           attempts: 1,
           status: "ok",
         }),
@@ -710,12 +703,6 @@ export function projectCompleteRun(input: {
           replicate: Number(row.replicate ?? 1),
           attempt: Number(row.attempt ?? 1),
           status: String(row.status ?? "completed"),
-          cash_cost_usd:
-            typeof row.cashCostUsd === "number" ? row.cashCostUsd : null,
-          notional_cost_usd:
-            typeof row.notionalCostUsd === "number"
-              ? row.notionalCostUsd
-              : null,
         });
       }
     }

@@ -84,7 +84,6 @@ function sampleDoc(
       tokens_in: 5000,
       tokens_out: 500,
       tokens_total: 5500,
-      cost_usd_est: 0.2,
       per_agent: {
         lifecycle: { tokens_total: 5500, duration_ms: 2500 },
       },
@@ -123,7 +122,6 @@ const SAMPLE_PER_AGENT: Record<string, PerAgentUsage> = {
     duration_ms: 2500,
     tokens_in: 5000,
     tokens_out: 500,
-    cost_usd_est: 0.2,
     attempts: 1,
     status: "ok",
   },
@@ -247,13 +245,23 @@ describe("Local Store Server & Typed Client", () => {
       const usageAll = await client.getUsage({ all: true });
       expect(usageAll.rows.length).toBe(3);
       expect(usageAll.total_tokens).toBe(16500);
-      expect(usageAll.total_cost_usd).toBeCloseTo(0.6, 2);
 
       const usageRepoA = await client.getUsage({
         repo_id: "github.com/org/repo-a",
       });
       expect(usageRepoA.rows.length).toBe(1);
       expect(usageRepoA.total_tokens).toBe(5500);
+
+      // S3: the store keeps `cost_usd_est` as a legacy column (0 on new rows); no dollar leaves
+      // the engine through its API, where a 0 would read as a free run.
+      const runId = allRuns[0]?.id ?? 0;
+      for (const row of [
+        ...allRuns,
+        ...usageAll.rows,
+        (await client.getRun(runId)) ?? {},
+      ]) {
+        expect(row).not.toHaveProperty("cost_usd_est");
+      }
     } finally {
       serverHandle.stop();
     }

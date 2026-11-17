@@ -27,8 +27,6 @@ const USAGE: NormalizedUsage = {
   tokens: { inputUncached: 1 },
   completeness: "complete",
   billingMode: "subscription",
-  costSource: "provider",
-  cashCostUsd: 0,
 };
 
 function capabilities(
@@ -53,7 +51,7 @@ function capabilities(
       usageMode: "snapshot",
     },
     cancellation: { deadlineMs: 7500, conformance: "passed" },
-    billing: { mode: "subscription", pricingReady: true },
+    billing: { mode: "subscription" },
     issues: [],
     ...overrides,
   };

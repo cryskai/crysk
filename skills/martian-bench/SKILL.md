@@ -42,7 +42,7 @@ Do not load for the M6 floor cases on the musive control set alone, or a product
 ## Execution Steps
 
 1. Load `references/corpus.md` and `benchmarks/martian/README.md`. Name the baseline arm and whether this spend is new.
-2. Confirm authorised slice, one variable, cost band: `bun run benchmarks/martian/martian-cal.ts plan`.
+2. Confirm authorised slice, one variable, and the expected spend: `bun run benchmarks/martian/martian-cal.ts plan` prints the size gate per PR and no dollar figure (the engine no longer prints one); take the order of magnitude from the measured bands in `references/flow.md`.
 3. `check` then `run`. Isolation is the engine’s. Resume requires the frozen schedule/identity and attributable delivered-attempt proof; existing files alone never qualify. Preserve unqualified directories under `incomplete-attempts/`. Unknown spend remains unknown.
 4. Surface A: `bun run benchmarks/martian/martian-judge.ts`. Label gateway + model. Sibling same `path:line` are not extra FPs.
 5. Surface B only if authorised. Always **say** whether it ran.
@@ -51,7 +51,7 @@ Do not load for the M6 floor cases on the musive control set alone, or a product
 
 ## Output Contract
 
-Return: arm id + prompt-set sha + judge gateway/model; cost and wall; per-PR tp/fp/fn and High+Critical recall; Surface B ran or not; delta vs Cal.com 10 `hunters` if this is a new arm; which corpus evals were consulted.
+Return: arm id + prompt-set sha + judge gateway/model; cost and wall (the engine's artifacts carry no dollars: price the run's recorded usage yourself and say how); per-PR tp/fp/fn and High+Critical recall; Surface B ran or not; delta vs Cal.com 10 `hunters` if this is a new arm; which corpus evals were consulted.
 
 ## References
 

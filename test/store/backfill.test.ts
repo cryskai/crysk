@@ -73,7 +73,6 @@ function sampleDoc(
       tokens_in: 5000,
       tokens_out: 500,
       tokens_total: 5500,
-      cost_usd_est: 0.2,
       per_agent: {},
     },
     findings: [sampleFinding()],
@@ -102,12 +101,13 @@ describe("Backfill pure helpers", () => {
     stats.ingested = 9;
     stats.skipped = 1;
     stats.total_tokens = 50000;
-    stats.total_cost_usd = 1.25;
 
     const report = renderBackfillReport(stats);
     expect(report).toContain("Discovered runs: 10");
     expect(report).toContain("Ingested runs:   9");
-    expect(report).toContain("Total cost USD:  $1.25");
+    expect(report).toContain("Total tokens:    50,000");
+    expect(report).not.toContain("cost");
+    expect(report).not.toContain("$");
   });
 });
 
@@ -127,16 +127,20 @@ describe("backfillHistoricalRuns & migrateMetricsDb", () => {
     await mkdir(repoRunsDir, { recursive: true });
 
     const doc = sampleDoc({ pr: 42 });
+    // An artifact written before the engine dropped dollars still holds a cost.
+    const legacyDoc = {
+      ...doc,
+      telemetry: { ...doc.telemetry, cost_usd_est: 0.2 },
+    };
     await writeFile(
       path.join(repoRunsDir, "findings.json"),
-      JSON.stringify(doc, null, 2),
+      JSON.stringify(legacyDoc, null, 2),
     );
 
     const stats1 = await backfillHistoricalRuns({ home });
     expect(stats1.discovered).toBe(1);
     expect(stats1.ingested).toBe(1);
     expect(stats1.errors).toBe(0);
-    expect(stats1.total_cost_usd).toBeCloseTo(0.2, 2);
 
     const dbPath = path.join(home, ".prhero", "prhero.db");
     const db = openProductStore(dbPath);
@@ -145,7 +149,11 @@ describe("backfillHistoricalRuns & migrateMetricsDb", () => {
       expect(runs.length).toBe(1);
       expect(runs[0]?.repo_id).toBe("github.com/juanmaagd/pr-hero");
       expect(runs[0]?.run_dir).toBe("pr-42-abc-1");
-      expect(runs[0]?.cost_usd_est).toBeCloseTo(0.2, 2);
+      // The artifact still carries its old `cost_usd_est`; the backfill stores none of it.
+      const stored = db.query("SELECT cost_usd_est FROM runs").get() as {
+        cost_usd_est: number;
+      };
+      expect(stored.cost_usd_est).toBe(0);
     } finally {
       db.close();
     }

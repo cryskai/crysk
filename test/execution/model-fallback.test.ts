@@ -75,17 +75,14 @@ const SUBSCRIPTION: NormalizedUsage = {
   tokens: { totalKnown: 1 },
   completeness: "complete",
   billingMode: "subscription",
-  costSource: "subscription",
 };
 
-function metered(cashCostUsd: number): NormalizedUsage {
+function metered(): NormalizedUsage {
   return {
     wallMs: 10,
     tokens: { outputVisible: 10, outputKnown: 10, totalKnown: 20 },
     completeness: "complete",
     billingMode: "metered",
-    costSource: "provider",
-    cashCostUsd,
   };
 }
 
@@ -126,7 +123,6 @@ function scriptedTransport(
   requests: TransportRequest[],
   billing: ProviderCapabilityReport["billing"] = {
     mode: "subscription",
-    pricingReady: true,
   },
 ): ProviderTransport {
   return {
@@ -174,7 +170,6 @@ const READY_OPENCODE_EVIDENCE: D1_11ReadinessEvidence = {
   sdkAvailable: true,
   credentialAuthority: true,
   workspaceBroker: true,
-  pricingReady: true,
 };
 
 async function writeFixture(
@@ -616,9 +611,9 @@ describe("spend and usage across models", () => {
       ),
       opencode: scriptedTransport(
         "opencode",
-        () => ok(metered(0.25)),
+        () => ok(metered()),
         openRequests,
-        { mode: "metered", pricingReady: true },
+        { mode: "metered" },
       ),
     });
     try {
@@ -628,15 +623,12 @@ describe("spend and usage across models", () => {
       expect(result.reservations?.length).toBe(1);
       expect(result.reservations?.[0]?.attempt).toBe(2);
       expect(result.reservations?.[0]?.state).toBe("settled");
-      // The step's total keeps the real cash, and each model keeps its own
-      // billing, so the mix does not collapse into one wrong label.
-      expect(result.usageV2?.cashCostUsd).toBe(0.25);
-      expect(result.usage.cost_usd_est).toBe(0.25);
+      // Each model keeps its own billing, so the mix does not collapse into
+      // one wrong label.
       expect(result.modelAttempts?.map((a) => a.usageV2?.billingMode)).toEqual([
         "subscription",
         "metered",
       ]);
-      expect(result.modelAttempts?.[1]?.usageV2?.cashCostUsd).toBe(0.25);
     } finally {
       await runtime.dispose();
     }

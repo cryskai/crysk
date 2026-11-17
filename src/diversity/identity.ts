@@ -45,7 +45,6 @@ export interface DiversityPlan {
   readonly promptFingerprint?: string;
   readonly legs: readonly DiversityLeg[];
   readonly maxLegs: number;
-  readonly cashCapUsd: number;
   readonly planFingerprint: string;
 }
 
@@ -94,7 +93,6 @@ function canonicalPlanPayload(
     plan.buildFingerprint ?? "",
     plan.promptFingerprint ?? "",
     String(plan.maxLegs),
-    String(plan.cashCapUsd),
     legs,
   ].join(";");
 }
@@ -203,7 +201,6 @@ export function buildDiversityPlan(
     promptFingerprint: input.promptFingerprint,
     legs,
     maxLegs: diversity.maxLegs,
-    cashCapUsd: diversity.cashCapUsd,
   });
 }
 
@@ -278,17 +275,6 @@ export function assertRouteFingerprintStable(
   if (frozen !== current) {
     throw new DiversityAdmissionError(
       `route drift for leg ${legId}: frozen ${frozen} != current ${current}`,
-    );
-  }
-}
-
-export function assertSpendUnderCap(
-  plan: DiversityPlan,
-  projectedCashUsd: number,
-): void {
-  if (projectedCashUsd > plan.cashCapUsd) {
-    throw new DiversityAdmissionError(
-      `projected cash ${projectedCashUsd} exceeds cap ${plan.cashCapUsd}`,
     );
   }
 }

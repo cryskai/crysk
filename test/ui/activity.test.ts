@@ -36,7 +36,6 @@ describe("ui-activity renderers", () => {
       blocking: 1,
       advisory: 2,
       wall_ms: 134000,
-      cost_usd_est: 0.85,
       generated_at: "2026-08-24T11:45:00.000Z",
       pr: 55,
       repo_id: "juanmaagd/pr-hero",
@@ -47,7 +46,6 @@ describe("ui-activity renderers", () => {
       blocking: 0,
       advisory: 0,
       wall_ms: 100000,
-      cost_usd_est: 0.52,
       generated_at: "2026-08-24T11:30:00.000Z",
       pr: 54,
       repo_id: "juanmaagd/pr-hero",
@@ -90,7 +88,8 @@ describe("ui-activity renderers", () => {
     expect(output).toContain("PR #55");
     expect(output).toContain("1 blocking");
     expect(output).toContain("02m 14s");
-    expect(output).toContain("$0.85");
+    expect(output).not.toContain("$");
+    expect(output).not.toContain("Cost");
     expect(output).toContain("clean");
   });
 

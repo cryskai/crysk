@@ -10,7 +10,7 @@ covers the two things that section does not: `models` and credentials.
 
 1. `crysk config` — every key's effective value and which layer it came from. Read-only, $0.
 2. `crysk doctor` — probes the *real* binding: binary, credential, isolation, billing mode. Read-only, $0.
-3. `crysk review --dry-run` — resolves the plan and prints the cost band without spawning anything. $0.
+3. `crysk review --dry-run` — resolves the plan without spawning anything. $0.
 
 ## Where a key belongs, and the two traps
 
@@ -75,7 +75,7 @@ apply. Unset, every role runs the model its prompt declares, on the
 Claude CLI.
 
 The credentials themselves are `CRYSK_*` secrets passed in the `crysk-secrets` input. Full wiring (the
-secrets, the OpenCode provider slots, the pinned OpenCode CLI version, budget ceilings) is in
+secrets, the OpenCode provider slots, the pinned OpenCode CLI version, the platform's dollar limits) is in
 [`docs/github-actions.md`](github-actions.md#opencode-in-ci); `crysk ci init` scaffolds it and prints the
 commands that set each variable and secret from your person config, and
 [`skills/crysk-ci-setup/SKILL.md`](../skills/crysk-ci-setup/SKILL.md) walks an agent through it.
@@ -249,8 +249,9 @@ DeepSeek API key, an OpenAI subscription). So a refused Claude login skips the o
 to an OpenCode model, a refused DeepSeek key skips the other DeepSeek models and moves to another provider,
 and the reverse. A cancelled run starts no further model.
 
-**A fenced credential.** A metered attempt whose cost the provider never reported (a timeout, a stream
-cut short) fences its credential's spend for the rest of the run, so nothing spends on it blindly. A
+**A fenced credential.** A metered attempt whose usage the provider never reported (a timeout, a stream
+cut short) fences its credential for the rest of the run, so nothing runs on it blindly: the usage the
+platform prices from would have a hole. A
 later model on that credential is then refused before any request: it is recorded `skipped`, and the
 list goes on to a model on another credential. So a metered OpenCode model that times out moves only to
 a model on another credential, never to another model on the same one.
@@ -260,11 +261,13 @@ can take grows with the list: a step whose three models all keep timing out take
 model would. Only the run's own ceiling bounds the whole step.
 
 **Cost.** The same holds for money: each model's attempts are paid on its own credential, so a step whose
-three models all fail after spending can cost up to three times one model. The CI `budget-usd` check reads
-the estimate before the run, which does not price fallbacks, and nothing caps dollars while the run goes.
+three models all fail after spending can cost up to three times one model. The engine shows no dollar figure
+and holds no dollar ceiling; the Crysk platform prices every attempt from the usage the engine reports, and
+its limits (Review > Limits in the dashboard) are compared with its estimate before the run, which does not
+price fallbacks.
 
 **Checked before anything spends.** Every model of every list is resolved, bound and admitted with the rest
-of the plan, before the cost confirmation, so a fallback that cannot run (no executable, no credential, a
+of the plan, before the confirmation, so a fallback that cannot run (no executable, no credential, a
 backend not admitted) fails the run up front instead of when its turn comes. OpenCode models may name
 several providers, and a free model may sit beside a metered one: each model runs through its own OpenCode
 server, projected with only its own credential (see "Several OpenCode providers in one review" below). A
@@ -325,8 +328,8 @@ What it is told is the engine's own text, not the refuter's: it answers whether 
 still present at the current head, which is not the refuter's question. A custom `review-refuter.md` therefore
 no longer changes the verifier's instructions, only its model, effort and tools. There is no CLI flag or
 environment variable that overrides effort, and the child process never inherits `CLAUDE_CODE_EFFORT_LEVEL`
-from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, and the cost band does
-not price effort yet, so expect the real bill to exceed the quote.
+from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, measured on past runs; the
+engine prints no estimate, and the Crysk platform shows what a review actually cost.
 
 **Consolidation.** After the refuter, one more step reads the findings about to be posted and rewrites the
 list so each comment states one defect: findings that describe the same defect are merged into one
@@ -363,7 +366,7 @@ its own entry's effort, not the first model's:
   provider (Anthropic `high` and `max`, OpenAI `none` to `xhigh`, Google `low` and `high`; see OpenCode's
   [Variants](https://opencode.ai/docs/models/)). OpenCode runs a variant the model does not have at its
   default level, without an error, so Crysk checks every variant the plan would send, fallbacks included,
-  against `opencode models <provider> --verbose --refresh` before the cost confirmation. A variant the model
+  against `opencode models <provider> --verbose --refresh` before the confirmation. A variant the model
   does not list, an effort on a model with no variants, or a listing that cannot be read stops the review
   before anything spends, naming the model and the variants it does have. An OpenCode model with no entry
   effort is sent no variant and runs at its default level.
@@ -388,7 +391,7 @@ exist today:
 
 | Kind | Source | Backend | Billing |
 | --- | --- | --- | --- |
-| `claude_subscription_oauth` | `CRYSK_CLAUDE_OAUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`, the macOS Keychain item `Claude Code-credentials` (via `/usr/bin/security`), or `~/.claude/.credentials.json` | `claude-code` | subscription (quota, `$0.00` cash) |
+| `claude_subscription_oauth` | `CRYSK_CLAUDE_OAUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`, the macOS Keychain item `Claude Code-credentials` (via `/usr/bin/security`), or `~/.claude/.credentials.json` | `claude-code` | subscription (quota, no per-token invoice) |
 | `provider_api_token` | `CRYSK_CLAUDE_API_KEY` or `ANTHROPIC_API_KEY` (claude-code), or the named key in OpenCode's `auth.json` (opencode; in CI, built from `CRYSK_OPENCODE_<P>_API_KEY`) | `claude-code`, `opencode` | metered (real invoice) |
 | `opencode_chatgpt_oauth` | the `openai` entry in `~/.local/share/opencode/auth.json` (or `$XDG_DATA_HOME/opencode/auth.json`), which must be `type: "oauth"` (in CI, built from `CRYSK_OPENCODE_OPENAI_OAUTH`) | `opencode` | subscription |
 | `provider_free` | the provider's own catalog declares the model free at runtime (`opencode models <provider> --verbose --refresh`, every cost leaf `0`, status active); the provider's `type: "api"` entry in `auth.json` is projected if one exists, otherwise nothing | `opencode` | free (not metered) |
@@ -420,9 +423,11 @@ OpenCode credential is a provider plus its kind (`provider_api_token`, `opencode
   server, launched under a synthetic home whose `auth.json` holds only that model's provider record. A
   DeepSeek server never sees the OpenAI record, and the other way round. Steps on different credentials
   never share a server.
-- **Billing per model.** A metered model reserves spend and can fence its own credential's bucket; a
-  subscription model reserves nothing; a free model settles at zero unless the provider prices it. The
-  usage record of each attempt carries the billing of the credential it ran on.
+- **Billing per model.** A metered model fences its own credential's bucket when an attempt's usage is not
+  confirmed (see "A fenced credential"); a model on a free route fences only when an attempt returns no usage at
+  all, and releases otherwise; a subscription model never does. The usage record of each
+  attempt carries the billing of the credential it ran on, which is what lets the platform report API and
+  subscription use apart.
 - **Closed when done.** A server stops when its last step ends, whether it succeeded, failed or was
   cancelled, and any server still up stops when the run ends.
 
@@ -456,8 +461,8 @@ used. Put `api_key` first to keep billing per token. With only one of them set, 
 The Claude child sees only the chosen credential, under the CLI's own name: `CLAUDE_CODE_OAUTH_TOKEN` for the
 subscription, `ANTHROPIC_API_KEY` for the key. The other one, and `ANTHROPIC_AUTH_TOKEN`, are removed from its
 environment. `ANTHROPIC_AUTH_TOKEN` is not a credential Crysk chooses: put an API key in `ANTHROPIC_API_KEY`
-instead. How a run bills follows the choice: on the API key it is metered and the CI budget ceiling applies
-(`$12` unless `budget-usd` says otherwise); on the subscription it draws on quota with no ceiling.
+instead. How a run bills follows the choice: on the API key it is metered, so the platform's dollar limits can
+skip it; on the subscription it draws on quota and is never skipped for cost.
 
 On macOS with `/usr/bin/security` present, a run on the subscription projects the Keychain OAuth record into
 the child. A run on the API key attaches no Keychain broker at all. If the `Claude Code-credentials` item is
@@ -519,16 +524,14 @@ Environment is operational, but some optional tools or configurations are degrad
 ### `crysk review --dry-run` — two caveats
 
 - **In PR mode it returns before route admission.** `crysk review --pr <n> --dry-run` prints the
-  plan and the cost band from the diff and the config alone, before any credential is projected or
+  plan from the diff and the config alone, before any credential is projected or
   route bound, so a plan that would die immediately at admission (an OpenCode effort the model does not
   offer, a fallback with no executable) can still print a clean dry-run. Local dry-run resolves the
   route plan and admission first (`#120`), so it catches admission refusals. Neither stops for a missing
   Claude credential: a dry run authenticates nothing.
-- **The cost band ignores billing mode.** It is a diff-size-and-agent-count estimate, calibrated from
-  measured runs, not derived from a live route. It prints the same non-zero range on a `$0.00`
-  subscription route as on a metered one — read it as "how big is this diff", not "what will this
-  cost". A platform run's CI budget gate reads the platform's estimate instead, priced from the setup's
-  models (see [GitHub Actions](github-actions.md)).
+- **The plan shows no cost.** The engine computes no dollar figure, so neither the plan nor the confirmation
+  prints a cost range; the Crysk platform shows what a review cost. A platform run's dollar limits are
+  applied by the CI run step (see [GitHub Actions](github-actions.md#spend-controls)).
 
 ## What is proven for OpenCode, and what is not
 

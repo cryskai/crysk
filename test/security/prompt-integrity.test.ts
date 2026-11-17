@@ -50,8 +50,6 @@ const zeroUsage: TransportOutcome["usage"] = {
   tokens: {},
   completeness: "complete",
   billingMode: "subscription",
-  costSource: "provider",
-  cashCostUsd: 0,
 };
 
 describe("§6.3 prompt integrity: transport pre-spawn verification", () => {

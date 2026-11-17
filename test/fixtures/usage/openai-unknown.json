@@ -10,7 +10,6 @@
     "wallMs": 6100,
     "tokens": {},
     "completeness": "unavailable",
-    "billingMode": "unknown",
-    "costSource": "unknown"
+    "billingMode": "unknown"
   }
 }

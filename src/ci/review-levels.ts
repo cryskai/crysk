@@ -1,5 +1,5 @@
 // The choices `setup --ci` asks for, as data: the re-review level presets, the
-// gate mode, the spend ceiling, and the advanced keys. Pure, so every choice
+// gate mode, and the advanced keys. Pure, so every choice
 // and every line of the summary is testable offline; the prompts live in the
 // command shell (src/commands/ci-setup.ts).
 //
@@ -10,7 +10,6 @@
 
 import type { PostMinSeverity } from "#pr/post-floor";
 import { DEFAULT_SIZE_GATE } from "#review/size-gate";
-import { CI_DEFAULT_METERED_BUDGET_USD } from "./gates";
 import {
   DEFAULT_CI_ADVISORY_WEIGHT,
   DEFAULT_CI_BLOCKING_WEIGHT,
@@ -91,8 +90,6 @@ export function isReviewLevel(value: string): value is ReviewLevel {
   return (REVIEW_LEVEL_ORDER as readonly string[]).includes(value);
 }
 
-export type Billing = "subscription" | "api";
-
 export interface AdvancedChoices {
   ci_blocking_weight?: number;
   ci_advisory_weight?: number;
@@ -106,14 +103,9 @@ export interface AdvancedChoices {
 export interface CiSetupChoices {
   level: ReviewLevel;
   mode: "gate" | "advisory";
-  // Undefined: nobody said how the review is paid, so no ceiling is written
-  // and the action resolves it from the route's billing mode.
-  billing?: Billing;
-  // Only with billing "api"; undefined there means the metered default.
-  budgetUsd?: number;
-  // Always written. Unlike the budget, a size threshold matters on any route:
-  // left unset, a subscription route resolves to NO limit, so a huge PR would
-  // run a review nobody asked for. 0 is the explicit, chosen "no limit".
+  // Always written: a size threshold matters on any route. Left unset, a
+  // subscription route resolves to NO limit, so a huge PR would run a review
+  // nobody asked for. 0 is the explicit, chosen "no limit".
   maxChangedLines: number;
   advanced: AdvancedChoices;
   // True when no human or agent chose: the summary must say so.
@@ -121,13 +113,12 @@ export interface CiSetupChoices {
   // Which groups someone chose this run. A chosen group overrides the file; an
   // unchosen one only fills a group the file does not have yet, so re-running
   // setup (say `--force` to refresh an old workflow) never resets tuned keys.
-  // `mode` and `billing` guard the workflow the same way: on a --force refresh
-  // an unchosen one keeps what the old workflow said.
+  // `mode` guards the workflow the same way: on a --force refresh an unchosen
+  // one keeps what the old workflow said.
   chosen: {
     level: boolean;
     maxChangedLines: boolean;
     mode: boolean;
-    billing: boolean;
   };
 }
 
@@ -137,7 +128,6 @@ export interface CurrentSettings {
   config: Record<string, unknown>;
   workflow: {
     mode?: "gate" | "advisory";
-    budgetUsd?: string;
     maxChangedLines?: string;
     maxChangedFiles?: string;
   };
@@ -168,13 +158,14 @@ export function presetMatching(
   return "custom";
 }
 
-// The two inputs setup writes into the workflow, read back from an existing one.
+// The inputs setup writes into the workflow, read back from an existing one.
 export function parseWorkflowChoices(
   text: string,
 ): CurrentSettings["workflow"] {
   // One input per line, quoted or not, with an optional trailing comment. A
-  // number must be a whole number (sizes) or a plain decimal (budget): a value
-  // like `1.2.3` reads as absent rather than becoming NaN in the new file.
+  // number must be a whole number: a value like `1.2` reads as absent rather
+  // than becoming NaN in the new file. Inputs setup no longer writes (the
+  // retired `budget-usd`) are not read, so a re-run drops them.
   const input = (name: string, value: string): string | undefined =>
     new RegExp(`^\\s+${name}:\\s*["']?(${value})["']?\\s*(?:#.*)?$`, "m").exec(
       text,
@@ -183,12 +174,10 @@ export function parseWorkflowChoices(
     | "gate"
     | "advisory"
     | undefined;
-  const budgetUsd = input("budget-usd", "-?\\d+(?:\\.\\d+)?");
   const maxChangedLines = input("max-changed-lines", "\\d+");
   const maxChangedFiles = input("max-changed-files", "\\d+");
   return {
     ...(mode === undefined ? {} : { mode }),
-    ...(budgetUsd === undefined ? {} : { budgetUsd }),
     ...(maxChangedLines === undefined ? {} : { maxChangedLines }),
     ...(maxChangedFiles === undefined ? {} : { maxChangedFiles }),
   };
@@ -204,28 +193,8 @@ export function defaultChoices(): CiSetupChoices {
     maxChangedLines: DEFAULT_MAX_CHANGED_LINES,
     advanced: {},
     defaulted: true,
-    chosen: {
-      level: false,
-      maxChangedLines: false,
-      mode: false,
-      billing: false,
-    },
+    chosen: { level: false, maxChangedLines: false, mode: false },
   };
-}
-
-// The `budget-usd` workflow input for these choices, or undefined to write none.
-// A subscription writes none. CI bills as metered only when the run's chosen
-// Claude credential is the API key (S5: the first of `credentials.claude` that is
-// present, default subscription then api_key; gates.ts, CiBillingMode), so a
-// subscription run already gets no ceiling. An explicit 0 would print the
-// disabled-ceiling warning on every run and, worse, stay an operator override if
-// the run later moves to an API key, defeating the default ceiling a metered run
-// brings back.
-export function budgetInput(choices: CiSetupChoices): string | undefined {
-  if (choices.billing === "api") {
-    return String(choices.budgetUsd ?? CI_DEFAULT_METERED_BUDGET_USD);
-  }
-  return undefined;
 }
 
 // How the choices land in .crysk/config.json. `set` overrides; each group in
@@ -284,10 +253,9 @@ export function renderChoicesSummary(
     ...(effective as AdvancedChoices),
     ...choices.advanced,
   };
-  const budget = budgetInput(choices);
   const lines = [
     choices.defaulted
-      ? "Review settings (defaults: nobody chose them; pass --level, --ci-mode and --billing, or run setup --ci in a terminal, to choose):"
+      ? "Review settings (defaults: nobody chose them; pass --level and --ci-mode, or run setup --ci in a terminal, to choose):"
       : "Review settings:",
     ...(levelKept.length > 0
       ? [
@@ -299,15 +267,6 @@ export function renderChoicesSummary(
           `  verification     up to ${c.max_verification_steps} prior findings checked per re-review`,
         ]),
     `  gate             ${choices.mode === "gate" ? "gate: blocking findings turn the crysk check red" : "advisory: the crysk check stays green"}`,
-    `  budget           ${
-      budget === undefined
-        ? choices.billing === "subscription"
-          ? `not set: no ceiling while the review runs on CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model (a subscription spends quota, not dollars); CRYSK_CLAUDE_API_KEY chosen in its place, or an OpenCode model with its CRYSK_OPENCODE_* secret, brings back the $${CI_DEFAULT_METERED_BUDGET_USD} ceiling`
-          : `not set: resolved from how the review is paid (no ceiling on a subscription, $${CI_DEFAULT_METERED_BUDGET_USD} on an API key)`
-        : Number(budget) <= 0
-          ? `none (budget-usd: ${budget}; 0 or less disables the ceiling)`
-          : `$${budget} per review (budget-usd)`
-    }`,
     `  score weights    blocking ${a.ci_blocking_weight ?? DEFAULT_CI_BLOCKING_WEIGHT}, advisory ${a.ci_advisory_weight ?? DEFAULT_CI_ADVISORY_WEIGHT}`,
     `  observe only     ${a.ci_admission_observe_only === true ? "yes: skip decisions are logged, every push is reviewed" : "no"}`,
     `  trusted actors   ${a.ci_trusted_actors && a.ci_trusted_actors.length > 0 ? a.ci_trusted_actors.join(", ") : "none beyond the workflow actor"}`,

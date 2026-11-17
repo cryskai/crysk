@@ -398,9 +398,9 @@ export function unquotePath(field: string): string {
   return out;
 }
 
-// The cost basis: the same aggregate the plan and the cost band read, but
-// summed over the files that SURVIVE the exclusions. Feeding estimateCost the
-// raw stat would price a lockfile the hunters never see.
+// The size basis: the same aggregate the plan reads, but summed over the
+// files that SURVIVE the exclusions. Feeding the gate the raw stat would
+// count a lockfile the hunters never see.
 export function effectiveDiffStat(
   files: NumstatFile[],
   rules: readonly IgnoreRule[],
