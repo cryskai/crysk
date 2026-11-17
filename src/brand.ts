@@ -88,18 +88,24 @@ export function commandForms(command: string): string[] {
   return [command];
 }
 
-// Exact match after trimming, and nothing else: no case folding, no inner
-// whitespace tolerance, no trailing words. A loose match is how a quoted reply
-// would start a paid review.
-export function isCommand(text: string, command: string): boolean {
-  const trimmed = text.trim();
-  return commandForms(command).includes(trimmed);
+// The line a comment is read as a command from: the first line of its trimmed text. What follows
+// that line is not part of the command, so a signature or a note below it changes nothing.
+export function commandLine(text: string): string {
+  return (text.trim().split(/\r?\n/, 1)[0] ?? "").trim();
 }
 
-// For near-miss detection: the text begins like the command.
+// The first line must be exactly the command: no case folding, no inner whitespace tolerance, no
+// trailing words. A loose match is how "/crysk review please" or a quoted reply would start a paid
+// review. WHY only the first line: an agent signs its comments, and a command with a signature
+// below it used to be no command at all, with nothing said.
+export function isCommand(text: string, command: string): boolean {
+  return commandForms(command).includes(commandLine(text));
+}
+
+// For near-miss detection: the first line begins like the command.
 export function startsWithCommand(text: string, command: string): boolean {
-  const trimmed = text.trim();
-  return commandForms(command).some((form) => trimmed.startsWith(form));
+  const line = commandLine(text);
+  return commandForms(command).some((form) => line.startsWith(form));
 }
 
 // A command as a hint a person or an agent will act on.

@@ -165,6 +165,10 @@ for f in crysk.yml pr-hero.yml; do
 done; exit 1
 ```
 
+Post a command as the first line of its comment. Text below it (a signature, a note) is ignored, and other
+words on the same line make it no command at all. An engine older than this rule reads a command only when it
+is the whole comment, so on a repository that has not updated, post the command alone.
+
 ## The loop, end to end
 
 **Run this as a continuous autonomous loop (`while next_action !== "done"`).** Never end your turn or stop to ask the human for permission between `triage`, fixing code, `git push`, `recheck`, `review`, and waiting for CI to finish. Stop only when `next_action === "done"` or one of the hard escalation stops below triggers (repeated gate/runner failure, 6 forced runs on one head, 2 consecutive `inconclusive` heads, a suspected flawed design (### C), or `override-or-fix` with nothing left you can fix).
@@ -221,7 +225,7 @@ done; exit 1
    that bypasses the size, platform cost-limit and admission gates (`ci_max_attempts` included), and a gate
    `error` (expired token, missing credential, crash) makes step 0 say `review` again forever.
    Before posting either, count the ones already on this head, never from memory: the comments in
-   `gh pr view <n> --json comments` whose body is exactly `/crysk review` or `/crysk recheck`, and whose `createdAt` is at or after the oldest `crysk` or `pr-hero` status on the head
+   `gh pr view <n> --json comments` whose first line is exactly `/crysk review` or `/crysk recheck`, and whose `createdAt` is at or after the oldest `crysk` or `pr-hero` status on the head
    (`gh api "repos/{owner}/{repo}/commits/<head>/statuses?per_page=100" --jq '[.[] | select(.context == "crysk" or .context == "pr-hero")] | last.created_at'`;
    no status yet means none counted). Each reason step 0 gives gets its command once per head:
    one `/crysk review` each for a skipped head, a partial review, a used-up budget, a gate
