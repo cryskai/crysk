@@ -1,5 +1,13 @@
 # GitHub Actions Integration
 
+> **The maintained user docs are on [crysk.dev/docs](https://crysk.dev/docs/)** (index for agents:
+> [crysk.dev/llms.txt](https://crysk.dev/llms.txt)). Start with the
+> [Quickstart](https://crysk.dev/docs/quickstart-github-actions/), and use the
+> [Action reference](https://crysk.dev/docs/github-actions/action-reference/) and the
+> [error codes](https://crysk.dev/docs/reference/error-codes/). This file is the engine's longer CI guide. It
+> stays because tests and links already posted on pull requests point at its sections and error-code anchors,
+> and the site is the source for anything that differs.
+
 Crysk reviews every pull request automatically: a multi-agent hunt with adversarial refutation runs
 inside a GitHub Actions job, posts findings as PR comments, and writes a step summary. Its commit status
 (`crysk`; the legacy `pr-hero` status is no longer posted, so a branch-protection rule on it must move to `crysk`) is a gate by default: blocking findings turn it red, so
@@ -989,7 +997,7 @@ Posting floor: setup writes `post_min_severity: "warning"` only when the repo co
 
 These keys live in the **repository** config (not the PR branch worktree). A PR author cannot change
 them to suppress review of their own PR. The same rule applies to `.cryskignore` (size-gate/diff
-exclusions, see the README): under CI it is read from the PR's base ref, never the PR's own branch.
+exclusions, see [Exclude files](https://crysk.dev/docs/reviews/exclude-files/)): under CI it is read from the PR's base ref, never the PR's own branch.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -999,7 +1007,7 @@ exclusions, see the README): under CI it is read from the PR's base ref, never t
 | `ci_blocking_weight` | `2` | Score weight for blocking-tier findings. |
 | `ci_advisory_weight` | `1` | Score weight for advisory-tier findings. |
 | `ci_trusted_actors` | `[]` (+ `GITHUB_ACTOR`) | GitHub logins whose finding markers count as authoritative. |
-| `materiality_gate` | `false` | When `true`, an extra judge checks each blocking finding and posts it as advisory if it is not material under normal use. Security, credential and data-loss findings are never demoted. One judge call per blocking finding; Claude route only. |
+| `materiality_gate` | `false` | When `true`, an extra judge checks each blocking finding and posts it as advisory if it is not material under normal use. A safety guard keeps findings about security, credentials, isolation or data loss away from the judge, so they are never demoted. One judge call per blocking finding the guard does not protect, on the profile's judge model (Claude Sonnet or Opus on `claude`, OpenAI Terra on `openai`); on any other route findings stay blocking. It is on only when no config layer turns it off: a repo file cannot switch it on over a global `false`. |
 | `ci_admission_observe_only` | `false` | When `true`, admission still evaluates and emits a `::notice::` with the would-be decision but **always runs** the review. Use during rollout. A `/crysk stop` still skips: it is a maintainer's decision, not an automatic one. |
 
 #### `ci_review_policy` modes
