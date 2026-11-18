@@ -83,7 +83,7 @@ export async function persistCiAdmissionLedger(
 
 // A ledger write that failed, as a workflow warning. The ledger is CI-only, so stdout is the run's
 // log. The error text is cut short: it is whatever gh printed.
-function ledgerWarning(
+export function ledgerWarning(
   warn: ((line: string) => void) | undefined,
   what: string,
   error: unknown,
