@@ -32,7 +32,7 @@ If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk@0.
 | `hunter.<key>` | one hunter: `logic`, `reliability`, `resilience`, `security` |
 | `refuter` | refuter, re-review verifier, CI adjudicator |
 | `consolidate`, `summary` | those steps |
-| `judge` | materiality judge: only `claude:sonnet-latest` or `claude:opus-latest`, never `default` |
+| `judge` | materiality judge: only its profile's judge models (`claude:sonnet-latest` or `claude:opus-latest`; on the `openai` profile also `opencode:openai/gpt-6.1-terra`), never `default` |
 
 Model names: `claude:sonnet-latest` / `opus-latest` / `haiku-latest` / `fable-latest` (newest), a full `claude:claude-…` id (pinned), or `opencode:<provider>/<model>`. There is no `modelSnapshot`, `gateway` or alias mapping any more: the provider's model id is part of the name. Confirm the id with `opencode models <provider>`; do not guess `deepseek-chat` if the CLI lists `deepseek-v4-flash` / `deepseek-v4-pro`. An entry may be `{"model": "...", "effort": "..."}`; on OpenCode the effort must be one of the model's variants (`opencode models <provider> --verbose`), or the review stops before spending.
 
@@ -44,7 +44,7 @@ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["DEEPSEEK"]'
 gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY
 ```
 
-Every step runs on DeepSeek. Without a Claude secret, keep `materiality_gate` off: the judge runs only on Claude.
+Every step runs on DeepSeek. Without a Claude secret on the default profile, keep `materiality_gate` off: the judge runs only on its profile's judge models, which are Claude's there (the `openai` profile runs it on `opencode:openai/gpt-6.1-terra`).
 
 ### OpenCode hunters, Claude refuter and summarizer, Claude fallback
 

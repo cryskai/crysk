@@ -472,7 +472,8 @@ Options:
   --head <ref>        Head branch or sha (default: ${DEFAULT_HEAD_REF})
   --agents <dir>      Prompt-set directory. Default, in order: the config's
                       agents_dir (relative paths resolve against the config
-                      file), then PRHERO_AGENTS_DIR
+                      file), then CRYSK_AGENTS_DIR (PRHERO_AGENTS_DIR is
+                      still read)
   --out <dir>         Run directory; must live OUTSIDE the reviewed repo
                       (default: ~/.crysk/repos/<origin>/runs/<sha>-<n>).
                       For reverts and corpus: the file to write instead of

@@ -34,8 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as before. `crysk ci init` and the CI guide no longer say the legacy `pr-hero` commit status is still posted:
   it is read, not written, so a branch protection rule on it must move to `crysk`. The README's `--full` line
   and its `v2.0` note are gone with the sections that held them; `--full` widens a re-review to the full pull
-  request range. The size defaults read: locally 4000 lines and 150 files, in CI no limit on a Claude
-  subscription and 4000 lines and 50 files on a pay-per-token route. `agents_dir` is listed in both config
+  request range. The size defaults read: locally 4000 lines and 150 files, in CI, when the
+  workflow and the repo config set none, no limit on a Claude subscription and 4000 lines and 50 files on a
+  pay-per-token route. `agents_dir` is listed in both config
   layers with the repo winning, and the materiality gate text matches the code (a safety guard keeps security,
   credential and data-loss findings away from the judge, which runs on its profile's judge model).
 - **SECURITY.md** no longer lists a `1.0` version that does not exist, and the package has a description.

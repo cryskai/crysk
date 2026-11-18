@@ -152,12 +152,12 @@ or advisory.
 | Code | Meaning |
 | --- | --- |
 | `0` | The review is complete, with or without findings. |
-| `1` | No usable review: every hunter failed, no reviewer ran, a size-gate skip, or findings that should have been posted were dropped. |
+| `1` | No usable review: every hunter failed, no reviewer ran, or findings that should have been posted were dropped. |
 | `2` | Usage error. |
 | `3` | The review is incomplete: it ran, but a step failed (a hunter, the refuter, verify, adjudicate, or the time ceiling). `findings.json` reads `run_status: "partial"`. Run it again. |
 
-A script that merges on success should treat only `0` as a finished review. A `--dry-run` always exits `0`,
-even when it reports that the size gate would skip the diff.
+A script that merges on success should treat only `0` as a finished review. A local review that the size gate
+skips exits `1`; a `--dry-run` that reports it would skip does not change its exit code.
 
 ## Isolation model
 
