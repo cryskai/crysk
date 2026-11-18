@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-18
+
+### Changed
+
+- **A triage reply counts only from a login with write access, in the review too.** The gate already read
+  replies that way. The review now does as well: a reply from someone who can only comment on the pull request
+  is not read, so it cannot queue a dismissal for the CI adjudicator or buy a verification. On a pull request
+  from an outside contributor, someone with write access answers the findings. `crysk status` reports the reply
+  the gate counts in `triage`, and a `triage` reason names the logins whose replies do not count.
+- **A command is read from the comment's first line.** `/crysk review`, `/crysk recheck`, `/crysk override` and
+  `/crysk stop` run when the first line is exactly the command, whatever follows on later lines. Nothing may
+  come before the command, and other words on its line still make it no command.
+- **Reinstall the skills** (`crysk skills install`) to get the triage instructions for findings listed only in
+  the summary and the command rule above.
+
+### Fixed
+
+- **A re-review no longer reads what a merge of the base branch brought in.** When the author merged the base
+  branch into the pull request between two reviews, the next review's delta carried the base branch's own
+  changes to every file the pull request also touches, and a finding could land on code from another, already
+  merged pull request. The delta now keeps only the hunks that belong to the pull request's own diff. The
+  report's diff stat and the size gate count that filtered delta. A push with no such merge is read exactly as
+  before. The run's `pipeline.json` records how many hunks were left out (`rereview.base_merge_hunks_dropped`),
+  and `diff.raw.patch` keeps the unfiltered delta.
+
+- **A finding carried from an earlier review can be answered again.** A blocking finding that outlives its
+  review keeps the comment of the review that first posted it. `crysk triage reply` stamped its reply with that
+  comment's head, so in the next round it found the first round's reply and skipped, and `--from <run-dir>`
+  could not match the finding at all: the finding stayed open until a fix or an override. A reply now carries
+  the head of the review it answers (the summary's head), and the gate and `crysk status` count it. `--from`
+  with a carried finding names the `R###` id to reply with. Replies already on pull requests are read as
+  before. Reinstall the skills (`crysk skills install`) to get the updated triage instructions.
+
+- **A finding listed only in the summary can be answered.** A finding GitHub cannot anchor has no comment of its
+  own, so `crysk triage reply` had nothing to bind to and the gate counted it open whatever the author did: a
+  blocking one could only be fixed or overridden. `triage reply --finding R###` now answers it with a top-level
+  comment whose marker names the row; the gate counts an `applied` one, `crysk status` asks to triage a row with
+  none, and the next review reads the reply, so an `applied` answer buys its verification. The summary's
+  Comments Outside Diff entries show their row id. A `dismissed` reply to one is ruled on by `/crysk recheck` like any other: the CI adjudicator posts its verdict as a
+  top-level comment that names the reply, and the gate, `crysk status` and the next review read it there. Reinstall the
+  skills (`crysk skills install`) for the updated triage instructions.
+
+- **A reply-shaped comment from someone without write access no longer blocks a real reply.** `crysk triage
+  reply` skipped posting when a triage marker for the same review was already there, whoever wrote it, while the
+  gate counts a reply only from a login with write access. Anyone could post the marker first and leave the
+  finding with no reply the gate reads. The skip now counts only a reply whose author has write access; when
+  GitHub does not return that permission, after one retry, the command posts nothing and says to run it again.
+
+- **A command followed by more lines runs.** A pull request comment counted as a command only when the whole
+  comment was the command, so `/crysk review` with a signature below it (coding agents sign their comments) did
+  nothing, and said nothing. A comment is now a command when its first line is exactly the command; the lines
+  below it are ignored. Other words on that line, as in `/crysk review please`, still make it no command. The
+  same rule reads `/crysk recheck`, `/crysk override` and `/crysk stop`.
+
+- **`crysk status` and the gate read the same replies.** The gate counts a triage reply only from a login with
+  write access and not older than the review's verdict, and lets the newest one decide. `crysk status` took
+  any author's newest reply, so it could say a fix was ready to push over a reply the gate ignores, and a
+  later reply from a login without write access overrode, in status only, a writer's answer. One filter now
+  serves both; `crysk status` asks GitHub for each reply author's permission, and a `triage` reason names the
+  logins whose replies do not count. `crysk triage reply` skips a second reply only when the newest counted
+  one already names this review, and it reads the pull request through the same read as `crysk status`, so a
+  finding posted as a top-level comment is no longer answered twice. Under a green gate any author's reply still satisfies "every finding has a
+  reply". The review applies the rule too: it reads a triage reply, and queues a dismissal for the CI
+  adjudicator, only from a login with write access.
+
+- **A reply in an unrelated review thread is never read for a finding posted as a top-level comment.** On an old
+  pull request such a finding is an issue comment, and its id could coincide with a review thread's.
+
+- **A skipped review no longer leaves its admission check in progress.** A skip (`/crysk stop`, an admission
+  rule) was recorded in two writes to the `crysk/ci-admission` check, reserved and then settled. When the second
+  write failed the check stayed "in progress" for good, the row counted as a spent attempt, and the log said
+  nothing. A skip is now recorded in one write, already settled, and a write to that check that fails is a
+  warning in the run's log.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed
@@ -1185,7 +1259,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/cryskai/crysk/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.1
 [0.8.0]: https://github.com/cryskai/crysk/compare/v0.7.0...cc6cdec9
 [0.7.0]: https://github.com/cryskai/crysk/compare/v0.6.1...v0.7.0

@@ -111,6 +111,13 @@ export interface RereviewProvenance {
   discovery_skip_reason?: "no_delta" | "all_excluded";
   // Populated only when `discovery_skip_reason` is `"all_excluded"`.
   discovery_excluded_paths?: string[];
+  // Hunks left out of a restricted discovery patch because they came from a
+  // merge of the base branch, not from the pull request (rereview/
+  // base-merge-filter.ts). `discovery_range` still names last-head..head, so
+  // without this count a reader could not tell the hunters read less than
+  // that range. Absent when none was left out, and on every pipeline.json
+  // written before this field existed.
+  base_merge_hunks_dropped?: number;
   // The prior ids this run's gate count released through a materiality
   // demotion (rereview/state.ts materialityReleasedIds). The state merge
   // re-tiers them advisory. Absent when none was released, and on every
@@ -932,6 +939,8 @@ function resolveRowTie<T extends PostedForPrior>(
 // dismissal can leave the gate count, so nothing else is worth a ruling.
 // WHY an "inconclusive" ruling stays pending: it counts as not upheld, and a
 // later recheck may retry the same dismissal and get a ruling.
+// A triage with a reply id and no thread answers a finding with no comment of its own;
+// its ruling is posted as a top-level comment.
 export function adjudicationQueue(
   priors: readonly PriorRecord[],
 ): AdjudicationSubject[] {
@@ -945,14 +954,13 @@ export function adjudicationQueue(
     if (
       triage?.tag !== "dismissed" ||
       triage.replyId === undefined ||
-      triage.threadId === undefined ||
       (triage.ciVerdict != null && triage.ciVerdict !== "inconclusive")
     ) {
       continue;
     }
     const subject: AdjudicationSubject = {
       priorId: prior.id,
-      threadId: triage.threadId,
+      ...(triage.threadId === undefined ? {} : { threadId: triage.threadId }),
       replyId: triage.replyId,
       sev: prior.sev,
       locs: prior.locs,
@@ -970,7 +978,7 @@ export function adjudicationQueue(
 
 export function enrichPriorsFromThreads(input: {
   priors: readonly PriorRecord[];
-  posted: readonly PostedForPrior[];
+  posted: readonly (PostedForPrior & { channel: "review" | "issue" })[];
   // The head under review. A bot verdict counts only when its `head=` is this
   // head; when it is undefined no bot verdict counts.
   headSha?: string;
@@ -981,6 +989,18 @@ export function enrichPriorsFromThreads(input: {
     body: string;
     created_at?: string;
   }[];
+  // The pull request's top-level comments. A prior with no comment of its own (a finding GitHub
+  // could not anchor) is answered there, by a reply whose marker names its row (triage/triage.ts
+  // `row`). Absent: such a prior reads no reply, as before.
+  rowReplies?: readonly {
+    id?: number;
+    user?: string;
+    body: string;
+    created_at?: string;
+  }[];
+  // The login that posted the review summary. For a finding with no comment it stands where the
+  // finding's own author stands for a thread: only the bot that posted the review rules on it.
+  summaryAuthor?: string;
   summaryUpdatedAt: string | null;
   // In platform mode, the login the platform's token exchange returned (CRYSK_PLATFORM_ACTOR).
   platformActor?: string;
@@ -990,14 +1010,71 @@ export function enrichPriorsFromThreads(input: {
   const replies = withPlainAppliedReplies(input.replies);
   return input.priors.map((prior) => {
     const parent = bound.get(prior.id);
-    if (parent === undefined) return prior;
+    if (parent === undefined) {
+      // No comment, so no thread: the replies that name this prior's row answer it. The last one
+      // in comment order wins, as in a thread. Its CI ruling is a top-level comment too, read below.
+      const named = (input.rowReplies ?? []).filter(
+        (reply) => parseTriageMarker(reply.body)?.row === prior.id,
+      );
+      if (named.length === 0) return prior;
+      let rowTriage: PriorTriage | null = prior.triage;
+      for (const reply of named) {
+        const marker = parseTriageMarker(reply.body);
+        if (marker === null) continue;
+        rowTriage = {
+          tag: marker.tag,
+          verdict: marker.verdict ?? null,
+          createdAt: reply.created_at ?? null,
+          ...(reply.id === undefined ? {} : { replyId: reply.id }),
+          argument: reply.body.split("\n").slice(1).join("\n").trim(),
+          ciVerdict: null,
+        };
+      }
+      // The same trust and the same head rule as a thread's ruling (below): the marker names the
+      // reply it rules on, the last match wins, and the summary's author stands in for the
+      // finding's.
+      if (rowTriage?.replyId !== undefined && input.headSha !== undefined) {
+        for (const comment of input.rowReplies ?? []) {
+          if (
+            !trustedAdjudicator(comment.user, input.summaryAuthor, {
+              kind: "ci",
+              platformActor: input.platformActor,
+            })
+          ) {
+            continue;
+          }
+          const adjudication = parseAdjudicationMarker(comment.body);
+          if (
+            adjudication === null ||
+            adjudication.reply !== rowTriage.replyId ||
+            adjudication.head !== input.headSha
+          ) {
+            continue;
+          }
+          rowTriage = { ...rowTriage, ciVerdict: adjudication.verdict };
+        }
+      }
+      const newRowReply = named.some(
+        (reply) =>
+          reply.created_at !== undefined &&
+          input.summaryUpdatedAt !== null &&
+          reply.created_at > input.summaryUpdatedAt,
+      );
+      return { ...prior, triage: rowTriage, newThreadReply: newRowReply };
+    }
+    // WHY only a review comment has a thread here: `replies` are review comments, matched by the
+    // id they reply to, and an issue comment's id lives in another id space. A finding posted as a
+    // top-level comment (an old pull request) could otherwise take a reply from an unrelated review
+    // thread whose root happens to share its id.
+    if (parent.channel !== "review") return prior;
     const thread = replies.filter(
       (reply) => reply.in_reply_to_id === parent.id,
     );
     let triage: PriorTriage | null = prior.triage;
     for (const reply of thread) {
       const marker = parseTriageMarker(reply.body);
-      if (marker === null) continue;
+      // A reply that names a row answers a prior with no comment, never this thread's finding.
+      if (marker === null || marker.row !== undefined) continue;
       triage = {
         tag: marker.tag,
         verdict: marker.verdict ?? null,

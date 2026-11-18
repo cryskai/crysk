@@ -4,11 +4,14 @@
 // exits. A gh failure or a truncated comment read is a CliError and writes nothing to stdout.
 
 import { describe, expect, test } from "bun:test";
+import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
 import { runStatusCommand, statusCommand } from "#commands/status";
+import { carriedBlockingDescription } from "#pr/admission";
 import { CommentsTruncatedError, GRAPHQL_COMMENT_MAX_PAGES } from "#pr/pr";
 import { COMMIT_STATUS_CONTEXT, findingMarker } from "#pr/preflight";
 import { renderStateBlock, stateFinding } from "#rereview/state";
 import { parseArgs } from "#review/preflight";
+import { triageMarker } from "#triage/triage";
 import { CliError, CliUsageError } from "../../src/errors";
 
 type ScriptEntry = {
@@ -31,7 +34,17 @@ function makeFakeGh(script: ScriptEntry[]): {
   const spawnFn = ((argv: string[]) => {
     calls.push({ argv });
     const joined = argv.join(" ");
-    const entry = script.find((s) => s.match.every((t) => joined.includes(t)));
+    // The reply authors of the fixtures have write access. These entries come last, so a test
+    // scripts another answer for a login by putting its own entry first.
+    const entry = [
+      ...script,
+      ...["dev", "developer"].map(
+        (login): ScriptEntry => ({
+          match: [`collaborators/${login}/permission`],
+          response: { stdout: "write\n" },
+        }),
+      ),
+    ].find((s) => s.match.every((t) => joined.includes(t)));
     const scripted = entry?.response ?? { stdout: "", exitCode: 0 };
     const stream = (text: string) =>
       new ReadableStream<Uint8Array>({
@@ -654,5 +667,521 @@ describe("runStatusCommand --wait", () => {
     expect(statusPolls).toBe(3);
     expect(written).toHaveLength(1);
     expect(JSON.parse(written[0] ?? "").next_action).toBe("triage");
+  });
+});
+
+describe("crysk status — the review's verdict time", () => {
+  const OLDER = "d".repeat(40);
+  const EARLIER = "e".repeat(40);
+  const REVIEW_RED =
+    "pr-hero: 1 blocking finding(s) — fix and push, or /crysk override";
+  const VERDICT_AT = "2026-10-30T10:00:00Z";
+  const CARRIED_AT = "2026-10-30T12:00:00Z";
+
+  const commitStatus = (
+    state: string,
+    created_at: string,
+    description: string,
+  ) => ({
+    state,
+    context: COMMIT_STATUS_CONTEXT,
+    created_at,
+    description,
+    target_url: null,
+  });
+
+  // The summary the review wrote for `head`, with one blocking row.
+  const summaryFor = (head: string) =>
+    [
+      `<!-- pr-hero-report head=${head} -->`,
+      "",
+      renderStateBlock(
+        head,
+        [
+          stateFinding({
+            id: "R001",
+            sev: "CRITICAL",
+            tier: "blocking",
+            channel: "inline",
+            locs: ["src/a.ts:10"],
+            claim: CLAIM,
+          }),
+        ],
+        1,
+      ),
+    ].join("\n");
+
+  // A finding comment posted on `head`, as the review writes it.
+  const findingAt = (head: string) =>
+    [
+      findingMarker({
+        path: "src/a.ts",
+        line: 10,
+        headSha: head,
+        claim: CLAIM,
+      }),
+      "",
+      "🔴 blocking · CRITICAL · introduced · reliability",
+      "",
+      "`src/a.ts:10`",
+      "",
+      CLAIM,
+    ].join("\n");
+
+  // The head is carried from OLDER: the review of OLDER wrote its verdict at VERDICT_AT, and its
+  // finding was posted on EARLIER. The reply is stamped with EARLIER and created at replyAt.
+  const carriedScript = (replyAt: string): ScriptEntry[] => [
+    prView,
+    {
+      match: [`commits/${HEAD}/status`],
+      response: {
+        stdout: ndjson([
+          commitStatus(
+            "failure",
+            CARRIED_AT,
+            carriedBlockingDescription(1, OLDER),
+          ),
+        ]),
+      },
+    },
+    {
+      match: ["pulls/12/commits"],
+      response: { stdout: `${OLDER}\n${HEAD}\n` },
+    },
+    {
+      match: [`commits/${OLDER}/statuses`],
+      response: {
+        stdout: ndjson([commitStatus("failure", VERDICT_AT, REVIEW_RED)]),
+      },
+    },
+    {
+      match: ["issues/12/comments"],
+      response: {
+        stdout: ndjson([{ id: 100, user: "pr-hero", body: summaryFor(OLDER) }]),
+      },
+    },
+    {
+      match: ["pulls/12/comments"],
+      response: {
+        stdout: ndjson([
+          {
+            id: 41,
+            user: "pr-hero",
+            body: findingAt(EARLIER),
+            path: "src/a.ts",
+            line: 10,
+            original_line: 10,
+            in_reply_to_id: null,
+            created_at: "2026-10-30T09:00:00Z",
+          },
+          {
+            id: 42,
+            user: "developer",
+            body: `${triageMarker({ tag: "applied", headSha: EARLIER, actor: "agent" })}\n\nreasoning`,
+            path: "src/a.ts",
+            line: 10,
+            original_line: 10,
+            in_reply_to_id: 41,
+            created_at: replyAt,
+          },
+        ]),
+      },
+    },
+  ];
+
+  const runCarried = async (script: ScriptEntry[]) => {
+    const { spawnFn, calls } = makeFakeGh(script);
+    const written: string[] = [];
+    await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      out: (text) => written.push(text),
+    });
+    return { next: JSON.parse(written[0] ?? "").next_action, calls };
+  };
+
+  test("a head with a review's own verdict never lists the pull request's commits", async () => {
+    const { spawnFn, calls } = makeFakeGh(happyScript);
+    await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      out: () => {},
+    });
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("pulls/12/commits")),
+    ).toBe(false);
+  });
+
+  const commitListingsFor = async (script: ScriptEntry[]) => {
+    const { spawnFn, calls } = makeFakeGh(script);
+    await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      out: () => {},
+    });
+    return calls.filter((c) => c.argv.join(" ").includes("pulls/12/commits"));
+  };
+
+  test("a head with no crysk status never lists the pull request's commits", async () => {
+    expect(
+      await commitListingsFor([
+        prView,
+        { match: [`commits/${HEAD}/status`], response: { stdout: "" } },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("a head with a pending status never lists the pull request's commits", async () => {
+    expect(
+      await commitListingsFor([
+        prView,
+        {
+          match: [`commits/${HEAD}/status`],
+          response: {
+            stdout: ndjson([
+              commitStatus(
+                "pending",
+                new Date(NOW - 5_000).toISOString(),
+                "pr-hero: review in progress",
+              ),
+            ]),
+          },
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("a head an override turned green never lists the pull request's commits", async () => {
+    expect(
+      await commitListingsFor([
+        prView,
+        {
+          match: [`commits/${HEAD}/status`],
+          response: {
+            stdout: ndjson([
+              commitStatus(
+                "success",
+                new Date(NOW - 5_000).toISOString(),
+                `${OVERRIDE_DESCRIPTION_PREFIX}dev`,
+              ),
+            ]),
+          },
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("a head a skip carried reads the carried review's verdict: a reply after it answers", async () => {
+    const { next, calls } = await runCarried(
+      carriedScript("2026-10-30T11:00:00Z"),
+    );
+    expect(next).toBe("fix");
+    expect(
+      calls.filter((c) => c.argv.join(" ").includes("pulls/12/commits")),
+    ).toHaveLength(1);
+  });
+
+  test("a head a skip carried: a reply from before the carried review's verdict does not answer", async () => {
+    const { next } = await runCarried(carriedScript("2026-10-30T09:00:00Z"));
+    expect(next).toBe("triage");
+  });
+
+  test("the walk runs once per head across polls", async () => {
+    let statusPolls = 0;
+    let commitListings = 0;
+    let commentsFailed = false;
+    const base = makeFakeGh(carriedScript("2026-10-30T11:00:00Z")).spawnFn;
+    const encoder = new TextEncoder();
+    const stream = (text: string) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (text) controller.enqueue(encoder.encode(text));
+          controller.close();
+        },
+      });
+    const spawnFn = ((argv: string[], opts?: unknown) => {
+      const joined = argv.join(" ");
+      if (joined.includes("pulls/12/commits")) commitListings += 1;
+      if (joined.includes(`commits/${HEAD}/status`)) {
+        statusPolls += 1;
+        if (statusPolls === 1) {
+          return {
+            stdout: stream(
+              ndjson([
+                commitStatus(
+                  "pending",
+                  new Date(NOW - 5_000).toISOString(),
+                  "pr-hero: review in progress",
+                ),
+              ]),
+            ),
+            stderr: stream(""),
+            exited: Promise.resolve(0),
+            kill() {},
+          };
+        }
+      }
+      // One transient failure after the walk on poll 2: the next poll must reuse the walk.
+      if (
+        joined.includes("issues/12/comments") &&
+        statusPolls === 2 &&
+        !commentsFailed
+      ) {
+        commentsFailed = true;
+        return {
+          stdout: stream(""),
+          stderr: stream("HTTP 502 Bad Gateway"),
+          exited: Promise.resolve(1),
+          kill() {},
+        };
+      }
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }) as unknown as typeof Bun.spawn;
+
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      wait: true,
+      spawnFn,
+      nowMs: NOW,
+      pollIntervalMs: 1_000,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(statusPolls).toBe(3);
+    expect(commitListings).toBe(1);
+    expect(JSON.parse(written[0] ?? "").next_action).toBe("fix");
+  });
+
+  test("a walk that read nothing is read again on the next poll", async () => {
+    let statusPolls = 0;
+    let commitListings = 0;
+    let commentsFailed = false;
+    const base = makeFakeGh(carriedScript("2026-10-30T11:00:00Z")).spawnFn;
+    const encoder = new TextEncoder();
+    const stream = (text: string) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (text) controller.enqueue(encoder.encode(text));
+          controller.close();
+        },
+      });
+    const failed = (stderr: string) => ({
+      stdout: stream(""),
+      stderr: stream(stderr),
+      exited: Promise.resolve(1),
+      kill() {},
+    });
+    const spawnFn = ((argv: string[], opts?: unknown) => {
+      const joined = argv.join(" ");
+      if (joined.includes(`commits/${HEAD}/status`)) {
+        statusPolls += 1;
+        // Poll 1 settles nothing, so no walk runs on it; polls 2 and 3 see the carried red.
+        if (statusPolls === 1) {
+          return {
+            stdout: stream(
+              ndjson([
+                commitStatus(
+                  "pending",
+                  new Date(NOW - 5_000).toISOString(),
+                  "pr-hero: review in progress",
+                ),
+              ]),
+            ),
+            stderr: stream(""),
+            exited: Promise.resolve(0),
+            kill() {},
+          };
+        }
+      }
+      if (joined.includes("pulls/12/commits")) {
+        commitListings += 1;
+        // The walk on poll 2 reads nothing: poll 3 must walk again rather than hold the null.
+        if (commitListings === 1) return failed("HTTP 502 Bad Gateway");
+      }
+      // One transient failure after the walk on poll 2, so poll 3 runs on the same head.
+      if (
+        joined.includes("issues/12/comments") &&
+        statusPolls === 2 &&
+        !commentsFailed
+      ) {
+        commentsFailed = true;
+        return failed("HTTP 502 Bad Gateway");
+      }
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }) as unknown as typeof Bun.spawn;
+
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      wait: true,
+      spawnFn,
+      nowMs: NOW,
+      pollIntervalMs: 1_000,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(commitListings).toBe(2);
+    expect(JSON.parse(written[0] ?? "").next_action).toBe("fix");
+  });
+});
+
+describe("runStatusCommand: the reply authors' permissions", () => {
+  const replyBy = (user: string, id: number) => ({
+    id,
+    user,
+    created_at: new Date(NOW - 60_000).toISOString(),
+    body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nreasoning`,
+    path: "src/a.ts",
+    line: 10,
+    original_line: 10,
+    in_reply_to_id: 41,
+  });
+  const withReplies = (replies: unknown[]): ScriptEntry[] =>
+    happyScript.map((entry) =>
+      entry.match[0] === "pulls/12/comments"
+        ? {
+            ...entry,
+            response: {
+              stdout: ndjson([
+                {
+                  id: 41,
+                  user: "pr-hero",
+                  body: findingBody,
+                  path: "src/a.ts",
+                  line: 10,
+                  original_line: 10,
+                  in_reply_to_id: null,
+                },
+                ...replies,
+              ]),
+            },
+          }
+        : entry,
+    );
+
+  test("a reply author's permission that does not read fails the command, and nothing reaches stdout", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["collaborators/stranger/permission"],
+        response: { stderr: "HTTP 500", exitCode: 1 },
+      },
+      ...withReplies([replyBy("stranger", 42)]),
+    ]);
+    const written: string[] = [];
+    const run = runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    await expect(run).rejects.toBeInstanceOf(CliError);
+    await expect(run).rejects.toThrow(
+      /could not read whether stranger has write access/,
+    );
+    expect(written).toEqual([]);
+  });
+
+  test("a stale reply from a login whose permission does not read does not fail the command", async () => {
+    // Older than the verdict on HEAD (happyScript's red gate), at an older head: the gate drops it.
+    const staleBy = {
+      ...replyBy("ghost", 42),
+      created_at: new Date(NOW - 10 * 60_000).toISOString(),
+      body: `${triageMarker({ tag: "applied", headSha: "d".repeat(40), actor: "agent" })}\n\nreasoning`,
+    };
+    const run = async (script: ScriptEntry[]) => {
+      const written: string[] = [];
+      const code = await runStatusCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 12,
+        json: true,
+        spawnFn: makeFakeGh(script).spawnFn,
+        nowMs: NOW,
+        sleepFn: async () => {},
+        out: (text) => written.push(text),
+      });
+      return { code, written };
+    };
+    const withStale = await run([
+      {
+        match: ["collaborators/ghost/permission"],
+        response: { stderr: "HTTP 500", exitCode: 1 },
+      },
+      ...withReplies([staleBy]),
+    ]);
+    const without = await run(withReplies([]));
+    expect(withStale.code).toBe(0);
+    expect(withStale.written).toEqual(without.written);
+  });
+
+  test("the permission of a reply author is asked once across polls", async () => {
+    const pending = {
+      state: "pending",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: new Date(NOW - 5_000).toISOString(),
+      description: "pr-hero: review in progress",
+      target_url: null,
+    };
+    const base = makeFakeGh(withReplies([replyBy("dev", 42)])).spawnFn;
+    let statusPolls = 0;
+    let permissionAsks = 0;
+    const spawnFn = ((argv: string[], opts?: unknown) => {
+      const joined = argv.join(" ");
+      if (joined.includes("collaborators/dev/permission")) permissionAsks += 1;
+      if (joined.includes(`commits/${HEAD}/status`)) {
+        statusPolls += 1;
+        const row = statusPolls === 1 ? pending : gateRow;
+        return makeFakeGh([
+          {
+            match: [`commits/${HEAD}/status`],
+            response: { stdout: ndjson([row]) },
+          },
+        ]).spawnFn(argv);
+      }
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }) as unknown as typeof Bun.spawn;
+
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      wait: true,
+      spawnFn,
+      nowMs: NOW,
+      pollIntervalMs: 1_000,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(statusPolls).toBe(2);
+    expect(permissionAsks).toBe(1);
   });
 });

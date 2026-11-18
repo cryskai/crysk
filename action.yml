@@ -71,7 +71,7 @@ inputs:
     required: false
     default: 'true'
   force:
-    description: 'Bypass CI skip gates for this run: the size gate, review-policy admission, and the Crysk platform''s dollar limits. A pull request comment that is exactly `/crysk review` (or `/crysk review --full`) from a user with write access sets it on its own, with no input; a workflow_dispatch caller, such as a pr-hero-force.yml scaffolded before the comment trigger, can still pass it explicitly.'
+    description: 'Bypass CI skip gates for this run: the size gate, review-policy admission, and the Crysk platform''s dollar limits. A pull request comment whose first line is exactly `/crysk review` (or `/crysk review --full`) from a user with write access sets it on its own, with no input; a workflow_dispatch caller, such as a pr-hero-force.yml scaffolded before the comment trigger, can still pass it explicitly.'
     required: false
     default: 'false'
   full:
@@ -167,8 +167,8 @@ runs:
     # imports only builtins). The calling workflow listens to `pull_request`
     # and `issue_comment`, and its job `if:` already drops fork PRs and
     # comments that do not start with `/crysk review`. This step re-checks
-    # all of it instead of trusting the caller: a comment must be exactly
-    # `/crysk review` or `/crysk review --full`, from a user with write
+    # all of it instead of trusting the caller: a comment's first line must be
+    # exactly `/crysk review` or `/crysk review --full`, from a user with write
     # or admin access, no removed input may hold a value, and at least one
     # credential must be set. A same-repo run that fails either goes RED here
     # instead of skipping green. It also resolves

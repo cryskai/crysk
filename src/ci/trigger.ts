@@ -33,7 +33,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { commandHint, isCommand, startsWithCommand } from "../brand";
+import {
+  commandHint,
+  commandLine,
+  isCommand,
+  startsWithCommand,
+} from "../brand";
 // The profile registry: data modules with no runtime imports of their own
 // (test/architecture/profile-registry.test.ts), so the builtins-only rule
 // still holds.
@@ -238,9 +243,8 @@ export type CiTriggerDecision =
   // any install, whatever else the workflow passes.
   | { kind: "removed-inputs"; inputs: readonly RemovedInput[] };
 
-// Exact match after trimming, and nothing else: no case folding, no inner
-// whitespace tolerance, no trailing words. A loose match is how "/crysk
-// review please" or a quoted reply would start a paid review.
+// The comment's first line must be exactly the command (brand.ts isCommand): no case folding, no
+// inner whitespace tolerance, no trailing words on that line.
 export function parseReviewCommand(
   body: string,
 ): { full: boolean; adjudicate: boolean } | undefined {
@@ -267,7 +271,7 @@ type EventVerdict =
   | { kind: "event" };
 
 // A comment that starts like a command but is not an exact one: "/crysk review
-// please", "/crysk override --force". It is judged on the trimmed text, the same way
+// please", "/crysk override --force". It is judged on the comment's first line, the same way
 // as the command. The job's own `startsWith` filter lets such a comment start a run,
 // and that run reviews nothing; its reaction (confused) is the only word it says.
 function isNearMiss(body: string): boolean {
@@ -317,18 +321,19 @@ function classifyEvent(input: CiTriggerInput): EventVerdict {
     if (review !== undefined) {
       return {
         kind: "comment",
+        // The command's own line, never the lines below it: this text is quoted back in a retry hint.
         command: {
           kind: "review",
           full: review.full,
           adjudicate: review.adjudicate,
-          text: input.commentBody.trim(),
+          text: commandLine(input.commentBody),
         },
       };
     }
     if (isCommand(input.commentBody, OVERRIDE_COMMAND)) {
       return {
         kind: "comment",
-        command: { kind: "override", text: input.commentBody.trim() },
+        command: { kind: "override", text: commandLine(input.commentBody) },
       };
     }
     return {

@@ -5,8 +5,6 @@ import { assertRunMatchesPr } from "#ci/gates";
 import { resolveRepoRoot } from "#git/git";
 import {
   fetchPostedFindingComments,
-  fetchPrComments,
-  fetchPrReviewComments,
   ghCurrentBranchPr,
   ghPrWebUrl,
   ghRepoNameWithOwner,
@@ -15,14 +13,12 @@ import {
   postReviewCommentReply,
   resolveReviewThreadForComment,
 } from "#pr/pr";
-import { buildPrStatus } from "#pr/pr-status";
-import { resolveCurrentPrNumber } from "#pr/preflight";
+import { findMarkedCommentId, resolveCurrentPrNumber } from "#pr/preflight";
 import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
 import { openProductStore, recordFindingTriage } from "#store/store";
 import {
   decideThreadResolve,
-  existingTriageAtHead,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
 } from "#triage/reply";
@@ -38,6 +34,7 @@ import { matchMarkerPrefix } from "../brand";
 import { CliError, CliUsageError } from "../errors";
 import { tryOriginRepoId } from "../home";
 import { prheroLayout } from "../home-preflight";
+import { readPrStatus } from "./status";
 
 // `crysk triage reply --pr <n> [--from <run-dir>] --finding <id> ...`: the
 // only triage verb. It posts one triage reply, records the verdict in the
@@ -110,33 +107,44 @@ async function outsidePullUrl(
   return `${host}/${nameWithOwner}/pull/${prNumber}`;
 }
 
+// Where a reply goes: the finding's own comment thread, or, for a finding with no comment of its own,
+// a top-level comment that names the summary row it is listed in.
+type ReplyTarget =
+  | { kind: "thread"; parent: { id: number; channel: "review" | "issue" } }
+  // A finding with no comment of its own: answered by a top-level comment that names its row.
+  | {
+      kind: "row";
+      rowId: string;
+      summaryId: number;
+      path: string;
+      line: number;
+    };
+
 // triage-without-skill S2: the finding a reply answers, read off the PR alone. The summary's state block
-// names the id, the posted finding comment carries the head it was posted on, and the join is the one
+// names the id, the summary carries the head the review ran on, and the join is the one
 // `crysk status --pr` makes (pr/pr-status.ts), so an agent with no run directory replies by id.
 async function postedFindingFromPr(
   operatorRoot: string,
   prNumber: number,
   findingId: string,
   spawnFn: typeof Bun.spawn | undefined,
+  sleepFn: (ms: number) => Promise<void>,
 ): Promise<{
-  parent: { id: number; channel: "review" | "issue" };
+  target: ReplyTarget;
   headSha: string;
+  already: boolean;
 }> {
-  const issueComments = await fetchPrComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
-  const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
-  const status = buildPrStatus({
+  // The read `crysk status` makes, so the reply is decided on the replies the gate counts.
+  const read = await readPrStatus({
+    operatorRoot,
     pr: prNumber,
-    head: "",
     nowMs: Date.now(),
-    statuses: [],
-    issueComments,
-    reviewComments,
-    adjudicatorTrust: { kind: "local" },
+    spawnFn,
+    sleepFn,
+    memo: { writers: new Map() },
   });
+  const status = read.status;
+  const issueComments = read.issueComments;
   const finding = status.findings.find((row) => row.id === findingId);
   if (finding === undefined) {
     throw new CliUsageError(
@@ -144,18 +152,55 @@ async function postedFindingFromPr(
         `\`crysk status --pr ${prNumber} --json\` for its R### ids, or pass --from <run-dir> for an F### id`,
     );
   }
-  if (finding.comment_id === null || finding.head === null) {
+  if (finding.comment_id !== null) {
+    // WHY the summary's head and not the comment's: a finding carried from an earlier review keeps the
+    // comment, and so the head, of the review that first posted it. A reply names the review it answers;
+    // stamped with the comment's head, a second round would find the first round's reply and skip, and
+    // the finding could never be answered again. With no summary there is only the comment's head.
+    const headSha = status.report.head ?? finding.head;
+    if (headSha === null) {
+      throw new CliError(
+        `${findingId} on PR #${prNumber} has no review head to answer under`,
+      );
+    }
+    // Only the newest reply the gate counts makes a second one a repeat: status's `triage` for this
+    // finding is that reply, read with the same verdict time and the same author rule as the gate.
+    const already = finding.triage !== null && finding.triage.head === headSha;
+    return {
+      target: {
+        kind: "thread",
+        parent: {
+          id: finding.comment_id,
+          channel: finding.channel === "inline" ? "review" : "issue",
+        },
+      },
+      headSha,
+      already,
+    };
+  }
+  const summaryId = findMarkedCommentId(issueComments);
+  if (
+    summaryId === null ||
+    status.report.head === null ||
+    finding.id === null
+  ) {
     throw new CliError(
-      `${findingId} on PR #${prNumber} has no comment thread to reply to ` +
-        "(it lives only in the summary)",
+      `${findingId} on PR #${prNumber} has no comment and the pull request has no review summary to answer it in`,
     );
   }
+  const headSha = status.report.head;
+  // A summary-row reply is answered by the newest counted reply that names the row, at this head.
+  const already = finding.triage !== null && finding.triage.head === headSha;
   return {
-    parent: {
-      id: finding.comment_id,
-      channel: finding.channel === "inline" ? "review" : "issue",
+    target: {
+      kind: "row",
+      rowId: finding.id,
+      summaryId,
+      path: finding.path,
+      line: finding.line,
     },
-    headSha: finding.head,
+    headSha,
+    already,
   };
 }
 
@@ -175,6 +220,33 @@ async function readReasoning(bodyFile: string): Promise<string> {
   return reasoning;
 }
 
+// The summary's live rows with a comment on this path, for the message of a finding no comment of
+// this run carries. Best effort: the message stands without it.
+async function carriedRowsHint(input: {
+  operatorRoot: string;
+  prNumber: number;
+  findingPath: string;
+  spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
+}): Promise<string> {
+  try {
+    const { status } = await readPrStatus({
+      operatorRoot: input.operatorRoot,
+      pr: input.prNumber,
+      nowMs: Date.now(),
+      spawnFn: input.spawnFn,
+      sleepFn: input.sleepFn,
+      memo: { writers: new Map() },
+    });
+    const rows = status.findings
+      .filter((row) => row.id !== null && row.path === input.findingPath)
+      .map((row) => `${row.id} (${row.path}:${row.line})`);
+    return rows.length === 0 ? "" : ` On this path: ${rows.join(", ")}.`;
+  } catch {
+    return "";
+  }
+}
+
 // The posted finding a reply binds to and the head its marker names, read from a completed run
 // directory: the finding row by id, matched to its posted comment by marker.
 async function postedFindingFromRunDir(input: {
@@ -184,10 +256,12 @@ async function postedFindingFromRunDir(input: {
   findingId: string;
   bodyFile: string;
   spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
 }): Promise<{
-  parent: { id: number; channel: "review" | "issue" };
+  target: ReplyTarget;
   headSha: string;
   reasoning: string;
+  already: boolean;
 }> {
   const { operatorRoot, prNumber, runDir, spawnFn } = input;
   const findingsPath = path.join(runDir, "findings.json");
@@ -242,9 +316,19 @@ async function postedFindingFromRunDir(input: {
         ? `${finding.path}:${identity.line}`
         : `${finding.path}: post line ${identity.line} ` +
           `(findings.json:${findingsLine})`;
+    const carried = await carriedRowsHint({
+      operatorRoot,
+      prNumber,
+      findingPath: finding.path,
+      spawnFn,
+      sleepFn: input.sleepFn,
+    });
     throw new CliError(
       `no posted <!-- crysk-finding (or <!-- pr-hero-finding) marker matches ${input.findingId} ` +
         `on PR #${prNumber} (${lineHint}, head ${doc.head_sha.slice(0, 8)}). ` +
+        "A finding with no comment on this head (carried from an earlier review, or listed only in the summary) " +
+        "is answered by its R### id, without --from " +
+        `(\`crysk status --pr ${prNumber} --json\` lists the ids).${carried} ` +
         "Bind by marker, never by a GitHub comment id or the nearest line",
     );
   }
@@ -254,7 +338,34 @@ async function postedFindingFromRunDir(input: {
         `(ids ${match.ids.join(", ")}) — will not pick by proximity`,
     );
   }
-  return { parent: match.posted, headSha: doc.head_sha, reasoning };
+  // The same read `crysk status` makes: a repeat only when the newest reply the gate counts for this
+  // finding already answers this review.
+  const read = await readPrStatus({
+    operatorRoot,
+    pr: prNumber,
+    nowMs: Date.now(),
+    spawnFn,
+    sleepFn: input.sleepFn,
+    memo: { writers: new Map() },
+  });
+  // WHY the channel too: a review comment's id and an issue comment's id are different id spaces,
+  // so the bare number could name another finding's comment.
+  const postedChannel = match.posted.channel === "issue" ? "outside" : "inline";
+  const postedRow = read.status.findings.find(
+    (row) =>
+      row.comment_id === match.posted.id && row.channel === postedChannel,
+  );
+  const already =
+    postedRow?.triage != null && postedRow.triage.head === doc.head_sha;
+  return {
+    target: {
+      kind: "thread",
+      parent: { id: match.posted.id, channel: match.posted.channel },
+    },
+    headSha: doc.head_sha,
+    reasoning,
+    already,
+  };
 }
 
 export async function runTriageReplyCommand(input: {
@@ -269,11 +380,13 @@ export async function runTriageReplyCommand(input: {
   issue?: number;
   dryRun: boolean;
   spawnFn?: typeof Bun.spawn;
+  // The wait between the two permission asks. Tests pass an immediate one.
+  sleepFn?: (ms: number) => Promise<void>;
 }): Promise<number> {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
   const runDir =
     input.from === undefined ? undefined : path.resolve(input.from);
-  const target =
+  const found =
     runDir === undefined
       ? {
           ...(await postedFindingFromPr(
@@ -281,55 +394,94 @@ export async function runTriageReplyCommand(input: {
             prNumber,
             input.findingId,
             spawnFn,
+            input.sleepFn ?? Bun.sleep,
           )),
           reasoning: await readReasoning(input.bodyFile),
         }
-      : await postedFindingFromRunDir({
-          operatorRoot,
-          prNumber,
-          runDir,
-          findingId: input.findingId,
-          bodyFile: input.bodyFile,
-          spawnFn,
-        });
-  const { parent, headSha, reasoning } = target;
+      : {
+          ...(await postedFindingFromRunDir({
+            operatorRoot,
+            prNumber,
+            runDir,
+            findingId: input.findingId,
+            bodyFile: input.bodyFile,
+            spawnFn,
+            sleepFn: input.sleepFn ?? Bun.sleep,
+          })),
+        };
+  const { target: replyTarget, headSha, reasoning, already } = found;
   const fields: TriageMarkerFields = {
     tag: input.tag,
     headSha,
     actor: "agent",
     verdict: input.verdict,
     issue: input.issue,
+    ...(replyTarget.kind === "row" ? { row: replyTarget.rowId } : {}),
   };
-  const body = renderTriageReplyBody(fields, reasoning);
-  const reviewComments = await fetchPrReviewComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
-  const already = existingTriageAtHead({
-    parentId: parent.id,
-    headSha,
-    replies: reviewComments,
-  });
+  // The visible line a summary-row reply carries in place of the thread it does not have: it names
+  // the row and links the summary, the only place the finding is listed.
+  let subject: string | undefined;
+  if (replyTarget.kind === "row") {
+    const pullUrl = await outsidePullUrl(operatorRoot, prNumber, spawnFn);
+    const summaryLink =
+      pullUrl === undefined
+        ? "listed in the review summary"
+        : `listed in the [review summary](${pullUrl}#issuecomment-${replyTarget.summaryId})`;
+    subject =
+      `Finding ${replyTarget.rowId} · \`${replyTarget.path}:${replyTarget.line}\` · ` +
+      `outside the diff, ${summaryLink}`;
+  }
+  const body =
+    subject === undefined
+      ? renderTriageReplyBody(fields, reasoning)
+      : renderTriageReplyBody(fields, reasoning, subject);
   const resolveDecision = decideThreadResolve({
-    channel: parent.channel,
+    channel: replyTarget.kind === "row" ? "issue" : replyTarget.parent.channel,
     verdict: input.verdict,
   });
   if (dryRun) {
-    log(
-      `plan: reply to ${parent.channel} comment ${parent.id} ` +
-        `(${input.findingId}, marker match) as ${input.tag}` +
-        (already ? " — already triaged at this head, would skip post" : ""),
-    );
-    if (resolveDecision === "resolve") {
-      log("plan: would resolve the review thread after posting");
-    } else if (resolveDecision === "skip-inconclusive") {
-      log("plan: would leave the thread open (adjudicator inconclusive)");
+    if (replyTarget.kind === "row") {
+      log(
+        `plan: reply to summary row ${replyTarget.rowId} (top-level comment) as ${input.tag}` +
+          (already ? " — already triaged at this head, would skip post" : ""),
+      );
+      log("plan: no review thread to resolve (summary row)");
     } else {
-      log("plan: no review thread to resolve (issue-comment finding)");
+      log(
+        `plan: reply to ${replyTarget.parent.channel} comment ${replyTarget.parent.id} ` +
+          `(${input.findingId}, marker match) as ${input.tag}` +
+          (already ? " — already triaged at this head, would skip post" : ""),
+      );
+      if (resolveDecision === "resolve") {
+        log("plan: would resolve the review thread after posting");
+      } else if (resolveDecision === "skip-inconclusive") {
+        log("plan: would leave the thread open (adjudicator inconclusive)");
+      } else {
+        log("plan: no review thread to resolve (issue-comment finding)");
+      }
     }
     log("dry run: nothing was posted.");
     return 0;
   }
-  if (!already) {
+  if (already) {
+    log(
+      replyTarget.kind === "row"
+        ? `skip post: ${input.findingId} already triaged at this head (summary row)`
+        : `skip post: ${input.findingId} already triaged at this head ` +
+            `(${replyTarget.parent.channel} comment ${replyTarget.parent.id})`,
+    );
+  } else if (replyTarget.kind === "row") {
+    await postIssueTriageComment({
+      operatorRoot,
+      pr: prNumber,
+      body,
+      spawnFn,
+    });
+    log(
+      `posted: ${input.tag} on ${input.findingId} (summary row, top-level comment)`,
+    );
+  } else {
+    const parent = replyTarget.parent;
     if (parent.channel === "review") {
       await postReviewCommentReply({
         operatorRoot,
@@ -355,18 +507,18 @@ export async function runTriageReplyCommand(input: {
       `posted: ${input.tag} on ${input.findingId} ` +
         `(${parent.channel} comment ${parent.id})`,
     );
-  } else {
-    log(
-      `skip post: ${input.findingId} already triaged at this head ` +
-        `(${parent.channel} comment ${parent.id})`,
-    );
   }
 
   // Persist triage record to canonical product store (idempotent upsert)
   try {
     const layout = prheroLayout(os.homedir());
-    // A reply read off the PR has no run to record against.
-    if (runDir !== undefined && existsSync(layout.prheroDbPath)) {
+    // A reply read off the PR has no run to record against, and a summary-row reply has no comment
+    // the store could key on.
+    if (
+      replyTarget.kind === "thread" &&
+      runDir !== undefined &&
+      existsSync(layout.prheroDbPath)
+    ) {
       const repoId = await tryOriginRepoId(operatorRoot);
       if (repoId) {
         const db = openProductStore(layout.prheroDbPath);
@@ -381,7 +533,7 @@ export async function runTriageReplyCommand(input: {
             recordFindingTriage(db, {
               run_id: runRow.id,
               finding_id: input.findingId,
-              comment_id: parent.id,
+              comment_id: replyTarget.parent.id,
               tag: input.tag,
               verdict: input.verdict,
               actor: "agent",
@@ -401,9 +553,11 @@ export async function runTriageReplyCommand(input: {
     );
   }
 
-  if (resolveDecision !== "resolve") {
+  // A summary-row reply has no review thread; its decision is always skip-issue-channel.
+  if (replyTarget.kind === "row" || resolveDecision !== "resolve") {
     return 0;
   }
+  const parent = replyTarget.parent;
   // Live #34: the reply POST succeeded, then GraphQL resolve threw and the
   // process exited 1. The skill's rule is never `gh` — say the reply is
   // already on GitHub and the same command retries resolve only.

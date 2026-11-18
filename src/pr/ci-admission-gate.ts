@@ -50,11 +50,11 @@ import {
 } from "#ci/review-risk";
 import {
   type CiAdmissionLedgerState,
+  ledgerWarning,
   publishCiSkip,
   recordCiAdmissionGateSkip,
   reserveCiAdmissionLedger,
   settleCiAdmissionLedger,
-  settleCiGateSkip,
 } from "#pr/admission";
 import {
   type AnsweredFindings,
@@ -66,11 +66,12 @@ import {
   fetchCommitStatuses,
   fetchPrComments,
   fetchPrReviewComments,
-  ghCollaboratorPermission,
+  ghCollaboratorPermissionRetried,
   ghCompareChangedFilesWithStatus,
   ghPrHeroWorkflowRunHeads,
   listAdmissionCheckRuns,
 } from "#pr/pr";
+import { verdictAtMs } from "#pr/pr-status";
 import {
   type CiMode,
   type CommitStatusContext,
@@ -532,14 +533,16 @@ export async function recordCiConfigErrorSkip(input: {
   spawnFn?: typeof Bun.spawn;
   // Test-only seam: the bound on the READS before the reservation.
   timeoutMs?: number;
+  // Test-only seam (default: a workflow warning on stdout).
+  warn?: (line: string) => void;
 }): Promise<void> {
   // WHY the deadline covers only the reads: the head lookup and the ledger list
   // have no bound of their own, and the caller rethrows the configuration error
-  // right after this returns. Once a reservation exists, though, it must be
-  // settled, or it stays `reserved` and counts as a spent attempt forever. So the
-  // deadline ends before the reserve, and the settle always runs. Its gh calls
-  // are already bounded by the check-run upsert (ADMISSION_CHECK_RUN_TIMEOUT_MS,
-  // two attempts), and a failed settle is swallowed by tryPersistCiAdmissionLedger.
+  // right after this returns. The skip is then recorded in one write, already
+  // settled (`settleAs`), so no row can be left `reserved`, which would count as
+  // a spent attempt for good. That write is bounded by the check-run upsert
+  // (ADMISSION_CHECK_RUN_TIMEOUT_MS, two attempts), and one that fails is a
+  // warning in the log.
   const reads = await readBeforeReservation(input);
   if (reads === null) return;
   try {
@@ -551,8 +554,8 @@ export async function recordCiConfigErrorSkip(input: {
       new Date(),
     );
     if (active !== null) return;
-    // If the reserve fails there is no row, so there is nothing to settle.
-    const state = await reserveCiAdmissionLedger({
+    // If the write fails there is no row.
+    await reserveCiAdmissionLedger({
       operatorRoot: input.operatorRoot,
       prNumber: input.prNumber,
       headSha: reads.headSha,
@@ -560,11 +563,16 @@ export async function recordCiConfigErrorSkip(input: {
       policyHash: reads.ciPolicyHash,
       existing: reads.existing,
       decisionReason: input.reason,
+      settleAs: { status: "gate-skipped", reason: input.reason },
       spawnFn: input.spawnFn,
     });
-    await settleCiGateSkip(state, input.reason, { spawnFn: input.spawnFn });
-  } catch {
-    // Swallowed on purpose: see the WHY above.
+  } catch (error) {
+    // It does not block the caller, which rethrows the configuration error; it is said in the log.
+    ledgerWarning(
+      input.warn,
+      "could not record this skip on the admission check",
+      error,
+    );
   }
 }
 
@@ -637,7 +645,7 @@ async function stoppedByMaintainer(
   for (const command of commands.slice(0, oldestStop + 1)) {
     let permission = permissions.get(command.user);
     if (!permissions.has(command.user)) {
-      permission = await stopAuthorPermission(
+      permission = await ghCollaboratorPermissionRetried(
         operatorRoot,
         command.user,
         spawnFn,
@@ -660,6 +668,66 @@ async function stoppedByMaintainer(
     }
   }
   return false;
+}
+
+// Whether each author of a triage reply has write access: true, false, or null when the permission
+// did not read. One lookup for the gate, crysk status and crysk triage reply, so the three read the
+// same replies. `known` carries answers across calls (a --wait poll must not ask again); only an
+// answer that read is kept in it.
+export async function lookUpReplyWriters(input: {
+  operatorRoot: string;
+  // id is optional, but a plain `applied` reply is found through its finding's id: pass the ids.
+  comments: readonly {
+    id?: number;
+    user: string;
+    body: string;
+    in_reply_to_id?: number | null;
+    created_at?: string;
+  }[];
+  known?: Map<string, boolean>;
+  // The reviewed head and the verdict time (ms): a stale reply's author is not asked.
+  cutoff?: { reviewedHead: string | null; verdictAt: number | null };
+  spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
+}): Promise<Map<string, boolean | null>> {
+  const writers = new Map<string, boolean | null>();
+  for (const login of triageReplyAuthors(input.comments, input.cutoff)) {
+    const cached = input.known?.get(login);
+    if (cached !== undefined) {
+      writers.set(login, cached);
+      continue;
+    }
+    const permission = await ghCollaboratorPermissionRetried(
+      input.operatorRoot,
+      login,
+      input.spawnFn,
+      input.sleepFn,
+    );
+    const writer =
+      permission === null
+        ? null
+        : permission === "admin" || permission === "write";
+    writers.set(login, writer);
+    if (writer !== null) input.known?.set(login, writer);
+  }
+  return writers;
+}
+
+// The same, for a reader that cannot go on without every answer: status and the triage driver.
+export async function requireReplyWriters(
+  input: Parameters<typeof lookUpReplyWriters>[0],
+): Promise<Map<string, boolean>> {
+  const writers = new Map<string, boolean>();
+  for (const [login, writer] of await lookUpReplyWriters(input)) {
+    if (writer === null) {
+      throw new CliError(
+        `could not read whether ${login} has write access to this repository, so its triage ` +
+          "replies cannot be read as the gate reads them. Nothing was changed: run the command again",
+      );
+    }
+    writers.set(login, writer);
+  }
+  return writers;
 }
 
 // budget-exhausted-carry S3, S4: the reader publishCiSkip calls when a skip carries a blocking red. Each
@@ -692,24 +760,13 @@ function answeredReader(input: {
   return async (verdictAt) => {
     const reviewedHead = input.reviewedHead;
     if (reviewedHead === null) return null;
-    const writers = new Map<string, boolean | null>();
-    for (const login of triageReplyAuthors([
-      ...input.reviewComments,
-      ...input.issueComments,
-    ])) {
-      const permission = await stopAuthorPermission(
-        input.operatorRoot,
-        login,
-        input.spawnFn,
-        input.sleepFn,
-      );
-      writers.set(
-        login,
-        permission === null
-          ? null
-          : permission === "admin" || permission === "write",
-      );
-    }
+    const writers = await lookUpReplyWriters({
+      operatorRoot: input.operatorRoot,
+      comments: [...input.reviewComments, ...input.issueComments],
+      cutoff: { reviewedHead, verdictAt: verdictAtMs(verdictAt) },
+      spawnFn: input.spawnFn,
+      sleepFn: input.sleepFn,
+    });
     return answeredBlockingFindings({
       pr: input.prNumber,
       reviewedHead,
@@ -721,27 +778,4 @@ function answeredReader(input: {
       platformActor: process.env.CRYSK_PLATFORM_ACTOR,
     });
   };
-}
-
-// Same bounds as the trigger's commenter lookup (lookupCommenterPermission):
-// one retry after a short wait, so a single API blip does not override a
-// maintainer's stop, and a timeout, so a hung gh call cannot stall admission.
-const STOP_PERMISSION_RETRY_DELAY_MS = 2_000;
-const STOP_PERMISSION_TIMEOUT_MS = 30_000;
-
-async function stopAuthorPermission(
-  operatorRoot: string,
-  login: string,
-  spawnFn: typeof Bun.spawn | undefined,
-  sleepFn: (ms: number) => Promise<void>,
-): Promise<string | null> {
-  const ask = () =>
-    ghCollaboratorPermission(operatorRoot, login, {
-      spawnFn,
-      timeoutMs: STOP_PERMISSION_TIMEOUT_MS,
-    });
-  const first = await ask();
-  if (first !== null) return first;
-  await sleepFn(STOP_PERMISSION_RETRY_DELAY_MS);
-  return ask();
 }

@@ -120,9 +120,9 @@ gh pr create -R cryskai/crysk --base main --head dev --title "chore: promote dev
 Wait for the checks. The `crysk` gate on this PR is usually red: the whole diff since the last release is over the size
 gate, so no review runs. Every change in it was already reviewed in its own PR into `dev`. Only the
 `Test, typecheck & lint` check is required on `main`. Ask the maintainer how to close it. Their usual
-choice is `/crysk override`, posted only on their explicit instruction. The comment must be exactly
-`/crysk override` and nothing else: with any extra text, the workflow says "This comment is not a
-crysk command" and does nothing.
+choice is `/crysk override`, posted only on their explicit instruction. Post `/crysk override` alone. Its first
+line must be exactly the command, and a workflow still on an engine older than this rule rejects any extra
+text at all: it says "This comment is not a crysk command" and does nothing.
 
 Once the gate is settled the way the maintainer chose, merge with `--merge`, then go to step 8.
 

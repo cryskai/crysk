@@ -36,6 +36,7 @@ import {
   fetchPrCommitShas,
   fetchPrReviewComments,
   GRAPHQL_COMMENT_MAX_PAGES,
+  ghCollaboratorPermissionRetried,
   ghPrFiles,
   ghPrHeadSha,
   ghPrHeroWorkflowRunHeads,
@@ -1108,6 +1109,114 @@ describe("ghPrHeadSha", () => {
       { match: ["headRefOid"], response: { stdout: "\n" } },
     ]);
     expect(await ghPrHeadSha(OPERATOR_ROOT, 42, { spawnFn })).toBeUndefined();
+  });
+});
+
+describe("ghCollaboratorPermissionRetried", () => {
+  // A gh double that answers each permission ask from `outcomes`, in order, and
+  // repeats the last one once they run out.
+  function permissionAsks(outcomes: ScriptedResponse[]) {
+    const calls: RecordedCall[] = [];
+    const encoder = new TextEncoder();
+    const stream = (text: string) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (text) controller.enqueue(encoder.encode(text));
+          controller.close();
+        },
+      });
+    const spawnFn = ((argv: string[]) => {
+      calls.push({ argv, cwd: undefined, stdin: undefined });
+      const scripted =
+        outcomes[Math.min(calls.length - 1, outcomes.length - 1)] ?? {};
+      return {
+        stdout: stream(scripted.stdout ?? ""),
+        stderr: stream(scripted.stderr ?? ""),
+        exited: Promise.resolve(scripted.exitCode ?? 0),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, calls };
+  }
+
+  function recordedSleeps(): {
+    sleeps: number[];
+    sleepFn: (ms: number) => Promise<void>;
+  } {
+    const sleeps: number[] = [];
+    return {
+      sleeps,
+      sleepFn: async (ms: number) => {
+        sleeps.push(ms);
+      },
+    };
+  }
+
+  test("a first ask that reads answers without a second ask or a wait", async () => {
+    const { spawnFn, calls } = permissionAsks([{ stdout: "write\n" }]);
+    const { sleeps, sleepFn } = recordedSleeps();
+    expect(
+      await ghCollaboratorPermissionRetried(
+        OPERATOR_ROOT,
+        "dev",
+        spawnFn,
+        sleepFn,
+      ),
+    ).toBe("write");
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  test("a failed first ask waits 2 seconds and reads the second ask", async () => {
+    const { spawnFn, calls } = permissionAsks([
+      { stderr: "HTTP 500", exitCode: 1 },
+      { stdout: "admin\n" },
+    ]);
+    const { sleeps, sleepFn } = recordedSleeps();
+    expect(
+      await ghCollaboratorPermissionRetried(
+        OPERATOR_ROOT,
+        "dev",
+        spawnFn,
+        sleepFn,
+      ),
+    ).toBe("admin");
+    expect(calls).toHaveLength(2);
+    expect(sleeps).toEqual([2_000]);
+  });
+
+  test("two failed asks read null, never a permission", async () => {
+    const { spawnFn, calls } = permissionAsks([
+      { stderr: "HTTP 500", exitCode: 1 },
+    ]);
+    const { sleeps, sleepFn } = recordedSleeps();
+    expect(
+      await ghCollaboratorPermissionRetried(
+        OPERATOR_ROOT,
+        "dev",
+        spawnFn,
+        sleepFn,
+      ),
+    ).toBeNull();
+    expect(calls).toHaveLength(2);
+    expect(sleeps).toEqual([2_000]);
+  });
+
+  test("a 404 is 'none' on the first ask: a non-collaborator is an answer", async () => {
+    const { spawnFn, calls } = permissionAsks([
+      { stderr: "gh: Not Found (HTTP 404)", exitCode: 1 },
+    ]);
+    const { sleeps, sleepFn } = recordedSleeps();
+    expect(
+      await ghCollaboratorPermissionRetried(
+        OPERATOR_ROOT,
+        "dev",
+        spawnFn,
+        sleepFn,
+      ),
+    ).toBe("none");
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
   });
 });
 

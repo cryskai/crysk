@@ -2,12 +2,17 @@ import { describe, expect, test } from "bun:test";
 import {
   AllExcludedError,
   discoveryHunters,
+  type PrDiscoveryGit,
   resolvePrDiscovery,
 } from "#pr/discovery";
+import { patchNumstat } from "#rereview/base-merge-filter";
 import { skippedDiscoveryMessage } from "#rereview/plan";
+import { renderStateBlock, stateFinding } from "#rereview/state";
 import { allExcludedMessage } from "#review/preflight";
+import { evaluateSizeGate } from "#review/size-gate";
 import type { AgentSpec } from "#review/spec";
 import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
+import { triageMarker } from "#triage/triage";
 import { CliError } from "../../src/errors";
 import { parseIgnoreFile } from "../../src/ignore-file";
 
@@ -89,6 +94,17 @@ function markerComment(complete: boolean) {
   };
 }
 
+// Every login the fixtures reply as is a writer, so the existing expectations hold. A test that
+// depends on a login's permission passes its own map.
+const WRITERS: ReadonlyMap<string, boolean | null> = new Map([
+  ["pr-hero", true],
+  ["reviewer", true],
+  ["someone", true],
+  ["author", true],
+  [CI_ADJUDICATOR_LOGIN, true],
+  ["crysk-app[bot]", true],
+]);
+
 const POSTED_FINDING = {
   id: 100,
   channel: "review" as const,
@@ -118,6 +134,7 @@ describe("resolvePrDiscovery — rereview-coverage fix (invariants 2 & 3)", () =
       prIgnore: { rules: [], found: false },
       issueComments: [markerComment(false)],
       postedFindings: [POSTED_FINDING],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: () => {},
@@ -140,6 +157,7 @@ describe("resolvePrDiscovery — rereview-coverage fix (invariants 2 & 3)", () =
       prIgnore: { rules: [], found: false },
       issueComments: [markerComment(true)],
       postedFindings: [POSTED_FINDING],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: () => {},
@@ -194,6 +212,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
           marker: { ...POSTED_FINDING.marker, headSha: H },
         },
       ],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: (line) => {
@@ -249,6 +268,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       // exactly what `enrichPriorsFromThreads` reads to set
       // `newThreadReply: true`, the input `classifyPrior`'s case-B branch
       // gates on.
+      replyWriters: WRITERS,
       reviewComments: [
         {
           id: 900,
@@ -277,6 +297,62 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
     expect(
       logs.some((line) => line.includes("No prior finding is queued")),
     ).toBe(false);
+  });
+
+  // A prior with no comment of its own: GitHub could not anchor the finding, so it
+  // lives only as row R001 in the summary's state block. Its answer is a top-level
+  // comment whose triage marker names that row.
+  test("an applied reply to a prior with no comment queues it for verification", async () => {
+    const logs: string[] = [];
+    const summary = `${markerCommentForHead(H, true).body}\n\n${renderStateBlock(
+      H,
+      [
+        stateFinding({
+          id: "R001",
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: ["src/a.ts:10"],
+          claim: "a finding GitHub could not anchor",
+        }),
+      ],
+      1,
+      1,
+    )}`;
+    const result = await resolvePrDiscovery({
+      diffFromSha: B,
+      headSha: H,
+      full: false,
+      baseRef: B,
+      headLabel: "PR #1 head",
+      isCi: false,
+      sizeGateOverrides: {},
+      config: { suspicion_priors: [] },
+      prIgnore: { rules: [], found: false },
+      issueComments: [
+        { ...markerCommentForHead(H, true), body: summary },
+        {
+          id: 2,
+          user: "pr-hero",
+          body: `${triageMarker({
+            tag: "applied",
+            headSha: H,
+            actor: "agent",
+            row: "R001",
+          })}\n\nfixed in x`,
+          created_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+      postedFindings: [],
+      replyWriters: WRITERS,
+      reviewComments: [],
+      git: baseGit(),
+      log: (line) => {
+        if (line !== undefined) logs.push(line);
+      },
+    });
+
+    expect(result.verifyQueue.map((v) => v.priorId)).toEqual(["R001"]);
   });
 
   // #286 finding 1: a REAL, non-empty delta that the size gate / ignore
@@ -329,6 +405,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       prIgnore: { rules: parseIgnoreFile("dist/**\n", "user"), found: true },
       issueComments: [markerCommentForHead(L, true)],
       postedFindings: [],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: excludingGit,
       log: (line) => {
@@ -370,6 +447,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
           marker: { ...POSTED_FINDING.marker, headSha: H },
         },
       ],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: baseGit(),
       log: () => {},
@@ -467,6 +545,7 @@ describe("resolvePrDiscovery — #206 body recovery keys by comment kind", () =>
         },
       ],
       postedFindings: [POSTED_FINDING],
+      replyWriters: WRITERS,
       reviewComments: [
         {
           id: POSTED_FINDING.id,
@@ -509,6 +588,11 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
     Parameters<typeof resolvePrDiscovery>[0]["reviewComments"]
   >[number];
 
+  type RunOptions = {
+    writers?: ReadonlyMap<string, boolean | null>;
+    log?: (line?: string) => void;
+  };
+
   function run(adjudicate: boolean | undefined) {
     return runWithReplies(adjudicate, []);
   }
@@ -516,6 +600,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
   function runWithReplies(
     adjudicate: boolean | undefined,
     extraReplies: readonly ReviewComment[],
+    options: RunOptions = {},
   ) {
     return resolvePrDiscovery({
       diffFromSha: B,
@@ -529,6 +614,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       prIgnore: { rules: [], found: false },
       issueComments: [markerCommentForHead(L, true)],
       postedFindings: [POSTED_FINDING],
+      replyWriters: options.writers ?? WRITERS,
       reviewComments: [
         {
           id: POSTED_FINDING.id,
@@ -553,7 +639,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
         ...extraReplies,
       ],
       git: baseGit(),
-      log: () => {},
+      log: options.log ?? (() => {}),
       ...(adjudicate === undefined ? {} : { adjudicate }),
     });
   }
@@ -589,6 +675,287 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
     expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
     expect(result.adjudicationQueue[0]?.threadId).toBe(POSTED_FINDING.id);
     expect(result.adjudicationQueue[0]?.replyId).toBe(200);
+  });
+
+  // A blocking finding GitHub could not anchor: it is row R001 of the summary, and its
+  // dismissal is a top-level reply naming that row (reply 2).
+  function summaryRowRun(
+    extraIssueComments: readonly {
+      id: number;
+      user: string;
+      body: string;
+      created_at?: string;
+    }[],
+    summaryUser?: string,
+    options: RunOptions = {},
+  ) {
+    const summary = `${markerCommentForHead(L, true).body}\n\n${renderStateBlock(
+      L,
+      [
+        stateFinding({
+          id: "R001",
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: ["src/a.ts:10"],
+          claim: "a finding GitHub could not anchor",
+        }),
+      ],
+      1,
+      1,
+    )}`;
+    return resolvePrDiscovery({
+      diffFromSha: B,
+      headSha: H,
+      full: false,
+      baseRef: B,
+      headLabel: "PR #1 head",
+      isCi: true,
+      sizeGateOverrides: {},
+      config: { suspicion_priors: [] },
+      prIgnore: { rules: [], found: false },
+      issueComments: [
+        {
+          ...markerCommentForHead(L, true),
+          body: summary,
+          ...(summaryUser === undefined ? {} : { user: summaryUser }),
+        },
+        ...extraIssueComments,
+      ],
+      postedFindings: [],
+      replyWriters: options.writers ?? WRITERS,
+      reviewComments: [],
+      git: baseGit(),
+      log: options.log ?? (() => {}),
+      adjudicate: true,
+    });
+  }
+
+  const ROW_DISMISSAL = {
+    id: 2,
+    user: "author",
+    body: `${triageMarker({ tag: "dismissed", headSha: H, actor: "human", verdict: "upheld", row: "R001" })}\n\nthe timer is cleared in the caller`,
+    created_at: "2026-01-02T00:00:00Z",
+  };
+
+  test("a dismissed reply to a prior with no comment is queued with --adjudicate", async () => {
+    const result = await summaryRowRun([ROW_DISMISSAL]);
+    expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+    expect(result.adjudicationQueue[0]?.replyId).toBe(2);
+    expect(
+      result.adjudicationQueue[0] && "threadId" in result.adjudicationQueue[0],
+    ).toBe(false);
+  });
+
+  test("a dismissed reply to a prior with no comment is not queued once the CI bot upheld it", async () => {
+    const result = await summaryRowRun([
+      ROW_DISMISSAL,
+      {
+        id: 3,
+        user: CI_ADJUDICATOR_LOGIN,
+        body: adjudicationMarker({ verdict: "upheld", reply: 2, head: H }),
+        created_at: "2026-01-03T00:00:00Z",
+      },
+    ]);
+    expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("in platform mode the platform bot's ruling counts when that bot posted the summary", async () => {
+    const previous = process.env.CRYSK_PLATFORM_ACTOR;
+    process.env.CRYSK_PLATFORM_ACTOR = "crysk-app[bot]";
+    try {
+      const result = await summaryRowRun(
+        [
+          ROW_DISMISSAL,
+          {
+            id: 3,
+            user: "crysk-app[bot]",
+            body: adjudicationMarker({ verdict: "upheld", reply: 2, head: H }),
+            created_at: "2026-01-03T00:00:00Z",
+          },
+        ],
+        "crysk-app[bot]",
+      );
+      expect(result.adjudicationQueue).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.CRYSK_PLATFORM_ACTOR;
+      else process.env.CRYSK_PLATFORM_ACTOR = previous;
+    }
+  });
+
+  test("in platform mode the platform bot's ruling does not count when another bot posted the summary", async () => {
+    const previous = process.env.CRYSK_PLATFORM_ACTOR;
+    process.env.CRYSK_PLATFORM_ACTOR = "crysk-app[bot]";
+    try {
+      const result = await summaryRowRun(
+        [
+          ROW_DISMISSAL,
+          {
+            id: 3,
+            user: "crysk-app[bot]",
+            body: adjudicationMarker({ verdict: "upheld", reply: 2, head: H }),
+            created_at: "2026-01-03T00:00:00Z",
+          },
+        ],
+        "github-actions[bot]",
+      );
+      expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+    } finally {
+      if (previous === undefined) delete process.env.CRYSK_PLATFORM_ACTOR;
+      else process.env.CRYSK_PLATFORM_ACTOR = previous;
+    }
+  });
+
+  // The review reads a triage reply only from a login with write access, the rule the gate and
+  // crysk status apply (triage/reply.ts countedTriageReplies).
+  function writersWith(login: string, writer: boolean | null) {
+    const writers = new Map(WRITERS);
+    writers.set(login, writer);
+    return writers;
+  }
+
+  function collectLog(logged: string[]) {
+    return (line?: string) => {
+      if (line !== undefined) logged.push(line);
+    };
+  }
+
+  function priorTriageTag(result: {
+    phaseB?: { priors: { id: string; triage: { tag: string } | null }[] };
+  }) {
+    return (
+      result.phaseB?.priors.find((prior) => prior.id === "R001")?.triage?.tag ??
+      null
+    );
+  }
+
+  test("a dismissed reply from a login without write access is not queued", async () => {
+    const result = await runWithReplies(true, [], {
+      writers: writersWith("author", false),
+    });
+    expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("a dismissed row reply from a login without write access is not queued", async () => {
+    const result = await summaryRowRun([ROW_DISMISSAL], undefined, {
+      writers: writersWith("author", false),
+    });
+    expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("a permission that did not read counts as no access", async () => {
+    const logged: string[] = [];
+    const nulled = await runWithReplies(true, [], {
+      writers: writersWith("author", null),
+      log: collectLog(logged),
+    });
+    expect(nulled.adjudicationQueue).toEqual([]);
+    expect(
+      logged.some(
+        (line) =>
+          line.includes("Could not read whether") && line.includes("author"),
+      ),
+    ).toBe(true);
+
+    logged.length = 0;
+    const missing = await runWithReplies(true, [], {
+      writers: new Map<string, boolean | null>(),
+      log: collectLog(logged),
+    });
+    expect(missing.adjudicationQueue).toEqual([]);
+    expect(
+      logged.some(
+        (line) =>
+          line.includes("Could not read whether") && line.includes("author"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a writer's dismissal is queued as before", async () => {
+    const result = await runWithReplies(true, [], {
+      writers: writersWith("author", true),
+    });
+    expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+  });
+
+  test("an upheld dismissal from a login without write access stays counted", async () => {
+    const result = await runWithReplies(
+      true,
+      [
+        {
+          id: 201,
+          user: CI_ADJUDICATOR_LOGIN,
+          body: adjudicationMarker({ verdict: "upheld", reply: 200, head: H }),
+          path: "src/a.ts",
+          line: 10,
+          original_line: 10,
+          in_reply_to_id: POSTED_FINDING.id,
+          created_at: "2026-01-03T00:00:00Z",
+        },
+      ],
+      { writers: writersWith("author", false) },
+    );
+    expect(result.adjudicationQueue).toEqual([]);
+    // The non-writer's dismissal is not read at all, so the prior carries no dismissal.
+    expect(priorTriageTag(result)).not.toBe("dismissed");
+  });
+
+  test("a bare applied reply from a login without write access is not read", async () => {
+    const plainApplied = {
+      id: 202,
+      user: "author",
+      body: "applied: the timer is cleared in the caller",
+      path: "src/a.ts",
+      line: 10,
+      original_line: 10,
+      in_reply_to_id: POSTED_FINDING.id,
+      created_at: "2026-01-05T00:00:00Z",
+    };
+    const denied = await runWithReplies(false, [plainApplied], {
+      writers: writersWith("author", false),
+    });
+    expect(priorTriageTag(denied)).not.toBe("applied");
+
+    const allowed = await runWithReplies(false, [plainApplied], {
+      writers: writersWith("author", true),
+    });
+    expect(priorTriageTag(allowed)).toBe("applied");
+  });
+
+  test("the note names the logins whose replies are not read", async () => {
+    const logged: string[] = [];
+    await runWithReplies(true, [], {
+      writers: writersWith("author", false),
+      log: collectLog(logged),
+    });
+    expect(
+      logged.some(
+        (line) => line.includes("are not read") && line.includes("author"),
+      ),
+    ).toBe(true);
+
+    logged.length = 0;
+    await runWithReplies(true, [], { log: collectLog(logged) });
+    expect(logged.some((line) => line.includes("are not read"))).toBe(false);
+  });
+
+  test("a comment that is not a triage reply is untouched", async () => {
+    const logged: string[] = [];
+    const result = await summaryRowRun(
+      [
+        ROW_DISMISSAL,
+        {
+          id: 3,
+          user: CI_ADJUDICATOR_LOGIN,
+          body: adjudicationMarker({ verdict: "upheld", reply: 2, head: H }),
+          created_at: "2026-01-03T00:00:00Z",
+        },
+      ],
+      undefined,
+      { writers: new Map([["author", true]]), log: collectLog(logged) },
+    );
+    expect(result.adjudicationQueue).toEqual([]);
+    expect(logged.some((line) => line.includes("Could not read"))).toBe(false);
   });
 });
 
@@ -635,7 +1002,7 @@ function rangeGit(outputs: Record<string, string>, calls: string[][]) {
 }
 
 function discoveryFor(
-  git: ReturnType<typeof rangeGit>,
+  git: PrDiscoveryGit,
   overrides: Partial<Parameters<typeof resolvePrDiscovery>[0]>,
 ) {
   return resolvePrDiscovery({
@@ -650,6 +1017,7 @@ function discoveryFor(
     prIgnore: { rules: [], found: false },
     issueComments: [markerCommentForHead(L, true)],
     postedFindings: [],
+    replyWriters: WRITERS,
     reviewComments: [],
     git,
     log: () => {},
@@ -769,6 +1137,7 @@ describe("resolvePrDiscovery — a first review with every file excluded (#317)"
       prIgnore: { rules: parseIgnoreFile("dist/**\n", "user"), found: true },
       issueComments: [],
       postedFindings: [],
+      replyWriters: WRITERS,
       reviewComments: [],
       git: excludingGit(),
       log: () => {},
@@ -785,5 +1154,118 @@ describe("resolvePrDiscovery — a first review with every file excluded (#317)"
     expect((error as Error).message).toBe(
       allExcludedMessage(["dist/bundle.js"]),
     );
+  });
+});
+
+describe("resolvePrDiscovery — a merge of the base branch between reviews", () => {
+  const FILE_HEADER =
+    "diff --git a/src/a.ts b/src/a.ts\n" +
+    "index 1111111..2222222 100644\n" +
+    "--- a/src/a.ts\n" +
+    "+++ b/src/a.ts\n";
+  const AUTHOR_HUNK =
+    "@@ -10,3 +10,3 @@\n ctx\n-author old\n+author new\n ctx\n";
+  const BASE_HUNK = "@@ -80,3 +80,3 @@\n ctx\n-base old\n+base new\n ctx\n";
+  // The pull request's own diff: only the author's change.
+  const PR_RANGE = `${FILE_HEADER}@@ -10,3 +10,3 @@\n ctx\n-author older\n+author new\n ctx\n`;
+
+  // The merge base is not an ancestor of the last reviewed head: the author
+  // merged the base branch in between. Every other ancestry check holds.
+  function mergedGit(outputs: Record<string, string>, calls: string[][]) {
+    return {
+      ...rangeGit(outputs, calls),
+      isAncestor: (ancestor: string, descendant: string) =>
+        Promise.resolve(!(ancestor === B && descendant === L)),
+    };
+  }
+
+  test("leaves out the hunks the merge brought in and records how many", async () => {
+    const logs: string[] = [];
+    const git = mergedGit(
+      {
+        [`${L}..${H}`]: FILE_HEADER + AUTHOR_HUNK + BASE_HUNK,
+        [`${B}..${H}`]: PR_RANGE,
+      },
+      [],
+    );
+    const result = await discoveryFor(git, {
+      log: (line?: string) => {
+        logs.push(line ?? "");
+      },
+    });
+    expect(result.effectiveDiff.patch).toContain("+author new");
+    expect(result.effectiveDiff.patch).not.toContain("base new");
+    expect(result.rawDiff).toBe(FILE_HEADER + AUTHOR_HUNK + BASE_HUNK);
+    expect(result.baseMergeHunksDropped).toBe(1);
+    expect(result.rereview?.base_merge_hunks_dropped).toBe(1);
+    expect(logs.some((line) => line.includes("merge of the base branch"))).toBe(
+      true,
+    );
+  });
+
+  test("an ordinary push reads the delta unchanged, with no second diff", async () => {
+    const calls: string[][] = [];
+    const git = rangeGit(
+      {
+        [`${L}..${H}`]: FILE_HEADER + AUTHOR_HUNK + BASE_HUNK,
+        [`${B}..${H}`]: PR_RANGE,
+      },
+      calls,
+    );
+    const result = await discoveryFor(git, {});
+    expect(result.rawDiff).toBe(FILE_HEADER + AUTHOR_HUNK + BASE_HUNK);
+    expect(result.effectiveDiff.patch).toBe(
+      FILE_HEADER + AUTHOR_HUNK + BASE_HUNK,
+    );
+    expect(result.baseMergeHunksDropped).toBe(0);
+    expect(result.rereview?.base_merge_hunks_dropped).toBeUndefined();
+    const prRangeCalls = calls.filter(
+      (args) =>
+        args[0] === "diff" &&
+        args.includes(`${B}..${H}`) &&
+        args.includes("--") &&
+        !args.includes("--numstat"),
+    );
+    expect(prRangeCalls).toEqual([]);
+    // The ordinary path still reads its stat from git's numstat.
+    expect(calls.some((args) => args.includes("--numstat"))).toBe(true);
+  });
+
+  test("the stat and the size gate count the filtered delta, not the range", async () => {
+    const WIDE_AUTHOR_HUNK =
+      "@@ -10,3 +10,4 @@\n ctx\n-author old\n+author new\n+author more\n ctx\n";
+    const WIDE_PR_RANGE = `${FILE_HEADER}@@ -10,3 +10,4 @@\n ctx\n-author older\n+author new\n+author more\n ctx\n`;
+    const calls: string[][] = [];
+    const git = mergedGit(
+      {
+        [`${L}..${H}`]: FILE_HEADER + WIDE_AUTHOR_HUNK + BASE_HUNK,
+        [`${B}..${H}`]: WIDE_PR_RANGE,
+      },
+      calls,
+    );
+    const result = await discoveryFor(git, {});
+    // The fake numstat would report 1 file with 1 insertion and 1 deletion.
+    expect(result.diffStat).toEqual({ files: 1, insertions: 2, deletions: 1 });
+    expect(calls.some((args) => args.includes("--numstat"))).toBe(false);
+    expect(result.sizeGate).toEqual(
+      evaluateSizeGate(
+        patchNumstat(FILE_HEADER + WIDE_AUTHOR_HUNK),
+        result.gateConfig,
+      ),
+    );
+  });
+
+  test("a delta made only of the merge skips discovery", async () => {
+    const git = mergedGit(
+      {
+        [`${L}..${H}`]: FILE_HEADER + BASE_HUNK,
+        [`${B}..${H}`]: PR_RANGE,
+      },
+      [],
+    );
+    const result = await discoveryFor(git, {});
+    expect(result.skipDiscovery).toBe(true);
+    expect(result.rereview?.discovery_skip_reason).toBe("no_delta");
+    expect(result.rereview?.base_merge_hunks_dropped).toBe(1);
   });
 });

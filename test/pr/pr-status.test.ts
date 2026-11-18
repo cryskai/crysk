@@ -6,7 +6,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
-import { NOTHING_TO_REVIEW_DESCRIPTION } from "#pr/admission";
+import {
+  carriedBlockingDescription,
+  NOTHING_TO_REVIEW_DESCRIPTION,
+} from "#pr/admission";
 import {
   buildPrStatus,
   type PrStatusInput,
@@ -145,15 +148,28 @@ function triageReply(options: {
   };
 }
 
+// A comment with no author is posted by the login the fixtures use for a writer (dev).
+function withAuthor<T extends { user?: string }>(comment: T): T {
+  return comment.user === undefined ? { ...comment, user: "dev" } : comment;
+}
+
+// Every author of a fixture comment has write access, so the reader counts their replies.
 function input(overrides: Partial<PrStatusInput> = {}): PrStatusInput {
+  const issueComments = (overrides.issueComments ?? []).map(withAuthor);
+  const reviewComments = (overrides.reviewComments ?? []).map(withAuthor);
+  const authors = [...issueComments, ...reviewComments].map(
+    (comment) => comment.user ?? "dev",
+  );
   return {
     pr: 12,
     head: CURRENT,
     nowMs: NOW,
     statuses: [],
-    issueComments: [],
-    reviewComments: [],
     ...overrides,
+    issueComments,
+    reviewComments,
+    writers:
+      overrides.writers ?? new Map(authors.map((login) => [login, true])),
   };
 }
 
@@ -291,7 +307,7 @@ describe("buildPrStatus: next_action, first match wins", () => {
       state: "failure",
     },
     {
-      name: "a triage reply at another head does not count as triage at the posted head",
+      name: "a reply stamped with the reviewed head answers a finding carried from an earlier head",
       input: input({
         statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
         reviewComments: [
@@ -304,6 +320,33 @@ describe("buildPrStatus: next_action, first match wins", () => {
             id: 2,
             parent: 1,
             head: CURRENT,
+            tag: "applied",
+          }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+        ],
+      }),
+      action: "fix",
+      state: "failure",
+    },
+    {
+      name: "a triage reply at a head that is neither the posted nor the reviewed one does not answer",
+      input: input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: "9".repeat(40),
             tag: "applied",
           }),
         ],
@@ -1765,7 +1808,7 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
             id: 100,
             body: summary(CURRENT, [
               stateRow("R001", CLAIM),
-              stateRow("R002", CLAIM_TWO),
+              stateRow("R002", CLAIM_TWO, "blocking", "src/a.ts:20"),
             ]),
           },
         ],
@@ -1782,7 +1825,7 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
   const MANUAL_DESCRIPTION =
     "pr-hero: review needs a manual trigger (ci_review_policy is manual_only) — /crysk review reviews this head";
 
-  test("(a) a state row with no comment behind a red gate is a finding with no thread, and it is fixed", () => {
+  test("(a) a state row with no comment behind a red gate is a finding with no thread, and it is owed a reply", () => {
     const status = buildPrStatus(
       input({
         statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
@@ -1811,15 +1854,15 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
       ci_verdict: null,
     });
     expect(status.unresolved_blocking).toBe(1);
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("triage");
     expect(status.reason).toBe(
-      "1 live blocking finding(s) (R001) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /crysk override.",
+      "1 live blocking finding(s) on this head have no triage reply that answers this review; triage them first.",
     );
   });
 
   // #348 R001/R003: the upheld dismissal was consumed, the gate still counts a summary-only row.
-  // The answer must be fix, never review, which would loop on the same red gate.
-  test("(b) upheld dismissals consumed and one summary-only blocking row: never review", () => {
+  // The summary-only row is owed a reply, never review: review would loop on the same red gate.
+  test("(b) upheld dismissals consumed and one summary-only blocking row: never review, the row is owed a reply", () => {
     const status = buildPrStatus(
       input({
         statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
@@ -1858,8 +1901,11 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
-    expect(status.reason).toMatch(/\(R002\)/);
+    expect(status.next_action).toBe("triage");
+    expect(status.next_action).not.toBe("review");
+    expect(status.reason).toBe(
+      "1 live blocking finding(s) on this head have no triage reply that answers this review; triage them first.",
+    );
     expect(status.reason).not.toMatch(/upheld every dismissal/);
   });
 
@@ -2047,6 +2093,466 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
   );
 });
 
+describe("buildPrStatus — answering a row with no comment", () => {
+  const RED = gate("failure", BLOCKING_DESCRIPTION(1));
+
+  // A top-level reply that names a summary row (triage/triage.ts `row`).
+  function rowReply(options: {
+    id: number;
+    row: string;
+    head: string;
+    tag: TriageTag;
+    verdict?: TriageVerdict;
+  }): { id: number; body: string } {
+    return {
+      id: options.id,
+      body: `${triageMarker({
+        tag: options.tag,
+        headSha: options.head,
+        actor: "agent",
+        row: options.row,
+        ...(options.verdict === undefined ? {} : { verdict: options.verdict }),
+      })}\n\nreasoning`,
+    };
+  }
+
+  // The summary for CURRENT with one blocking row R001 and no finding comment, posted by the CI bot.
+  function rowSummary(
+    extra: { id: number; body: string; user?: string; created_at?: string }[],
+  ) {
+    return input({
+      statuses: [RED],
+      issueComments: [
+        {
+          id: 100,
+          user: CI_ADJUDICATOR_LOGIN,
+          body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+        },
+        ...extra,
+      ],
+    });
+  }
+
+  // The CI adjudicator's ruling on a row reply: a top-level comment that names the reply by its id.
+  function rowRuling(options: {
+    id: number;
+    reply: number;
+    verdict: "upheld" | "rejected" | "inconclusive";
+    user?: string;
+    head?: string;
+  }): { id: number; user: string; body: string } {
+    return {
+      id: options.id,
+      user: options.user ?? CI_ADJUDICATOR_LOGIN,
+      body: `${adjudicationMarker({
+        verdict: options.verdict,
+        reply: options.reply,
+        head: options.head ?? CURRENT,
+      })}\n\nruling`,
+    };
+  }
+
+  // The dismissal the author typed on R001 at CURRENT, comment id 60, by a person.
+  function rowDismissal(verdict: TriageVerdict = "upheld"): {
+    id: number;
+    user: string;
+    body: string;
+  } {
+    return {
+      ...rowReply({
+        id: 60,
+        row: "R001",
+        head: CURRENT,
+        tag: "dismissed",
+        verdict,
+      }),
+      user: "dev",
+    };
+  }
+
+  test("1: with no reply, the row is owed a triage and its triage is null", () => {
+    const status = buildPrStatus(rowSummary([]));
+    expect(status.next_action).toBe("triage");
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.comment_id).toBeNull();
+    expect(row?.triage).toBeNull();
+  });
+
+  test("2: an applied row reply stamped with the reviewed head answers the row, so it is fixed", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowReply({ id: 200, row: "R001", head: CURRENT, tag: "applied" }),
+      ]),
+    );
+    expect(status.next_action).toBe("fix");
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.comment_id).toBeNull();
+    expect(row?.triage).toEqual({
+      tag: "applied",
+      verdict: null,
+      actor: "agent",
+      head: CURRENT,
+    });
+  });
+
+  test("3: an applied row reply stamped with an older head does not answer the row", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowReply({ id: 200, row: "R001", head: EARLIER, tag: "applied" }),
+      ]),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("4: an applied reply that names another row does not answer R001", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        {
+          id: 200,
+          body: rowReply({
+            id: 200,
+            row: "R002",
+            head: CURRENT,
+            tag: "applied",
+          }).body,
+        },
+      ]),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("5: a top-level triage marker with no row token does not answer a row", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        {
+          id: 200,
+          body: `${triageMarker({ tag: "applied", headSha: CURRENT, actor: "agent" })}\n\nreasoning`,
+        },
+      ]),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("6: with two row replies at the reviewed head, the newest dismissal is pending a CI ruling and needs a recheck", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowReply({ id: 200, row: "R001", head: CURRENT, tag: "applied" }),
+        rowReply({
+          id: 201,
+          row: "R001",
+          head: CURRENT,
+          tag: "dismissed",
+          verdict: "upheld",
+        }),
+      ]),
+    );
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.triage?.tag).toBe("dismissed");
+    // The row's ruling is a top-level comment that names its reply: none is posted, so recheck rules.
+    expect(status.next_action).toBe("recheck");
+    expect(status.reason).toMatch(/comment \/crysk recheck/);
+  });
+
+  test("7: a row reply does not answer a legacy top-level finding comment that links itself", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [RED],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+          { id: 50, body: findingBody({ head: CURRENT, claim: CLAIM }) },
+          {
+            id: 51,
+            body: `${triageMarker({
+              tag: "applied",
+              headSha: CURRENT,
+              actor: "agent",
+              row: "R001",
+            })}\n\nIn reply to: https://github.com/o/r/pull/12#issuecomment-50`,
+          },
+        ],
+      }),
+    );
+    const legacy = status.findings.find((f) => f.comment_id === 50);
+    expect(legacy?.triage).toBeNull();
+  });
+
+  test("8: a thread-less row dismissed upheld with no CI ruling is pending a ruling and needs a recheck", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowReply({
+          id: 200,
+          row: "R001",
+          head: CURRENT,
+          tag: "dismissed",
+          verdict: "upheld",
+        }),
+      ]),
+    );
+    // The row's ruling is a top-level comment that names its reply, so recheck is what settles it.
+    expect(status.next_action).toBe("recheck");
+    expect(status.reason).toMatch(/comment \/crysk recheck/);
+  });
+
+  // A dismissed row under a gate that states no blocking count reviewed nothing, so its ruling is not owed.
+  function dismissedRowUnder(statusDescription: string) {
+    return input({
+      statuses: [gate("failure", statusDescription)],
+      issueComments: [
+        {
+          id: 100,
+          user: CI_ADJUDICATOR_LOGIN,
+          body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+        },
+        rowReply({
+          id: 200,
+          row: "R001",
+          head: CURRENT,
+          tag: "dismissed",
+          verdict: "upheld",
+        }),
+      ],
+    });
+  }
+
+  test("a dismissed row under a skipped gate is not a recheck", () => {
+    const status = buildPrStatus(dismissedRowUnder(SKIP_DESCRIPTION));
+    // The skip's own branch answers: the head was never reviewed, so a review comes first.
+    expect(status.next_action).toBe("override-or-fix");
+  });
+
+  test("a dismissed row under a red partial-review gate is not a recheck", () => {
+    const status = buildPrStatus(
+      dismissedRowUnder(
+        "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /crysk review retries it",
+      ),
+    );
+    // The partial review's own branch answers: the review is retried before any ruling.
+    expect(status.next_action).toBe("review");
+  });
+
+  test("(a) a dismissed row with no CI ruling has a null ci_verdict and needs a recheck", () => {
+    const status = buildPrStatus(rowSummary([rowDismissal()]));
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(b) an upheld ruling by the CI bot on the dismissal sets ci_verdict upheld, and the review runs", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "upheld" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "upheld",
+    );
+    expect(status.next_action).toBe("review");
+  });
+
+  test("(c) a rejected ruling sets ci_verdict rejected and the dismissal is overridden or fixed", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "rejected" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "rejected",
+    );
+    expect(status.next_action).toBe("override-or-fix");
+  });
+
+  test("(d) an inconclusive ruling leaves the dismissal pending and needs a recheck", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "inconclusive" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "inconclusive",
+    );
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(e) an upheld ruling written by a person is not a ruling and needs a recheck", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "upheld", user: "someone" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(f) an upheld ruling that names another reply is not a ruling on this dismissal", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 99, verdict: "upheld" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(g) an upheld ruling at another head is not a ruling at this head", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "upheld", head: EARLIER }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  // A row's ruling is a top-level comment; the same marker inside a review thread is not read for a row.
+  test("a ruling inside a review thread does not rule on a row", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [RED],
+        issueComments: [
+          {
+            id: 100,
+            user: CI_ADJUDICATOR_LOGIN,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+          rowDismissal(),
+        ],
+        reviewComments: [
+          {
+            id: 61,
+            user: CI_ADJUDICATOR_LOGIN,
+            body: `${adjudicationMarker({ verdict: "upheld", reply: 60, head: CURRENT })}\n\nruling`,
+            in_reply_to_id: 1,
+          },
+        ],
+      }),
+    );
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(h) of two rulings on the same reply, the highest comment id wins", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "rejected" }),
+        rowRuling({ id: 62, reply: 60, verdict: "upheld" }),
+      ]),
+    );
+    expect(status.findings.find((f) => f.id === "R001")?.ci_verdict).toBe(
+      "upheld",
+    );
+  });
+
+  test("(i) a newer row reply after an upheld ruling leaves the ruling naming the older reply, so ci_verdict is null", () => {
+    const status = buildPrStatus(
+      rowSummary([
+        rowDismissal(),
+        rowRuling({ id: 61, reply: 60, verdict: "upheld" }),
+        rowReply({ id: 63, row: "R001", head: CURRENT, tag: "applied" }),
+      ]),
+    );
+    const row = status.findings.find((f) => f.id === "R001");
+    expect(row?.triage?.tag).toBe("applied");
+    expect(row?.ci_verdict).toBeNull();
+  });
+
+  test("(j) local trust: an App bot's ruling on the App bot's summary counts; another App bot's does not", () => {
+    const local = { kind: "local" } as const;
+    const summaryBy = (author: string, ruler: string) =>
+      input({
+        statuses: [RED],
+        adjudicatorTrust: local,
+        issueComments: [
+          {
+            id: 100,
+            user: author,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+          rowDismissal(),
+          rowRuling({ id: 61, reply: 60, verdict: "upheld", user: ruler }),
+        ],
+      });
+    const same = buildPrStatus(
+      summaryBy("crysk-app[bot]", "crysk-app[bot]"),
+    ).findings.find((f) => f.id === "R001");
+    expect(same?.ci_verdict).toBe("upheld");
+    const other = buildPrStatus(
+      summaryBy("crysk-app[bot]", "other-app[bot]"),
+    ).findings.find((f) => f.id === "R001");
+    expect(other?.ci_verdict).toBeNull();
+  });
+
+  test("(l) a top-level ruling that names a thread reply does not set the threaded finding's ci_verdict", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [RED],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            user: CI_ADJUDICATOR_LOGIN,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+          rowRuling({ id: 61, reply: 2, verdict: "upheld" }),
+        ],
+      }),
+    );
+    const threaded = status.findings.find((f) => f.comment_id === 1);
+    expect(threaded?.ci_verdict).toBeNull();
+  });
+
+  test("a thread reply that names a row does not answer its thread's finding", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [RED],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            id: 2,
+            in_reply_to_id: 1,
+            body: `${triageMarker({
+              tag: "applied",
+              headSha: CURRENT,
+              actor: "agent",
+              row: "R009",
+            })}\n\nreasoning`,
+          },
+        ],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+    const threaded = status.findings.find((f) => f.comment_id === 1);
+    expect(threaded?.triage).toBeNull();
+  });
+});
+
 describe("shouldWaitPrStatus", () => {
   test("waits when next_action is wait (in-flight pending gate)", () => {
     const status = buildPrStatus(
@@ -2111,6 +2617,28 @@ describe("shouldWaitPrStatus", () => {
             id: 11,
             body: "/crysk review --full",
             created_at: recentCommentIso,
+          },
+        ],
+        nowMs: NOW,
+        elapsedMs: 0,
+      }),
+    ).toBe(true);
+  });
+
+  test("waits on a fresh /crysk review comment with a signature below it", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", "pr-hero: 1 blocking finding(s)", 5)],
+      }),
+    );
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [
+          {
+            id: 21,
+            body: "/crysk review\n\nGenerated by Claude Code",
+            created_at: new Date(NOW - 10_000).toISOString(),
           },
         ],
         nowMs: NOW,
@@ -2448,8 +2976,9 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
-    expect(status.reason).toContain("are still open");
+    // The newest counted reply is at another head, so it does not answer this review (as at the gate).
+    expect(status.next_action).toBe("triage");
+    expect(status.reason).toContain("no triage reply that answers this review");
   });
 
   // PR #442 F (blocking): one applied beside a deferred must not promise that replies unlock the red.
@@ -2491,5 +3020,209 @@ describe("buildPrStatus: a head a review rule skipped", () => {
     expect(status.next_action).toBe("fix");
     expect(status.reason).toContain("1 blocking finding(s) are still open");
     expect(status.reason).not.toContain("turns green");
+  });
+});
+
+describe("buildPrStatus — a finding carried from an earlier review", () => {
+  const VERDICT_AT = "2026-10-30T10:00:00Z";
+  const RED_DESCRIPTION =
+    "crysk: 1 blocking finding(s) — fix and push, or /crysk override";
+  // The finding was posted on EARLIER and carried into the review of CURRENT: its row is in the
+  // summary written for CURRENT.
+  const carried = (extra: Partial<PrStatusInput> = {}): PrStatusInput =>
+    input({
+      statuses: [
+        {
+          state: "failure",
+          context: COMMIT_STATUS_CONTEXT,
+          created_at: VERDICT_AT,
+          description: RED_DESCRIPTION,
+          target_url: null,
+        },
+      ],
+      verdictAt: VERDICT_AT,
+      issueComments: [
+        { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+      ],
+      reviewComments: [
+        {
+          id: 1,
+          body: findingBody({ head: EARLIER, claim: CLAIM }),
+          in_reply_to_id: null,
+        },
+      ],
+      ...extra,
+    });
+
+  test("an earlier-round reply does not answer the new review", () => {
+    const status = buildPrStatus(
+      carried({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T09:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("a reply stamped with the reviewed head answers it", () => {
+    const status = buildPrStatus(
+      carried({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("a reply at the posted head, newer than the verdict, answers it", () => {
+    const status = buildPrStatus(
+      carried({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T11:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  // A skip carried the red onto a newer head. Its status is newer than the review's own verdict,
+  // so the verdict time comes from the caller (`verdictAt`), as the status command reads it.
+  const NEXT = "7".repeat(40);
+  const carriedRed = (extra: Partial<PrStatusInput> = {}): PrStatusInput =>
+    carried({
+      head: NEXT,
+      statuses: [
+        {
+          state: "failure",
+          context: COMMIT_STATUS_CONTEXT,
+          created_at: "2026-10-30T12:00:00Z",
+          description: carriedBlockingDescription(1, CURRENT),
+          target_url: null,
+        },
+      ],
+      ...extra,
+    });
+
+  test("on a head a skip carried, a reply made after the review and before the skip answers it", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T11:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("on that head a reply stamped with the reviewed head answers it too", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+            created_at: "2026-10-30T11:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("on a head a skip carried, a reply from before the review's verdict does not answer", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T09:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("with no verdict time, a reply at the posted head on a carried finding does not answer", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        verdictAt: null,
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+            created_at: "2026-10-30T11:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("with no verdict time, a reply stamped with the reviewed head still answers", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        verdictAt: null,
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("no reply at all: triage, and the reason says no reply answers this review", () => {
+    const status = buildPrStatus(carried());
+    expect(status.next_action).toBe("triage");
+    expect(status.reason).toContain("no triage reply that answers this review");
   });
 });

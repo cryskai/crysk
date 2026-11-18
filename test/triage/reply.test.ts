@@ -9,10 +9,13 @@ import {
   parseFindingMarker,
 } from "#pr/preflight";
 import {
+  countedTriageReplies,
   decideThreadResolve,
-  existingTriageAtHead,
+  findingAnswered,
   findingIdentityForMarkerMatch,
   matchPostedFindingExact,
+  replyAnswersReview,
+  replyHeadAnswers,
 } from "#triage/reply";
 import { triageMarker } from "#triage/triage";
 
@@ -209,49 +212,362 @@ describe("decideThreadResolve", () => {
   });
 });
 
-describe("existingTriageAtHead", () => {
-  test("detects a same-head triage reply on the parent", () => {
+describe("replyAnswersReview", () => {
+  const POSTED = "a".repeat(40);
+  const REVIEWED = "b".repeat(40);
+  const OTHER = "c".repeat(40);
+  const VERDICT = Date.parse("2026-10-30T10:00:00Z");
+  const BEFORE = "2026-10-30T09:00:00Z";
+  const AFTER = "2026-10-30T11:00:00Z";
+
+  test("a reply at the reviewed head answers a finding posted on that head", () => {
     expect(
-      existingTriageAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 22,
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
-          },
-        ],
+      replyAnswersReview({
+        replyHead: REVIEWED,
+        replyCreatedAt: BEFORE,
+        findingHead: REVIEWED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
       }),
     ).toBe(true);
   });
 
-  test("a different head is not a skip", () => {
+  test("a reply at the reviewed head answers a finding carried from an older head", () => {
     expect(
-      existingTriageAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 22,
-            body: `${triageMarker({ tag: "applied", headSha: OTHER_HEAD, actor: "agent" })}\nok`,
-          },
-        ],
+      replyAnswersReview({
+        replyHead: REVIEWED,
+        replyCreatedAt: BEFORE,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at the posted head, created after the verdict, answers a carried finding", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: AFTER,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at the posted head, created before the verdict, does not answer a carried finding", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: BEFORE,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
       }),
     ).toBe(false);
   });
 
-  test("a reply to a different parent is not a skip", () => {
+  test("a posted-head reply with an unknown time or an unknown verdict time fails closed", () => {
     expect(
-      existingTriageAtHead({
-        parentId: 22,
-        headSha: HEAD,
-        replies: [
-          {
-            in_reply_to_id: 11,
-            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\nok`,
-          },
-        ],
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: undefined,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: VERDICT,
       }),
+    ).toBe(false);
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: AFTER,
+        findingHead: POSTED,
+        reviewedHead: REVIEWED,
+        verdictAt: null,
+      }),
+    ).toBe(false);
+  });
+
+  test("a reply at the posted head answers it when the pull request has no summary", () => {
+    expect(
+      replyAnswersReview({
+        replyHead: POSTED,
+        replyCreatedAt: BEFORE,
+        findingHead: POSTED,
+        reviewedHead: null,
+        verdictAt: null,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at a head that is neither the posted nor the reviewed one never answers", () => {
+    for (const reviewedHead of [REVIEWED, null]) {
+      expect(
+        replyAnswersReview({
+          replyHead: OTHER,
+          replyCreatedAt: AFTER,
+          findingHead: POSTED,
+          reviewedHead,
+          verdictAt: VERDICT,
+        }),
+      ).toBe(false);
+    }
+  });
+});
+
+describe("countedTriageReplies", () => {
+  const WRITER_LOGIN = "dev";
+  const READER_LOGIN = "visitor";
+  const VERDICT = Date.parse("2026-11-10T12:00:00Z");
+  const BEFORE = "2026-11-10T11:00:00Z";
+  const AFTER = "2026-11-10T13:00:00Z";
+  const writers = new Map<string, boolean | null>([
+    [WRITER_LOGIN, true],
+    [READER_LOGIN, false],
+  ]);
+  const reply = (
+    id: number,
+    user: string | undefined,
+    head: string,
+    created_at?: string,
+  ) => ({
+    id,
+    user,
+    created_at,
+    body: `${triageMarker({ tag: "applied", headSha: head, actor: "agent" })}\n\nreasoning`,
+  });
+  const plain = { id: 1, user: "someone", body: "a comment" };
+
+  test("keeps a comment that is not a triage reply", () => {
+    const result = countedTriageReplies({
+      comments: [plain],
+      writers: new Map(),
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [plain], uncounted: [] });
+  });
+
+  test("keeps a reply from a login with write access", () => {
+    const kept = reply(2, WRITER_LOGIN, HEAD, AFTER);
+    const result = countedTriageReplies({
+      comments: [kept],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [kept], uncounted: [] });
+  });
+
+  test("drops a reply from a login without write access and names it once", () => {
+    const result = countedTriageReplies({
+      comments: [
+        reply(2, READER_LOGIN, HEAD, AFTER),
+        reply(3, READER_LOGIN, HEAD, AFTER),
+      ],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [], uncounted: [READER_LOGIN] });
+  });
+
+  test("an author whose permission did not read fails the whole read", () => {
+    const result = countedTriageReplies({
+      comments: [reply(2, "unread", HEAD, AFTER)],
+      writers: new Map<string, boolean | null>([["unread", null]]),
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("an author missing from the map fails the whole read", () => {
+    const result = countedTriageReplies({
+      comments: [reply(2, "missing", HEAD, AFTER)],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("drops a stale reply at an older head, created before the verdict, without naming it", () => {
+    const result = countedTriageReplies({
+      comments: [reply(2, READER_LOGIN, OTHER_HEAD, BEFORE)],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [], uncounted: [] });
+  });
+
+  test("keeps a reply stamped with the reviewed head even when it predates the verdict", () => {
+    const kept = reply(2, WRITER_LOGIN, HEAD, BEFORE);
+    const result = countedTriageReplies({
+      comments: [kept],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [kept], uncounted: [] });
+  });
+
+  test("with no summary no reply is stale, so an older-head reply is kept", () => {
+    const kept = reply(2, WRITER_LOGIN, OTHER_HEAD, BEFORE);
+    const result = countedTriageReplies({
+      comments: [kept],
+      writers,
+      reviewedHead: null,
+      verdictAt: VERDICT,
+    });
+    expect(result).toEqual({ kept: [kept], uncounted: [] });
+  });
+
+  // A stale reply is not an answer, so its author is never asked for a permission: an unread
+  // permission on it must not turn the whole read into null.
+  test("a stale reply is dropped before its author is asked", () => {
+    const stale = reply(2, "ghost", OTHER_HEAD, BEFORE);
+    const absent = countedTriageReplies({
+      comments: [stale],
+      writers: new Map(),
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(absent).not.toBeNull();
+    expect(absent?.kept).toEqual([]);
+    expect(absent?.uncounted).toEqual([]);
+
+    const unread = countedTriageReplies({
+      comments: [stale],
+      writers: new Map<string, boolean | null>([["ghost", null]]),
+      reviewedHead: HEAD,
+      verdictAt: VERDICT,
+    });
+    expect(unread).not.toBeNull();
+    expect(unread?.kept).toEqual([]);
+    expect(unread?.uncounted).toEqual([]);
+  });
+
+  // WHY the boundary is exact: a reply made at the verdict's own instant was not written after the
+  // verdict, so the review that wrote the verdict could not have seen it.
+  test("a reply created at the verdict's own instant is stale, one second later is kept", () => {
+    const VERDICT_ISO = "2026-11-10T12:00:00Z";
+    const atVerdict = reply(2, WRITER_LOGIN, OTHER_HEAD, VERDICT_ISO);
+    const droppedAtVerdict = countedTriageReplies({
+      comments: [atVerdict],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: Date.parse(VERDICT_ISO),
+    });
+    expect(droppedAtVerdict).toEqual({ kept: [], uncounted: [] });
+
+    const later = reply(3, WRITER_LOGIN, OTHER_HEAD, "2026-11-10T12:00:01Z");
+    const keptLater = countedTriageReplies({
+      comments: [later],
+      writers,
+      reviewedHead: HEAD,
+      verdictAt: Date.parse(VERDICT_ISO),
+    });
+    expect(keptLater).toEqual({ kept: [later], uncounted: [] });
+  });
+});
+
+describe("replyHeadAnswers", () => {
+  test("a reply at the reviewed head answers the review", () => {
+    expect(
+      replyHeadAnswers({
+        findingHead: OTHER_HEAD,
+        replyHead: HEAD,
+        reviewedHead: HEAD,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at the finding's own head answers a carried finding", () => {
+    expect(
+      replyHeadAnswers({
+        findingHead: OTHER_HEAD,
+        replyHead: OTHER_HEAD,
+        reviewedHead: HEAD,
+      }),
+    ).toBe(true);
+  });
+
+  test("a reply at a foreign head does not answer", () => {
+    expect(
+      replyHeadAnswers({
+        findingHead: OTHER_HEAD,
+        replyHead: "e".repeat(40),
+        reviewedHead: HEAD,
+      }),
+    ).toBe(false);
+  });
+
+  test("a row (no finding head) is answered only at the reviewed head", () => {
+    expect(
+      replyHeadAnswers({
+        findingHead: null,
+        replyHead: HEAD,
+        reviewedHead: HEAD,
+      }),
+    ).toBe(true);
+    expect(
+      replyHeadAnswers({
+        findingHead: null,
+        replyHead: OTHER_HEAD,
+        reviewedHead: HEAD,
+      }),
+    ).toBe(false);
+  });
+
+  test("with no reviewed head, a reply at the finding's own head still answers", () => {
+    expect(
+      replyHeadAnswers({
+        findingHead: HEAD,
+        replyHead: HEAD,
+        reviewedHead: null,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("findingAnswered", () => {
+  const finding = (
+    tag: string | null,
+    ci_verdict: string | null,
+    head = HEAD,
+    replyHead = HEAD,
+  ) => ({
+    head,
+    triage: tag === null ? null : { tag, head: replyHead },
+    ci_verdict,
+  });
+
+  test("an applied reply at the reviewed head answers", () => {
+    expect(findingAnswered(finding("applied", null), HEAD)).toBe(true);
+  });
+
+  test("a dismissal the CI adjudicator upheld answers", () => {
+    expect(findingAnswered(finding("dismissed", "upheld"), HEAD)).toBe(true);
+  });
+
+  test("a dismissal with no ruling does not answer", () => {
+    expect(findingAnswered(finding("dismissed", null), HEAD)).toBe(false);
+  });
+
+  test("a deferred reply does not answer", () => {
+    expect(findingAnswered(finding("deferred", null), HEAD)).toBe(false);
+  });
+
+  test("no triage reply does not answer", () => {
+    expect(findingAnswered(finding(null, null), HEAD)).toBe(false);
+  });
+
+  test("an applied reply at a foreign head does not answer", () => {
+    expect(
+      findingAnswered(finding("applied", null, HEAD, OTHER_HEAD), HEAD),
     ).toBe(false);
   });
 });

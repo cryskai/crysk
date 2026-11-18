@@ -7,6 +7,7 @@ import {
 } from "#rereview/classify";
 import { planDiscovery } from "#rereview/plan";
 import {
+  adjudicationQueue,
   bindPriorsToPosted,
   buildPhaseBQueue,
   collapseTargets,
@@ -30,6 +31,7 @@ import {
 } from "#rereview/state";
 import type { Finding } from "#review/findings";
 import { renderInlineComment } from "#review/report";
+import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { triageMarker } from "#triage/triage";
 
 const B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -450,7 +452,11 @@ describe("S-B — enrichPriorsFromThreads newness", () => {
     // keying on `c` alone (F001/F003). Same prior, same comment, same
     // assertions — the marker now simply carries the identity it always had.
     const posted = [
-      { id: 22, marker: { path: "src/app.ts", line: 10, c: fingerprint } },
+      {
+        id: 22,
+        channel: "review" as const,
+        marker: { path: "src/app.ts", line: 10, c: fingerprint },
+      },
     ];
     const applied = `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n`;
     const after = enrichPriorsFromThreads({
@@ -498,6 +504,421 @@ describe("S-B — enrichPriorsFromThreads newness", () => {
     });
     expect(queuedBefore.queued).toEqual([]);
     expect(queuedBefore.settled[0]?.status).toBe("carried");
+  });
+});
+
+describe("enrichPriorsFromThreads — the channel of the bound comment", () => {
+  const HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const claim = "a live defect";
+  const prior = {
+    id: "R001",
+    sev: "CRITICAL" as const,
+    tier: "blocking" as const,
+    channel: "inline" as const,
+    locs: ["src/app.ts:10"],
+    claim,
+    triage: null,
+    newThreadReply: false,
+  };
+  const applied = `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n`;
+
+  test("a reply in a review thread is not read for a finding posted as a top-level comment, even when the ids coincide", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [prior],
+      posted: [
+        {
+          id: 500,
+          channel: "issue",
+          marker: { path: "src/app.ts", line: 10, c: claimFingerprint(claim) },
+        },
+      ],
+      replies: [
+        {
+          id: 501,
+          in_reply_to_id: 500,
+          user: "dev",
+          body: applied,
+          created_at: "2026-08-21T12:00:00Z",
+        },
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage).toBeNull();
+  });
+
+  test("a finding posted as a review comment still reads its thread", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [prior],
+      posted: [
+        {
+          id: 500,
+          channel: "review",
+          marker: { path: "src/app.ts", line: 10, c: claimFingerprint(claim) },
+        },
+      ],
+      replies: [
+        {
+          id: 501,
+          in_reply_to_id: 500,
+          user: "dev",
+          body: applied,
+          created_at: "2026-08-21T12:00:00Z",
+        },
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage?.tag).toBe("applied");
+  });
+});
+
+describe("enrichPriorsFromThreads — a prior with no comment", () => {
+  const HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const claim = "a finding GitHub could not anchor";
+  const rowPrior = {
+    id: "R001",
+    sev: "CRITICAL" as const,
+    tier: "blocking" as const,
+    channel: "inline" as const,
+    locs: ["src/app.ts:10"],
+    claim,
+    triage: null,
+    newThreadReply: false,
+  };
+
+  function rowReply(over: {
+    id: number;
+    tag: "applied" | "dismissed";
+    row: string;
+    verdict?: "upheld" | "rejected" | "inconclusive";
+    created_at?: string;
+    text?: string;
+  }) {
+    const marker = triageMarker({
+      tag: over.tag,
+      headSha: HEAD,
+      actor: over.tag === "dismissed" ? "human" : "agent",
+      ...(over.verdict === undefined ? {} : { verdict: over.verdict }),
+      row: over.row,
+    });
+    return {
+      id: over.id,
+      body: over.text === undefined ? marker : `${marker}\n\n${over.text}`,
+      ...(over.created_at === undefined ? {} : { created_at: over.created_at }),
+    };
+  }
+
+  test("a top-level reply that names the prior's row becomes its triage", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({
+          id: 70,
+          tag: "applied",
+          row: "R001",
+          created_at: "2026-10-30T11:00:00Z",
+          text: "fixed in x",
+        }),
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage).toEqual({
+      tag: "applied",
+      verdict: null,
+      createdAt: "2026-10-30T11:00:00Z",
+      replyId: 70,
+      argument: "fixed in x",
+      ciVerdict: null,
+    });
+    expect(enriched?.triage && "threadId" in enriched.triage).toBe(false);
+  });
+
+  test("the last reply that names the row wins", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({ id: 70, tag: "applied", row: "R001" }),
+        rowReply({
+          id: 71,
+          tag: "dismissed",
+          row: "R001",
+          verdict: "upheld",
+        }),
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage?.tag).toBe("dismissed");
+    expect(enriched?.triage?.replyId).toBe(71);
+  });
+
+  test("a reply that names another row is ignored", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [rowReply({ id: 70, tag: "applied", row: "R002" })],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched).toEqual(rowPrior);
+  });
+
+  test("a top-level triage marker with no row is ignored", () => {
+    const plain = `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n`;
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [{ id: 70, body: plain }],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched).toEqual(rowPrior);
+  });
+
+  test("without rowReplies the prior is unchanged", () => {
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched).toEqual(rowPrior);
+  });
+
+  test("a row reply newer than the summary marks the prior as newly answered", () => {
+    const after = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({
+          id: 70,
+          tag: "applied",
+          row: "R001",
+          created_at: "2026-10-30T11:00:00Z",
+        }),
+      ],
+      summaryUpdatedAt: "2026-10-30T10:00:00Z",
+    });
+    expect(after[0]?.newThreadReply).toBe(true);
+
+    const before = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({
+          id: 70,
+          tag: "applied",
+          row: "R001",
+          created_at: "2026-10-30T09:00:00Z",
+        }),
+      ],
+      summaryUpdatedAt: "2026-10-30T10:00:00Z",
+    });
+    expect(before[0]?.newThreadReply).toBe(false);
+  });
+
+  test("a row reply is not read as a thread reply", () => {
+    const fingerprint = claimFingerprint(claim);
+    const [enriched] = enrichPriorsFromThreads({
+      priors: [rowPrior],
+      posted: [
+        {
+          id: 22,
+          channel: "review",
+          marker: { path: "src/app.ts", line: 10, c: fingerprint },
+        },
+      ],
+      replies: [
+        {
+          id: 80,
+          in_reply_to_id: 22,
+          body: rowReply({ id: 80, tag: "applied", row: "R009" }).body,
+          created_at: "2026-10-30T11:00:00Z",
+        },
+      ],
+      summaryUpdatedAt: null,
+    });
+    expect(enriched?.triage).toBeNull();
+  });
+
+  test("a dismissed row reply is queued for adjudication, with no thread", () => {
+    const [dismissed] = enrichPriorsFromThreads({
+      priors: [{ ...rowPrior, tier: "blocking" }],
+      posted: [],
+      replies: [],
+      rowReplies: [
+        rowReply({
+          id: 71,
+          tag: "dismissed",
+          row: "R001",
+          verdict: "upheld",
+        }),
+      ],
+      summaryUpdatedAt: null,
+    });
+    const queue = adjudicationQueue([dismissed as PriorRecord]);
+    expect(queue).toHaveLength(1);
+    expect(queue[0]?.priorId).toBe("R001");
+    expect(queue[0]?.replyId).toBe(71);
+    expect(queue[0] && "threadId" in queue[0]).toBe(false);
+  });
+
+  function rowDismissal(
+    ciVerdict: "upheld" | "rejected" | "inconclusive" | null,
+    replyId: number | undefined,
+  ): PriorRecord {
+    return {
+      ...rowPrior,
+      tier: "blocking",
+      triage: {
+        tag: "dismissed",
+        verdict: "upheld",
+        createdAt: null,
+        ...(replyId === undefined ? {} : { replyId }),
+        argument: "",
+        ciVerdict,
+      },
+    } as PriorRecord;
+  }
+
+  test("adjudicationQueue skips a row dismissal with no reply id", () => {
+    expect(adjudicationQueue([rowDismissal(null, undefined)])).toEqual([]);
+  });
+
+  test("adjudicationQueue skips a row dismissal the CI bot already upheld", () => {
+    expect(adjudicationQueue([rowDismissal("upheld", 71)])).toEqual([]);
+  });
+
+  test("adjudicationQueue retries a row dismissal ruled inconclusive", () => {
+    const queue = adjudicationQueue([rowDismissal("inconclusive", 71)]);
+    expect(queue.map((subject) => subject.replyId)).toEqual([71]);
+  });
+
+  describe("the CI ruling on a row dismissal", () => {
+    const ruling = (
+      id: number,
+      user: string,
+      verdict: "upheld" | "rejected",
+      reply: number,
+      head: string = HEAD,
+    ) => ({ id, user, body: adjudicationMarker({ verdict, reply, head }) });
+
+    function ciVerdictOf(
+      rulings: readonly { id: number; user: string; body: string }[],
+      options: {
+        headSha?: string;
+        platformActor?: string;
+        summaryAuthor?: string;
+      } = { headSha: HEAD },
+    ) {
+      const [enriched] = enrichPriorsFromThreads({
+        priors: [rowPrior],
+        posted: [],
+        replies: [],
+        rowReplies: [
+          rowReply({
+            id: 71,
+            tag: "dismissed",
+            row: "R001",
+            verdict: "upheld",
+          }),
+          ...rulings,
+        ],
+        summaryUpdatedAt: null,
+        ...options,
+      });
+      return enriched?.triage?.ciVerdict;
+    }
+
+    test("a top-level ruling by the CI bot at this head sets the CI verdict", () => {
+      expect(
+        ciVerdictOf([ruling(72, CI_ADJUDICATOR_LOGIN, "upheld", 71)]),
+      ).toBe("upheld");
+    });
+
+    test("a ruling by anyone else is ignored", () => {
+      expect(ciVerdictOf([ruling(72, "someone", "upheld", 71)])).toBeNull();
+    });
+
+    test("a ruling that names another reply is ignored", () => {
+      expect(
+        ciVerdictOf([ruling(72, CI_ADJUDICATOR_LOGIN, "upheld", 99)]),
+      ).toBeNull();
+    });
+
+    test("a ruling at another head is ignored", () => {
+      expect(
+        ciVerdictOf([
+          ruling(72, CI_ADJUDICATOR_LOGIN, "upheld", 71, "b".repeat(40)),
+        ]),
+      ).toBeNull();
+    });
+
+    test("no ruling counts when no headSha is passed", () => {
+      expect(
+        ciVerdictOf([ruling(72, CI_ADJUDICATOR_LOGIN, "upheld", 71)], {}),
+      ).toBeNull();
+    });
+
+    test("the last CI ruling wins", () => {
+      expect(
+        ciVerdictOf([
+          ruling(72, CI_ADJUDICATOR_LOGIN, "rejected", 71),
+          ruling(73, CI_ADJUDICATOR_LOGIN, "upheld", 71),
+        ]),
+      ).toBe("upheld");
+    });
+
+    test("in platform mode the ruling counts only from the summary's bot", () => {
+      expect(
+        ciVerdictOf([ruling(72, "crysk-app[bot]", "upheld", 71)], {
+          headSha: HEAD,
+          platformActor: "crysk-app[bot]",
+          summaryAuthor: "crysk-app[bot]",
+        }),
+      ).toBe("upheld");
+      expect(
+        ciVerdictOf([ruling(72, "crysk-app[bot]", "upheld", 71)], {
+          headSha: HEAD,
+          platformActor: "crysk-app[bot]",
+          summaryAuthor: "other-app[bot]",
+        }),
+      ).toBeNull();
+    });
+
+    test("a thread prior ignores a top-level ruling that names its thread reply", () => {
+      const [enriched] = enrichPriorsFromThreads({
+        priors: [rowPrior],
+        posted: [
+          {
+            id: 22,
+            channel: "review",
+            marker: {
+              path: "src/app.ts",
+              line: 10,
+              c: claimFingerprint(claim),
+            },
+          },
+        ],
+        replies: [
+          {
+            id: 80,
+            user: "author",
+            in_reply_to_id: 22,
+            body: `${triageMarker({ tag: "dismissed", headSha: HEAD, actor: "human", verdict: "upheld" })}\n\nthe timer is cleared`,
+          },
+        ],
+        rowReplies: [ruling(90, CI_ADJUDICATOR_LOGIN, "upheld", 80)],
+        summaryUpdatedAt: null,
+        headSha: HEAD,
+      });
+      expect(enriched?.triage?.threadId).toBe(22);
+      expect(enriched?.triage?.ciVerdict).toBeNull();
+    });
   });
 });
 

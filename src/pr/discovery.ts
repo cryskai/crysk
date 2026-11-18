@@ -15,12 +15,14 @@
 // are not.
 
 import { formatWorkflowCommand } from "#ci/reporter";
+import { triageReplyAuthors } from "#pr/answered-findings";
 import type {
   fetchPostedFindingComments,
   fetchPrComments,
   fetchPrReviewComments,
 } from "#pr/pr";
 import { findMarkedCommentId } from "#pr/preflight";
+import { keepPrOwnedHunks, patchNumstat } from "#rereview/base-merge-filter";
 import {
   adjudicationQueue,
   buildPhaseBQueue,
@@ -53,6 +55,7 @@ import {
 } from "#review/run";
 import {
   type ExcludedPath,
+  effectiveDiffStat,
   evaluateSizeGate,
   filterDiffByIgnoreRules,
   type SizeGateVerdict,
@@ -60,6 +63,8 @@ import {
 } from "#review/size-gate";
 import type { AgentSpec } from "#review/spec";
 import type { AdjudicationSubject } from "#triage/adjudication";
+import { withPlainAppliedReplies } from "#triage/plain-reply";
+import { countedTriageReplies } from "#triage/reply";
 import { parsePrCommentMarker, summaryMarkerFields } from "#watch/preflight";
 import { CliError } from "../errors";
 import type { IgnoreFileReadResult } from "../ignore-read";
@@ -109,6 +114,8 @@ export interface PrDiscoveryResult {
   prepared: PreparedDiscovery;
   skipDiscovery: boolean;
   rawDiff: string;
+  // Hunks left out of the discovery patch because a merge of the base branch brought them in.
+  baseMergeHunksDropped: number;
   effectiveDiff: {
     patch: string;
     droppedPaths: string[];
@@ -138,6 +145,64 @@ export interface PrDiscoveryResult {
   sizeGate: SizeGateVerdict;
 }
 
+// The triage replies the review may read: those from a login with write access. A bare `applied`
+// reply is a triage reply too, so it is read as one before its author is judged. Returns the notes
+// the review logs about the replies it leaves out.
+function readableReplies<
+  R extends { user: string; body: string; in_reply_to_id: number | null },
+  I extends { user: string; body: string },
+>(input: {
+  reviewComments: readonly R[];
+  issueComments: readonly I[];
+  replyWriters: ReadonlyMap<string, boolean | null>;
+}): { reviewComments: R[]; issueComments: I[]; notes: string[] } {
+  const reviewComments = withPlainAppliedReplies(input.reviewComments);
+  const writers = new Map<string, boolean>();
+  const unread: string[] = [];
+  for (const login of triageReplyAuthors([
+    ...reviewComments,
+    ...input.issueComments,
+  ])) {
+    const writer = input.replyWriters.get(login);
+    if (writer === undefined || writer === null) unread.push(login);
+    writers.set(login, writer === true);
+  }
+  const review = countedTriageReplies({
+    comments: reviewComments,
+    writers,
+    reviewedHead: null,
+    verdictAt: null,
+  });
+  const issue = countedTriageReplies({
+    comments: input.issueComments,
+    writers,
+    reviewedHead: null,
+    verdictAt: null,
+  });
+  if (review === null || issue === null) {
+    throw new Error("review: a triage reply author has no permission entry");
+  }
+  const dropped = [
+    ...new Set([...review.uncounted, ...issue.uncounted]),
+  ].filter((login) => !unread.includes(login));
+  const notes: string[] = [];
+  if (dropped.length > 0) {
+    notes.push(
+      `Triage replies from ${dropped.join(", ")} are not read: a reply counts only from a login with write access.`,
+    );
+  }
+  if (unread.length > 0) {
+    notes.push(
+      `Could not read whether ${unread.join(", ")} has write access, so the triage replies from that login are not read on this review.`,
+    );
+  }
+  return {
+    reviewComments: review.kept,
+    issueComments: issue.kept,
+    notes,
+  };
+}
+
 export async function resolvePrDiscovery(params: {
   diffFromSha: string;
   headSha: string;
@@ -153,6 +218,9 @@ export async function resolvePrDiscovery(params: {
   issueComments: Awaited<ReturnType<typeof fetchPrComments>>;
   postedFindings: Awaited<ReturnType<typeof fetchPostedFindingComments>>;
   reviewComments: Awaited<ReturnType<typeof fetchPrReviewComments>>;
+  // Whether each author of a triage reply has write access (pr/ci-admission-gate.ts
+  // lookUpReplyWriters): true, false, or null when the permission did not read.
+  replyWriters: ReadonlyMap<string, boolean | null>;
   git: PrDiscoveryGit;
   log: (line?: string) => void;
 }): Promise<PrDiscoveryResult> {
@@ -170,6 +238,7 @@ export async function resolvePrDiscovery(params: {
     issueComments,
     postedFindings,
     reviewComments,
+    replyWriters,
     git,
     log,
   } = params;
@@ -213,11 +282,38 @@ export async function resolvePrDiscovery(params: {
   const skipPlannedDiscovery =
     prepared.plan.skipDiscovery || prepared.discoverySkippedEmptyDelta;
 
+  // rawDiff keeps the unfiltered bytes; ownedDiff is what the hunters read.
   let rawDiff = "";
+  let ownedDiff = "";
+  let baseMergeHunksDropped = 0;
   if (!skipPlannedDiscovery) {
     const diff = await git.runGit(["diff", discoveryRange, ...pathArgs]);
     if (!diff.ok) throw new CliError(`git diff failed: ${diff.stderr}`);
     rawDiff = diff.stdout;
+    ownedDiff = rawDiff;
+    // WHY a second diff: a restricted re-review reads last-head..head, and when
+    // the author merged the base branch in between, that range also carries
+    // the base branch's own changes to every file the pull request touches.
+    // The merge base moves past the last reviewed head only through such a
+    // merge, so this probe leaves an ordinary push on the exact patch it
+    // always read. `rawDiff` keeps the unfiltered bytes for diff.raw.patch.
+    if (
+      prepared.discoveryPaths !== null &&
+      prepared.last.L !== null &&
+      !(await git.isAncestor(diffFromSha, prepared.last.L))
+    ) {
+      const prRange = await git.runGit([
+        "diff",
+        `${diffFromSha}..${headSha}`,
+        ...pathArgs,
+      ]);
+      if (!prRange.ok) {
+        throw new CliError(`git diff failed: ${prRange.stderr}`);
+      }
+      const owned = keepPrOwnedHunks(rawDiff, prRange.stdout);
+      ownedDiff = owned.patch;
+      baseMergeHunksDropped = owned.droppedHunks;
+    }
   }
   if (shouldAbortEmptyDiscovery(prepared.plan, rawDiff)) {
     throw new CliError(emptyDiffMessage(baseRef, headLabel, false));
@@ -229,7 +325,7 @@ export async function resolvePrDiscovery(params: {
         droppedPaths: [] as string[],
         exclusions: [] as ExcludedPath[],
       }
-    : filterDiffByIgnoreRules(rawDiff, gateConfig.excludeRules);
+    : filterDiffByIgnoreRules(ownedDiff, gateConfig.excludeRules);
   if (
     prepared.plan.emptyDeltaIsError &&
     effectiveDiff.patch.trim().length === 0
@@ -258,6 +354,13 @@ export async function resolvePrDiscovery(params: {
     ).patch;
   }
   const rereview = toRereviewProvenance(prepared, postedFindings.length);
+  if (rereview !== undefined && baseMergeHunksDropped > 0) {
+    rereview.base_merge_hunks_dropped = baseMergeHunksDropped;
+    const note =
+      `Re-review: left out ${baseMergeHunksDropped} hunk(s) that came from a ` +
+      "merge of the base branch, not from this pull request.";
+    log(isCi ? formatWorkflowCommand("notice", note) : note);
+  }
   if (rereview !== undefined && skipDiscovery) {
     rereview.discovery_skipped_empty_delta = true;
     // pr-hero review #286 finding: this flag alone cannot tell a reader WHY
@@ -353,10 +456,27 @@ export async function resolvePrDiscovery(params: {
             })),
           )
         : priorsFromStateFindings(state.findings);
+    // WHY the review reads a triage reply only from a login with write access: a reply steers
+    // the review (an `applied` one buys a verification, a `dismissed` one is ruled on by the CI
+    // adjudicator and, upheld, leaves the count), and anyone can comment on a pull request. It is
+    // the gate's and crysk status's rule (triage/reply.ts countedTriageReplies). A permission that
+    // did not read counts as no access here: the finding then stays counted, which is the closed
+    // side, and the next review asks again.
+    const readable = readableReplies({
+      reviewComments,
+      issueComments,
+      replyWriters,
+    });
+    for (const line of readable.notes) {
+      log(isCi ? formatWorkflowCommand("notice", line) : line);
+    }
     const priors = enrichPriorsFromThreads({
       priors: rawPriors,
       posted: postedFindings,
-      replies: reviewComments,
+      replies: readable.reviewComments,
+      rowReplies: readable.issueComments,
+      summaryAuthor: issueComments.find((c) => c.id === existingSummaryId)
+        ?.user,
       summaryUpdatedAt,
       headSha,
       platformActor: process.env.CRYSK_PLATFORM_ACTOR,
@@ -413,6 +533,15 @@ export async function resolvePrDiscovery(params: {
   if (skipDiscovery) {
     diffStat = { files: 0, insertions: 0, deletions: 0 };
     sizeGate = evaluateSizeGate([], gateConfig);
+  } else if (baseMergeHunksDropped > 0) {
+    // WHY not git's numstat: no range describes the delta once hunks are left
+    // out, and the stat must be of what the hunters read (ReportMeta.diffStat).
+    // The gate loses its whitespace-insensitive count here (that needs git), so
+    // an author's whitespace-only lines count toward it: an over-count, on the
+    // safe side of a cost bound, and far below counting the base branch's hunks.
+    const files = patchNumstat(ownedDiff);
+    diffStat = effectiveDiffStat(files, gateConfig.excludeRules);
+    sizeGate = evaluateSizeGate(files, gateConfig);
   } else {
     // See computeDiffStatAndSizeGate (src/review/run.ts) for the full
     // rationale.
@@ -428,6 +557,7 @@ export async function resolvePrDiscovery(params: {
     prepared,
     skipDiscovery,
     rawDiff,
+    baseMergeHunksDropped,
     effectiveDiff,
     anchorPatch,
     gateConfig,

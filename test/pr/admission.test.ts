@@ -25,10 +25,14 @@ import {
   type AdmissionStatusInput,
   type CiAdmissionLedgerState,
   carriedBlockingDescription,
+  carriedReviewVerdictTime,
   carriedSuccessDescription,
+  headStatusRed,
   holdCiAdmissionLedger,
   isReviewVerdictStatus,
+  ownReviewVerdictTime,
   publishCiSkip,
+  recordCiAdmissionGateSkip,
   releaseCiAdmissionLedger,
   reserveCiAdmissionLedger,
   settleCiAdmissionLedger,
@@ -1842,6 +1846,224 @@ describe("isReviewVerdictStatus: a review's verdict, by the writers that build i
   });
 });
 
+describe("the review's own verdict time", () => {
+  const C_SHA = "c".repeat(40);
+  const B_SHA = "b".repeat(40);
+  const A_SHA = "a".repeat(40);
+  const OWN_BLOCKING = blockingCommitStatusRequest({
+    blockingCount: 1,
+    targetUrl: undefined,
+    context: COMMIT_STATUS_CONTEXT,
+  }).description;
+  const statusRow = (
+    state: string,
+    description: string,
+    created_at: string,
+  ) => ({
+    state,
+    context: COMMIT_STATUS_CONTEXT,
+    created_at,
+    description,
+  });
+
+  describe("ownReviewVerdictTime", () => {
+    test("a review's own blocking verdict gives its time", () => {
+      expect(
+        ownReviewVerdictTime([
+          statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z"),
+        ]),
+      ).toBe("2026-11-10T10:00:00Z");
+    });
+
+    test("a carried blocking status alone gives null", () => {
+      expect(
+        ownReviewVerdictTime([
+          statusRow(
+            "failure",
+            carriedBlockingDescription(2, B_SHA),
+            "2026-11-10T12:00:00Z",
+          ),
+        ]),
+      ).toBeNull();
+    });
+
+    test("an own verdict at 10:00 beats a newer carried status at 12:00", () => {
+      expect(
+        ownReviewVerdictTime([
+          statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z"),
+          statusRow(
+            "failure",
+            carriedBlockingDescription(2, B_SHA),
+            "2026-11-10T12:00:00Z",
+          ),
+        ]),
+      ).toBe("2026-11-10T10:00:00Z");
+    });
+
+    test("an empty list gives null", () => {
+      expect(ownReviewVerdictTime([])).toBeNull();
+    });
+  });
+
+  describe("headStatusRed", () => {
+    test("a newest carried blocking red is red", () => {
+      expect(
+        headStatusRed([
+          statusRow(
+            "failure",
+            carriedBlockingDescription(1, B_SHA),
+            "2026-11-10T12:00:00Z",
+          ),
+        ]),
+      ).toBe(true);
+    });
+
+    test("a review's own blocking verdict is red", () => {
+      expect(
+        headStatusRed([
+          statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z"),
+        ]),
+      ).toBe(true);
+    });
+
+    test("a newest success is not red", () => {
+      expect(
+        headStatusRed([
+          statusRow(
+            "success",
+            "pr-hero: no blocking findings",
+            "2026-11-10T10:00:00Z",
+          ),
+        ]),
+      ).toBe(false);
+    });
+
+    test("a newest pending status is not red", () => {
+      expect(
+        headStatusRed([
+          statusRow(
+            "pending",
+            "pr-hero: review in progress",
+            "2026-11-10T10:00:00Z",
+          ),
+        ]),
+      ).toBe(false);
+    });
+
+    test("an empty list is not red", () => {
+      expect(headStatusRed([])).toBe(false);
+    });
+
+    test("an older failure followed by a newer success is not red", () => {
+      expect(
+        headStatusRed([
+          statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z"),
+          statusRow(
+            "success",
+            "pr-hero: no blocking findings",
+            "2026-11-10T12:00:00Z",
+          ),
+        ]),
+      ).toBe(false);
+    });
+  });
+
+  describe("carriedReviewVerdictTime", () => {
+    // Commits are listed oldest first, as the real lister returns them: [A, B, C], head C.
+    const commitsAbc = async () => [A_SHA, B_SHA, C_SHA];
+    const statusesBy = (bySha: Record<string, Row[] | null>) => {
+      return async (_root: string, sha: string) =>
+        sha in bySha ? (bySha[sha] ?? null) : [];
+    };
+    type Row = ReturnType<typeof statusRow>;
+
+    test("the head carries a verdict whose own review is on the previous commit", async () => {
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: commitsAbc,
+        readStatuses: statusesBy({
+          [C_SHA]: [
+            statusRow(
+              "failure",
+              carriedBlockingDescription(2, B_SHA),
+              "2026-11-10T11:00:00Z",
+            ),
+          ],
+          [B_SHA]: [statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z")],
+        }),
+      });
+      expect(time).toBe("2026-11-10T10:00:00Z");
+    });
+
+    test("a chained carry walks down to the commit with the review's own verdict", async () => {
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: commitsAbc,
+        readStatuses: statusesBy({
+          [C_SHA]: [
+            statusRow(
+              "failure",
+              carriedBlockingDescription(2, B_SHA),
+              "2026-11-10T12:00:00Z",
+            ),
+          ],
+          [B_SHA]: [
+            statusRow(
+              "failure",
+              carriedBlockingDescription(2, A_SHA),
+              "2026-11-10T11:00:00Z",
+            ),
+          ],
+          [A_SHA]: [statusRow("failure", OWN_BLOCKING, "2026-11-10T09:00:00Z")],
+        }),
+      });
+      expect(time).toBe("2026-11-10T09:00:00Z");
+    });
+
+    test("a failed status read gives null", async () => {
+      const rows: Row[] | null = null;
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: commitsAbc,
+        readStatuses: statusesBy({ [C_SHA]: rows }),
+      });
+      expect(time).toBeNull();
+    });
+
+    test("a commit lister that throws gives null instead of throwing", async () => {
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: async () => {
+          throw new Error("gh exploded");
+        },
+        readStatuses: statusesBy({}),
+      });
+      expect(time).toBeNull();
+    });
+
+    test("a head missing from the listed commits gives null", async () => {
+      const time = await carriedReviewVerdictTime({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: C_SHA,
+        listCommits: async () => [A_SHA, B_SHA],
+        readStatuses: statusesBy({
+          [B_SHA]: [statusRow("failure", OWN_BLOCKING, "2026-11-10T10:00:00Z")],
+        }),
+      });
+      expect(time).toBeNull();
+    });
+  });
+});
+
 // The override check's read (fetchCommitStatuses with failClosed). Through the real reader and a fake gh:
 // a failed read must not look like a head with no status rows, a dropped row must not hide an override,
 // and an empty successful read is still no rows.
@@ -1998,5 +2220,179 @@ describe("reserveCiAdmissionLedger — adoption after a failed POST", () => {
     expect(
       calls.filter((argv) => argv.join(" ").includes("check_name=")),
     ).toHaveLength(2);
+  });
+});
+
+// A gh double that answers each call from `answer`, so one test can fail the
+// PATCH and let the POST through (or the reverse).
+function scriptedGh(
+  answer: (argv: string[]) => {
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+  },
+): { spawnFn: typeof Bun.spawn; calls: string[][] } {
+  const calls: string[][] = [];
+  const encoder = new TextEncoder();
+  const stream = (text: string) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (text) controller.enqueue(encoder.encode(text));
+        controller.close();
+      },
+    });
+  const spawnFn = ((argv: string[]) => {
+    calls.push(argv);
+    const { exitCode, stdout, stderr } = answer(argv);
+    return {
+      stdout: stream(stdout),
+      stderr: stream(stderr),
+      exited: Promise.resolve(exitCode),
+      kill() {},
+    };
+  }) as unknown as typeof Bun.spawn;
+  return { spawnFn, calls };
+}
+
+const checkRunWrites = (calls: string[][]): string[][] =>
+  calls.filter((argv) => argv.includes("POST") || argv.includes("PATCH"));
+
+const CREATED = { exitCode: 0, stdout: '{"id":99}', stderr: "" };
+const REFUSED = { exitCode: 1, stdout: "", stderr: "gh: check-run refused" };
+
+describe("recordCiAdmissionGateSkip — a skip is one write, already settled", () => {
+  const SKIP_POLICY = resolveCiReviewPolicy({});
+  const SKIP_HASH = ciReviewPolicyHash(SKIP_POLICY);
+  const skipInput = {
+    operatorRoot: "/repo",
+    prNumber: PR,
+    headSha: HEAD,
+    policy: SKIP_POLICY,
+    policyHash: SKIP_HASH,
+    existing: [] as AdmissionRecord[],
+    reason: "stopped by /crysk stop",
+    priorScore: null,
+    blockingCount: null,
+    advisoryCount: null,
+  };
+
+  test("a gate skip is recorded in one write, already settled", async () => {
+    const { spawnFn, calls } = scriptedGh(() => CREATED);
+
+    await recordCiAdmissionGateSkip({ ...skipInput, unspent: true, spawnFn });
+
+    const writes = checkRunWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("POST");
+    expect(writes[0]).toContain("repos/{owner}/{repo}/check-runs");
+    expect(writes[0]).toContain("status=completed");
+    expect(writes[0]).toContain("output[summary]=gate-skipped (attempt 1)");
+    expect(calls.some((argv) => argv.includes("PATCH"))).toBe(false);
+  });
+
+  test("an admission skip that counts is recorded as skipped, in one write", async () => {
+    const { spawnFn, calls } = scriptedGh(() => CREATED);
+
+    await recordCiAdmissionGateSkip({ ...skipInput, spawnFn });
+
+    const writes = checkRunWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("output[summary]=skipped (attempt 1)");
+  });
+
+  test("a skip whose write fails says so and does not throw", async () => {
+    const { spawnFn, calls } = scriptedGh(() => REFUSED);
+    const warnings: string[] = [];
+
+    await expect(
+      recordCiAdmissionGateSkip({
+        ...skipInput,
+        unspent: true,
+        spawnFn,
+        warn: (line) => warnings.push(line),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].startsWith("::warning::")).toBe(true);
+    expect(warnings[0]).toContain(
+      "could not record this skip on the admission check",
+    );
+    expect(warnings[0]).toContain("check-run refused");
+    expect(calls.some((argv) => argv.includes("PATCH"))).toBe(false);
+  });
+});
+
+describe("settleCiAdmissionLedger — a failed write is said, not swallowed", () => {
+  const SETTLE_POLICY = resolveCiReviewPolicy({});
+  const SETTLE_HASH = ciReviewPolicyHash(SETTLE_POLICY);
+
+  async function reservedWith(spawnFn: typeof Bun.spawn) {
+    return reserveCiAdmissionLedger({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      headSha: HEAD,
+      policy: SETTLE_POLICY,
+      policyHash: SETTLE_HASH,
+      existing: [],
+      decisionReason: "admitted",
+      spawnFn,
+    });
+  }
+
+  const patchFails = (argv: string[]) =>
+    argv.includes("PATCH") ? REFUSED : CREATED;
+
+  test("a settle whose write fails says so and does not throw", async () => {
+    const { spawnFn } = scriptedGh(patchFails);
+    const state = await reservedWith(spawnFn);
+    const warnings: string[] = [];
+
+    await expect(
+      settleCiAdmissionLedger(state, "completed", "done", {
+        spawnFn,
+        warn: (line) => warnings.push(line),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].startsWith("::warning::")).toBe(true);
+    expect(warnings[0]).toContain(
+      "could not write the admission check as completed (attempt 1)",
+    );
+  });
+
+  test("a settle that succeeds says nothing", async () => {
+    const { spawnFn, calls } = scriptedGh(() => CREATED);
+    const state = await reservedWith(spawnFn);
+    const warnings: string[] = [];
+
+    await settleCiAdmissionLedger(state, "completed", "done", {
+      spawnFn,
+      warn: (line) => warnings.push(line),
+    });
+
+    expect(warnings).toEqual([]);
+    expect(checkRunWrites(calls)).toHaveLength(2);
+  });
+
+  test("the warning carries no line break and is cut short", async () => {
+    const longError = `gh: first line\nsecond line ${"x".repeat(1000)}`;
+    const { spawnFn } = scriptedGh((argv) =>
+      argv.includes("PATCH")
+        ? { exitCode: 1, stdout: "", stderr: longError }
+        : CREATED,
+    );
+    const state = await reservedWith(spawnFn);
+    const warnings: string[] = [];
+
+    await settleCiAdmissionLedger(state, "completed", "done", {
+      spawnFn,
+      warn: (line) => warnings.push(line),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain("\n");
+    expect(warnings[0].length).toBeLessThanOrEqual(420);
   });
 });
