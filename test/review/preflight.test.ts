@@ -2190,6 +2190,26 @@ describe("allExcludedMessage", () => {
 // can drop anything the operator names — the help text must say so, or a
 // user who defines their own rules never learns the flag interacts with
 // them at all.
+describe("HELP_TEXT — what each command does to your files", () => {
+  test("--from is required for post only; triage reply reads the PR without it", () => {
+    const line = HELP_TEXT.slice(HELP_TEXT.indexOf("  --from <dir>"));
+    const entry = line.slice(0, line.indexOf("  --finding <id>"));
+    expect(entry).toContain("Required for post");
+    expect(entry).toContain("optional for triage reply");
+    expect(entry).not.toContain("(required)");
+  });
+
+  test("crysk config lists read-only, and set, unset and edit are named as writes", () => {
+    const start = HELP_TEXT.indexOf("  crysk config [options]");
+    const entry = HELP_TEXT.slice(start, HELP_TEXT.indexOf("Options:", start));
+    expect(entry).not.toContain("it never writes either file");
+    expect(entry).toContain("crysk config set <key> <value>");
+    expect(entry).toContain("crysk config unset <key>");
+    expect(entry).toContain("crysk config edit");
+    expect(entry).toContain("Writes that file");
+  });
+});
+
 describe("HELP_TEXT — --max-changed-lines names .cryskignore", () => {
   test("mentions .cryskignore beside the generated-file examples", () => {
     expect(HELP_TEXT).toContain(".cryskignore");

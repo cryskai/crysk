@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The user docs are on crysk.dev.** [crysk.dev/docs](https://crysk.dev/docs/) is the maintained home of the
+  quickstart, the review guides, the Action reference, the config reference and the error codes, and
+  [crysk.dev/llms.txt](https://crysk.dev/llms.txt) indexes them for agents. The README is now short: what Crysk
+  is, how to install it, a first review, notes for AI agents, exit codes and development, with links to the
+  site. `docs/github-actions.md` and `docs/configuration.md` stay for existing links and say so at the top, and
+  `docs/README.md` maps the folder.
+- **A ChatGPT plan is not supported in the open-source Action.** OpenAI replaces its refresh token on every
+  renewal, a review never holds the new one and nothing renews a repository secret, so a stored login stops
+  working. OpenAI in the Action means `CRYSK_OPENCODE_OPENAI_API_KEY`; a ChatGPT plan needs the Crysk GitHub App.
+  The workflow template, `crysk ci init`, the CI skill and the error fixes for a missing, rejected or expiring
+  OpenAI login now say so and no longer tell a standalone user to store the login record. The Action still
+  accepts `CRYSK_OPENCODE_OPENAI_OAUTH`, which the Crysk platform uses: nothing about how a run reads it changed.
+- **Error annotations link to the error-code page on crysk.dev**
+  (`https://crysk.dev/docs/reference/error-codes/#crysk-cred-missing` and the like). Comments already posted
+  keep working: `docs/github-actions.md` still has every code section and anchor.
+- **Reinstall the skills** (`crysk skills install`) to get the new OpenAI wording and the links to the site.
+
+### Fixed
+
+- **Text that did not match the code.** `crysk config` is read-only only when it lists: `set`, `unset` and `edit`
+  write a config file, and the help now says so. `--from` is required for `post` and optional for
+  `triage reply`. A local `--dry-run` that the size gate would skip no longer prints `(exit 1)`: it returns `0`,
+  as before. `crysk ci init` and the CI guide no longer say the legacy `pr-hero` commit status is still posted:
+  it is read, not written, so a branch protection rule on it must move to `crysk`. The README's `--full` line
+  and its `v2.0` note are gone with the sections that held them; `--full` widens a re-review to the full pull
+  request range. The size defaults read: locally 4000 lines and 150 files, in CI, when the
+  workflow and the repo config set none, no limit on a Claude subscription and 4000 lines and 50 files on a
+  pay-per-token route. `agents_dir` is listed in both config
+  layers with the repo winning, and the materiality gate text matches the code (a safety guard keeps security,
+  credential and data-loss findings away from the judge, which runs on its profile's judge model).
+- **SECURITY.md** no longer lists a `1.0` version that does not exist, and the package has a description.
+
 ## [0.9.0] - 2026-11-18
 
 ### Changed

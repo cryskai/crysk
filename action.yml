@@ -21,7 +21,7 @@ inputs:
     required: false
     default: ''
   opencode-auth:
-    description: 'Removed: pass one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
+    description: 'Removed: pass one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_API_KEY for OpenAI; a ChatGPT plan needs the Crysk GitHub App) in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   models:
     description: 'The models per role, as JSON: the models object of the personal config, from role (default, hunter.logic, judge, ...) to an ordered list of models, the first one tried first, e.g. {"default": ["claude:sonnet-latest"], "hunter.logic": ["opencode:deepseek/deepseek-chat", "claude:sonnet-latest"]}. An entry is a model name or {"model": ..., "effort": ...}. Pass it from a repository variable, models: followed by the vars.CRYSK_MODELS expression. Read by the setup step only, with the engine''s own parser, and written to the runner''s personal config file; a malformed value fails the run (CRYSK-CONFIG-INVALID). A repository connected to the Crysk platform takes its models from the platform''s model settings, which win whole: this input and credentials are then ignored with a warning. Empty: every role runs the default Claude model.'
