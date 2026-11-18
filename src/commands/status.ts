@@ -8,6 +8,7 @@
 // head that is not a commit id), so the command exits 1 with nothing on stdout. An empty
 // answer from a failed read would read as "no review yet" and send a review out blind.
 
+import os from "node:os";
 import { resolveRepoRoot } from "#git/git";
 import {
   carriedReviewVerdictTime,
@@ -37,7 +38,9 @@ import { resolvePrTarget } from "#pr/preflight";
 import type { CliOptions } from "#review/preflight";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { log } from "#ui/primitives";
+import { resolveEngineAssets } from "../assets";
 import { CliError, CliUsageError } from "../errors";
+import { recordEngineVersion } from "../skills-cache";
 
 export async function statusCommand(options: CliOptions): Promise<number> {
   // parseArgs already requires a numeric --pr for this command; the check is the type
@@ -46,11 +49,14 @@ export async function statusCommand(options: CliOptions): Promise<number> {
     throw new CliUsageError("status requires --pr <n> (a PR number)");
   }
   const operatorRoot = await resolveRepoRoot(options.repo);
+  const home = os.homedir();
   return runStatusCommand({
     operatorRoot,
     pr: options.pr,
     json: options.json === true,
     wait: options.wait === true,
+    cliVersion: resolveEngineAssets().version,
+    recordEngine: (version) => recordEngineVersion(home, operatorRoot, version),
   });
 }
 
@@ -77,6 +83,8 @@ export async function readPrStatus(input: {
   // Called with the head as soon as the pull request is read, before the reads that can still
   // fail: a --wait run dates its grace window from the moment it first saw a head.
   onHead?: (head: string) => void;
+  // The running CLI's version, for the skills reload hint (pr-status.ts skills_reload).
+  cliVersion?: string;
 }): Promise<{
   status: PrStatusJson;
   head: string;
@@ -147,6 +155,7 @@ export async function readPrStatus(input: {
     writers,
     // A developer's machine never learns the platform's login (src/triage/adjudication.ts).
     adjudicatorTrust: { kind: "local" },
+    ...(input.cliVersion === undefined ? {} : { cliVersion: input.cliVersion }),
   });
   return { status, head, issueComments, reviewComments };
 }
@@ -170,6 +179,12 @@ export async function runStatusCommand(input: {
   // Overrides every bound below. The tests use it to see a timeout without waiting the real one.
   ghTimeoutMs?: number;
   out?: (text: string) => void;
+  // The running CLI's version, for the skills reload hint. Absent: none is named.
+  cliVersion?: string;
+  // Records the engine version the summary names, so `skills load` serves that
+  // version's playbook with no network call (skills-cache.ts). Absent: nothing
+  // is recorded.
+  recordEngine?: (version: string) => void;
 }): Promise<number> {
   const { operatorRoot, pr, spawnFn } = input;
   // Every gh call here is bounded, so a call that never answers is a timeout CliError and the
@@ -213,6 +228,9 @@ export async function runStatusCommand(input: {
         viewTimeoutMs,
         commentTimeoutMs,
         memo,
+        ...(input.cliVersion === undefined
+          ? {}
+          : { cliVersion: input.cliVersion }),
         onHead: (head) => {
           if (head !== lastHead) {
             lastHead = head;
@@ -258,6 +276,9 @@ export async function runStatusCommand(input: {
     }
     await sleep(pollIntervalMs);
     sleptMs += pollIntervalMs;
+  }
+  if (status.report.engine_version !== null) {
+    input.recordEngine?.(status.report.engine_version);
   }
   if (input.json) {
     const write = input.out ?? ((text: string) => process.stdout.write(text));

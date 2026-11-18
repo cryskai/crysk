@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
+import { renderCiAdmissionBlock } from "#ci/review-admission";
 import { runStatusCommand, statusCommand } from "#commands/status";
 import { carriedBlockingDescription } from "#pr/admission";
 import { CommentsTruncatedError, GRAPHQL_COMMENT_MAX_PAGES } from "#pr/pr";
@@ -1183,5 +1184,61 @@ describe("runStatusCommand: the reply authors' permissions", () => {
     expect(code).toBe(0);
     expect(statusPolls).toBe(2);
     expect(permissionAsks).toBe(1);
+  });
+});
+
+// The skill loads the playbook of the engine that reviewed the PR. Status runs
+// every round of the loop, so it is what notices a new engine version: it
+// records the version for `skills load` and names the reload command.
+describe("runStatusCommand — the engine version", () => {
+  const stampedScript = (user: string): ScriptEntry[] =>
+    happyScript.map((entry) =>
+      entry.match.includes("issues/12/comments")
+        ? {
+            ...entry,
+            response: {
+              stdout: ndjson([
+                {
+                  id: 100,
+                  user,
+                  body: `${summaryBody}\n${renderCiAdmissionBlock(HEAD, { blocking: 1, advisory: 0 }, 1, "0.10.0")}`,
+                },
+              ]),
+            },
+          }
+        : entry,
+    );
+
+  async function run(user: string) {
+    const { spawnFn } = makeFakeGh(stampedScript(user));
+    const recorded: string[] = [];
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      cliVersion: "0.9.5",
+      recordEngine: (version) => recorded.push(version),
+      out: (text) => written.push(text),
+    });
+    return { code, recorded, json: JSON.parse(written[0] ?? "{}") };
+  }
+
+  test("records the version and prints the reload command", async () => {
+    const { code, recorded, json } = await run("github-actions[bot]");
+    expect(code).toBe(0);
+    expect(recorded).toEqual(["0.10.0"]);
+    expect(json.report.engine_version).toBe("0.10.0");
+    expect(json.skills_reload).toBe(
+      "npx -y crysk@0.10.0 skills load crysk-loop",
+    );
+  });
+
+  test("records nothing when no bot wrote the summary", async () => {
+    const { recorded, json } = await run("someone");
+    expect(recorded).toEqual([]);
+    expect(json.skills_reload).toBeNull();
   });
 });

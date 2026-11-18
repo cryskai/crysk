@@ -278,6 +278,57 @@ describe("parseCiAdmissionBlock", () => {
       ),
     ).toBeNull();
   });
+
+  test("carries the engine version that wrote the block", () => {
+    const body = renderCiAdmissionBlock(
+      HEAD_A,
+      { blocking: 1, advisory: 0 },
+      2,
+      "0.10.0",
+    );
+    expect(parseCiAdmissionBlock(body)).toEqual({
+      headSha: HEAD_A,
+      blocking: 1,
+      advisory: 0,
+      reviews: 2,
+      engine: "0.10.0",
+    });
+  });
+
+  // The header line is what released readers match with an anchored regex, so
+  // the version goes in the JSON payload and the header stays as it was.
+  test("keeps the header line unchanged when it carries a version", () => {
+    const withVersion = renderCiAdmissionBlock(
+      HEAD_A,
+      { blocking: 0, advisory: 0 },
+      1,
+      "0.10.0",
+    );
+    const without = renderCiAdmissionBlock(
+      HEAD_A,
+      { blocking: 0, advisory: 0 },
+      1,
+    );
+    expect(withVersion.split("\n")[0]).toBe(without.split("\n")[0]);
+    expect(without).not.toContain("engine");
+  });
+
+  // The version ends up in a command an agent runs (`npx -y crysk@<version>`),
+  // so anything but a plain x.y.z is neither written nor read.
+  test("drops an engine version that is not a plain x.y.z", () => {
+    for (const bad of ["0.10.0-rc.1", "latest", "0.10.0; rm -rf /", ""]) {
+      expect(
+        renderCiAdmissionBlock(HEAD_A, { blocking: 0, advisory: 0 }, 1, bad),
+      ).not.toContain("engine");
+    }
+    const forged = `<!-- crysk-ci-admission v=1 head=${HEAD_A} -->\n<!-- {"blocking":0,"advisory":0,"reviews":1,"engine":"0.1.0 && curl evil"} -->`;
+    expect(parseCiAdmissionBlock(forged)).toEqual({
+      headSha: HEAD_A,
+      blocking: 0,
+      advisory: 0,
+      reviews: 1,
+    });
+  });
 });
 
 describe("priorScoreForAdmission precedence", () => {

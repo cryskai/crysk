@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
+import { renderCiAdmissionBlock } from "#ci/review-admission";
 import {
   carriedBlockingDescription,
   NOTHING_TO_REVIEW_DESCRIPTION,
@@ -506,6 +507,7 @@ describe("buildPrStatus: report and output shape", () => {
       complete: true,
       reviews: 3,
       outcome_code: null,
+      engine_version: null,
     });
   });
 
@@ -526,6 +528,7 @@ describe("buildPrStatus: report and output shape", () => {
       complete: null,
       reviews: null,
       outcome_code: null,
+      engine_version: null,
     });
   });
 
@@ -3224,5 +3227,85 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
     const status = buildPrStatus(carried());
     expect(status.next_action).toBe("triage");
     expect(status.reason).toContain("no triage reply that answers this review");
+  });
+});
+
+// The skill loads the playbook of the engine that wrote the summary: status
+// reads that version from the admission block and names the command that loads
+// the matching playbook when the CLI running status is another version.
+describe("buildPrStatus — the engine version that wrote the summary", () => {
+  function stamped(user: string, version = "0.10.0") {
+    return input({
+      cliVersion: "0.9.5",
+      issueComments: [
+        {
+          id: 1,
+          user,
+          body: `${summary(CURRENT)}\n${renderCiAdmissionBlock(CURRENT, { blocking: 0, advisory: 0 }, 1, version)}`,
+        },
+      ],
+    });
+  }
+
+  test("reports the version and the reload command when the CLI differs", () => {
+    const status = buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN));
+    expect(status.report.engine_version).toBe("0.10.0");
+    expect(status.skills_reload).toBe(
+      "npx -y crysk@0.10.0 skills load crysk-loop",
+    );
+  });
+
+  test("trusts a summary the Crysk App bot posted", () => {
+    const status = buildPrStatus(stamped("crysk[bot]"));
+    expect(status.report.engine_version).toBe("0.10.0");
+  });
+
+  test("names no reload when the CLI already is that version", () => {
+    const status = buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN, "0.9.5"));
+    expect(status.report.engine_version).toBe("0.9.5");
+    expect(status.skills_reload).toBeNull();
+  });
+
+  // Anyone can comment on a pull request, and the version becomes a command
+  // the agent runs, so only a summary a bot posted is read for it.
+  test("ignores the version on a summary a person posted", () => {
+    const status = buildPrStatus(stamped("someone"));
+    expect(status.report.engine_version).toBeNull();
+    expect(status.skills_reload).toBeNull();
+  });
+
+  test("reports null for a summary written before the version was stamped", () => {
+    const status = buildPrStatus(
+      input({
+        cliVersion: "0.9.5",
+        issueComments: [
+          { id: 1, user: CI_ADJUDICATOR_LOGIN, body: summary(CURRENT) },
+        ],
+      }),
+    );
+    expect(status.report.engine_version).toBeNull();
+    expect(status.skills_reload).toBeNull();
+  });
+
+  test("adds a reload line to the text output", () => {
+    const lines = renderPrStatusLines(
+      buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN)),
+    );
+    expect(lines.join("\n")).toContain(
+      "npx -y crysk@0.10.0 skills load crysk-loop",
+    );
+  });
+
+  test("leaves next_action as it would be without the version", () => {
+    const withVersion = buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN));
+    const without = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, user: CI_ADJUDICATOR_LOGIN, body: summary(CURRENT) },
+        ],
+      }),
+    );
+    expect(withVersion.next_action).toBe(without.next_action);
+    expect(withVersion.reason).toBe(without.reason);
   });
 });

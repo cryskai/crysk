@@ -50,6 +50,8 @@ export interface PrheroLayout {
   storeSocketPath: string;
   // Upgrade check TTL cache
   upgradeCheckPath: string;
+  // The skills' engine-version and per-version playbook caches (skills-cache.ts)
+  skillsCacheDir: string;
   // D1-08 PR3 (§9.2/Q5): the persisted, non-secret HMAC key that derives
   // rate-limit bucket IDs. Sibling of the other home files for the same
   // reason as metricsDbPath: one place, no drift between the layout and the
@@ -75,6 +77,7 @@ export function prheroLayout(
     prheroDbPath: path.join(dir, "prhero.db"),
     storeSocketPath: path.join(dir, "store.sock"),
     upgradeCheckPath: path.join(dir, "upgrade-check.json"),
+    skillsCacheDir: path.join(dir, "skills"),
     bucketKeyPath: path.join(dir, "bucket-key"),
   };
 }

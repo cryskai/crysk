@@ -12,6 +12,7 @@
 
 import { OUTCOME_MARKER_PREFIX, parseOutcomeCode } from "#ci/outcome";
 import { isOverrideStatus, overrideActorOf } from "#ci/override";
+import { parseCiAdmissionBlock } from "#ci/review-admission";
 import {
   OVERRIDE_COMMAND,
   RECHECK_COMMAND,
@@ -41,6 +42,7 @@ import { parseFindingCommentBadge } from "#review/report";
 import {
   type AdjudicatorTrust,
   CI_ADJUDICATOR_TRUST,
+  isBotLogin,
   parseAdjudicationMarker,
   trustedAdjudicator,
 } from "#triage/adjudication";
@@ -92,6 +94,9 @@ export interface PrStatusReport {
   complete: boolean | null;
   reviews: number | null;
   outcome_code: string | null;
+  // The engine version that wrote the summary, read from its admission block.
+  // Null when no bot posted the summary or the engine predates the stamp.
+  engine_version: string | null;
 }
 
 export interface PrStatusTriage {
@@ -138,6 +143,11 @@ export interface PrStatusJson {
   unresolved_blocking: number;
   next_action: PrNextAction;
   reason: string;
+  // The command that loads the crysk-loop playbook at the engine version, when
+  // the CLI running status is another version. The skill runs it and follows
+  // what it prints, so the agent's instructions match the engine that reviewed
+  // the PR. Null when they already match or the engine version is unknown.
+  skills_reload: string | null;
 }
 
 // A GitHub comment as the shell reads it. Review comments also carry the thread link a
@@ -178,6 +188,8 @@ export interface PrStatusRead {
   reviewComments: PrStatusReviewComment[];
   // Whose CI ruling counts. Absent is a run's standalone read: only github-actions[bot].
   adjudicatorTrust?: AdjudicatorTrust;
+  // The version of the CLI running status. Absent: no reload is named.
+  cliVersion?: string;
 }
 
 export interface PrStatusInput extends PrStatusRead {
@@ -232,6 +244,7 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
       complete: summary.complete,
       reviews: summary.reviews,
       outcome_code: outcomeCodeOf(input.issueComments),
+      engine_version: summary.engine,
     },
     findings: analyzed.map((a) => a.finding),
     // A dismissal the CI adjudicator upheld on this head leaves the gate's count (review #348
@@ -242,7 +255,18 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
     ),
     next_action: decision.next_action,
     reason: decision.reason,
+    skills_reload: skillsReloadCommand(summary.engine, input.cliVersion),
   };
+}
+
+export function skillsReloadCommand(
+  engine: string | null,
+  cliVersion: string | undefined,
+): string | null {
+  if (engine === null || cliVersion === undefined || engine === cliVersion) {
+    return null;
+  }
+  return `npx -y crysk@${engine} skills load crysk-loop`;
 }
 
 // The comments as the gate reads them (triage/reply.ts countedTriageReplies). The command that
@@ -379,6 +403,7 @@ function readSummary(comments: PrStatusComment[]): {
   reviews: number | null;
   rows: StateFinding[];
   author: string | undefined;
+  engine: string | null;
 } {
   const id = findMarkedCommentId(comments);
   const summaryComment = comments.find((c) => c.id === id);
@@ -390,6 +415,7 @@ function readSummary(comments: PrStatusComment[]): {
       reviews: null,
       rows: [],
       author: undefined,
+      engine: null,
     };
   }
   const marker = parsePrCommentMarker(body);
@@ -400,6 +426,9 @@ function readSummary(comments: PrStatusComment[]): {
     reviews: state?.reviews ?? null,
     rows: state?.findings ?? [],
     author: summaryComment?.user,
+    engine: isBotLogin(summaryComment?.user)
+      ? (parseCiAdmissionBlock(body)?.engine ?? null)
+      : null,
   };
 }
 
@@ -1095,5 +1124,10 @@ export function renderPrStatusLines(status: PrStatusJson): string[] {
     `gate: ${gate}`,
     `findings: ${status.findings.length} posted, ${status.unresolved_blocking} unresolved blocking`,
     `next: ${status.next_action} — ${status.reason}`,
+    ...(status.skills_reload === null
+      ? []
+      : [
+          `skills: the review ran on crysk ${status.report.engine_version}; load its playbook with ${status.skills_reload}`,
+        ]),
   ];
 }

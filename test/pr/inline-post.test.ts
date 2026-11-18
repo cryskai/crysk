@@ -2904,6 +2904,45 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
 // The summary's own counter, end to end: postInlineFindings writes it into the
 // summary body, and a later run reads it back. A comment-triggered (forced)
 // post must leave it where it was; an automatic post must still add one.
+// The agent's skill loads the playbook of the engine that wrote the summary
+// (`crysk status` reads this version), so every posted summary carries it.
+describe("postInlineFindings — the engine version in the summary", () => {
+  async function postedAdmission(engine: FindingsDocument["engine"]) {
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+        ...(engine === undefined ? {} : { engine }),
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const bodies = summaryStdins(calls);
+    expect(bodies.length).toBeGreaterThan(0);
+    return bodies.map((body) => parseCiAdmissionBlock(body));
+  }
+
+  test("stamps the engine version on every summary body", async () => {
+    const blocks = await postedAdmission({ name: "crysk", version: "0.10.0" });
+    for (const block of blocks) expect(block?.engine).toBe("0.10.0");
+  });
+
+  test("writes no version when the document names no engine", async () => {
+    const blocks = await postedAdmission(undefined);
+    for (const block of blocks) {
+      expect(block).not.toBeNull();
+      expect(block?.engine).toBeUndefined();
+    }
+  });
+});
+
 describe("postInlineFindings — the summary counter and a forced run", () => {
   async function postFirstReview(force: boolean | undefined) {
     const { spawnFn, calls } = makeFakeGh([

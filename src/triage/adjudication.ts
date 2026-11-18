@@ -25,6 +25,14 @@ export const CI_ADJUDICATOR_LOGIN = "github-actions[bot]";
 // A GitHub App's bot login. A person's login can never end in `[bot]`.
 const APP_BOT_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\[bot\]$/;
 
+// Whether a login is one a review summary can come from unattended: the
+// Actions bot or a GitHub App bot. A person can post a summary-shaped comment,
+// so what only the engine writes (its version) is read from a bot's summary.
+export function isBotLogin(login: string | undefined): boolean {
+  if (login === undefined) return false;
+  return login === CI_ADJUDICATOR_LOGIN || APP_BOT_LOGIN.test(login);
+}
+
 // Who a read trusts to rule (odd/tasks/platform-commands.md in the platform repo, S5).
 // - `ci`: a run's own read, which decides the gate. Standalone only github-actions[bot] rules. A
 //   run a Crysk platform dispatched posts as the platform App's bot, the login the platform's

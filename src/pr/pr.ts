@@ -3258,6 +3258,7 @@ export async function postInlineFindings(input: {
       doc.head_sha,
       counts,
       postedReviewCount,
+      doc.engine?.version,
     );
     if (state === undefined) {
       return `${body}${admissionBlock}`;
