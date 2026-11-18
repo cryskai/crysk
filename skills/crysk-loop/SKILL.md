@@ -9,7 +9,7 @@ metadata:
 
 ## Step 0 — Load the Live Playbook (Mandatory)
 
-This skill is a dynamic loader so its triage rules, CLI flags, and engine version always match the latest published Crysk release.
+This skill is a loader: its triage rules and CLI flags always match the Crysk version that reviewed the pull request (the newest release when no version is set).
 
 Before taking any action, run:
 

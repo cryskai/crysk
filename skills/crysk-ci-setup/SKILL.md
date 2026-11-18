@@ -9,7 +9,7 @@ metadata:
 
 ## Step 0 — Load the Live Playbook (Mandatory)
 
-This skill is a dynamic loader so its CI workflow templates, admission rules, and CLI version always match the latest published Crysk release.
+This skill is a loader: its CI workflow templates, admission rules, and CLI version always match the Crysk version this repository's CI runs (the newest release when no version is set).
 
 Before taking any action, run:
 

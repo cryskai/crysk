@@ -343,7 +343,9 @@ Usage:
   crysk skills install [--force]
                              Install the crysk, crysk-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
   crysk skills load <skill> [<file>]
-                             Print a bundled skill's playbook (or a companion file such as adjudicator.md, references/*, assets/*) to stdout
+                             Print a skill's playbook (or a companion file such as adjudicator.md, references/*, assets/*) to stdout,
+                             from the crysk version the repository's CI runs: the one crysk status last read from a review, else the
+                             workflow's uses: cryskai/crysk@v... tag, else the latest. Falls back to the bundled copy, with a warning
   crysk ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
                              command
   crysk doctor [options]   Check system tools and environment readiness
