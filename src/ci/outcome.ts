@@ -1206,7 +1206,13 @@ const OPENCODE_PROVIDER_TOKEN_NOTE =
 // the Crysk GitHub App.
 const CHATGPT_PLAN_NOTE =
   "A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).";
-const OPENAI_API_KEY_SECRET = "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY";
+// The scaffolded workflow forwards an OpenCode API key only for the tokens listed in
+// CRYSK_OPENCODE_PROVIDERS, so the secret alone never reaches the action.
+const OPENAI_API_KEY_STEPS = [
+  "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+  "Then list OPENAI in the workflow's provider variable, keeping any token already there:",
+  `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,
+];
 const CRED_STORE_WHY =
   "the credential store does not hold what this route needs";
 // missing_subscription_record is raised for a Claude keychain record and for an
@@ -1221,7 +1227,7 @@ const OPENAI_API_KEY_INSTEAD =
   "Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):";
 const OPENCODE_SUBSCRIPTION_FIXES = [
   "Provider `openai` has no usable ChatGPT login. In GitHub Actions, bill per token with an OpenAI API key:",
-  OPENAI_API_KEY_SECRET,
+  ...OPENAI_API_KEY_STEPS,
   `Stop passing CRYSK_OPENCODE_OPENAI_OAUTH in the crysk-secrets input: the login is used while it is passed. ${CHATGPT_PLAN_NOTE}`,
   "On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.",
   "Locally, run `opencode auth login` and choose ChatGPT.",
@@ -1243,7 +1249,7 @@ function isCryskSecretsDetail(params: ErrorParams): boolean {
 }
 const CRYSK_SECRETS_FIXES = [
   "Re-set the CRYSK_* secret the message names. For OpenAI, set an API key and stop passing the _OAUTH secret in the crysk-secrets input:",
-  OPENAI_API_KEY_SECRET,
+  ...OPENAI_API_KEY_STEPS,
   CHATGPT_PLAN_NOTE,
   "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
 ];
@@ -1346,7 +1352,7 @@ const OPENCODE_CREDENTIAL_FIXES = [
   OPENCODE_API_KEY_SECRET,
   OPENCODE_PROVIDER_TOKEN_NOTE,
   `For OpenAI, set an OpenAI API key. ${CHATGPT_PLAN_NOTE}`,
-  OPENAI_API_KEY_SECRET,
+  ...OPENAI_API_KEY_STEPS,
   `If the secret is already set, check that the workflow passes it to the action in the \`crysk-secrets\` input, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_OPENCODE_DEEPSEEK_API_KEY")}\`: a secret the workflow does not pass never reaches Crysk.`,
   "Dependabot PRs read Dependabot secrets, so set this one too:",
   "$ gh secret set --app dependabot CRYSK_OPENCODE_<PROVIDER>_API_KEY",
@@ -1487,7 +1493,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         fixes: [
           "On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.",
           "On a workflow you manage yourself, nothing renews the secret, so a ChatGPT login does not last. Set an OpenAI API key and stop passing the `_OAUTH` secret in the crysk-secrets input:",
-          OPENAI_API_KEY_SECRET,
+          ...OPENAI_API_KEY_STEPS,
           CHATGPT_PLAN_NOTE,
           "Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.",
         ],
@@ -1567,7 +1573,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         why: "the ChatGPT login recorded in that secret is expired or revoked",
         fixes: [
           "This Action cannot renew a ChatGPT login. Bill per token instead: set an OpenAI API key and stop passing {secret} in the crysk-secrets input (the login is used while it is passed):",
-          OPENAI_API_KEY_SECRET,
+          ...OPENAI_API_KEY_STEPS,
           CHATGPT_PLAN_NOTE,
           "On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.",
           "Then ask for a new review:",
@@ -1900,7 +1906,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Re-run after the limit resets:",
           REVIEW_AGAIN,
           OPENAI_API_KEY_INSTEAD,
-          "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+          ...OPENAI_API_KEY_STEPS,
         ],
         annotationFix:
           "re-run after the limit resets, or set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} to bill per token",

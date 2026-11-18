@@ -1172,6 +1172,10 @@ describe("renderCode and renderError: the annotation", () => {
     expect(openaiSummary).toContain(
       "gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
     );
+    // The workflow forwards an OpenCode API key only for tokens in this variable.
+    expect(openaiSummary).toContain(
+      `gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,
+    );
     expect(openaiSummary).toContain("Crysk GitHub App");
     expect(openaiSummary).toContain(
       "reconnect the provider in the Crysk dashboard",

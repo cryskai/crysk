@@ -1612,6 +1612,12 @@ For OpenAI, set an OpenAI API key. A ChatGPT plan is not supported in this Actio
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
+Then list OPENAI in the workflow's provider variable, keeping any token already there:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
+```
+
 If the secret is already set, check that the workflow passes it to the action in the `crysk-secrets` input, one NAME=value line per secret, for example `CRYSK_OPENCODE_DEEPSEEK_API_KEY=${{ secrets.CRYSK_OPENCODE_DEEPSEEK_API_KEY }}`: a secret the workflow does not pass never reaches Crysk.
 
 Dependabot PRs read Dependabot secrets, so set this one too:
@@ -1710,6 +1716,12 @@ Provider `openai` has no usable ChatGPT login. In GitHub Actions, bill per token
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
+Then list OPENAI in the workflow's provider variable, keeping any token already there:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
+```
+
 Stop passing CRYSK_OPENCODE_OPENAI_OAUTH in the crysk-secrets input: the login is used while it is passed. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.
@@ -1728,6 +1740,12 @@ On a workflow you manage yourself, nothing renews the secret, so a ChatGPT login
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
+
+Then list OPENAI in the workflow's provider variable, keeping any token already there:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
 ```
 
 A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
@@ -1759,6 +1777,12 @@ When `{detail}` names a `CRYSK_*` secret, the `crysk-secrets` input was refused.
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
+
+Then list OPENAI in the workflow's provider variable, keeping any token already there:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
 ```
 
 A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
@@ -1910,6 +1934,12 @@ This Action cannot renew a ChatGPT login. Bill per token instead: set an OpenAI 
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
+
+Then list OPENAI in the workflow's provider variable, keeping any token already there:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
 ```
 
 A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
@@ -2402,6 +2432,12 @@ Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} i
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
+
+Then list OPENAI in the workflow's provider variable, keeping any token already there:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
 ```
 
 <a id="prh-provider-unavailable"></a>
