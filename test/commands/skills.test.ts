@@ -15,10 +15,12 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  delegateToCryskVersion,
   isNewerSemver,
   SKILLS_LOAD_CHECK_TTL_MS,
   skillsInstallCommand,
   skillsLoadCommand,
+  verifyReleaseMetadata,
 } from "#commands/skills";
 import { parseArgs } from "#review/preflight";
 import { resolveEngineAssets } from "../../src/assets";
@@ -272,16 +274,159 @@ describe("skillsLoadCommand", () => {
     ).rejects.toThrow(CliUsageError);
   });
 
-  describe("1h upgrade-check TTL cache and auto-delegation", () => {
+  describe("1h upgrade-check TTL cache, verification, and bounded auto-delegation", () => {
     const nowMs = Date.parse("2026-11-18T12:00:00.000Z");
 
-    test("isNewerSemver compares major.minor.patch strictly", () => {
+    test("isNewerSemver compares same-major versions strictly and rejects major jumps", () => {
       expect(isNewerSemver("0.10.0", "0.9.0")).toBe(true);
-      expect(isNewerSemver("1.0.0", "0.9.9")).toBe(true);
       expect(isNewerSemver("0.9.1", "0.9.0")).toBe(true);
+      expect(isNewerSemver("1.0.0", "0.9.9")).toBe(false);
       expect(isNewerSemver("0.9.0", "0.9.0")).toBe(false);
       expect(isNewerSemver("0.8.9", "0.9.0")).toBe(false);
+      expect(isNewerSemver("v0.10.0", "0.9.0")).toBe(false);
       expect(isNewerSemver("0.10.0-rc.1", "0.9.0")).toBe(false);
+    });
+
+    test("verifyReleaseMetadata requires matching npm integrity/gitHead and GitHub release with SHA256SUMS", () => {
+      const validNpm = {
+        name: "crysk",
+        version: "0.10.0",
+        gitHead: "a".repeat(40),
+        dist: { integrity: "sha512-abc123==" },
+      };
+      const validGh = {
+        tag_name: "v0.10.0",
+        draft: false,
+        prerelease: false,
+        assets: [{ name: "crysk-darwin-arm64" }, { name: "SHA256SUMS" }],
+      };
+
+      expect(verifyReleaseMetadata(validNpm, validGh)).toBe("0.10.0");
+      expect(
+        verifyReleaseMetadata({ ...validNpm, name: "other" }, validGh),
+      ).toBeUndefined();
+      expect(
+        verifyReleaseMetadata(
+          { ...validNpm, dist: { integrity: "md5-bad" } },
+          validGh,
+        ),
+      ).toBeUndefined();
+      expect(
+        verifyReleaseMetadata({ ...validNpm, gitHead: "short" }, validGh),
+      ).toBeUndefined();
+      expect(
+        verifyReleaseMetadata(validNpm, { ...validGh, tag_name: "v0.9.9" }),
+      ).toBeUndefined();
+      expect(
+        verifyReleaseMetadata(validNpm, { ...validGh, prerelease: true }),
+      ).toBeUndefined();
+      expect(
+        verifyReleaseMetadata(validNpm, {
+          ...validGh,
+          assets: [{ name: "crysk-darwin-arm64" }],
+        }),
+      ).toBeUndefined();
+    });
+
+    test("delegateToCryskVersion runs load first, syncs without --force, and never installs when load fails", async () => {
+      const calls: string[][] = [];
+      const okSpawn = ((argv: string[]) => {
+        calls.push(argv);
+        return {
+          stdout: new ReadableStream({
+            start(c) {
+              c.enqueue(new TextEncoder().encode("# playbook"));
+              c.close();
+            },
+          }),
+          exited: Promise.resolve(0),
+          kill: () => {},
+        };
+      }) as unknown as typeof Bun.spawn;
+
+      const out = await delegateToCryskVersion(
+        "0.10.0",
+        "crysk-loop",
+        "adjudicator.md",
+        { spawnFn: okSpawn },
+      );
+      expect(out).toBe("# playbook");
+      expect(calls).toEqual([
+        [
+          "npx",
+          "-y",
+          "crysk@0.10.0",
+          "skills",
+          "load",
+          "crysk-loop",
+          "adjudicator.md",
+        ],
+        ["npx", "-y", "crysk@0.10.0", "skills", "install"],
+      ]);
+
+      const failCalls: string[][] = [];
+      const failSpawn = ((argv: string[]) => {
+        failCalls.push(argv);
+        return {
+          stdout: new ReadableStream({
+            start(c) {
+              c.close();
+            },
+          }),
+          exited: Promise.resolve(1),
+          kill: () => {},
+        };
+      }) as unknown as typeof Bun.spawn;
+
+      const failed = await delegateToCryskVersion(
+        "0.10.0",
+        "crysk-loop",
+        undefined,
+        {
+          spawnFn: failSpawn,
+        },
+      );
+      expect(failed).toBeUndefined();
+      expect(failCalls).toEqual([
+        ["npx", "-y", "crysk@0.10.0", "skills", "load", "crysk-loop"],
+      ]);
+    });
+
+    test("delegateToCryskVersion kills a stalled child on timeout and skips install", async () => {
+      const calls: string[][] = [];
+      let killed = false;
+      // Resolve exited after kill so the bounded helper exits cleanly in the test.
+      let resolveExited!: (code: number) => void;
+      const killableSpawn = ((argv: string[]) => {
+        calls.push(argv);
+        return {
+          stdout: new ReadableStream({
+            start(c) {
+              setTimeout(() => c.close(), 15);
+            },
+          }),
+          exited: new Promise<number>((r) => {
+            resolveExited = r;
+          }),
+          kill: () => {
+            killed = true;
+            resolveExited(137);
+          },
+        };
+      }) as unknown as typeof Bun.spawn;
+
+      const out = await delegateToCryskVersion(
+        "0.10.0",
+        "crysk-loop",
+        undefined,
+        {
+          spawnFn: killableSpawn,
+          timeoutMs: 10,
+        },
+      );
+      expect(killed).toBe(true);
+      expect(out).toBeUndefined();
+      expect(calls.length).toBe(1);
     });
 
     test("fresh cache hit within 1h TTL skips network fetch and serves local playbook", async () => {
@@ -290,6 +435,7 @@ describe("skillsLoadCommand", () => {
         checked_at: new Date(nowMs - 10 * 60 * 1000).toISOString(),
         current_version: assets.version,
         latest_version: assets.version,
+        verified_version: assets.version,
       };
       const { deps } = makeDeps({
         [CACHE_FILE]: JSON.stringify(freshCache),
@@ -306,7 +452,7 @@ describe("skillsLoadCommand", () => {
           env: {},
           fetchLatestVersion: async () => {
             fetchCalls += 1;
-            return "9.9.9";
+            return "0.99.0";
           },
           writeStdout: (t) => out.push(t),
         },
@@ -314,6 +460,43 @@ describe("skillsLoadCommand", () => {
 
       expect(code).toBe(0);
       expect(fetchCalls).toBe(0);
+      const expected = readFileSync(
+        assets.triageSkillFiles["playbook.md"] ?? "",
+        "utf-8",
+      );
+      expect(out.join("")).toBe(expected);
+    });
+
+    test("fresh cache without verified_version does not delegate to unverified latest_version", async () => {
+      const assets = resolveEngineAssets();
+      const unverifiedCache: UpgradeCheckCache = {
+        checked_at: new Date(nowMs - 5 * 60 * 1000).toISOString(),
+        current_version: assets.version,
+        latest_version: "0.99.0",
+      };
+      const { deps } = makeDeps({
+        [CACHE_FILE]: JSON.stringify(unverifiedCache),
+      });
+      let delegateCalls = 0;
+      const out: string[] = [];
+
+      const code = await skillsLoadCommand(
+        parseArgs(["skills", "load", "crysk-loop"]).options,
+        {
+          ...deps,
+          assets,
+          nowMs,
+          env: {},
+          delegateToVersion: async () => {
+            delegateCalls += 1;
+            return "should not delegate";
+          },
+          writeStdout: (t) => out.push(t),
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(delegateCalls).toBe(0);
       const expected = readFileSync(
         assets.triageSkillFiles["playbook.md"] ?? "",
         "utf-8",
@@ -329,6 +512,7 @@ describe("skillsLoadCommand", () => {
         ).toISOString(),
         current_version: assets.version,
         latest_version: assets.version,
+        verified_version: assets.version,
       };
       const { files, deps } = makeDeps({
         [CACHE_FILE]: JSON.stringify(staleCache),
@@ -364,6 +548,7 @@ describe("skillsLoadCommand", () => {
       ) as UpgradeCheckCache;
       expect(updated.checked_at).toBe(new Date(nowMs).toISOString());
       expect(updated.latest_version).toBe(assets.version);
+      expect(updated.verified_version).toBe(assets.version);
       const expected = readFileSync(
         assets.prSkillFiles["playbook.md"] ?? "",
         "utf-8",
@@ -371,7 +556,7 @@ describe("skillsLoadCommand", () => {
       expect(out.join("")).toBe(expected);
     });
 
-    test("newer version delegates, prints delegated stdout, and records reconciled_version", async () => {
+    test("newer version delegates, prints delegated stdout, and records verified + reconciled versions", async () => {
       const assets = resolveEngineAssets();
       const { files, deps } = makeDeps();
       const delegatedArgs: Array<[string, string, string | undefined]> = [];
@@ -403,53 +588,61 @@ describe("skillsLoadCommand", () => {
         files.get(CACHE_FILE) ?? "{}",
       ) as UpgradeCheckCache;
       expect(saved.latest_version).toBe("0.99.0");
+      expect(saved.verified_version).toBe("0.99.0");
       expect(saved.reconciled_version).toBe("0.99.0");
     });
 
-    test("falls back cleanly to local bundled asset when delegation fails", async () => {
+    test("delegation failure falls back to local asset and writes backoff cache so next call skips re-spawning", async () => {
       const assets = resolveEngineAssets();
       const { files, deps } = makeDeps();
-      const out: string[] = [];
+      let fetchCalls = 0;
+      let delegateCalls = 0;
+      const out1: string[] = [];
 
-      const code = await skillsLoadCommand(
+      const code1 = await skillsLoadCommand(
         parseArgs(["skills", "load", "crysk"]).options,
         {
           ...deps,
           assets,
           nowMs,
           env: {},
-          fetchLatestVersion: async () => "0.99.0",
-          delegateToVersion: async () => undefined,
-          writeStdout: (t) => out.push(t),
+          fetchLatestVersion: async () => {
+            fetchCalls += 1;
+            return "0.99.0";
+          },
+          delegateToVersion: async () => {
+            delegateCalls += 1;
+            return undefined;
+          },
+          writeStdout: (t) => out1.push(t),
         },
       );
 
-      expect(code).toBe(0);
+      expect(code1).toBe(0);
+      expect(fetchCalls).toBe(1);
+      expect(delegateCalls).toBe(1);
       const expected = readFileSync(
         assets.generalSkillFiles["playbook.md"] ?? "",
         "utf-8",
       );
-      expect(out.join("")).toBe(expected);
+      expect(out1.join("")).toBe(expected);
+
       const saved = JSON.parse(
         files.get(CACHE_FILE) ?? "{}",
       ) as UpgradeCheckCache;
+      expect(saved.latest_version).toBe(assets.version);
+      expect(saved.verified_version).toBe(assets.version);
       expect(saved.reconciled_version).toBeUndefined();
-    });
 
-    test("CRYSK_SKILLS_DELEGATED=1 bypasses cache check and delegation", async () => {
-      const assets = resolveEngineAssets();
-      const { deps } = makeDeps();
-      let fetchCalls = 0;
-      let delegateCalls = 0;
-      const out: string[] = [];
-
-      const code = await skillsLoadCommand(
-        parseArgs(["skills", "load", "crysk-loop"]).options,
+      // Second call within the 1h TTL uses the backoff cache and skips both fetch & delegate.
+      const out2: string[] = [];
+      const code2 = await skillsLoadCommand(
+        parseArgs(["skills", "load", "crysk"]).options,
         {
           ...deps,
           assets,
-          nowMs,
-          env: { CRYSK_SKILLS_DELEGATED: "1" },
+          nowMs: nowMs + 5 * 60 * 1000,
+          env: {},
           fetchLatestVersion: async () => {
             fetchCalls += 1;
             return "0.99.0";
@@ -458,18 +651,55 @@ describe("skillsLoadCommand", () => {
             delegateCalls += 1;
             return "should not run";
           },
-          writeStdout: (t) => out.push(t),
+          writeStdout: (t) => out2.push(t),
         },
       );
+      expect(code2).toBe(0);
+      expect(fetchCalls).toBe(1);
+      expect(delegateCalls).toBe(1);
+      expect(out2.join("")).toBe(expected);
+    });
 
-      expect(code).toBe(0);
-      expect(fetchCalls).toBe(0);
-      expect(delegateCalls).toBe(0);
-      const expected = readFileSync(
-        assets.triageSkillFiles["playbook.md"] ?? "",
-        "utf-8",
-      );
-      expect(out.join("")).toBe(expected);
+    test("CRYSK_NO_AUTO_UPDATE=1 and CRYSK_SKILLS_DELEGATED=1 bypass cache check and delegation", async () => {
+      const assets = resolveEngineAssets();
+      for (const env of [
+        { CRYSK_SKILLS_DELEGATED: "1" },
+        { CRYSK_NO_AUTO_UPDATE: "1" },
+        { CRYSK_NO_AUTO_UPDATE: "true" },
+      ]) {
+        const { deps } = makeDeps();
+        let fetchCalls = 0;
+        let delegateCalls = 0;
+        const out: string[] = [];
+
+        const code = await skillsLoadCommand(
+          parseArgs(["skills", "load", "crysk-loop"]).options,
+          {
+            ...deps,
+            assets,
+            nowMs,
+            env,
+            fetchLatestVersion: async () => {
+              fetchCalls += 1;
+              return "0.99.0";
+            },
+            delegateToVersion: async () => {
+              delegateCalls += 1;
+              return "should not run";
+            },
+            writeStdout: (t) => out.push(t),
+          },
+        );
+
+        expect(code).toBe(0);
+        expect(fetchCalls).toBe(0);
+        expect(delegateCalls).toBe(0);
+        const expected = readFileSync(
+          assets.triageSkillFiles["playbook.md"] ?? "",
+          "utf-8",
+        );
+        expect(out.join("")).toBe(expected);
+      }
     });
   });
 });

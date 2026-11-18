@@ -1,8 +1,9 @@
 // `crysk skills install` / `crysk skills load`: install writes the bundled
 // loader stubs into every detected coding agent that has a skills directory;
-// load checks npm at most once per hour (via ~/.crysk/upgrade-check.json),
-// auto-delegates and updates local stubs when a newer release exists, and
-// prints the requested skill's playbook or companion file to stdout.
+// load checks dual-verified release metadata (npm + GitHub release with
+// SHA256SUMS) at most once per hour via ~/.crysk/upgrade-check.json,
+// auto-delegates same-major updates within a bounded timeout (refreshing only
+// unmodified local stubs), and prints the requested playbook or companion file.
 
 import { readFileSync } from "node:fs";
 import os from "node:os";
@@ -14,23 +15,28 @@ import { prheroLayout } from "../home-preflight";
 import type { CliOptions } from "../review/preflight";
 import {
   isCheckCacheFresh,
+  PRHERO_GITHUB_REPO,
   readUpgradeCache,
   type UpgradeCheckCache,
   writeUpgradeCache,
 } from "../updater";
 
 export const SKILLS_LOAD_CHECK_TTL_MS = 60 * 60 * 1000;
+export const SKILLS_DELEGATE_TIMEOUT_MS = 10_000;
 
 export function isNewerSemver(candidate: string, current: string): boolean {
   const parse = (v: string): [number, number, number] | null => {
-    const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(v.trim());
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(v.trim());
     if (!match) return null;
     return [Number(match[1]), Number(match[2]), Number(match[3])];
   };
   const a = parse(candidate);
   const b = parse(current);
   if (!a || !b) return false;
-  for (let i = 0; i < 3; i += 1) {
+  // Same-major allowlist: auto-delegation only crosses 0.x -> 0.y (matching @v0),
+  // never jumping across a major version automatically.
+  if (a[0] !== b[0]) return false;
+  for (let i = 1; i < 3; i += 1) {
     const ai = a[i] ?? 0;
     const bi = b[i] ?? 0;
     if (ai !== bi) return ai > bi;
@@ -38,67 +44,164 @@ export function isNewerSemver(candidate: string, current: string): boolean {
   return false;
 }
 
+// Require independent agreement between the npm `latest` manifest (package name,
+// canonical semver, 40-hex gitHead, sha512 dist.integrity) and the published
+// non-draft, non-prerelease GitHub release carrying a SHA256SUMS asset.
+export function verifyReleaseMetadata(
+  npmData: unknown,
+  ghData: unknown,
+): string | undefined {
+  if (
+    typeof npmData !== "object" ||
+    npmData === null ||
+    typeof ghData !== "object" ||
+    ghData === null
+  ) {
+    return undefined;
+  }
+  const npm = npmData as {
+    name?: unknown;
+    version?: unknown;
+    gitHead?: unknown;
+    dist?: { integrity?: unknown };
+  };
+  if (npm.name !== "crysk") return undefined;
+  if (typeof npm.version !== "string" || !/^\d+\.\d+\.\d+$/.test(npm.version)) {
+    return undefined;
+  }
+  if (typeof npm.gitHead !== "string" || !/^[0-9a-f]{40}$/.test(npm.gitHead)) {
+    return undefined;
+  }
+  if (
+    typeof npm.dist?.integrity !== "string" ||
+    !/^sha512-[A-Za-z0-9+/=]+$/.test(npm.dist.integrity)
+  ) {
+    return undefined;
+  }
+
+  const gh = ghData as {
+    tag_name?: unknown;
+    draft?: unknown;
+    prerelease?: unknown;
+    assets?: unknown;
+  };
+  if (gh.tag_name !== `v${npm.version}`) return undefined;
+  if (gh.draft === true || gh.prerelease === true) return undefined;
+  if (!Array.isArray(gh.assets)) return undefined;
+  const hasChecksums = gh.assets.some(
+    (asset) =>
+      typeof asset === "object" &&
+      asset !== null &&
+      (asset as { name?: unknown }).name === "SHA256SUMS",
+  );
+  if (!hasChecksums) return undefined;
+  return npm.version;
+}
+
 async function fetchLatestCryskVersion(): Promise<string | undefined> {
   try {
-    const resp = await fetch("https://registry.npmjs.org/crysk/latest", {
-      signal: AbortSignal.timeout(1500),
-    });
-    if (!resp.ok) return undefined;
-    const data = (await resp.json()) as { version?: unknown };
-    return typeof data.version === "string" ? data.version : undefined;
+    const [npmResp, ghResp] = await Promise.all([
+      fetch("https://registry.npmjs.org/crysk/latest", {
+        signal: AbortSignal.timeout(1500),
+      }),
+      fetch(
+        `https://api.github.com/repos/${PRHERO_GITHUB_REPO}/releases/latest`,
+        {
+          headers: { "User-Agent": "crysk-cli" },
+          signal: AbortSignal.timeout(1500),
+        },
+      ),
+    ]);
+    if (!npmResp.ok || !ghResp.ok) return undefined;
+    const [npmData, ghData] = await Promise.all([
+      npmResp.json(),
+      ghResp.json(),
+    ]);
+    return verifyReleaseMetadata(npmData, ghData);
   } catch {
     return undefined;
   }
 }
 
-async function delegateToCryskVersion(
+async function runBoundedNpx(
+  args: string[],
+  options: {
+    env: Record<string, string | undefined>;
+    captureStdout: boolean;
+    timeoutMs: number;
+    spawnFn: typeof Bun.spawn;
+  },
+): Promise<{ ok: boolean; stdout: string }> {
+  try {
+    const proc = options.spawnFn(["npx", "-y", ...args], {
+      env: options.env,
+      stdout: options.captureStdout ? "pipe" : "ignore",
+      stderr: "ignore",
+      timeout: options.timeoutMs,
+    });
+    let timedOut = false;
+    const watchdog = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, options.timeoutMs);
+    let stdout = "";
+    let exitCode = 1;
+    try {
+      if (
+        options.captureStdout &&
+        proc.stdout !== undefined &&
+        typeof proc.stdout !== "number"
+      ) {
+        [stdout, exitCode] = await Promise.all([
+          new Response(proc.stdout).text(),
+          proc.exited,
+        ]);
+      } else {
+        exitCode = await proc.exited;
+      }
+    } finally {
+      clearTimeout(watchdog);
+    }
+    if (timedOut || exitCode !== 0) return { ok: false, stdout: "" };
+    return { ok: true, stdout };
+  } catch {
+    return { ok: false, stdout: "" };
+  }
+}
+
+export async function delegateToCryskVersion(
   version: string,
   skillName: string,
   skillFile?: string,
+  deps: { spawnFn?: typeof Bun.spawn; timeoutMs?: number } = {},
 ): Promise<string | undefined> {
   const childEnv = { ...process.env, CRYSK_SKILLS_DELEGATED: "1" };
-  try {
-    const installProc = Bun.spawn(
-      ["npx", "-y", `crysk@${version}`, "skills", "install", "--force"],
-      {
-        env: childEnv,
-        stdout: "ignore",
-        stderr: "ignore",
-      },
-    );
-    await installProc.exited;
-  } catch {
-    // Best-effort local stub update; proceed to load from the newer version.
+  const spawnFn = deps.spawnFn ?? Bun.spawn;
+  const timeoutMs = deps.timeoutMs ?? SKILLS_DELEGATE_TIMEOUT_MS;
+
+  const loadResult = await runBoundedNpx(
+    [
+      `crysk@${version}`,
+      "skills",
+      "load",
+      skillName,
+      ...(skillFile === undefined ? [] : [skillFile]),
+    ],
+    { env: childEnv, captureStdout: true, timeoutMs, spawnFn },
+  );
+  if (!loadResult.ok || loadResult.stdout.length === 0) {
+    return undefined;
   }
 
-  try {
-    const loadProc = Bun.spawn(
-      [
-        "npx",
-        "-y",
-        `crysk@${version}`,
-        "skills",
-        "load",
-        skillName,
-        ...(skillFile === undefined ? [] : [skillFile]),
-      ],
-      {
-        env: childEnv,
-        stdout: "pipe",
-        stderr: "ignore",
-      },
-    );
-    const [stdout, exitCode] = await Promise.all([
-      new Response(loadProc.stdout).text(),
-      loadProc.exited,
-    ]);
-    if (exitCode === 0 && stdout.length > 0) {
-      return stdout;
-    }
-  } catch {
-    // Offline or npx failure: fall back to local bundled asset.
-  }
-  return undefined;
+  // Refresh unmodified local stubs only after `load` succeeded, and never with
+  // `--force`, so user-edited skill files stay drift-kept.
+  await runBoundedNpx([`crysk@${version}`, "skills", "install"], {
+    env: childEnv,
+    captureStdout: false,
+    timeoutMs,
+    spawnFn,
+  });
+  return loadResult.stdout;
 }
 
 export interface SkillsInstallDeps {
@@ -179,7 +282,12 @@ export async function skillsLoadCommand(
     deps.writeStdout ?? ((text: string) => process.stdout.write(text));
 
   const env = deps.env ?? process.env;
-  if (env.CRYSK_SKILLS_DELEGATED !== "1") {
+  const autoUpdateDisabled =
+    env.CRYSK_SKILLS_DELEGATED === "1" ||
+    env.CRYSK_NO_AUTO_UPDATE === "1" ||
+    env.CRYSK_NO_AUTO_UPDATE === "true";
+
+  if (!autoUpdateDisabled) {
     const home = deps.home ?? os.homedir();
     const nowMs = deps.nowMs ?? Date.now();
     const layout = prheroLayout(home, deps.exists);
@@ -198,30 +306,34 @@ export async function skillsLoadCommand(
         ? delegateToCryskVersion
         : async () => undefined);
 
-    let latestVersion: string | undefined;
-    let latestCache: UpgradeCheckCache | undefined = cache;
+    const writeCacheBestEffort = (next: UpgradeCheckCache): void => {
+      try {
+        writeUpgradeCache(layout.upgradeCheckPath, next, {
+          writeFile: deps.writeFile,
+        });
+      } catch {
+        // Best-effort cache write; read-only homes still serve skills.
+      }
+    };
 
+    let latestVersion: string | undefined;
     if (isCheckCacheFresh(cache, nowMs, SKILLS_LOAD_CHECK_TTL_MS)) {
-      latestVersion = cache?.latest_version;
+      latestVersion = cache?.verified_version;
     } else {
       const fetched = await fetchLatest();
       if (fetched !== undefined) {
         latestVersion = fetched;
-        latestCache = {
-          ...cache,
-          checked_at: new Date(nowMs).toISOString(),
-          current_version: assets.version,
-          latest_version: fetched,
-        };
-        try {
-          writeUpgradeCache(layout.upgradeCheckPath, latestCache, {
-            writeFile: deps.writeFile,
+        if (!isNewerSemver(fetched, assets.version)) {
+          writeCacheBestEffort({
+            ...cache,
+            checked_at: new Date(nowMs).toISOString(),
+            current_version: assets.version,
+            latest_version: fetched,
+            verified_version: fetched,
           });
-        } catch {
-          // Best-effort cache write; read-only homes still serve skills.
         }
       } else {
-        latestVersion = cache?.latest_version;
+        latestVersion = cache?.verified_version;
       }
     }
 
@@ -232,25 +344,26 @@ export async function skillsLoadCommand(
         options.skillFile,
       );
       if (delegated !== undefined) {
-        try {
-          writeUpgradeCache(
-            layout.upgradeCheckPath,
-            {
-              ...latestCache,
-              checked_at:
-                latestCache?.checked_at ?? new Date(nowMs).toISOString(),
-              current_version: latestCache?.current_version ?? assets.version,
-              latest_version: latestVersion,
-              reconciled_version: latestVersion,
-            },
-            { writeFile: deps.writeFile },
-          );
-        } catch {
-          // Best-effort cache write.
-        }
+        writeCacheBestEffort({
+          ...cache,
+          checked_at: new Date(nowMs).toISOString(),
+          current_version: assets.version,
+          latest_version: latestVersion,
+          verified_version: latestVersion,
+          reconciled_version: latestVersion,
+        });
         writeStdout(delegated.endsWith("\n") ? delegated : `${delegated}\n`);
         return 0;
       }
+      // Back off for the TTL window so a failing/stalled npx download does not
+      // re-spawn on every subsequent `skills load` for the next hour.
+      writeCacheBestEffort({
+        ...cache,
+        checked_at: new Date(nowMs).toISOString(),
+        current_version: assets.version,
+        latest_version: assets.version,
+        verified_version: assets.version,
+      });
     }
   }
 
