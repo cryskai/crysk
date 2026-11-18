@@ -21,7 +21,7 @@ Unset `CRYSK_MODELS` = Claude-only CI.
 
 ## Fastest path: `crysk ci init`
 
-If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk@0.8.1 ci init` (or `setup --ci`) prints every `gh secret set` / `gh variable set` command for it: the Claude secret, one `CRYSK_OPENCODE_<P>_API_KEY` per provider (plus the `_OAUTH` line for openai), `CRYSK_MODELS`, `CRYSK_CREDENTIALS` and `CRYSK_OPENCODE_PROVIDERS`. It never runs them. It refuses, writing nothing, when the models name more than 5 OpenCode providers. Run the commands the human agrees to; `gh secret set` asks for each value, so it never appears in the chat.
+If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk@0.9.0 ci init` (or `setup --ci`) prints every `gh secret set` / `gh variable set` command for it: the Claude secret, one `CRYSK_OPENCODE_<P>_API_KEY` per provider (plus the `_OAUTH` line for openai), `CRYSK_MODELS`, `CRYSK_CREDENTIALS` and `CRYSK_OPENCODE_PROVIDERS`. It never runs them. It refuses, writing nothing, when the models name more than 5 OpenCode providers. Run the commands the human agrees to; `gh secret set` asks for each value, so it never appears in the chat.
 
 ## Models per role
 
@@ -89,7 +89,7 @@ models: ${{ vars.CRYSK_MODELS }}
 credentials: ${{ vars.CRYSK_CREDENTIALS }}
 ```
 
-Copy it from `assets/workflow.yml` or re-scaffold with `npx -y crysk@0.8.1 ci init --force`; never write it from memory. An unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped.
+Copy it from `assets/workflow.yml` or re-scaffold with `npx -y crysk@0.9.0 ci init --force`; never write it from memory. An unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped.
 
 The Action installs OpenCode CLI **1.18.30** in its **own** step when the setup step built an OpenCode auth file **or** the models in effect name `opencode:`. Never `latest`. Claude-only skips that install.
 

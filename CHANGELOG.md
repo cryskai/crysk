@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-18
+
+### Changed
+
+- **A triage reply counts only from a login with write access, in the review too.** The gate already read
+  replies that way. The review now does as well: a reply from someone who can only comment on the pull request
+  is not read, so it cannot queue a dismissal for the CI adjudicator or buy a verification. On a pull request
+  from an outside contributor, someone with write access answers the findings. `crysk status` reports the reply
+  the gate counts in `triage`, and a `triage` reason names the logins whose replies do not count.
+- **A command is read from the comment's first line.** `/crysk review`, `/crysk recheck`, `/crysk override` and
+  `/crysk stop` run when the first line is exactly the command, whatever follows on later lines. Nothing may
+  come before the command, and other words on its line still make it no command.
+- **Reinstall the skills** (`crysk skills install`) to get the triage instructions for findings listed only in
+  the summary and the command rule above.
+
 ### Fixed
 
 - **A re-review no longer reads what a merge of the base branch brought in.** When the author merged the base
@@ -1244,7 +1259,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/cryskai/crysk/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.1
 [0.8.0]: https://github.com/cryskai/crysk/compare/v0.7.0...cc6cdec9
 [0.7.0]: https://github.com/cryskai/crysk/compare/v0.6.1...v0.7.0
