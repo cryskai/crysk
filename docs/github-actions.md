@@ -1598,10 +1598,10 @@ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 
 <PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).
 
-For an OpenAI subscription, set its record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):
+For OpenAI, set an OpenAI API key. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 ```bash
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
 If the secret is already set, check that the workflow passes it to the action in the `crysk-secrets` input, one NAME=value line per secret, for example `CRYSK_OPENCODE_DEEPSEEK_API_KEY=${{ secrets.CRYSK_OPENCODE_DEEPSEEK_API_KEY }}`: a secret the workflow does not pass never reaches Crysk.
@@ -1642,11 +1642,7 @@ gh secret set CRYSK_CLAUDE_API_KEY
 gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
-claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. An OpenAI subscription is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):
-
-```bash
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
-```
+claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. For OpenAI that is CRYSK_OPENCODE_OPENAI_API_KEY. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 In the workflow, delete the old lines under `with:` and pass the secrets in one `crysk-secrets: |` block, one NAME=value line per secret, for example `CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}`.
 
@@ -1700,18 +1696,15 @@ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN
 
 On the OpenCode route (`backend` is `opencode`):
 
-Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then set its record, base64 on one line (on macOS, drop -w0):
-
-```bash
-opencode auth login
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
-```
-
-Or bill per token with an OpenAI API key instead:
+Provider `openai` has no usable ChatGPT login. In GitHub Actions, bill per token with an OpenAI API key:
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+Stop passing CRYSK_OPENCODE_OPENAI_OAUTH in the crysk-secrets input: the login is used while it is passed. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
+
+Locally, run `opencode auth login` and choose ChatGPT.
 
 #### `subscription_expiring`
 
@@ -1721,7 +1714,13 @@ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 
 On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.
 
-On a workflow you manage yourself, run `opencode auth login` again and set the `CRYSK_OPENCODE_<PROVIDER>_OAUTH` secret from its new record: the secret is a snapshot, and nothing renews it for you.
+On a workflow you manage yourself, nothing renews the secret, so a ChatGPT login does not last. Set an OpenAI API key and stop passing the `_OAUTH` secret in the crysk-secrets input:
+
+```bash
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
+
+A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.
 
@@ -1746,12 +1745,13 @@ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
 When `{detail}` names a `CRYSK_*` secret, the `crysk-secrets` input was refused. See
-[`CRYSK_*` secrets](#crysk_-secrets). Re-set an `_OAUTH` secret from the provider's record in your
-OpenCode auth file, encoded on one line (on macOS, `base64` does not wrap, so drop `-w0`):
+[`CRYSK_*` secrets](#crysk_-secrets). Re-set the CRYSK_* secret the message names. For OpenAI, set an API key and stop passing the _OAUTH secret in the crysk-secrets input:
 
 ```bash
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 When `{detail}` is `CRYSK_OPENCODE__API_KEY has a value but no provider: an unused OpenCode slot must be empty`,
 the Crysk platform passed an OpenCode key through a provider slot with no provider name, so Crysk cannot tell
@@ -1896,18 +1896,13 @@ The rejected secret is the OpenAI subscription record, `CRYSK_OPENCODE_OPENAI_OA
 
 **Fix:**
 
-Log in again with `opencode auth login` and choose ChatGPT, then set the provider's record, base64 on one line (on macOS, drop -w0):
-
-```bash
-opencode auth login
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
-```
-
-Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):
+This Action cannot renew a ChatGPT login. Bill per token instead: set an OpenAI API key and stop passing {secret} in the crysk-secrets input (the login is used while it is passed):
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 Then ask for a new review:
 

@@ -1162,14 +1162,40 @@ describe("renderCode and renderError: the annotation", () => {
       { backend: "opencode", provider: "openai", secret: "OPENCODE_AUTH_JSON" },
       "action",
     );
+    // The Action cannot keep a ChatGPT login valid: the fix leads with the API
+    // key, sends a ChatGPT plan to the Crysk GitHub App and never tells anyone
+    // to store the login record.
     expect(openai.annotation).toContain("ChatGPT");
-    expect(openai.annotation).toContain("opencode auth login");
-    expect(openai.summary.join("\n")).toContain("ChatGPT");
-    expect(openai.summary.join("\n")).toContain("opencode auth login");
-    expect(openai.summary.join("\n")).toContain(
+    expect(openai.annotation).toContain("CRYSK_OPENCODE_OPENAI_API_KEY");
+    expect(openai.annotation).toContain("Crysk GitHub App");
+    const openaiSummary = openai.summary.join("\n");
+    expect(openaiSummary).toContain("ChatGPT");
+    expect(openaiSummary).toContain(
+      "gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+    );
+    expect(openaiSummary).toContain("Crysk GitHub App");
+    expect(openaiSummary).not.toContain(
       "gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
     );
-    expect(openai.summary.join("\n")).not.toContain("OPENCODE_AUTH_JSON");
+    expect(openaiSummary).not.toContain("| base64");
+    expect(openaiSummary).not.toContain("OPENCODE_AUTH_JSON");
+  });
+
+  test("no code tells anyone to build a ChatGPT login secret from their OpenCode auth file", () => {
+    for (const code of ERROR_CODES) {
+      const entry = entryOf(code);
+      for (const ctx of CONTEXTS) {
+        for (const key of Object.keys(entry.variants)) {
+          const variant = key === "action" || key === "local" ? undefined : key;
+          const rendered = renderCode(code, FULL, ctx, variant);
+          const text = `${rendered.annotation}\n${rendered.summary.join("\n")}`;
+          expect(text, `${code} ${ctx} ${key}`).not.toContain("| base64");
+          expect(text, `${code} ${ctx} ${key}`).not.toContain(
+            "gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+          );
+        }
+      }
+    }
   });
 
   test("an expiring subscription login says who renews it, in CI and locally", () => {
@@ -1187,6 +1213,9 @@ describe("renderCode and renderError: the annotation", () => {
     expect(ci.code).toBe("CRYSK-CRED-UNUSABLE");
     expect(ci.summary.join("\n")).toContain("expires");
     expect(ci.summary.join("\n")).toContain("Crysk dashboard");
+    // A workflow you manage yourself gets the API key, not another login record.
+    expect(ci.summary.join("\n")).toContain("CRYSK_OPENCODE_OPENAI_API_KEY");
+    expect(ci.summary.join("\n")).not.toContain("| base64");
     const local = renderError(
       { kind: "credential", failureClass: "subscription_expiring" },
       params,
@@ -2015,7 +2044,7 @@ describe("parseCliRecord — a credential refusal", () => {
     );
     expect(rendered.code).toBe("CRYSK-CRED-UNUSABLE");
     const summary = rendered.summary.join("\n");
-    expect(summary).toContain("opencode auth login");
+    expect(summary).toContain("CRYSK_OPENCODE_OPENAI_API_KEY");
     expect(summary).not.toContain("claude setup-token");
   });
 

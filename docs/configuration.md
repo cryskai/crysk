@@ -105,7 +105,8 @@ A **profile** is a ready-made set of models for every role. Pick one in your per
   measured on (`claude:sonnet-latest`, `claude:opus-latest`). On `openai` it runs on
   `opencode:openai/gpt-6.1-terra`, a choice made without a measurement; `models.judge` may also pick one of the
   two measured Claude models, which then needs Claude. Either way the judge runs only with `materiality_gate` on.
-- On `openai` the runner needs `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and no Claude
+- On `openai` the runner needs `CRYSK_OPENCODE_OPENAI_API_KEY` (a ChatGPT login works only on a repository connected
+  to the Crysk platform, never from a secret you set yourself), and no Claude
   CLI unless a `models` entry, or a prompt in a custom `agents_dir` (whose `model:` outranks the profile),
   names a Claude model.
 - If a profile is set and its route plan cannot be built, the review fails. It never falls back to another
@@ -408,7 +409,9 @@ regardless of what it is named.
 
 In CI the kind follows the secret instead of the provider's name: the setup step records which `CRYSK_*`
 secret built each record, so an `openai` model on `CRYSK_OPENCODE_OPENAI_API_KEY` runs as a metered API
-key, and on `CRYSK_OPENCODE_OPENAI_OAUTH` as the subscription (see
+key, and on `CRYSK_OPENCODE_OPENAI_OAUTH` as the subscription, a login only the Crysk platform writes: in the
+open-source Action a ChatGPT plan is not supported, because OpenAI replaces its refresh token on every
+renewal and nothing renews a repository secret (see
 [How the OpenCode secrets become the auth file](github-actions.md#how-the-opencode-secrets-become-the-auth-file)).
 The rule above holds for your own machine's `auth.json`, where no such record exists.
 

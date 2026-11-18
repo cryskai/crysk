@@ -161,7 +161,7 @@ describe("CRYSK-CRED-REJECTED on an OpenCode route names the OpenCode secret", (
     expect(rendered?.summary.join("\n")).not.toContain("Claude Console");
   });
 
-  test("a rejected OpenAI subscription record: the fix logs in to OpenCode again", () => {
+  test("a rejected OpenAI subscription record: the fix is the API key, and a ChatGPT plan goes to the GitHub App", () => {
     const rendered = renderHunterCause(
       "auth_invalid",
       { ...RUN, provider: "openai", model: "gpt-5" },
@@ -170,11 +170,12 @@ describe("CRYSK-CRED-REJECTED on an OpenCode route names the OpenCode secret", (
     );
     expect(rendered?.code).toBe("CRYSK-CRED-REJECTED");
     expect(rendered?.what).toContain("CRYSK_OPENCODE_OPENAI_OAUTH");
-    expect(rendered?.summary.join("\n")).toContain("opencode auth login");
-    expect(rendered?.summary.join("\n")).toContain(
-      "gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
-    );
-    expect(rendered?.summary.join("\n")).not.toContain("claude setup-token");
+    const summary = rendered?.summary.join("\n") ?? "";
+    expect(summary).toContain("gh secret set CRYSK_OPENCODE_OPENAI_API_KEY");
+    expect(summary).toContain("Crysk GitHub App");
+    expect(summary).not.toContain("opencode auth login");
+    expect(summary).not.toContain("gh secret set CRYSK_OPENCODE_OPENAI_OAUTH");
+    expect(summary).not.toContain("claude setup-token");
   });
 
   test("renderCode picks the OpenCode variant from the secret alone", () => {
