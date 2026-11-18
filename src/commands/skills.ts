@@ -44,9 +44,11 @@ export function isNewerSemver(candidate: string, current: string): boolean {
   return false;
 }
 
-// Require independent agreement between the npm `latest` manifest (package name,
-// canonical semver, 40-hex gitHead, sha512 dist.integrity) and the published
-// non-draft, non-prerelease GitHub release carrying a SHA256SUMS asset.
+// Validate npm `latest` manifest fields (`name`, canonical semver `version`,
+// 40-hex `gitHead`, `sha512-` `dist.integrity`) and require GitHub `/releases/latest`
+// to be a published non-draft, non-prerelease release with matching
+// `tag_name: "v<version>"` and a `SHA256SUMS` asset (structural/tag agreement
+// only — does not cross-verify commit SHAs or tarball hashes).
 export function verifyReleaseMetadata(
   npmData: unknown,
   ghData: unknown,
@@ -139,31 +141,63 @@ async function runBoundedNpx(
       stderr: "ignore",
       timeout: options.timeoutMs,
     });
+    const stdoutStream =
+      options.captureStdout &&
+      proc.stdout !== undefined &&
+      typeof proc.stdout !== "number"
+        ? proc.stdout
+        : undefined;
     let timedOut = false;
-    const watchdog = setTimeout(() => {
-      timedOut = true;
-      proc.kill();
-    }, options.timeoutMs);
-    let stdout = "";
-    let exitCode = 1;
-    try {
-      if (
-        options.captureStdout &&
-        proc.stdout !== undefined &&
-        typeof proc.stdout !== "number"
-      ) {
-        [stdout, exitCode] = await Promise.all([
-          new Response(proc.stdout).text(),
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+      watchdog = setTimeout(() => {
+        timedOut = true;
+        try {
+          proc.kill();
+        } catch {
+          // Process may have already exited.
+        }
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // Process may have already exited.
+        }
+        if (stdoutStream) {
+          try {
+            void stdoutStream.cancel().catch(() => {});
+          } catch {
+            // Ignore locked or already-closed stdout streams.
+          }
+        }
+        resolve({ kind: "timeout" });
+      }, options.timeoutMs);
+    });
+    const workPromise = (async (): Promise<{
+      kind: "done";
+      stdout: string;
+      exitCode: number;
+    }> => {
+      if (stdoutStream) {
+        const [stdout, exitCode] = await Promise.all([
+          new Response(stdoutStream).text(),
           proc.exited,
         ]);
-      } else {
-        exitCode = await proc.exited;
+        return { kind: "done", stdout, exitCode };
       }
+      const exitCode = await proc.exited;
+      return { kind: "done", stdout: "", exitCode };
+    })();
+    // Prevent unhandled rejections if child pipe/process rejects after timeout wins.
+    void workPromise.catch(() => {});
+    try {
+      const outcome = await Promise.race([workPromise, timeoutPromise]);
+      if (timedOut || outcome.kind === "timeout" || outcome.exitCode !== 0) {
+        return { ok: false, stdout: "" };
+      }
+      return { ok: true, stdout: outcome.stdout };
     } finally {
-      clearTimeout(watchdog);
+      if (watchdog !== undefined) clearTimeout(watchdog);
     }
-    if (timedOut || exitCode !== 0) return { ok: false, stdout: "" };
-    return { ok: true, stdout };
   } catch {
     return { ok: false, stdout: "" };
   }
@@ -356,12 +390,14 @@ export async function skillsLoadCommand(
         return 0;
       }
       // Back off for the TTL window so a failing/stalled npx download does not
-      // re-spawn on every subsequent `skills load` for the next hour.
+      // re-spawn on every subsequent `skills load` for the next hour, while
+      // preserving `latest_version` so `crysk upgrade --check` still surfaces
+      // the newer upstream release.
       writeCacheBestEffort({
         ...cache,
         checked_at: new Date(nowMs).toISOString(),
         current_version: assets.version,
-        latest_version: assets.version,
+        latest_version: latestVersion,
         verified_version: assets.version,
       });
     }

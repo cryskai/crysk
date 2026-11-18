@@ -287,7 +287,7 @@ describe("skillsLoadCommand", () => {
       expect(isNewerSemver("0.10.0-rc.1", "0.9.0")).toBe(false);
     });
 
-    test("verifyReleaseMetadata requires matching npm integrity/gitHead and GitHub release with SHA256SUMS", () => {
+    test("verifyReleaseMetadata validates npm field shapes and matching non-draft GitHub release tag with SHA256SUMS", () => {
       const validNpm = {
         name: "crysk",
         version: "0.10.0",
@@ -392,25 +392,22 @@ describe("skillsLoadCommand", () => {
       ]);
     });
 
-    test("delegateToCryskVersion kills a stalled child on timeout and skips install", async () => {
+    test("delegateToCryskVersion kills a stalled child on timeout (even with leaked pipes) and skips install", async () => {
       const calls: string[][] = [];
-      let killed = false;
-      // Resolve exited after kill so the bounded helper exits cleanly in the test.
-      let resolveExited!: (code: number) => void;
+      const signals: (string | number | undefined)[] = [];
       const killableSpawn = ((argv: string[]) => {
         calls.push(argv);
         return {
           stdout: new ReadableStream({
-            start(c) {
-              setTimeout(() => c.close(), 15);
+            start() {
+              // Never closes or errors, simulating a grandchild holding the pipe.
             },
           }),
-          exited: new Promise<number>((r) => {
-            resolveExited = r;
+          exited: new Promise<number>(() => {
+            // Never resolves, proving Promise.race bounds the wait.
           }),
-          kill: () => {
-            killed = true;
-            resolveExited(137);
+          kill: (sig?: string | number) => {
+            signals.push(sig);
           },
         };
       }) as unknown as typeof Bun.spawn;
@@ -424,7 +421,7 @@ describe("skillsLoadCommand", () => {
           timeoutMs: 10,
         },
       );
-      expect(killed).toBe(true);
+      expect(signals).toEqual([undefined, "SIGKILL"]);
       expect(out).toBeUndefined();
       expect(calls.length).toBe(1);
     });
@@ -630,7 +627,7 @@ describe("skillsLoadCommand", () => {
       const saved = JSON.parse(
         files.get(CACHE_FILE) ?? "{}",
       ) as UpgradeCheckCache;
-      expect(saved.latest_version).toBe(assets.version);
+      expect(saved.latest_version).toBe("0.99.0");
       expect(saved.verified_version).toBe(assets.version);
       expect(saved.reconciled_version).toBeUndefined();
 
