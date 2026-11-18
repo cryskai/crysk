@@ -7,7 +7,7 @@ Load when the user wants to **operate or configure Crysk on their machine or rep
 - Set up the watcher (`crysk watch`) or worktree GC (`crysk gc`).
 - Diagnose a broken install or a refused run (`crysk doctor`, `crysk config`).
 
-Route away: GitHub Actions, `CRYSK_*` secrets, `CRYSK_MODELS`, `/crysk review` comments → load `crysk-ci-setup`. Replying to posted `<!-- crysk-finding` comments → load `crysk-loop`.
+Route away: GitHub Actions, `CRYSK_*` secrets, `CRYSK_MODELS`, `/crysk review` comments → load `crysk-ci-setup`. Replying to posted `crysk-finding` comments → load `crysk-loop`.
 
 ## Source of Truth
 

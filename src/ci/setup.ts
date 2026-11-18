@@ -231,7 +231,7 @@ function credentialWithLines(options: CiWorkflowTemplateOptions): string {
           # both Claude secrets set, credentials.claude picks one (the subscription first).
           #   CRYSK_CLAUDE_OAUTH_TOKEN — from \`claude setup-token\`: a long-lived
           #     (~1 year) token that draws on your Claude subscription. The
-          #     session token \`/login\` leaves in the keychain expires in hours.
+          #     session token a \`/login\` stores locally expires in hours.
           #   CRYSK_CLAUDE_API_KEY     — pay-as-you-go key (billed per token).`;
   if (options.cryskSecrets !== undefined) {
     return `${block}

@@ -9,18 +9,18 @@ Use it when you see comments whose FIRST line matches:
 <!-- crysk-finding path=<url-encoded-path> line=<n> head=<40-hex-sha> c=<12-hex> -->
 ```
 
-Comments posted before the rename to Crysk start with `<!-- pr-hero-` instead of
-`<!-- crysk-` (`<!-- pr-hero-finding`, `<!-- pr-hero-report`, `<!-- pr-hero-triage`, ...).
+Comments posted before the rename to Crysk carry markers named `pr-hero-…` instead of
+`crysk-…` (`pr-hero-finding`, `pr-hero-report`, `pr-hero-triage`, ...).
 Treat them exactly the same; the CLI reads both.
 
 Do not use it for ordinary human review comments, or for Crysk's own summary comment
 (`<!-- crysk-report head=<sha> -->`). That comment is a status roll-up plus, since W2
 (issues #16/#17), a `### Comments Outside Diff` bucket for findings GitHub would not
-anchor. Those bucket findings have **no** `<!-- crysk-finding` marker and **no**
+anchor. Those bucket findings have **no** `crysk-finding` marker and **no**
 review thread; each shows its row id (`R003`) beside its location, and step 0 lists it with
 `comment_id: null`. You answer one like any other finding, by that id: the driver posts a
 top-level comment that names the row. Do not reply on the summary yourself and do not invent a
-`gh` comment for them. Every other finding has its own `<!-- crysk-finding` comment, almost
+`gh` comment for them. Every other finding has its own comment with a `crysk-finding` marker, almost
 always an inline review comment on Files changed.
 
 ## Running the CLI (no install needed)
@@ -247,7 +247,7 @@ so on a repository that has not updated, post the command alone.
    re-answered at a later head. The thread (step 2 below) settles the per-head question, and the
    escalation count still reads the thread's prior markers.
 
-For EVERY `<!-- crysk-finding ` comment on this PR that has not already been triaged for the
+For EVERY comment on this PR that carries a `crysk-finding` marker that has not already been triaged for the
 current head:
 
 1. **Read the finding.** Fetch the comment body (the marker plus Crysk's claim/severity/tier
@@ -282,7 +282,7 @@ current head:
    with no comment (`comment_id: null`) the same command posts a top-level comment that names the
    row; there is no thread to resolve.
 
-   The driver resolves the parent from the posted `<!-- crysk-finding`
+   The driver resolves the parent from the posted `crysk-finding`
    marker (never a comment id, never the nearest line), prepends the triage
    marker and the visible badge, posts the reply, records the triage event
    transactionally in the canonical product store (`finding_triage` table in
@@ -445,7 +445,7 @@ different answer — if two different heads with real code changes between them 
 a third will not, and by then the thread carries enough material for a person to rule in a minute.
 
 **The count is read off the finding's PRIOR triage markers, not remembered or estimated.** Fetch
-this finding's own reply thread, parse every `<!-- crysk-triage ` marker already posted in it in
+this finding's own reply thread, parse every `crysk-triage` marker already posted in it in
 order, and read their `verdict=` fields — the same field this round's reply will also carry. If
 the most recent one is `verdict=inconclusive` AND the one before it is also `verdict=inconclusive`
 (two markers, both `inconclusive`, both belonging to a head change that legitimately re-triaged —
@@ -455,9 +455,9 @@ nothing else to consult.
 
 ## What you write vs what the driver posts
 
-`--body-file` is **reasoning prose only**. Do not put a `<!-- crysk-triage` marker or a
+`--body-file` is **reasoning prose only**. Do not put a `crysk-triage` marker or a
 badge line in that file — the driver prepends both, picks the parent comment from the posted
-`<!-- crysk-finding` marker, records the decision to the canonical store (`finding_triage`
+`crysk-finding` marker, records the decision to the canonical store (`finding_triage`
 table), and resolves the inline review thread when there is one.
 Passing a GitHub comment id, or posting with `gh api … in_reply_to`, is how replies landed
 under Greptile on Musive #1724. Do not do that. Do not reply on
