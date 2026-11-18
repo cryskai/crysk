@@ -2,7 +2,7 @@
 
 Crysk reviews every pull request automatically: a multi-agent hunt with adversarial refutation runs
 inside a GitHub Actions job, posts findings as PR comments, and writes a step summary. Its commit status
-(`crysk`; `pr-hero` is still posted for one version) is a gate by default: blocking findings turn it red, so
+(`crysk`; the legacy `pr-hero` status is no longer posted, so a branch-protection rule on it must move to `crysk`) is a gate by default: blocking findings turn it red, so
 require `crysk` in branch protection to block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mode-the-status-is-the-check).
 
 ## Quick path

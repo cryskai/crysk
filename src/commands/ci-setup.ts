@@ -501,7 +501,7 @@ export async function ciSetupCommand(
   // The check to require is `crysk` (the commit status, the gate), not the
   // `review` job, which stays green even when it finds blocking issues.
   log(
-    `${next()} In branch protection, require the \`crysk\` status check (not the \`review\` job; the legacy \`pr-hero\` status is still posted for one version, so an existing rule on \`pr-hero\` keeps working); a private repository on GitHub Free cannot require status checks`,
+    `${next()} In branch protection, require the \`crysk\` status check (not the \`review\` job; the legacy \`pr-hero\` status is no longer posted, so a rule that requires it must move to \`crysk\`); a private repository on GitHub Free cannot require status checks`,
   );
   log(`${next()} Open a pull request to trigger the workflow`);
   // GitHub reads a comment-triggered workflow from the DEFAULT branch, so a

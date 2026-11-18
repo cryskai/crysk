@@ -2079,7 +2079,7 @@ describe("ci init review-instructions steps (CLI)", () => {
   test("every repo is told to require the crysk status check, not the review job", async () => {
     const { output } = await runInit();
     expect(output).toContain(
-      "require the `crysk` status check (not the `review` job; the legacy `pr-hero` status is still posted for one version, so an existing rule on `pr-hero` keeps working)",
+      "require the `crysk` status check (not the `review` job; the legacy `pr-hero` status is no longer posted, so a rule that requires it must move to `crysk`)",
     );
   });
 });
