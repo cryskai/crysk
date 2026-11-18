@@ -480,7 +480,7 @@ npx -y crysk@0.9.0 triage reply --pr <n> --finding R00N \
 ```
 
 If the driver says the PR has no posted finding with that id, the finding lives only in the summary
-(or was never posted): stop. Full detail: `docs/github-actions.md` → "Triaging a CI review".
+(or was never posted): stop. Full detail: [Let your agent fix findings](https://crysk.dev/docs/reviews/agent-fixes/) and `docs/github-actions.md` → "Triaging a CI review".
 
 The posted body looks like this (driver-owned; shown so you know what a human will see):
 

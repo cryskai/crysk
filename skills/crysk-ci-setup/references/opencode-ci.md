@@ -1,6 +1,6 @@
 # OpenCode in CI — operator procedure
 
-Read this when the operator wants OpenCode, DeepSeek, mixed Claude+OpenCode, fallback models, or different models per step in GitHub Actions. Full narrative: `docs/github-actions.md` (sections **OpenCode in CI** and **`CRYSK_*` secrets**); model rules: `docs/configuration.md` (section **Models**).
+Read this when the operator wants OpenCode, DeepSeek, mixed Claude+OpenCode, fallback models, or different models per step in GitHub Actions. User docs: [Other model providers](https://crysk.dev/docs/github-actions/other-providers/), [Use OpenAI models](https://crysk.dev/docs/github-actions/openai/), [Action reference](https://crysk.dev/docs/github-actions/action-reference/). Longer engine notes: `docs/github-actions.md` (sections **OpenCode in CI** and **`CRYSK_*` secrets**) and `docs/configuration.md` (section **Models**).
 
 Do **not** print, `cat`, or log credential values. Inspect **keys and `type` only**.
 

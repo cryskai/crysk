@@ -1,6 +1,7 @@
 # CI review admission — setup reference
 
-Read this when configuring `.crysk/config.json` during CI setup. Full operator docs:
+Read this when configuring `.crysk/config.json` during CI setup. User docs:
+[Re-review levels](https://crysk.dev/docs/reviews/review-levels/) and the [config reference](https://crysk.dev/docs/reference/config/). Full engine notes:
 `docs/github-actions.md` (section **CI review admission**).
 
 ## Where config lives
