@@ -32,6 +32,7 @@ import {
   isReviewVerdictStatus,
   ownReviewVerdictTime,
   publishCiSkip,
+  recordCiAdmissionGateSkip,
   releaseCiAdmissionLedger,
   reserveCiAdmissionLedger,
   settleCiAdmissionLedger,
@@ -2219,5 +2220,179 @@ describe("reserveCiAdmissionLedger — adoption after a failed POST", () => {
     expect(
       calls.filter((argv) => argv.join(" ").includes("check_name=")),
     ).toHaveLength(2);
+  });
+});
+
+// A gh double that answers each call from `answer`, so one test can fail the
+// PATCH and let the POST through (or the reverse).
+function scriptedGh(
+  answer: (argv: string[]) => {
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+  },
+): { spawnFn: typeof Bun.spawn; calls: string[][] } {
+  const calls: string[][] = [];
+  const encoder = new TextEncoder();
+  const stream = (text: string) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (text) controller.enqueue(encoder.encode(text));
+        controller.close();
+      },
+    });
+  const spawnFn = ((argv: string[]) => {
+    calls.push(argv);
+    const { exitCode, stdout, stderr } = answer(argv);
+    return {
+      stdout: stream(stdout),
+      stderr: stream(stderr),
+      exited: Promise.resolve(exitCode),
+      kill() {},
+    };
+  }) as unknown as typeof Bun.spawn;
+  return { spawnFn, calls };
+}
+
+const checkRunWrites = (calls: string[][]): string[][] =>
+  calls.filter((argv) => argv.includes("POST") || argv.includes("PATCH"));
+
+const CREATED = { exitCode: 0, stdout: '{"id":99}', stderr: "" };
+const REFUSED = { exitCode: 1, stdout: "", stderr: "gh: check-run refused" };
+
+describe("recordCiAdmissionGateSkip — a skip is one write, already settled", () => {
+  const SKIP_POLICY = resolveCiReviewPolicy({});
+  const SKIP_HASH = ciReviewPolicyHash(SKIP_POLICY);
+  const skipInput = {
+    operatorRoot: "/repo",
+    prNumber: PR,
+    headSha: HEAD,
+    policy: SKIP_POLICY,
+    policyHash: SKIP_HASH,
+    existing: [] as AdmissionRecord[],
+    reason: "stopped by /crysk stop",
+    priorScore: null,
+    blockingCount: null,
+    advisoryCount: null,
+  };
+
+  test("a gate skip is recorded in one write, already settled", async () => {
+    const { spawnFn, calls } = scriptedGh(() => CREATED);
+
+    await recordCiAdmissionGateSkip({ ...skipInput, unspent: true, spawnFn });
+
+    const writes = checkRunWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("POST");
+    expect(writes[0]).toContain("repos/{owner}/{repo}/check-runs");
+    expect(writes[0]).toContain("status=completed");
+    expect(writes[0]).toContain("output[summary]=gate-skipped (attempt 1)");
+    expect(calls.some((argv) => argv.includes("PATCH"))).toBe(false);
+  });
+
+  test("an admission skip that counts is recorded as skipped, in one write", async () => {
+    const { spawnFn, calls } = scriptedGh(() => CREATED);
+
+    await recordCiAdmissionGateSkip({ ...skipInput, spawnFn });
+
+    const writes = checkRunWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("output[summary]=skipped (attempt 1)");
+  });
+
+  test("a skip whose write fails says so and does not throw", async () => {
+    const { spawnFn, calls } = scriptedGh(() => REFUSED);
+    const warnings: string[] = [];
+
+    await expect(
+      recordCiAdmissionGateSkip({
+        ...skipInput,
+        unspent: true,
+        spawnFn,
+        warn: (line) => warnings.push(line),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].startsWith("::warning::")).toBe(true);
+    expect(warnings[0]).toContain(
+      "could not record this skip on the admission check",
+    );
+    expect(warnings[0]).toContain("check-run refused");
+    expect(calls.some((argv) => argv.includes("PATCH"))).toBe(false);
+  });
+});
+
+describe("settleCiAdmissionLedger — a failed write is said, not swallowed", () => {
+  const SETTLE_POLICY = resolveCiReviewPolicy({});
+  const SETTLE_HASH = ciReviewPolicyHash(SETTLE_POLICY);
+
+  async function reservedWith(spawnFn: typeof Bun.spawn) {
+    return reserveCiAdmissionLedger({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      headSha: HEAD,
+      policy: SETTLE_POLICY,
+      policyHash: SETTLE_HASH,
+      existing: [],
+      decisionReason: "admitted",
+      spawnFn,
+    });
+  }
+
+  const patchFails = (argv: string[]) =>
+    argv.includes("PATCH") ? REFUSED : CREATED;
+
+  test("a settle whose write fails says so and does not throw", async () => {
+    const { spawnFn } = scriptedGh(patchFails);
+    const state = await reservedWith(spawnFn);
+    const warnings: string[] = [];
+
+    await expect(
+      settleCiAdmissionLedger(state, "completed", "done", {
+        spawnFn,
+        warn: (line) => warnings.push(line),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].startsWith("::warning::")).toBe(true);
+    expect(warnings[0]).toContain(
+      "could not write the admission check as completed (attempt 1)",
+    );
+  });
+
+  test("a settle that succeeds says nothing", async () => {
+    const { spawnFn, calls } = scriptedGh(() => CREATED);
+    const state = await reservedWith(spawnFn);
+    const warnings: string[] = [];
+
+    await settleCiAdmissionLedger(state, "completed", "done", {
+      spawnFn,
+      warn: (line) => warnings.push(line),
+    });
+
+    expect(warnings).toEqual([]);
+    expect(checkRunWrites(calls)).toHaveLength(2);
+  });
+
+  test("the warning carries no line break and is cut short", async () => {
+    const longError = `gh: first line\nsecond line ${"x".repeat(1000)}`;
+    const { spawnFn } = scriptedGh((argv) =>
+      argv.includes("PATCH")
+        ? { exitCode: 1, stdout: "", stderr: longError }
+        : CREATED,
+    );
+    const state = await reservedWith(spawnFn);
+    const warnings: string[] = [];
+
+    await settleCiAdmissionLedger(state, "completed", "done", {
+      spawnFn,
+      warn: (line) => warnings.push(line),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain("\n");
+    expect(warnings[0].length).toBeLessThanOrEqual(420);
   });
 });

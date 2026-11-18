@@ -81,15 +81,39 @@ export async function persistCiAdmissionLedger(
   );
 }
 
+// A ledger write that failed, as a workflow warning. The ledger is CI-only, so stdout is the run's
+// log. The error text is cut short: it is whatever gh printed.
+export function ledgerWarning(
+  warn: ((line: string) => void) | undefined,
+  what: string,
+  error: unknown,
+): void {
+  const detail = (error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .slice(0, 300);
+  const line = formatWorkflowCommand(
+    "warning",
+    `crysk: ${what}: ${detail}. The review's outcome is unchanged.`,
+  );
+  if (warn !== undefined) warn(line);
+  else process.stdout.write(`${line}\n`);
+}
+
 export async function tryPersistCiAdmissionLedger(
   state: CiAdmissionLedgerState | null,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; warn?: (line: string) => void },
 ): Promise<void> {
   if (state === null) return;
   try {
     await persistCiAdmissionLedger(state, options);
-  } catch {
-    // Best-effort: settlement must not mask the underlying review failure.
+  } catch (error) {
+    // Best-effort: settlement must not mask the underlying review failure. It is said, though:
+    // a write that fails here leaves the check as it was, and nothing else would show why.
+    ledgerWarning(
+      options?.warn,
+      `could not write the admission check as ${state.record.status} (attempt ${state.record.attemptNumber})`,
+      error,
+    );
   }
 }
 
@@ -161,7 +185,7 @@ export async function settleCiAdmissionLedger(
   state: CiAdmissionLedgerState | null,
   status: AdmissionAttemptStatus,
   reason: string,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; warn?: (line: string) => void },
 ): Promise<void> {
   if (state === null) return;
   if (TERMINAL_ADMISSION_STATUSES.has(state.record.status)) return;
@@ -214,8 +238,12 @@ export async function reserveCiAdmissionLedger(input: {
   forced?: boolean;
   // Test-only seam (default: the real Bun.spawn), threaded to the check-run write.
   spawnFn?: typeof Bun.spawn;
+  // Record the attempt already settled, in the one write: a skip has nothing to wait for between
+  // reserving and settling, and two writes left a window where the first landed and the second
+  // did not, which showed as a check stuck in progress.
+  settleAs?: { status: AdmissionAttemptStatus; reason: string };
 }): Promise<CiAdmissionLedgerState> {
-  const { record } = reserveAdmissionAttempt({
+  const reserved = reserveAdmissionAttempt({
     existing: input.existing,
     prNumber: input.prNumber,
     headSha: input.headSha,
@@ -228,6 +256,14 @@ export async function reserveCiAdmissionLedger(input: {
     reservationTtlSeconds: input.policy.reservationTtlSeconds,
     forced: input.forced,
   });
+  const record =
+    input.settleAs === undefined
+      ? reserved.record
+      : settleAdmissionAttempt(
+          reserved.record,
+          input.settleAs.status,
+          input.settleAs.reason,
+        );
   const checkRunId = await upsertAdmissionCheckRun(
     input.operatorRoot,
     {
@@ -258,9 +294,12 @@ export async function recordCiAdmissionGateSkip(input: {
   // A skip that spent nothing and must not count against ci_max_attempts
   // (a /crysk stop): settled as "gate-skipped", like a size or budget skip.
   unspent?: boolean;
+  // Test-only seams (defaults: the real Bun.spawn, and a workflow warning on stdout).
+  spawnFn?: typeof Bun.spawn;
+  warn?: (line: string) => void;
 }): Promise<void> {
   try {
-    const state = await reserveCiAdmissionLedger({
+    await reserveCiAdmissionLedger({
       operatorRoot: input.operatorRoot,
       prNumber: input.prNumber,
       headSha: input.headSha,
@@ -271,15 +310,20 @@ export async function recordCiAdmissionGateSkip(input: {
       priorScore: input.priorScore,
       blockingCount: input.blockingCount,
       advisoryCount: input.advisoryCount,
+      settleAs: {
+        status: input.unspent === true ? "gate-skipped" : "skipped",
+        reason: input.reason,
+      },
+      spawnFn: input.spawnFn,
     });
-    await settleCiAdmissionLedger(
-      state,
-      input.unspent === true ? "gate-skipped" : "skipped",
-      input.reason,
-    );
-  } catch {
+  } catch (error) {
     // The skip notice is the operator-facing outcome; a check-run write must
     // not block publishing it.
+    ledgerWarning(
+      input.warn,
+      "could not record this skip on the admission check",
+      error,
+    );
   }
 }
 

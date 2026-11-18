@@ -1853,6 +1853,69 @@ describe("recordCiConfigErrorSkip — a configuration error before the review sp
     ).resolves.toBeUndefined();
     expect(calls).toEqual([]);
   });
+
+  test("a configuration-error skip is recorded in one write, already settled", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await recordCiConfigErrorSkip({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      config: EMPTY_LOCAL_CONFIG,
+      resolveHeadSha: async () => HEAD_A,
+      reason: CONFIG_REASON,
+      spawnFn,
+    });
+
+    const writes = calls.filter((argv) =>
+      argv.some((token) => token === "POST" || token === "PATCH"),
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("POST");
+    expect(writes[0]).toContain("status=completed");
+    expect(writes[0]).toContain("output[summary]=gate-skipped (attempt 1)");
+    expect(writes[0].some((token) => token === "PATCH")).toBe(false);
+  });
+
+  test("a configuration-error skip whose write fails says so and does not throw", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["POST", "check-runs"],
+          response: { exitCode: 1, stderr: "gh: check-run refused" },
+        },
+        { match: ["check_name="], response: { stdout: "" } },
+        { match: ["check-runs"], response: { stdout: "" } },
+      ],
+      calls,
+    );
+    const warnings: string[] = [];
+
+    await expect(
+      recordCiConfigErrorSkip({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        config: EMPTY_LOCAL_CONFIG,
+        resolveHeadSha: async () => HEAD_A,
+        reason: CONFIG_REASON,
+        spawnFn,
+        warn: (line) => warnings.push(line),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].startsWith("::warning::")).toBe(true);
+    expect(warnings[0]).toContain(
+      "could not record this skip on the admission check",
+    );
+    expect(calls.some((argv) => argv.some((token) => token === "PATCH"))).toBe(
+      false,
+    );
+  });
 });
 
 describe("isCiConfigError — only a classified configuration CliError qualifies", () => {
@@ -1902,7 +1965,7 @@ describe("recordCiConfigErrorSkip — a hung GitHub call is bounded", () => {
 // Once the reservation exists, the settle must run to completion, even when it
 // is slower than the read deadline. Abandoning it would leave a `reserved` check
 // run that counts as a spent attempt forever.
-describe("recordCiConfigErrorSkip — a created reservation is always settled", () => {
+describe("recordCiConfigErrorSkip — the skip's one write finishes before the call returns", () => {
   test("a slow but bounded settle finishes before the call returns, as gate-skipped", async () => {
     const calls: string[][] = [];
     const base = makeFakeGh(
@@ -1912,7 +1975,7 @@ describe("recordCiConfigErrorSkip — a created reservation is always settled", 
     let settleFinished = false;
     const spawnFn = ((argv: string[]) => {
       const proc = base(argv);
-      if (!argv.join(" ").includes("PATCH")) return proc;
+      if (!argv.includes("POST")) return proc;
       return {
         ...proc,
         exited: new Promise<number>((resolve) =>
@@ -1938,7 +2001,7 @@ describe("recordCiConfigErrorSkip — a created reservation is always settled", 
     expect(
       calls.some(
         (argv) =>
-          argv.join(" ").includes("PATCH") &&
+          argv.includes("POST") &&
           argv.join(" ").includes("output[summary]=gate-skipped"),
       ),
     ).toBe(true);

@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A reply in an unrelated review thread is never read for a finding posted as a top-level comment.** On an old
   pull request such a finding is an issue comment, and its id could coincide with a review thread's.
 
+- **A skipped review no longer leaves its admission check in progress.** A skip (`/crysk stop`, an admission
+  rule) was recorded in two writes to the `crysk/ci-admission` check, reserved and then settled. When the second
+  write failed the check stayed "in progress" for good, the row counted as a spent attempt, and the log said
+  nothing. A skip is now recorded in one write, already settled, and a write to that check that fails is a
+  warning in the run's log.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed

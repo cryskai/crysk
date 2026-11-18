@@ -50,11 +50,11 @@ import {
 } from "#ci/review-risk";
 import {
   type CiAdmissionLedgerState,
+  ledgerWarning,
   publishCiSkip,
   recordCiAdmissionGateSkip,
   reserveCiAdmissionLedger,
   settleCiAdmissionLedger,
-  settleCiGateSkip,
 } from "#pr/admission";
 import {
   type AnsweredFindings,
@@ -533,14 +533,16 @@ export async function recordCiConfigErrorSkip(input: {
   spawnFn?: typeof Bun.spawn;
   // Test-only seam: the bound on the READS before the reservation.
   timeoutMs?: number;
+  // Test-only seam (default: a workflow warning on stdout).
+  warn?: (line: string) => void;
 }): Promise<void> {
   // WHY the deadline covers only the reads: the head lookup and the ledger list
   // have no bound of their own, and the caller rethrows the configuration error
-  // right after this returns. Once a reservation exists, though, it must be
-  // settled, or it stays `reserved` and counts as a spent attempt forever. So the
-  // deadline ends before the reserve, and the settle always runs. Its gh calls
-  // are already bounded by the check-run upsert (ADMISSION_CHECK_RUN_TIMEOUT_MS,
-  // two attempts), and a failed settle is swallowed by tryPersistCiAdmissionLedger.
+  // right after this returns. The skip is then recorded in one write, already
+  // settled (`settleAs`), so no row can be left `reserved`, which would count as
+  // a spent attempt for good. That write is bounded by the check-run upsert
+  // (ADMISSION_CHECK_RUN_TIMEOUT_MS, two attempts), and one that fails is a
+  // warning in the log.
   const reads = await readBeforeReservation(input);
   if (reads === null) return;
   try {
@@ -552,8 +554,8 @@ export async function recordCiConfigErrorSkip(input: {
       new Date(),
     );
     if (active !== null) return;
-    // If the reserve fails there is no row, so there is nothing to settle.
-    const state = await reserveCiAdmissionLedger({
+    // If the write fails there is no row.
+    await reserveCiAdmissionLedger({
       operatorRoot: input.operatorRoot,
       prNumber: input.prNumber,
       headSha: reads.headSha,
@@ -561,11 +563,16 @@ export async function recordCiConfigErrorSkip(input: {
       policyHash: reads.ciPolicyHash,
       existing: reads.existing,
       decisionReason: input.reason,
+      settleAs: { status: "gate-skipped", reason: input.reason },
       spawnFn: input.spawnFn,
     });
-    await settleCiGateSkip(state, input.reason, { spawnFn: input.spawnFn });
-  } catch {
-    // Swallowed on purpose: see the WHY above.
+  } catch (error) {
+    // It does not block the caller, which rethrows the configuration error; it is said in the log.
+    ledgerWarning(
+      input.warn,
+      "could not record this skip on the admission check",
+      error,
+    );
   }
 }
 
