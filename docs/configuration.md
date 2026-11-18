@@ -1,9 +1,15 @@
 # Configuration, Models and Credentials
 
+> **The maintained user docs are on [crysk.dev/docs](https://crysk.dev/docs/)**: the
+> [config reference](https://crysk.dev/docs/reference/config/), [Use your Claude plan](https://crysk.dev/docs/github-actions/claude-plan/),
+> [Other model providers](https://crysk.dev/docs/github-actions/other-providers/) and the
+> [CLI reference](https://crysk.dev/docs/local/cli/). This file keeps the engine's longer notes on models and
+> credentials, and stays because skills and links already published point at its sections.
+
 An operator guide: where config lives, which model each step of a review runs on, which credentials
 Crysk reads and from where, and how to check all of it without spending money. For the day-to-day config
-keys and the two-layer merge rule, see the README's
-[Configuration — two layers](../README.md#configuration--two-layers) section first — this document
+keys and the two-layer merge rule, see the
+[config reference](https://crysk.dev/docs/reference/config/) on crysk.dev first — this document
 covers the two things that section does not: `models` and credentials.
 
 ## Quick path
@@ -16,11 +22,16 @@ covers the two things that section does not: `models` and credentials.
 
 | Layer | File | Holds |
 | --- | --- | --- |
-| Global / per-person | `~/.crysk/config.json` (or `~/.prhero/config.json`, see below) | `profile`, `models`, `credentials`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
-| Repo | `<repo>/.crysk/config.json` | `agents_dir`, `default_base`, `suspicion_priors` |
-| Repo, review instructions | `<repo>/REVIEW.md`, else `<repo>/.crysk/gotchas.md` (optional) | facts the hunters and the refuter read; with `materiality_gate` on, the judge also reads it as owner policy for style, test, generated-code and dev-script findings only; see the README's `REVIEW.md` and `gotchas.md` section |
+| Global / per-person | `~/.crysk/config.json` (or `~/.prhero/config.json`, see below) | `profile`, `models`, `credentials`, `agents_dir`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
+| Repo | `<repo>/.crysk/config.json` | `agents_dir` (wins over the global one), `default_base`, `suspicion_priors` |
+| Repo, review instructions | `<repo>/REVIEW.md`, else `<repo>/.crysk/gotchas.md` (optional) | facts the hunters and the refuter read; with `materiality_gate` on, the judge also reads it as owner policy for style, test, generated-code and dev-script findings only; see [Write review instructions](https://crysk.dev/docs/reviews/review-instructions/) |
 
 `max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and Crysk can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
+
+**`agents_dir` layers.** Either file may name it, and the repo file wins over the global one. A relative path
+resolves against the directory of the file that named it, so a global `./prompts` means `~/.crysk/prompts`. The
+`--agents` flag beats both, then `CRYSK_AGENTS_DIR` (`PRHERO_AGENTS_DIR` on an install from before the rename),
+then the bundled prompts.
 
 **A custom `agents_dir` mirrors the default set.** The directory has to hold exactly the prompt files the
 review runs, no more and no fewer, so a hunter is never dropped or left unused in silence. When a hunter joins
@@ -105,7 +116,8 @@ A **profile** is a ready-made set of models for every role. Pick one in your per
   measured on (`claude:sonnet-latest`, `claude:opus-latest`). On `openai` it runs on
   `opencode:openai/gpt-6.1-terra`, a choice made without a measurement; `models.judge` may also pick one of the
   two measured Claude models, which then needs Claude. Either way the judge runs only with `materiality_gate` on.
-- On `openai` the runner needs `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH`, and no Claude
+- On `openai` the runner needs `CRYSK_OPENCODE_OPENAI_API_KEY` (a ChatGPT login works only on a repository connected
+  to the Crysk platform, never from a secret you set yourself), and no Claude
   CLI unless a `models` entry, or a prompt in a custom `agents_dir` (whose `model:` outranks the profile),
   names a Claude model.
 - If a profile is set and its route plan cannot be built, the review fails. It never falls back to another
@@ -408,7 +420,9 @@ regardless of what it is named.
 
 In CI the kind follows the secret instead of the provider's name: the setup step records which `CRYSK_*`
 secret built each record, so an `openai` model on `CRYSK_OPENCODE_OPENAI_API_KEY` runs as a metered API
-key, and on `CRYSK_OPENCODE_OPENAI_OAUTH` as the subscription (see
+key, and on `CRYSK_OPENCODE_OPENAI_OAUTH` as the subscription, a login only the Crysk platform writes: in the
+open-source Action a ChatGPT plan is not supported, because OpenAI replaces its refresh token on every
+renewal and nothing renews a repository secret (see
 [How the OpenCode secrets become the auth file](github-actions.md#how-the-opencode-secrets-become-the-auth-file)).
 The rule above holds for your own machine's `auth.json`, where no such record exists.
 

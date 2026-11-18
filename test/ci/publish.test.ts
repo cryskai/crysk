@@ -512,7 +512,11 @@ describe("decidePublication — the pure table", () => {
       // it is, with the OpenCode fix and no Claude step.
       test.each([
         ["deepseek", "CRYSK_OPENCODE_DEEPSEEK_API_KEY", "gh secret set"],
-        ["openai", "CRYSK_OPENCODE_OPENAI_OAUTH", "opencode auth login"],
+        [
+          "openai",
+          "CRYSK_OPENCODE_OPENAI_OAUTH",
+          "CRYSK_OPENCODE_OPENAI_API_KEY",
+        ],
       ])(
         "auth_invalid on an OpenCode %s route renders CRYSK-CRED-REJECTED naming %s",
         (provider, secret, fix) => {
@@ -1559,9 +1563,8 @@ describe("decidePublication — the pure table", () => {
       );
       expect(plan.rendered.annotation).not.toContain("OPENCODE_AUTH_JSON");
       const summary = plan.rendered.summary.join("\n");
-      expect(summary).toContain(
-        "jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
-      );
+      expect(summary).toContain("gh secret set CRYSK_OPENCODE_OPENAI_API_KEY");
+      expect(summary).not.toContain("auth.json");
       expect(summary).not.toContain("jq -e 'type==\"object\"'");
     }
   });

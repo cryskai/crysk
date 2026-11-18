@@ -14,8 +14,7 @@ import {
 import { CANCELLED_STATUS_DESCRIPTION } from "../../src/ci/publish";
 
 const DOCS = path.resolve(import.meta.dir, "../../docs/github-actions.md");
-const DOCS_URL_PREFIX =
-  "https://github.com/cryskai/crysk/blob/v0/docs/github-actions.md#";
+const DOCS_URL_PREFIX = "https://crysk.dev/docs/reference/error-codes/#";
 
 function outcomeBody(heading: string): string {
   return `${OUTCOME_MARKER_PREFIX}v=1 head=unknown run=7 attempt=1 -->\n\n### ${heading}\n\nbody`;

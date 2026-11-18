@@ -270,14 +270,16 @@ export function workflowVariableCommands(
 
 const OPENAI_TOKEN = opencodeSecretToken(OPENCODE_OAUTH_SECRET_PROVIDER);
 
-// One secret per OpenCode provider the models name. OpenAI may be a ChatGPT
-// subscription instead of a key: its OpenCode login record, base64 on one line.
+// One secret per OpenCode provider the models name. OpenAI takes an API key
+// here: a ChatGPT login cannot be kept valid by a workflow secret (OpenAI
+// replaces the refresh token on every renewal and nothing renews the secret),
+// so a ChatGPT plan goes through the Crysk GitHub App.
 export function openCodeSecretCommands(tokens: readonly string[]): string[] {
   return tokens.flatMap((token) =>
     token === OPENAI_TOKEN
       ? [
           `$ gh secret set CRYSK_OPENCODE_${token}_API_KEY`,
-          `  or, for a ChatGPT subscription (on macOS, drop -w0): jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_${token}_OAUTH`,
+          "  a ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/)",
         ]
       : [`$ gh secret set CRYSK_OPENCODE_${token}_API_KEY`],
   );
@@ -499,7 +501,7 @@ export async function ciSetupCommand(
   // The check to require is `crysk` (the commit status, the gate), not the
   // `review` job, which stays green even when it finds blocking issues.
   log(
-    `${next()} In branch protection, require the \`crysk\` status check (not the \`review\` job; the legacy \`pr-hero\` status is still posted for one version, so an existing rule on \`pr-hero\` keeps working); a private repository on GitHub Free cannot require status checks`,
+    `${next()} In branch protection, require the \`crysk\` status check (not the \`review\` job; the legacy \`pr-hero\` status is no longer posted, so a rule that requires it must move to \`crysk\`); a private repository on GitHub Free cannot require status checks`,
   );
   log(`${next()} Open a pull request to trigger the workflow`);
   // GitHub reads a comment-triggered workflow from the DEFAULT branch, so a

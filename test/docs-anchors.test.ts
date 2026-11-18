@@ -36,8 +36,13 @@ describe("README anchors linked from skills and docs", () => {
     [...readme.matchAll(/^#{1,6}\s+(.+)$/gm)].map((m) => slug(m[1] ?? "")),
   );
 
+  // The README no longer carries that section (it moved to crysk.dev), so the
+  // rule is checked on the heading text itself, and the guard below keeps
+  // working for any README heading a link names.
   test("the slug rule reproduces the renamed heading's anchor", () => {
-    expect(anchors.has("cryskignore--repo-defined-exclusions")).toBe(true);
+    expect(slug("`.cryskignore` — repo-defined exclusions")).toBe(
+      "cryskignore--repo-defined-exclusions",
+    );
   });
 
   test("every link to README.md#anchor in skills/ and docs/ resolves", () => {
