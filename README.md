@@ -102,7 +102,9 @@ crysk doctor
 cd /path/to/your-repo && crysk setup
 
 # 4. Track the scaffold, or ignore .crysk/: a local review refuses a dirty tree.
-git add .crysk REVIEW.md && git commit -m "chore: crysk config"   # drop REVIEW.md if setup wrote none
+git add .crysk
+[ -f REVIEW.md ] && git add REVIEW.md
+git commit -m "chore: crysk config"
 
 # 5. Replace the placeholder in REVIEW.md with real review instructions (see below), then:
 crysk review
