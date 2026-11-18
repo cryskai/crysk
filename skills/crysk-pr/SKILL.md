@@ -56,7 +56,7 @@ When `crysk` is active on the repository, **never stop right after `gh pr create
 
 1. **Subscribe to the initial review from second zero:**
    ```bash
-   npx -y crysk@0.8.1 status --pr <n> --wait --json
+   npx -y crysk@0.9.0 status --pr <n> --wait --json
    ```
    `--wait` holds automatically during the 3-minute startup grace window while `gate.state` is `"none"` (waiting for GitHub Actions to pick up the new PR), continues polling every 15s while `gate.state` is `"pending"`, and returns as soon as the review settles.
 
