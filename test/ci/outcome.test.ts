@@ -40,8 +40,7 @@ const REPO_ROOT = path.resolve(import.meta.dir, "../..");
 const OUTCOME_SRC = path.join(REPO_ROOT, "src/ci/outcome.ts");
 const TRIGGER_SRC = path.join(REPO_ROOT, "src/ci/trigger.ts");
 const DOCS = path.join(REPO_ROOT, "docs/github-actions.md");
-const DOCS_URL_PREFIX =
-  "https://github.com/cryskai/crysk/blob/v0/docs/github-actions.md#";
+const DOCS_URL_PREFIX = "https://crysk.dev/docs/reference/error-codes/#";
 const CONTEXTS: OutcomeContext[] = ["action", "local"];
 
 // Exhaustive expectations. Typing them as Record over the real unions makes

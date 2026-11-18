@@ -1184,8 +1184,10 @@ const TRANSPORT_PHRASE: Record<
   legacy_terminal: "the run ended in a state Crysk no longer produces",
 };
 
-const DOCS_BASE =
-  "https://github.com/cryskai/crysk/blob/v0/docs/github-actions.md#";
+// The published error-code page. Its anchors are the lowercased codes
+// (`#crysk-cred-missing`), the same slugs docs/github-actions.md keeps for
+// the annotations already posted that link there.
+const DOCS_BASE = "https://crysk.dev/docs/reference/error-codes/#";
 
 const ENGINE_DEFECT_ISSUE =
   'gh issue create -R cryskai/crysk --title "CRYSK-ENGINE-DEFECT {detail}" --body "{runUrl}"';
