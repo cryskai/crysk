@@ -2213,6 +2213,12 @@ describe("Packaging & distribution configuration", () => {
       "crysk-ci-setup",
       "SKILL.md",
     );
+    const playbookPath = path.join(
+      rootDir,
+      "skills",
+      "crysk-ci-setup",
+      "playbook.md",
+    );
     const refPath = path.join(
       rootDir,
       "skills",
@@ -2221,12 +2227,15 @@ describe("Packaging & distribution configuration", () => {
       "opencode-ci.md",
     );
     expect(existsSync(skillPath)).toBe(true);
+    expect(existsSync(playbookPath)).toBe(true);
     expect(existsSync(refPath)).toBe(true);
     const skill = readFileSync(skillPath, "utf-8");
-    expect(skill).toContain("references/opencode-ci.md");
-    expect(skill).toContain("CRYSK_MODELS");
-    expect(skill).toContain("CRYSK_OPENCODE_PROVIDERS");
-    expect(skill).toContain("crysk-secrets");
+    expect(skill).toContain("skills load crysk-ci-setup");
+    const playbook = readFileSync(playbookPath, "utf-8");
+    expect(playbook).toContain("references/opencode-ci.md");
+    expect(playbook).toContain("CRYSK_MODELS");
+    expect(playbook).toContain("CRYSK_OPENCODE_PROVIDERS");
+    expect(playbook).toContain("crysk-secrets");
     const ref = readFileSync(refPath, "utf-8");
     expect(ref).toContain("CRYSK_OPENCODE_PROVIDERS");
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");

@@ -67,6 +67,7 @@ describe("doctor tri-state evaluation", () => {
           return JSON.stringify({
             files: {
               "SKILL.md": "mock_hash",
+              "playbook.md": "mock_hash",
               "adjudicator.md": "mock_hash",
               "assets/workflow.yml": "mock_hash",
             },
@@ -74,6 +75,7 @@ describe("doctor tri-state evaluation", () => {
         }
         if (
           p.endsWith("SKILL.md") ||
+          p.endsWith("playbook.md") ||
           p.endsWith("adjudicator.md") ||
           p.endsWith("workflow.yml") ||
           p.endsWith("admission-config.example.json") ||

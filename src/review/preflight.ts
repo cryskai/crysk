@@ -160,10 +160,12 @@ export interface CliOptions {
   // watcher: it runs `pr-hero gc` (no reviews, no watch.json, no window/cap).
   // Unset means the collector itself.
   gc?: "install" | "uninstall" | "status";
-  // `skills install` (src/commands/skills.ts): the non-interactive install of
-  // pr-hero's agent skills into every detected coding agent. Its only
-  // subcommand; anything else after `skills` is a usage error.
-  skills?: "install";
+  // `skills install` / `skills load` (src/commands/skills.ts): install writes
+  // the bundled skills into detected coding agents; load prints a bundled
+  // skill's playbook or companion file to stdout.
+  skills?: "install" | "load";
+  skillName?: string;
+  skillFile?: string;
   // watch install and gc install: launchd StartInterval, in minutes.
   interval?: number;
   // watch add only: record on_push: true for the repo, so every new push
@@ -340,6 +342,8 @@ Usage:
                              login
   crysk skills install [--force]
                              Install the crysk, crysk-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
+  crysk skills load <skill> [<file>]
+                             Print a bundled skill's playbook (or a companion file such as adjudicator.md, references/*, assets/*) to stdout
   crysk ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
                              command
   crysk doctor [options]   Check system tools and environment readiness
@@ -960,18 +964,24 @@ export function parseArgs(argv: string[]): ParsedCli {
       options.gc = arg;
       continue;
     }
-    if (
-      command === "skills" &&
-      options.skills === undefined &&
-      arg === "install"
-    ) {
-      options.skills = "install";
-      continue;
-    }
-    // `skills` has exactly one subcommand, `install`; any other word in that
-    // slot is a usage error, not a generic unexpected argument.
     if (command === "skills" && options.skills === undefined) {
-      throw new CliUsageError("crysk skills needs a subcommand: install");
+      if (arg === "install" || arg === "load") {
+        options.skills = arg;
+        continue;
+      }
+      throw new CliUsageError(
+        "crysk skills needs a subcommand: install | load",
+      );
+    }
+    if (command === "skills" && options.skills === "load") {
+      if (options.skillName === undefined) {
+        options.skillName = arg;
+        continue;
+      }
+      if (options.skillFile === undefined) {
+        options.skillFile = arg;
+        continue;
+      }
     }
     if (
       command === "triage" &&
@@ -1031,7 +1041,19 @@ export function parseArgs(argv: string[]): ParsedCli {
     throw new CliUsageError('no command given (did you mean "crysk review"?)');
   }
   if (command === "skills" && options.skills === undefined) {
-    throw new CliUsageError("crysk skills needs a subcommand: install");
+    throw new CliUsageError("crysk skills needs a subcommand: install | load");
+  }
+  if (command === "skills" && options.skills === "load") {
+    if (!options.skillName) {
+      throw new CliUsageError(
+        "crysk skills load requires a skill name: crysk, crysk-loop, crysk-pr, crysk-ci-setup",
+      );
+    }
+    if (options.force) {
+      throw new CliUsageError(
+        "--force is only valid with crysk skills install",
+      );
+    }
   }
   // --pr derives the whole range from the PR record — head from GitHub, base
   // from the merge commit's parent or the base branch — so a hand-picked

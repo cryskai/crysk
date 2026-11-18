@@ -89,7 +89,7 @@ models: ${{ vars.CRYSK_MODELS }}
 credentials: ${{ vars.CRYSK_CREDENTIALS }}
 ```
 
-Copy it from `assets/workflow.yml` or re-scaffold with `npx -y crysk@0.9.0 ci init --force`; never write it from memory. An unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped.
+Load it with `npx -y crysk@0.9.0 skills load crysk-ci-setup assets/workflow.yml` or re-scaffold with `npx -y crysk@0.9.0 ci init --force`; never write it from memory. An unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped.
 
 The Action installs OpenCode CLI **1.18.30** in its **own** step when the setup step built an OpenCode auth file **or** the models in effect name `opencode:`. Never `latest`. Claude-only skips that install.
 

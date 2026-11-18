@@ -73,8 +73,10 @@ sed -i '' "s/ENGINE_VERSION = \"$PREV\"/ENGINE_VERSION = \"$V\"/" src/index.ts
 sed -i '' "s/  return \"$PREV\";/  return \"$V\";/" src/assets.ts
 sed -i '' "s/options.version ?? \"$PREV\"/options.version ?? \"$V\"/" src/updater.ts
 sed -i '' "s/VERSION=\"$PREV\"/VERSION=\"$V\"/" install.sh
-# The shipped skills pin the version they run through npx (test/skills-pin.test.ts): a skills
-# scanner flags an unpinned `npx -y crysk` as critical.
+# All .md files in the four shipped skills (SKILL.md stubs, playbook.md, and references/)
+# pin the exact version they run through npx (test/skills-pin.test.ts): a skills
+# scanner flags an unpinned `npx -y crysk` as critical, and `SKILL.md` uses the
+# exact pin so npx hits its warm-cache fast path while `skills load` checks npm on a 1h TTL.
 grep -rl "crysk@$PREV" skills/crysk skills/crysk-loop skills/crysk-pr skills/crysk-ci-setup | xargs sed -i '' "s/crysk@$PREV/crysk@$V/g"
 grep -rn "crysk@$PREV" skills/   # must print nothing
 bun test test/skills-pin.test.ts  # every npx crysk call in a shipped skill names $V

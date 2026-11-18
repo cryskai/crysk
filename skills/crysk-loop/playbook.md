@@ -1,0 +1,551 @@
+## When to Use
+
+Load this skill after Crysk has posted findings on a PR you (the coding agent) authored, and
+you need to answer each one so the review loop closes without a human in it by default.
+
+Use it when you see comments whose FIRST line matches:
+
+```
+<!-- crysk-finding path=<url-encoded-path> line=<n> head=<40-hex-sha> c=<12-hex> -->
+```
+
+Comments posted before the rename to Crysk start with `<!-- pr-hero-` instead of
+`<!-- crysk-` (`<!-- pr-hero-finding`, `<!-- pr-hero-report`, `<!-- pr-hero-triage`, ...).
+Treat them exactly the same; the CLI reads both.
+
+Do not use it for ordinary human review comments, or for Crysk's own summary comment
+(`<!-- crysk-report head=<sha> -->`). That comment is a status roll-up plus, since W2
+(issues #16/#17), a `### Comments Outside Diff` bucket for findings GitHub would not
+anchor. Those bucket findings have **no** `<!-- crysk-finding` marker and **no**
+review thread; each shows its row id (`R003`) beside its location, and step 0 lists it with
+`comment_id: null`. You answer one like any other finding, by that id: the driver posts a
+top-level comment that names the row. Do not reply on the summary yourself and do not invent a
+`gh` comment for them. Every other finding has its own `<!-- crysk-finding` comment, almost
+always an inline review comment on Files changed.
+
+## Running the CLI (no install needed)
+
+Every command below runs through `npx`, so nothing has to be installed on the machine first:
+
+```bash
+npx -y crysk@0.9.0 <command> ...
+```
+
+`npx` needs only Node. Crysk's package brings its own Bun runtime, and when that is
+unavailable it uses a `bun` already on PATH. `-y` skips npx's install prompt, which an agent
+cannot answer. If `crysk` is already on PATH (a global install), `crysk <command>` is the
+same command. Do not install Crysk just to triage a PR. To put these skills into another coding
+agent on the machine, run `npx -y crysk@0.9.0 skills install` (non-interactive; `--force` overwrites local edits).
+
+You also need `gh`, authenticated as a user with write access to the repository: the driver posts
+through it, and you comment `/crysk recheck` and `/crysk review` through it.
+
+## The strategic why
+
+The bottleneck of coding with AI is the review. If an agent writes the code and only a human can
+answer a review, the human is the queue. This skill exists so the default actor answering a
+finding is an agent — **the human is the objector, never the gate**: free to weigh in with a
+reaction or a reply whenever they have context or an opinion, never required for the loop to
+close. That only works if the agent actually judges. Closing the loop means answering with a
+tag, not applying the review as a todo list.
+
+## You own the judgment
+
+Every Crysk comment is a **claim to verify**, not an order. An advisory report never blocks anything. A CI
+report in gate mode can turn the `crysk` status red on blocking findings. Your reply is argument and evidence,
+and it never clears that status on its own while a review can still run. A blocking finding stops counting in
+exactly two ways:
+
+- **A fix**, pushed to the head and verified gone by the next review.
+- **A dismissal the CI adjudicator upholds.** You reply `dismissed`, comment `/crysk recheck`, an
+  adjudicator running in CI rules on your argument, and only its `upheld` (posted by
+  `github-actions[bot]`, or by the Crysk App's bot on a platform-managed repository, on that head) lets the next review stop counting the finding. See
+  "Closing a dismissal" below.
+
+**When no review is left, answers unlock the gate.** Every review rule that skips a push (the
+attempt budget used up, `/crysk stop`, `once_per_pr`, a low-risk or below-threshold delta,
+`manual_only`) carries the last verdict. A carried red turns green, marked
+`fixes unverified`, on the next push when every blocking finding's newest reply, from your
+write-access account, is `applied` and answers the last review (it carries that review's head, as
+the driver writes it) or a `dismissed` the adjudicator upheld. Nobody verifies those fixes, so
+`applied` must mean you fixed it and ran the tests. The gate reads the replies when the push
+arrives: **reply first, then push.** The exception: under the attempt budget used up or
+`manual_only`, no later push is reviewed on its own, so where the gate would turn green it holds
+the head `pending` instead ("crysk: waiting for a manual review"), and a maintainer decides between
+`/crysk review` and `/crysk override`.
+
+**`/crysk override` is a maintainer's, and only for what answers cannot unlock.** Never post it,
+and never ask for it because the review budget ran out, except to answer a manual-review hold. Ask
+a maintainer for it only when:
+- the CI review itself is broken (every hunter failing, credit or credentials, `CRYSK-HUNTERS-FAILED`):
+  stop the loop and report what is failing, never route around it;
+- a `deferred` or `misclassified` finding should merge unfixed: it names a real defect, so
+  accepting it is the maintainer's call;
+- a partial review keeps failing on the same hunters and their route cannot be fixed;
+- the gate holds the head for a manual review (budget used up or `manual_only`) and the
+  unreviewed delta does not justify another paid review: the maintainer picks review or override.
+
+`deferred` and `misclassified` never leave the gate count, whatever any adjudicator says: they are
+for findings that are real (or real at another severity), so the gate stays red until a fix or a
+human `/crysk override`. You — the
+coding agent running this skill — have the authority and the duty to accept it **or reject
+it**. The four tags are peers. None is the default.
+
+- Read the cited code yourself before you pick a tag. The repository is the evidence; the
+  review is not.
+- Applying every finding is a failure of this skill, not compliance with it.
+- Do not pick `applied` because it skips the adjudicator and closes the thread faster. Pick
+  `applied` only after you independently confirmed the defect and fixed it in this PR.
+- "It is marked CRITICAL" / "the review said so" is not a reason to change code. Severity is
+  the hunter's claim, not a command.
+- If you cannot confirm the defect from the code, `dismissed` (with cited disproof) or
+  `deferred` (with a real scope argument) is the honest move. Rubber-stamping a fix you did
+  not verify is the failure this section exists to prevent.
+
+## Review judgment: when to stop vs. when to request another pass
+
+You also own the judgment of whether the PR needs **zero more reviews** (stop and merge) or **one more forced review** (when workflow rules suppressed an automatic run on a risky change). Always compare `report.head` against `head` in `crysk status --pr <n> --json` and inspect `git diff <report.head>..<head>`:
+
+### A. Stopping diminishing returns (when to stop reviewing and merge)
+
+Later review passes hunt only the push delta. Once the real defects from pass 1 are fixed, hunters scanning a small fix-up commit can surface increasingly contrived, speculative, or nitpicky claims. **Fixing a contrived finding just to turn the gate green is worse than a wasted edit:** it creates a new push, triggers another review pass on an even smaller delta, and feeds an endless spiral of defensive code and absurd findings.
+
+1. **Never patch code to appease a contrived or over-severitied finding.**
+   - If the claimed bug requires an impossible precondition, contradicts an intentional invariant, or is already guarded: tag it `dismissed` with cited code and use `/crysk recheck` so the CI adjudicator clears it **without** a code change or a new push.
+   - If the observation is technically true but trivial, stylistic, pre-existing, or inflated to blocking: tag it `misclassified` or `deferred`. Never rewrite working code just to avoid asking for `/crysk override`.
+2. **Do not auto-force past `ci_max_attempts` on routine fix-ups.** The repository's `ci_max_attempts` (default `2`) exists specifically to stop diminishing-returns re-reviews, and the PR gets an "automatic reviews are done" comment when it runs out. A red then still carries: answer every blocking finding (`applied` with the fix in the tree, or `dismissed` + `/crysk recheck`) **before** you push. Where the gate would turn green, it holds the head `pending` for a manual review instead, and `crysk status` answers `override-or-fix`. If the commits since `report.head` only applied straightforward fixes for already-triaged findings, do not post `/crysk review`: stop the loop and tell the user the PR finished its review passes and waits for a maintainer's `/crysk review` (to verify the fixes) or `/crysk override` (to merge them unverified).
+3. **Stop and recommend merge when only diminishing-returns items remain.** On `override-or-fix` (or pass 2+ when every real bug is fixed and the only remaining red-gate items are `deferred`, `misclassified`, or a contrived finding whose dismissal the adjudicator did not uphold), **do not cave in and edit the code**. Exit the loop, list the remaining finding(s) with a one-line explanation of why they are contrived/out-of-scope, and tell the user the PR is ready to `/crysk override` and merge.
+4. **Stop automatic reviews BEFORE the push that should not be reviewed.** When you decide no further review pass is needed but you still have fixes to push, post `gh pr comment <n> --body "/crysk stop"` **first**, then `git push`. CI admission reads the stop on that push and skips the review, carrying the last verdict (a carried red turns green, marked `fixes unverified`, when every blocking finding was answered before that push; otherwise it stays red). The stop stays in force for every later push until someone comments `/crysk review` or `/crysk recheck`. It counts only from a user with write access, starts no workflow run, and costs $0. Never push first and try to stop the review afterwards: nothing cancels a review that already started.
+
+### B. Requesting or suggesting another review when workflow rules skipped it
+
+The opposite happens when a repository's workflow policy (`once_per_pr`, `thresholded`, `risk_aware` below the score floor, `ci_max_attempts` exhausted, or the size gate) suppresses an automatic review on a push that **genuinely changed load-bearing code**:
+- Under `once_per_pr`, `thresholded`, or `risk_aware`, a skipped push can inherit a carried `success` status from `report.head`, so `next_action` reads `"done"` even though `report.head !== head` (the commits `report.head..head` were never reviewed).
+- Under `ci_max_attempts` or `manual_only`, a red carries the same way, and a green is held `pending` ("crysk: waiting for a manual review"), so `next_action` reads `"override-or-fix"`. Under the size gate or the platform's cost limits (the skip comment says which), the automatic run is blocked and the head is red. Either way `report.head !== head`.
+
+Whenever `report.head !== head`, inspect `git diff <report.head>..<head>`:
+- If that unreviewed delta introduced **new business logic, state-machine or concurrency changes, auth/security/isolation edits, or a non-trivial refactor** (for example, fixing a finding required redesigning a function rather than adding a guard), an extra review **is** justified:
+  - When `next_action` is `"review"` or `"override-or-fix"` (and within the forced-run bound below), trigger `gh pr comment <n> --body "/crysk review"` and subscribe with `npx -y crysk@0.9.0 status --pr <n> --wait --json` — or, if `next_action` is `"done"` on a carried green status (or the forced-run bound is reached), explicitly **recommend running `/crysk review`** to the user and name the exact files/changes in `report.head..head` that warrant a fresh pass before merging.
+
+### C. Suspecting a flawed integration or design (stop patching, rethink the root cause)
+
+Reaching zero findings after several rounds of band-aid fixes is a failure if the underlying design was wrong from the start. Contrast this with `### A` (where later rounds only surface contrived nits): here the findings are **real**, and the volume or churn is telling you the approach itself is broken.
+
+Suspect a flawed integration or architecture when **either** of these signals appears. The number of findings alone is not a signal: a first round with many real findings on one new feature is normal polish.
+
+1. **Whack-a-mole loops (fixes spawning new real findings):** By Round 2+, fixing the previous round's findings introduces *new*, legitimate blocking findings in the next review pass, on the same seam — a sign that patches are fighting the architecture rather than closing isolated defects (or a finding returns at higher severity in the summary report).
+2. **Broken foundational assumption:** Two or more findings show that the code's mental model of an external API, lifecycle, concurrency guarantee, or module ownership does not hold (for example, the code infers from outside a system what that system already knows).
+
+**Action when triggered:**
+- **Halt the incremental fix-and-push loop before replying or patching.** Do **not** post `applied` replies for fixes that will not be pushed, and do not stack another round of tactical band-aids just to force the gate green. If unpushed local fix attempts exist, do not push them.
+- If `/crysk stop` was posted to pause automatic reviews while refactoring, remember that `/crysk stop` is persistent. Once the clean redesign is implemented and pushed, comment `/crysk review` on the PR to lift the stop and ensure CI reviews the new architecture.
+- Step back, identify the single root architectural or integration decision that caused the cluster of findings, and stop to report the diagnosis to the user (with the concrete alternative design or clean refactor plan) before continuing.
+
+## Which command spelling to post
+
+Post the `/crysk` form: `/crysk review`, `/crysk recheck`, `/crysk override`, `/crysk stop`. The
+legacy `/pr-hero …` spelling is no longer a command, and a comment that uses it starts nothing. A
+workflow set up before the rename (`pr-hero.yml`) may still filter only `/pr-hero` in its `if:`, so a
+`/crysk` comment starts nothing there either: check the workflow once per PR, and when it lacks
+`'/crysk review'`, tell the maintainer to re-scaffold it with `npx -y crysk@0.9.0 ci init --force`
+instead of posting any command.
+
+```bash
+for f in crysk.yml pr-hero.yml; do
+  gh api "repos/{owner}/{repo}/contents/.github/workflows/$f" --jq .content 2>/dev/null | base64 -d | grep -q "'/crysk review'" && exit 0
+done; exit 1
+```
+
+Post a command as the first line of its comment, with nothing before it: not a blank line, not a space. On a
+repository that runs Crysk from its own workflow, a comment that starts with anything else starts no run and
+gets no reaction. Text below the command (a signature, a note) is ignored, and other words on the same line
+make it no command at all. An engine older than this rule reads a command only when it is the whole comment,
+so on a repository that has not updated, post the command alone.
+
+## The loop, end to end
+
+**Run this as a continuous autonomous loop (`while next_action !== "done"`).** Never end your turn or stop to ask the human for permission between `triage`, fixing code, `git push`, `recheck`, `review`, and waiting for CI to finish. Stop only when `next_action === "done"` or one of the hard escalation stops below triggers (repeated gate/runner failure, 6 forced runs on one head, 2 consecutive `inconclusive` heads, a suspected flawed design (### C), or `override-or-fix` with nothing left you can fix).
+
+0. **Subscribe to and read the PR's settled state.** Run:
+
+   ```bash
+   npx -y crysk@0.9.0 status --pr <n> --wait --json
+   ```
+
+   It is read-only (reads GitHub through `gh`, writes nothing) and **deterministic**:
+   - When the head is already settled, it returns immediately on the first poll without sleeping.
+   - When a review is in flight (`next_action === "wait"`) **or** booting in the 3-minute startup grace window right after a `git push`, `/crysk review`, or `/crysk recheck`, `--wait` polls every 15s until the review finishes and emits the settled JSON in one call. Never invent your own `sleep` loop.
+
+   Act on its `next_action` and immediately loop back to step 0 until `done`:
+   - `wait`: if `--wait` was omitted, re-run with `--wait` and let it block until the review finishes.
+   - `review`: no review has run on this head, the last one did not finish, or the CI adjudicator
+     upheld every dismissal and the next review will stop counting them. (A head statused before
+     2026-10-30 may also read "the automatic review budget for this PR is used up"; push the answered
+     fixes instead, and the gate carries the verdict.) Check the forced-run bound below, comment
+     `gh pr comment <n> --body "/crysk review"`, and immediately run step 0 with `--wait`.
+   - `triage`: a live blocking finding on this head has no triage reply that answers this review (a
+     reply from an earlier review does not answer a finding that is still live), or the gate is green
+     and a finding posted on this head has no reply yet (advisory findings need one too). Run the
+     triage batch below (steps 1–6), which judges every finding, applies real fixes in the tree, posts
+     all replies, and either pushes the fixes or triggers `recheck` before looping back to step 0 with
+     `--wait`. When the reason says replies from a login do not count, that login has no write access
+     to the repository: the gate ignores its replies, so someone with write access must answer.
+   - `fix`: a blocking finding is tagged `applied`. Commit and `git push` the fix, then
+     immediately run step 0 with `--wait` so the next review verifies it.
+   - `recheck`: blocking findings are answered `dismissed` (with no pending code fixes to push) and the CI adjudicator has not ruled on
+     them on this head (or ruled `inconclusive`). Comment `gh pr comment <n> --body "/crysk recheck"`, then immediately run step 0 with `--wait` and follow "Closing a dismissal" below.
+   - `override-or-fix`: the gate is red (or held for a manual review) and nothing is left for
+     `triage` or `recheck`. Read the `reason` and act on the case it names; never override it yourself:
+     - the gate holds the head for a manual review (the gate description starts "crysk: waiting for
+       a manual review"): inspect `git diff <report.head>..<head>` as in "Requesting or suggesting
+       another review" above. A load-bearing delta justifies `/crysk review` (within the forced-run
+       bound), then step 0 with `--wait`; otherwise exit the loop and tell the maintainer the PR
+       waits for `/crysk review` or `/crysk override`;
+     - the head was size- or cost-limit-skipped (the gate description starts "crysk skipped the
+       review", or "pr-hero skipped the review" on a status an older action wrote): comment `/crysk review`, then run step 0 with `--wait`;
+     - the review is "partial again" with the same hunters failing: fix the failing hunter's route
+       (model or credential), or ask a maintainer to override;
+     - every blocking finding is already answered but none can clear without a fix (a dismissal the
+       CI adjudicator rejected, a `deferred` / `misclassified` tag, or a `dismissed` legacy top-level
+       finding comment, which no adjudicator can rule on): if the adjudicator's rejection exposed a real defect you missed, fix, commit, and `git push` (then step 0 `--wait`); if the finding is `deferred`, `misclassified`, or still contrived/absurd ("Stopping diminishing returns" above), **do not edit code to appease it** — exit the loop and tell the maintainer the PR is ready for `/crysk override` and merge (a `deferred` or `misclassified` finding names a real defect, so accepting it unfixed is the maintainer's call);
+     - the red gate names no live blocking finding on this head (the `reason` quotes the gate
+       description): read that description and act on what it says; when it names nothing you can
+       fix, ask a maintainer.
+   - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
+     finding posted on this head has a reply. When `findings` lists rows with `comment_id: null` (the `reason` says they "live only in the summary comment"), they are outside-diff findings with no thread: read each one in the summary, fix what is real and answer it by its `R###` id like any other finding, and name the ones you left unanswered in your report. A `fixes unverified` green (the `reason` says no review
+     verified it) is done too: report the PR ready to merge and say the fixes were not verified by a review. Before exiting, check whether `report.head && report.head !== head` (a green status carried over an unreviewed push under `once_per_pr`, `thresholded`, or `risk_aware`): if `git diff <report.head>..<head>` contains non-trivial logic or risky changes ("Requesting or suggesting another review" above), recommend `/crysk review` naming those changes; otherwise exit the loop and report that the PR is ready to merge.
+
+   **Bound the forced runs.** `/crysk review` and `/crysk recheck` each run a full paid review
+   that bypasses the size, platform cost-limit and admission gates (`ci_max_attempts` included), and a gate
+   `error` (expired token, missing credential, crash) makes step 0 say `review` again forever.
+   Before posting either, count the ones already on this head, never from memory: the comments in
+   `gh pr view <n> --json comments` whose first line is exactly `/crysk review` or `/crysk recheck`, and whose `createdAt` is at or after the oldest `crysk` or `pr-hero` status on the head
+   (`gh api "repos/{owner}/{repo}/commits/<head>/statuses?per_page=100" --jq '[.[] | select(.context == "crysk" or .context == "pr-hero")] | last.created_at'`;
+   no status yet means none counted). Each reason step 0 gives gets its command once per head:
+   one `/crysk review` each for a skipped head, a partial review, a used-up budget, a gate
+   `error`, and an `upheld` dismissal; one `/crysk recheck` per pending dismissal, plus one retry
+   when that run leaves no ruling or an `inconclusive` one. When the same reason comes back after
+   its command already ran (a second `error` with the same description, a second partial, a second
+   recheck with no ruling or `inconclusive` again), stop and hand it to a human. The hard ceiling
+   is six per head; reaching it goes to a human too.
+
+   `findings[]` lists each posted finding with its `id`, `path`, `line`, `head`, `live_on_head`, and
+   its newest `triage` (`null` when none), and `ci_verdict`. `comment_id` can be null: a live row of
+   the summary's state block that no comment carries (summary-only, or never posted inline). Its
+   `head` is null too; it has no thread, and `triage reply --finding R###` answers it with a
+   top-level comment that names the row. `ci_verdict` is the CI adjudicator's ruling on that newest
+   reply on this head (`upheld`, `rejected`, `inconclusive`, or `null`); for a row with no comment
+   the ruling is a top-level comment that names the reply. `triage` is only the newest reply the gate
+   counts (from a login with write access), so a finding can be answered at its own head and then
+   re-answered at a later head. The thread (step 2 below) settles the per-head question, and the
+   escalation count still reads the thread's prior markers.
+
+For EVERY `<!-- crysk-finding ` comment on this PR that has not already been triaged for the
+current head:
+
+1. **Read the finding.** Fetch the comment body (the marker plus Crysk's claim/severity/tier
+   text) and its GitHub comment id. New posts put that marker on an **inline review
+   comment**. A leftover top-level issue comment with the same marker may still exist on
+   an old PR (pre-W2); the driver still binds those by marker. A finding that appears
+   only under `Comments Outside Diff` in the summary has no comment to fetch: read it in the
+   summary, where its entry shows its row id.
+2. **Read the reviewed head.** It is `report.head` in step 0's JSON: the head the summary was written
+   for. This IS the budget unit — see "One adjudication per finding per HEAD" below. If a triage
+   reply already exists in this thread carrying that head, skip it: this review is already
+   answered. A finding carried from an earlier review keeps that review's comment, so its own
+   marker shows an older `head=`, and a reply from that earlier round does not answer this one.
+3. **Judge the finding against the repository, then pick exactly one tag**: `applied`,
+   `dismissed`, `deferred`, or `misclassified` (table below). The comment is a claim, not a
+   task. You may reject it. Before touching code, replying, or applying fixes, evaluate whether the cluster of findings indicates a flawed integration or broken design (### C) rather than isolated defects — if so, halt the loop and report the diagnosis without posting replies or patching. When you confirm the defect is real, isolated, and in scope (`applied`), make the fix in the working tree now, sweep its class across the PR ("Fix the class, not the site" under `applied`), and run the relevant tests, before posting the `applied` reply; **do not `git push` until you have replied to every finding on this head** (step 6).
+4. **For `dismissed`, `deferred`, and `misclassified`**: spawn the isolated adjudicator (see
+   "The adjudicator spawn" below) and include its verdict in your reply. `applied` never spawns
+   one.
+5. **Reply through the driver**, not with `gh`. Write reasoning prose to a
+   file and run:
+
+   ```bash
+   npx -y crysk@0.9.0 triage reply --pr <n> --finding R00N \
+     --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
+   ```
+
+   `R00N` is the finding's `id` in step 0's `findings[]`. It works for every posted finding,
+   including one carried from an earlier review. With the run directory on the machine (a local
+   review) you may pass `--from <run-dir> --finding F00N` instead, for a finding posted on this
+   head; for a carried finding the driver refuses and names the `R###` id to use. For a finding
+   with no comment (`comment_id: null`) the same command posts a top-level comment that names the
+   row; there is no thread to resolve.
+
+   The driver resolves the parent from the posted `<!-- crysk-finding`
+   marker (never a comment id, never the nearest line), prepends the triage
+   marker and the visible badge, posts the reply, records the triage event
+   transactionally in the canonical product store (`finding_triage` table in
+   `~/.crysk/prhero.db`), and — when the parent is an inline review
+   comment — resolves that review thread. If the driver says no posted marker
+   matches this `F00N`, follow its message: a carried finding is answered by the `R###` id it names.
+   If it names none, the finding lives in the summary bucket (or was never posted): stop. Do not fall back to `gh`. `applied` takes no
+   `--verdict`. `dismissed` / `deferred` / `misclassified` require
+   `--verdict` from the adjudicator. `--issue` is optional and only valid
+   with `--tag deferred`.
+6. **Advance the loop in one batch once all findings on this head are answered:**
+   - **If you made clean code fixes (`applied` or unthreaded blocking fixes):** if you decided this push needs no further review ("Stopping diminishing returns", rule 4), post `/crysk stop` before pushing, and after the push do **not** wait for a re-review: none will run. Report that the fixes are pushed and the PR is ready to merge: the gate carries the last verdict, and every blocking finding you answered before the push turns a carried red green, marked `fixes unverified`. Only a finding left `deferred` or `misclassified` still needs a maintainer's `/crysk override`. Otherwise, commit and `git push` all fixes in a single push, then immediately run `npx -y crysk@0.9.0 status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/crysk recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
+   - **If no code changes were needed:** run `npx -y crysk@0.9.0 status --pr <n> --wait --json` and execute its `next_action` (`recheck` when blocking findings were `dismissed`, or `done` when the gate is already green).
+
+   *(Note: The MCP server is strictly read-only for querying runs, findings, and
+   past triage records via `crysk_get_triage` and `crysk_get_findings`. All
+   mutations — posting comments, resolving threads, and updating the database —
+   must be performed via `npx -y crysk@0.9.0 triage reply`.)*
+
+   **Greptile re-review:** Greptile updates its existing PR comment in place —
+   it does not post a second one. Do not wait for a new Greptile comment to
+   appear; poll for a body change on the existing one.
+
+## Closing a dismissal: `/crysk recheck`
+
+Your local adjudicator (step 4) is a check on yourself before you post: its verdict goes in your
+reply's marker, and the gate ignores it, because you ran it. The gate trusts only the CI
+adjudicator. When step 0 says `recheck`:
+
+1. Comment `gh pr comment <n> --body "/crysk recheck"`. It runs a review of the head and, for each
+   blocking finding whose newest reply is `dismissed` (at most 5 per run), an adjudicator in CI that
+   reads your argument and the repository at that head. You may comment it yourself: you only supply
+   the argument, the CI adjudicator rules. (`/crysk override` is the opposite: never yours to post.)
+2. Wait with `npx -y crysk@0.9.0 status --pr <n> --wait --json` until the run settles. Each ruling is a reply on the finding's thread,
+   from `github-actions[bot]` (the Crysk App's bot on a platform-managed repository), whose first line is
+   `<!-- crysk-adjudication verdict=<v> reply=<your reply's id> head=<sha> -->`. Step 0's
+   `ci_verdict` reads it for you.
+3. Act on the verdict:
+   - `upheld`: the dismissal stands. The recheck run itself does not change its own count; step 0
+     now says `review`. Comment `/crysk review`, then run `npx -y crysk@0.9.0 status --pr <n> --wait --json`, and that review no longer counts the finding.
+   - `rejected`: the finding stands. Re-read the adjudicator's evidence. Fix it, or, if you still hold
+     it is wrong, ask a human (they may override). Do not re-post the same argument.
+   - `inconclusive`: the repository did not settle it either way. On the same reviewed head you
+     cannot post a stronger argument: the driver skips a second triage reply to a review that already
+     has one (`skip post: … already triaged at this head`), and the next recheck re-adjudicates your
+     original reply. Recheck once more; a second `inconclusive` on this head goes to a human. A
+     stronger argument needs a new review: after a push and its review, reply `dismissed` again with
+     the new evidence, then recheck.
+   - No ruling at all after the run: the adjudicator step failed. Nothing was posted and the
+     dismissal is still pending; recheck once more. A second recheck with no ruling goes to a
+     human (see "Bound the forced runs" in step 0).
+4. A ruling counts only on the head it was given. After any push, step 0 asks for a recheck again.
+
+The CI adjudicator answers where the finding is answered: on an inline finding's review thread, and, for a finding with
+no comment (a summary row), in a top-level comment that names your reply. Only a legacy top-level finding comment cannot be
+rechecked; step 0 says `override-or-fix` for it.
+
+## The four tags
+
+| tag | what it claims | what it must supply |
+|---|---|---|
+| `applied` | Fixed in this PR, with every instance of its class this PR introduced. | The class and the sites you swept. No adjudicator: the re-review verifies the fix. |
+| `dismissed` | The finding is wrong. | POSITIVE DISPROOF WITH CITED CODE. "I did it on purpose" is not evidence; "this line already covers it, here" is. |
+| `deferred` | The finding is right, but fixing it is out of this PR's scope. | Reasoning that says why, and what you are doing instead. A GitHub issue number is optional (`--issue`) — do not invent a tracking issue just to satisfy the tag. |
+| `misclassified` | The finding is real, but Crysk typed it wrong (severity, tier, or `causal_disposition`). | Name which field is wrong and why. This is the highest-value signal the loop produces — it points at a hunter/refuter defect, not a repository one. |
+
+Pick exactly one. There is no preferred tag. If you are tempted to pick two, the finding is
+`misclassified` (the label is wrong) rather than `dismissed` (the claim is wrong) — do not
+split the difference.
+
+### `applied`
+
+Only after you independently confirmed the defect in the repository, fixed it in this PR, and
+swept its class (below). Then reply. Do not restate the diff: a one-line pointer (commit sha or
+file) plus the class and the sites you swept is enough. No adjudicator. If you have not confirmed
+it, this is the wrong tag.
+
+#### Fix the class, not the site
+
+Most findings after the first review are bugs written by the previous round's fix, and more than
+half repeat the defect class of a finding already fixed, at another site. Each one costs another
+review round, or ships unverified once the review budget is used up. So before you reply `applied`:
+
+1. **Name the class in one sentence.** Name the rule the finding showed broken, not the line:
+   "a caller reads the cache before the refresh settles", not "line 42 lacks a guard".
+2. **Sweep the PR for it.** Check every hunk in `gh pr diff <n>` (GitHub's own diff of the PR, so
+   no local base ref can be stale or missing) plus everything you changed since the reviewed head:
+   `git diff <head>`, with `head` from `crysk status`, covers unpushed commits and the working tree.
+   If you cannot get the PR diff, say so in the reply and do not claim a sweep.
+   Search by shape (the same call, field, guard, state change or fallback), not only by the
+   identifier the finding named. Fix every instance this PR introduced in the same push, each with
+   a test that fails without its fix.
+3. **Re-read your own fix as the next reviewer will.** The next round hunts the code you just wrote:
+   new branches, early returns, fallbacks, and every caller that now sees a different value. Check
+   each against the same class before you push.
+4. **Leave instances the PR did not introduce alone.** Instances outside the diff are pre-existing:
+   fixing them here grows the delta the next round reviews. Name them in the reply instead.
+5. **Say what you swept.** End the reply with one line: the class, then how many sites you checked
+   and how many you fixed.
+
+Several findings on one head that share a class are one sweep, not several.
+
+### `dismissed`
+
+You are claiming Crysk is wrong. Cite the exact line(s) that already handle the case, or the
+exact reason the claimed defect cannot occur. Then spawn the adjudicator — its burden of proof
+rule is the same one you must meet, and it is the disinterested check on your own claim.
+
+### `deferred`
+
+Reply with why this is out of scope and what you are doing instead. If you
+already have a tracking issue, pass `--issue <n>`; if you do not, omit it.
+Do not create a GitHub issue just to fill the marker — some agents run on
+providers that are not GitHub, and the coding agent decides whether an issue
+belongs anywhere.
+
+### `misclassified`
+
+Name the exact field (`severity`, `tier`, or `causal_disposition`) and what it should be instead,
+with the evidence. The finding itself is not wrong — only its classification is.
+
+## The adjudicator spawn — isolation is load-bearing
+
+For `dismissed`, `deferred`, and `misclassified`, spawn a FRESH, ISOLATED sub-agent using the
+system prompt loaded via `npx -y crysk@0.9.0 skills load crysk-loop adjudicator.md`.
+
+**The isolation requirement, stated plainly: the adjudicator receives ONLY**
+
+- the finding (claim, path, line, severity/tier as Crysk posted it),
+- your argument (the case you are about to reply with), and
+- read-only access to the repository at this PR's head.
+
+**It must NEVER receive your own reasoning context** — not your conversation history, not your
+scratch notes, not "why I believe this". Its entire value is having nothing to defend. An
+adjudicator that inherited your context would simply agree with itself.
+
+The adjudicator returns exactly one of `upheld`, `rejected`, or `inconclusive` — see
+`adjudicator.md` (loaded via `npx -y crysk@0.9.0 skills load crysk-loop adjudicator.md`) for what each means and the burden-of-proof rule behind them. Pass that
+exact word as `--verdict` on `npx -y crysk@0.9.0 triage reply` (and mention it in the reasoning
+prose). The driver writes it on the marker; the escalation rule reads it back from there.
+
+## One adjudication per finding per HEAD
+
+This needs no new state. Each triage reply's marker carries the head of the review it answers
+(`report.head` when it was written), so the bound is read directly off the posted comments — do not
+invent a separate tracking file or counter.
+
+- Same reviewed head, already triaged → skip. Nothing changed, nothing to re-judge.
+- Head changed AND the new commits touched this finding's lines → re-triage is legitimate; this is
+  the one case that pays for another adjudicator run.
+- Head changed but did NOT touch those lines → the prior verdict stands; do not re-triage.
+
+## The escalation stops
+
+Escalate to a human and stop the loop only when one of these hard triggers fires:
+- **Flawed integration or design (### C):** Whack-a-mole findings on the same seam across review rounds, or broken foundational assumptions. Stop patching, do not push tactical band-aids, and report the architectural diagnosis and refactor plan to the human. If a `/crysk stop` was posted to pause reviews during refactoring, comment `/crysk review` once the clean redesign lands to lift the stop; otherwise let CI review the pushed redesign normally.
+- **Inconclusive adjudication after 2 consecutive heads:** After **2 consecutive heads** land at `inconclusive` for the same finding, STOP triaging it and
+say so in the reply: it escalates to a human. Do not spawn a third adjudicator round hoping for a
+different answer — if two different heads with real code changes between them did not settle it,
+a third will not, and by then the thread carries enough material for a person to rule in a minute.
+
+**The count is read off the finding's PRIOR triage markers, not remembered or estimated.** Fetch
+this finding's own reply thread, parse every `<!-- crysk-triage ` marker already posted in it in
+order, and read their `verdict=` fields — the same field this round's reply will also carry. If
+the most recent one is `verdict=inconclusive` AND the one before it is also `verdict=inconclusive`
+(two markers, both `inconclusive`, both belonging to a head change that legitimately re-triaged —
+see "One adjudication per finding per HEAD" above), this round is the escalation, not a third
+adjudicator spawn. This is what makes the rule checkable: the markers ARE the state, there is
+nothing else to consult.
+
+## What you write vs what the driver posts
+
+`--body-file` is **reasoning prose only**. Do not put a `<!-- crysk-triage` marker or a
+badge line in that file — the driver prepends both, picks the parent comment from the posted
+`<!-- crysk-finding` marker, records the decision to the canonical store (`finding_triage`
+table), and resolves the inline review thread when there is one.
+Passing a GitHub comment id, or posting with `gh api … in_reply_to`, is how replies landed
+under Greptile on Musive #1724. Do not do that. Do not reply on
+`<!-- crysk-report -->` either: that is the summary. A finding listed only there is answered through the driver by its `R###` id, like the rest.
+
+`--from` is the Crysk run directory that produced these findings (`findings.json`). `--finding`
+is the finding id (`F001`, …) from that file — never a comment id. Without `--from`, `--finding`
+is the PR's stable `R###` id instead (below).
+
+**When the review ran in CI, that directory is not on your machine: leave `--from` out.** The
+driver then reads the finding off the pull request itself, and `--finding` is the finding's stable
+`R###` id: the `id` of the row in `npx -y crysk@0.9.0 status --pr <n> --json` (`findings[]`), which
+the summary comment shows too. Nothing has to be downloaded:
+
+```bash
+npx -y crysk@0.9.0 triage reply --pr <n> --finding R00N \
+  --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
+```
+
+If the driver says the PR has no posted finding with that id, the finding lives only in the summary
+(or was never posted): stop. Full detail: `docs/github-actions.md` → "Triaging a CI review".
+
+The posted body looks like this (driver-owned; shown so you know what a human will see):
+
+### `applied`
+
+```
+<!-- crysk-triage tag=applied head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent -->
+
+✅ **APPLIED** · agent
+
+Fixed in this PR — see 3f9a2c1: `parseConfig` now validates `retries` before use.
+Class: a config value used before validation. Swept 4 reads of parsed config in this PR, fixed 2 (`retries`, `timeout_ms`).
+```
+
+`--body-file` for that reply is only the last paragraph.
+
+### `dismissed` (needs `--verdict`)
+
+```
+<!-- crysk-triage tag=dismissed head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
+
+❌ **DISMISSED** · agent · adjudicator: upheld
+
+The finding claims `parseConfig` can throw when `raw.retries` is undefined. It cannot:
+`config.ts:42` already guards it — `const retries = raw.retries ?? 3;` — and that line predates
+this PR. The isolated adjudicator confirmed the citation independently and returned `upheld`.
+```
+
+### `deferred` (needs `--verdict`; `--issue` optional)
+
+```
+<!-- crysk-triage tag=deferred head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
+
+📋 **DEFERRED** · agent · adjudicator: upheld
+
+The finding is correct — `retryQueue.ts` has no backoff cap — but fixing it means redesigning the
+retry policy, which is out of scope for this PR.
+```
+
+### `misclassified` (needs `--verdict`)
+
+```
+<!-- crysk-triage tag=misclassified head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
+
+🏷️ **MISCLASSIFIED** · agent · adjudicator: upheld
+
+The defect is real, but `causal_disposition` is wrong: this is filed `introduced` and it is
+pre-existing — `ghPrList` (watch.ts:243) has carried this exact unbounded `gh` hang since before
+this PR. The engine typed it wrong, not the code.
+```
+
+## Rules
+
+- You own the judgment. A Crysk finding is a claim to verify, never an order. `applied` is
+  not the default tag.
+- One tag per finding, no exceptions.
+- `dismissed`, `deferred`, `misclassified` all require a spawned, isolated adjudicator; `applied`
+  never does.
+- The adjudicator never sees your reasoning context — only the finding, your argument, and the
+  repo.
+- Never call `gh` to post or resolve a triage reply. Run `npx -y crysk@0.9.0 triage reply`. (Commenting
+  `/crysk recheck` or `/crysk review` with `gh pr comment` is not a triage reply, and is how you ask for them.)
+  If that command posted the reply and then failed to resolve, re-run the
+  **same** command — same-head skip retries resolve only. Do not `gh`.
+- A finding that only exists under `### Comments Outside Diff` in the summary is answered by its
+  `R###` id: the driver posts a top-level comment that names the row. It is triaged like any other finding: `applied` buys the
+  next review's verification, and a `dismissed` one is ruled on by `/crysk recheck`. If `npx -y crysk@0.9.0 triage reply`
+  reports no matching marker, follow its message.
+- `dismissed`, `deferred`, and `misclassified` without `--verdict` are malformed. `applied` WITH
+  `--verdict` is equally malformed.
+- Never re-triage a finding whose reviewed head is unchanged since its last triage on this PR (the driver
+  skips a same-head re-post).
+- Never post `/crysk review` or `/crysk recheck` past the bound in step 0: count the ones already
+  on the head (never from memory), six at most, and hand a repeated failure to a human sooner.
+- After 2 consecutive `inconclusive` heads — read off the finding's own prior triage markers, not
+  memory — stop and hand the finding to a human.
+- If whack-a-mole findings or broken foundational assumptions indicate a flawed integration or architecture (### C), stop patching and report to the user instead of stacking band-aids.
