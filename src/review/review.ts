@@ -79,6 +79,21 @@ import type { ProductionRuntime } from "../production-runtime";
 import { resolveRunnerAuthority } from "../runner-authority";
 import { resolveRunClaudeCredential } from "../security/claude-credential";
 
+// The lines that close a local --dry-run. The run itself returns 0 whatever
+// the verdict (a real review that the size gate skips exits 1), so the warning
+// names the verdict and never an exit code.
+export function dryRunClosingLines(input: {
+  sizeGateOk: boolean;
+  force: boolean;
+}): string[] {
+  return [
+    ...(!input.sizeGateOk && !input.force
+      ? ["dry run: this diff would be SKIPPED by the size gate."]
+      : []),
+    "dry run: nothing was spawned and nothing was spent.",
+  ];
+}
+
 export async function review(options: CliOptions): Promise<number> {
   // PR mode is a different front half (gh-resolved range, detached worktree)
   // around the same pipeline; it branches here so the local flow below stays
@@ -280,10 +295,12 @@ export async function review(options: CliOptions): Promise<number> {
   // spawn", and a $0 report is never a failure.
   if (options.dryRun) {
     log();
-    if (!sizeGate.ok && !options.force) {
-      log("dry run: this diff would be SKIPPED by the size gate (exit 1).");
+    for (const line of dryRunClosingLines({
+      sizeGateOk: sizeGate.ok,
+      force: options.force,
+    })) {
+      log(line);
     }
-    log("dry run: nothing was spawned and nothing was spent.");
     return 0;
   }
 

@@ -439,8 +439,19 @@ Usage:
                              default (neither file spoke). Names both file
                              paths whether or not they exist. Resolves through
                              the same merge a review does, so it cannot drift
-                             from what actually runs. Read-only — it never
-                             writes either file. $0
+                             from what actually runs. Listing is read-only
+                             and $0; writing is only through the three forms
+                             below
+  crysk config set <key> <value> [--person|--team|--watch]
+                             Write one scalar value into the chosen layer:
+                             your own file (~/.crysk/config.json, the default),
+                             the repo file (--team) or the watcher file
+                             (--watch). Writes that file
+  crysk config unset <key> [--person|--team|--watch]
+                             Remove one value from the chosen layer. Writes
+                             that file
+  crysk config edit        Open the interactive editor over those layers.
+                             Writes the files you save
 
 Options:
   --repo <dir>        Repository to review (default: current directory)
@@ -493,8 +504,10 @@ Options:
   --json              status only: print the status as one JSON object on
                       stdout (schema pr-hero.status/v1)
   --from <dir>        post/triage only: the run dir to read findings.json and
-                      anchor.patch or diff.patch from (required). triage reply maps
-                      --finding F00N onto the posted marker via the same
+                      anchor.patch or diff.patch from. Required for post;
+                      optional for triage reply, which without it reads the
+                      finding off the PR by its R### id. With it, triage reply
+                      maps --finding F00N onto the posted marker via the same
                       post-line remapping post uses
   --finding <id>      triage reply only: the finding id in that run's
                       findings.json (F001, …). The driver maps it to the
