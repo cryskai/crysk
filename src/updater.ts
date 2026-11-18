@@ -130,8 +130,6 @@ export interface UpgradeCheckCache {
   checked_at: string;
   current_version: string;
   latest_version: string;
-  // Set only when npm and GitHub release metadata + integrity checks agreed on this version.
-  verified_version?: string;
   reconciled_version?: string;
   release_url?: string;
   changelog?: string;
