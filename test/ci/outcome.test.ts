@@ -1173,6 +1173,9 @@ describe("renderCode and renderError: the annotation", () => {
       "gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
     );
     expect(openaiSummary).toContain("Crysk GitHub App");
+    expect(openaiSummary).toContain(
+      "reconnect the provider in the Crysk dashboard",
+    );
     expect(openaiSummary).not.toContain(
       "gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
     );

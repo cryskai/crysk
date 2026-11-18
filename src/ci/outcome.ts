@@ -1223,6 +1223,7 @@ const OPENCODE_SUBSCRIPTION_FIXES = [
   "Provider `openai` has no usable ChatGPT login. In GitHub Actions, bill per token with an OpenAI API key:",
   OPENAI_API_KEY_SECRET,
   `Stop passing CRYSK_OPENCODE_OPENAI_OAUTH in the crysk-secrets input: the login is used while it is passed. ${CHATGPT_PLAN_NOTE}`,
+  "On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.",
   "Locally, run `opencode auth login` and choose ChatGPT.",
 ];
 // Only the OpenCode route stores a ChatGPT login; any other backend, or none, is
@@ -1568,6 +1569,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "This Action cannot renew a ChatGPT login. Bill per token instead: set an OpenAI API key and stop passing {secret} in the crysk-secrets input (the login is used while it is passed):",
           OPENAI_API_KEY_SECRET,
           CHATGPT_PLAN_NOTE,
+          "On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.",
           "Then ask for a new review:",
           REVIEW_AGAIN,
         ],

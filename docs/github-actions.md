@@ -1712,6 +1712,8 @@ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 
 Stop passing CRYSK_OPENCODE_OPENAI_OAUTH in the crysk-secrets input: the login is used while it is passed. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
+On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.
+
 Locally, run `opencode auth login` and choose ChatGPT.
 
 #### `subscription_expiring`
@@ -1911,6 +1913,8 @@ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
 A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
+
+On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.
 
 Then ask for a new review:
 

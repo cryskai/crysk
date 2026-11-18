@@ -173,6 +173,7 @@ describe("CRYSK-CRED-REJECTED on an OpenCode route names the OpenCode secret", (
     const summary = rendered?.summary.join("\n") ?? "";
     expect(summary).toContain("gh secret set CRYSK_OPENCODE_OPENAI_API_KEY");
     expect(summary).toContain("Crysk GitHub App");
+    expect(summary).toContain("reconnect the provider in the Crysk dashboard");
     expect(summary).not.toContain("opencode auth login");
     expect(summary).not.toContain("gh secret set CRYSK_OPENCODE_OPENAI_OAUTH");
     expect(summary).not.toContain("claude setup-token");
