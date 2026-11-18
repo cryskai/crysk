@@ -13,9 +13,12 @@
 //      (`@v0.8.1` → `0.8.1`, `@v0` → `0`): a pin gets its exact version and a
 //      moving tag stays in step with the CI;
 //   3. otherwise the latest published crysk.
-// When that is this package's own version the bundled file is printed.
+// A range or tag is resolved to an exact version with `npm view`. WHY not hand
+// it to npx: npx keeps running the copy it cached for a range, so `crysk@0`
+// would stay on the first 0.x this machine downloaded.
+// When the exact version is this package's own the bundled file is printed.
 // Otherwise the file comes from the per-version cache, or from
-// `npx -y crysk@<spec> skills load …`; if that fails the bundled file is
+// `npx -y crysk@<version> skills load …`; if that fails the bundled file is
 // printed with a warning on stderr.
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -38,6 +41,8 @@ import {
 // measured (2026-11-19), so the bound leaves room for a slow network: the
 // agent waits once, and only when a new version first shows up.
 export const SKILLS_DELEGATE_TIMEOUT_MS = 60_000;
+// `npm view` answered in under half a second when measured (2026-11-19).
+export const SKILLS_VERSION_LOOKUP_TIMEOUT_MS = 15_000;
 
 // Set on the delegated child so it prints its own bundled file instead of
 // resolving a version again.
@@ -86,8 +91,8 @@ function readWorkflows(repoRoot: string): string[] {
   }
 }
 
-async function runBoundedNpx(
-  args: string[],
+async function runBounded(
+  argv: string[],
   options: {
     env: Record<string, string | undefined>;
     timeoutMs: number;
@@ -95,7 +100,7 @@ async function runBoundedNpx(
   },
 ): Promise<string | undefined> {
   try {
-    const proc = options.spawnFn(["npx", "-y", ...args], {
+    const proc = options.spawnFn(argv, {
       env: options.env,
       stdout: "pipe",
       stderr: "ignore",
@@ -135,17 +140,61 @@ async function runBoundedNpx(
   }
 }
 
-// What the crysk at `spec` prints for this skill file, or undefined when it
-// could not be run (offline, a version without `skills load`, a timeout).
-export async function delegateSkillsLoad(
+// The newest plain x.y.z in what `npm view <spec> version --json` prints: one
+// string when a single version matches, an array otherwise.
+export function newestPlainVersion(json: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+  const parts = (version: string) => version.split(".").map(Number);
+  let newest: string | undefined;
+  for (const version of Array.isArray(parsed) ? parsed : [parsed]) {
+    if (!isPlainEngineVersion(version)) continue;
+    if (newest === undefined) {
+      newest = version;
+      continue;
+    }
+    const a = parts(version);
+    const b = parts(newest);
+    const index = a.findIndex((part, i) => part !== b[i]);
+    if (index !== -1 && (a[index] ?? 0) > (b[index] ?? 0)) newest = version;
+  }
+  return newest;
+}
+
+// The exact version a range or tag names today, or undefined when npm cannot
+// say (offline, no such version, a timeout).
+export async function resolveCryskVersion(
   spec: string,
+  deps: { spawnFn?: typeof Bun.spawn; timeoutMs?: number } = {},
+): Promise<string | undefined> {
+  const stdout = await runBounded(
+    ["npm", "view", `crysk@${spec}`, "version", "--json", "--prefer-online"],
+    {
+      env: process.env,
+      timeoutMs: deps.timeoutMs ?? SKILLS_VERSION_LOOKUP_TIMEOUT_MS,
+      spawnFn: deps.spawnFn ?? Bun.spawn,
+    },
+  );
+  return stdout === undefined ? undefined : newestPlainVersion(stdout);
+}
+
+// What the crysk at this exact version prints for this skill file, or undefined
+// when it could not be run (offline, a version without `skills load`, a timeout).
+export async function delegateSkillsLoad(
+  version: string,
   skillName: string,
   skillFile: string | undefined,
   deps: { spawnFn?: typeof Bun.spawn; timeoutMs?: number } = {},
 ): Promise<string | undefined> {
-  return runBoundedNpx(
+  return runBounded(
     [
-      `crysk@${spec}`,
+      "npx",
+      "-y",
+      `crysk@${version}`,
       "skills",
       "load",
       skillName,
@@ -174,8 +223,10 @@ export interface SkillsLoadDeps {
   env?: Record<string, string | undefined>;
   // The repository the agent works in; undefined outside one.
   repoRoot?: () => Promise<string | undefined>;
+  // The exact version a range or tag names today.
+  resolveVersion?: (spec: string) => Promise<string | undefined>;
   delegate?: (
-    spec: string,
+    version: string,
     skillName: string,
     skillFile: string | undefined,
   ) => Promise<string | undefined>;
@@ -252,23 +303,23 @@ export async function skillsLoadCommand(
       repoRoot === undefined ? undefined : readEngineVersion(home, repoRoot),
     workflows: repoRoot === undefined ? [] : readWorkflows(repoRoot),
   });
-  if (spec === assets.version) return printBundled();
+  const version = isPlainEngineVersion(spec)
+    ? spec
+    : await (deps.resolveVersion ?? resolveCryskVersion)(spec);
+  if (version === assets.version) return printBundled();
 
-  const exact = isPlainEngineVersion(spec);
-  if (exact) {
-    const cached = readCachedSkillFile(home, spec, skillName, targetFile);
+  if (version !== undefined) {
+    const cached = readCachedSkillFile(home, version, skillName, targetFile);
     if (cached !== undefined) return print(cached);
-  }
-  const delegate = deps.delegate ?? delegateSkillsLoad;
-  const delegated = await delegate(spec, skillName, options.skillFile);
-  if (delegated !== undefined) {
-    if (exact) {
-      writeCachedSkillFile(home, spec, skillName, targetFile, delegated);
+    const delegate = deps.delegate ?? delegateSkillsLoad;
+    const delegated = await delegate(version, skillName, options.skillFile);
+    if (delegated !== undefined) {
+      writeCachedSkillFile(home, version, skillName, targetFile, delegated);
+      return print(delegated);
     }
-    return print(delegated);
   }
   writeStderr(
-    `crysk skills load: could not load ${skillName} from crysk@${spec}; printing the copy bundled with crysk ${assets.version}, which may not match the crysk your CI runs.\n`,
+    `crysk skills load: could not load ${skillName} from crysk@${version ?? spec}; printing the copy bundled with crysk ${assets.version}, which may not match the crysk your CI runs.\n`,
   );
   return printBundled();
 }

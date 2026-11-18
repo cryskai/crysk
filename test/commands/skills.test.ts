@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   delegateSkillsLoad,
+  newestPlainVersion,
+  resolveCryskVersion,
   resolveSkillsSpec,
   skillsInstallCommand,
   skillsLoadCommand,
@@ -360,11 +362,13 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
       file?: string;
       delegated?: string;
       repoRoot?: string | undefined;
+      resolved?: string;
     } = {},
   ) {
     const out: string[] = [];
     const err: string[] = [];
     const calls: Array<[string, string, string | undefined]> = [];
+    const lookups: string[] = [];
     const args = ["skills", "load", "crysk-loop"];
     if (options.file !== undefined) args.push(options.file);
     const code = await skillsLoadCommand(parseArgs(args).options, {
@@ -372,6 +376,10 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
       home,
       env: {},
       repoRoot: async () => ("repoRoot" in options ? options.repoRoot : repo),
+      resolveVersion: async (spec) => {
+        lookups.push(spec);
+        return options.resolved;
+      },
       delegate: async (spec, skill, file) => {
         calls.push([spec, skill, file]);
         return options.delegated;
@@ -379,7 +387,7 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
       writeStdout: (text) => out.push(text),
       writeStderr: (text) => err.push(text),
     });
-    return { code, out: out.join(""), err: err.join(""), calls };
+    return { code, out: out.join(""), err: err.join(""), calls, lookups };
   }
 
   test("delegates to the version status recorded and caches what it printed", async () => {
@@ -415,26 +423,64 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
     expect(result.out).toBe(bundledPlaybook());
   });
 
-  test("follows the workflow's moving tag, and never caches a range", async () => {
+  // npx keeps running the copy it cached for a range, so a moving tag has to be
+  // resolved to an exact version here or the agent stays on its first download.
+  test("resolves the workflow's moving tag to an exact version on every load", async () => {
     writeWorkflow("v0");
-    const result = await load({ delegated: "# newest 0.x\n" });
-    expect(result.calls).toEqual([["0", "crysk-loop", undefined]]);
-    expect(result.out).toBe("# newest 0.x\n");
-    const again = await load({ delegated: "# newer 0.x\n" });
-    expect(again.calls).toHaveLength(1);
-    expect(again.out).toBe("# newer 0.x\n");
+    const first = await load({ resolved: "0.42.0", delegated: "# 0.42.0\n" });
+    expect(first.lookups).toEqual(["0"]);
+    expect(first.calls).toEqual([["0.42.0", "crysk-loop", undefined]]);
+    expect(first.out).toBe("# 0.42.0\n");
+
+    const same = await load({ resolved: "0.42.0", delegated: "never used" });
+    expect(same.calls).toEqual([]);
+    expect(same.out).toBe("# 0.42.0\n");
+
+    const newer = await load({ resolved: "0.43.0", delegated: "# 0.43.0\n" });
+    expect(newer.calls).toEqual([["0.43.0", "crysk-loop", undefined]]);
+    expect(newer.out).toBe("# 0.43.0\n");
   });
 
-  test("follows an exact workflow pin", async () => {
+  test("follows an exact workflow pin with no version lookup", async () => {
     writeWorkflow("v0.8.1");
     const result = await load({ delegated: "# 0.8.1\n" });
+    expect(result.lookups).toEqual([]);
     expect(result.calls).toEqual([["0.8.1", "crysk-loop", undefined]]);
   });
 
-  test("loads the latest outside a repository", async () => {
-    const result = await load({ repoRoot: undefined, delegated: "# latest\n" });
-    expect(result.calls).toEqual([["latest", "crysk-loop", undefined]]);
+  test("a recorded engine version needs no lookup", async () => {
+    recordEngineVersion(home, repo, "0.42.0");
+    writeWorkflow("v0");
+    const result = await load({ delegated: "# 0.42.0\n" });
+    expect(result.lookups).toEqual([]);
+  });
+
+  test("loads the exact latest version outside a repository", async () => {
+    const result = await load({
+      repoRoot: undefined,
+      resolved: "0.50.0",
+      delegated: "# latest\n",
+    });
+    expect(result.lookups).toEqual(["latest"]);
+    expect(result.calls).toEqual([["0.50.0", "crysk-loop", undefined]]);
     expect(result.out).toBe("# latest\n");
+  });
+
+  test("prints the bundled playbook with no npx when the tag resolves to its own version", async () => {
+    writeWorkflow("v0");
+    const result = await load({ resolved: assets.version, delegated: "no" });
+    expect(result.calls).toEqual([]);
+    expect(result.out).toBe(bundledPlaybook());
+    expect(result.err).toBe("");
+  });
+
+  test("prints the bundled playbook and warns when the version cannot be resolved", async () => {
+    writeWorkflow("v0");
+    const result = await load({ delegated: "never used" });
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual([]);
+    expect(result.out).toBe(bundledPlaybook());
+    expect(result.err).toContain("could not load crysk-loop from crysk@0;");
   });
 
   test("prints the bundled playbook and warns when the delegation fails", async () => {
@@ -472,6 +518,22 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
 });
 
 // The real npx seam: argv, the child's env, and the bound.
+describe("newestPlainVersion", () => {
+  test("compares numerically and ignores anything but x.y.z", () => {
+    expect(
+      newestPlainVersion('["0.9.0","0.10.0","0.11.0-rc.1","latest"]'),
+    ).toBe("0.10.0");
+    expect(newestPlainVersion('"0.9.0"')).toBe("0.9.0");
+  });
+
+  test("gives nothing for an empty or unreadable answer", () => {
+    expect(newestPlainVersion("")).toBeUndefined();
+    expect(newestPlainVersion("not json")).toBeUndefined();
+    expect(newestPlainVersion("[]")).toBeUndefined();
+    expect(newestPlainVersion('{"error":{"code":"E404"}}')).toBeUndefined();
+  });
+});
+
 describe("delegateSkillsLoad", () => {
   function fakeSpawn(stdout: string, exitCode: number, hang = false) {
     const seen: { argv: string[]; env: Record<string, string | undefined> }[] =
@@ -527,6 +589,33 @@ describe("delegateSkillsLoad", () => {
       "adjudicator.md",
     ]);
     expect(seen[0]?.env.CRYSK_SKILLS_DELEGATED).toBe("1");
+  });
+
+  test("asks npm for the versions the spec matches and takes the newest", async () => {
+    const { spawnFn, seen } = fakeSpawn('["0.9.0","0.10.0"]', 0);
+    expect(await resolveCryskVersion("0", { spawnFn })).toBe("0.10.0");
+    expect(seen[0]?.argv).toEqual([
+      "npm",
+      "view",
+      "crysk@0",
+      "version",
+      "--json",
+      "--prefer-online",
+    ]);
+  });
+
+  test("a failed or stalled version lookup gives nothing", async () => {
+    expect(
+      await resolveCryskVersion("99", {
+        spawnFn: fakeSpawn('{"error":{"code":"E404"}}', 1).spawnFn,
+      }),
+    ).toBeUndefined();
+    expect(
+      await resolveCryskVersion("0", {
+        spawnFn: fakeSpawn("", 0, true).spawnFn,
+        timeoutMs: 20,
+      }),
+    ).toBeUndefined();
   });
 
   test("a failing child, an empty stdout or a timeout gives nothing", async () => {
