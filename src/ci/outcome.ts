@@ -1200,17 +1200,24 @@ const OPENCODE_API_KEY_SECRET =
   "$ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY";
 const OPENCODE_PROVIDER_TOKEN_NOTE =
   "<PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).";
+// The scaffolded workflow forwards an OpenCode API key only for the tokens listed in
+// CRYSK_OPENCODE_PROVIDERS, so the secret alone never reaches the action. The variable
+// holds the whole list and `gh variable set` replaces it.
+const PROVIDER_LIST_REPLACED =
+  "This command replaces the list, so include every provider you use:";
+const OPENCODE_PROVIDER_VARIABLE_STEPS = [
+  `Then add <PROVIDER> to the workflow's provider variable. ${PROVIDER_LIST_REPLACED}`,
+  `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["<PROVIDER>"]'`,
+];
 // A workflow secret cannot hold a ChatGPT login: OpenAI replaces the refresh token
 // on every renewal and nothing renews the secret. So no fix tells a standalone
 // user to store one; OpenAI runs on an API key, and a ChatGPT plan goes through
 // the Crysk GitHub App.
 const CHATGPT_PLAN_NOTE =
   "A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).";
-// The scaffolded workflow forwards an OpenCode API key only for the tokens listed in
-// CRYSK_OPENCODE_PROVIDERS, so the secret alone never reaches the action.
 const OPENAI_API_KEY_STEPS = [
   "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
-  "Then list OPENAI in the workflow's provider variable, keeping any token already there:",
+  `Then add OPENAI to the workflow's provider variable. ${PROVIDER_LIST_REPLACED}`,
   `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,
 ];
 const CRED_STORE_WHY =
@@ -1351,6 +1358,7 @@ const OPENCODE_CREDENTIAL_FIXES = [
   "Set the OpenCode credential of each provider your models use:",
   OPENCODE_API_KEY_SECRET,
   OPENCODE_PROVIDER_TOKEN_NOTE,
+  ...OPENCODE_PROVIDER_VARIABLE_STEPS,
   `For OpenAI, set an OpenAI API key. ${CHATGPT_PLAN_NOTE}`,
   ...OPENAI_API_KEY_STEPS,
   `If the secret is already set, check that the workflow passes it to the action in the \`crysk-secrets\` input, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_OPENCODE_DEEPSEEK_API_KEY")}\`: a secret the workflow does not pass never reaches Crysk.`,
@@ -1470,6 +1478,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Set {provider}'s secret and pass it in the crysk-secrets input:",
           OPENCODE_API_KEY_SECRET,
           OPENCODE_PROVIDER_TOKEN_NOTE,
+          ...OPENCODE_PROVIDER_VARIABLE_STEPS,
         ],
         annotationFix:
           "set {provider}'s CRYSK_OPENCODE_<PROVIDER>_API_KEY secret and pass it in the crysk-secrets input",

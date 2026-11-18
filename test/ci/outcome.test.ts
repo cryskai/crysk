@@ -644,6 +644,28 @@ describe("wording: no invented scope, and the credential text names the route th
   });
 });
 
+describe("OpenCode API key fixes name the provider variable", () => {
+  const command = `gh variable set CRYSK_OPENCODE_PROVIDERS --body '["<PROVIDER>"]'`;
+
+  test("a provider with no credential record", () => {
+    const { summary } = renderError(
+      { kind: "credential", failureClass: "missing_provider_record" },
+      { provider: "deepseek" },
+      "action",
+    );
+    expect(summary.join("\n")).toContain(command);
+  });
+
+  test("CRYSK-CRED-MISSING on an OpenCode route", () => {
+    const { summary } = renderCode(
+      "CRYSK-CRED-MISSING",
+      { backend: "opencode" },
+      "action",
+    );
+    expect(summary.join("\n")).toContain(command);
+  });
+});
+
 describe("docs parity: ## Error codes in docs/github-actions.md", () => {
   const docs = readFileSync(DOCS, "utf8");
   const sectionStart = docs.indexOf("\n## Error codes\n");
@@ -1172,6 +1194,9 @@ describe("renderCode and renderError: the annotation", () => {
     expect(openaiSummary).toContain(
       "gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
     );
+    // `gh variable set` replaces the value, so the fix must not promise to keep it.
+    expect(openaiSummary).toContain("This command replaces the list");
+    expect(openaiSummary).not.toContain("keeping any token already there");
     // The workflow forwards an OpenCode API key only for tokens in this variable.
     expect(openaiSummary).toContain(
       `gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,

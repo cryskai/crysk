@@ -1606,13 +1606,19 @@ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 
 <PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).
 
+Then add <PROVIDER> to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["<PROVIDER>"]'
+```
+
 For OpenAI, set an OpenAI API key. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
-Then list OPENAI in the workflow's provider variable, keeping any token already there:
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
 
 ```bash
 gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
@@ -1698,6 +1704,12 @@ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 
 <PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).
 
+Then add <PROVIDER> to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["<PROVIDER>"]'
+```
+
 #### `missing_subscription_record`
 
 On the Claude route (`backend` is `claude-code`, or no OpenCode backend):
@@ -1716,7 +1728,7 @@ Provider `openai` has no usable ChatGPT login. In GitHub Actions, bill per token
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
-Then list OPENAI in the workflow's provider variable, keeping any token already there:
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
 
 ```bash
 gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
@@ -1742,7 +1754,7 @@ On a workflow you manage yourself, nothing renews the secret, so a ChatGPT login
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
-Then list OPENAI in the workflow's provider variable, keeping any token already there:
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
 
 ```bash
 gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
@@ -1779,7 +1791,7 @@ When `{detail}` names a `CRYSK_*` secret, the `crysk-secrets` input was refused.
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
-Then list OPENAI in the workflow's provider variable, keeping any token already there:
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
 
 ```bash
 gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
@@ -1936,7 +1948,7 @@ This Action cannot renew a ChatGPT login. Bill per token instead: set an OpenAI 
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
-Then list OPENAI in the workflow's provider variable, keeping any token already there:
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
 
 ```bash
 gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
@@ -2434,7 +2446,7 @@ Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} i
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
-Then list OPENAI in the workflow's provider variable, keeping any token already there:
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
 
 ```bash
 gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
