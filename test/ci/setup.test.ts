@@ -336,6 +336,21 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     expect(usesValues).toContain("cryskai/crysk@v0");
   });
 
+  test("the credentials comment names the API key for OpenAI and sends a ChatGPT plan to the Crysk GitHub App", () => {
+    const template = generateCiWorkflowTemplate();
+    // The comment wraps, so read it as one line per sentence.
+    const prose = template.replace(/\n\s*#\s*/g, " ");
+    expect(prose).toContain(
+      "CRYSK_OPENCODE_<PROVIDER>_API_KEY — an OpenCode provider's API key",
+    );
+    expect(prose).toContain("OpenAI: CRYSK_OPENCODE_OPENAI_API_KEY");
+    expect(prose).toContain("A ChatGPT plan needs the Crysk GitHub App");
+    // The Action cannot keep a ChatGPT login valid, so the comment no longer
+    // tells anyone to store one.
+    expect(template).not.toContain("base64 on one line");
+    expect(template).not.toContain("auth.json");
+  });
+
   test("never embeds a secret value — references secrets by name only", () => {
     const template = generateCiWorkflowTemplate();
     expect(template).toContain(`\${{ secrets.CRYSK_CLAUDE_API_KEY }}`);
@@ -2113,7 +2128,7 @@ describe("ci init prints the CRYSK_* secrets and the workflow variables (CLI)", 
     expect(output).not.toContain("CRYSK_MODELS");
   });
 
-  test("the judge's models are not forwarded, and OpenAI also gets its subscription command", async () => {
+  test("the judge's models are not forwarded, and OpenAI points a ChatGPT plan at the Crysk GitHub App", async () => {
     const { output } = await runInit(
       {},
       {
@@ -2126,7 +2141,11 @@ describe("ci init prints the CRYSK_* secrets and the workflow variables (CLI)", 
     expect(output).toContain(
       `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,
     );
-    expect(output).toContain("gh secret set CRYSK_OPENCODE_OPENAI_OAUTH");
+    expect(output).toContain("gh secret set CRYSK_OPENCODE_OPENAI_API_KEY");
+    expect(output).toContain("ChatGPT plan");
+    expect(output).toContain("Crysk GitHub App");
+    expect(output).not.toContain("gh secret set CRYSK_OPENCODE_OPENAI_OAUTH");
+    expect(output).not.toContain("auth.json");
     expect(output).not.toContain("CRYSK_CREDENTIALS");
     expect(output).not.toContain("GROQ");
   });

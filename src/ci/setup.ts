@@ -239,10 +239,11 @@ function credentialWithLines(options: CiWorkflowTemplateOptions): string {
 ${lines}`;
   }
   return `${block}
-          #   CRYSK_OPENCODE_OPENAI_OAUTH — an OpenAI (ChatGPT) subscription for
-          #     OpenCode: the openai record of OpenCode's auth.json, base64 on one line.
           #   CRYSK_OPENCODE_<PROVIDER>_API_KEY — an OpenCode provider's API key,
-          #     <PROVIDER> being its id uppercased with - and . as _. The ${MAX_OPENCODE_PROVIDER_SLOTS}
+          #     <PROVIDER> being its id uppercased with - and . as _. For
+          #     OpenAI: CRYSK_OPENCODE_OPENAI_API_KEY. A ChatGPT plan needs the
+          #     Crysk GitHub App: this Action cannot keep a ChatGPT login valid,
+          #     so it has no secret for one. The ${MAX_OPENCODE_PROVIDER_SLOTS}
           #     lines after the fixed ones forward the providers listed in
           #     vars.${OPENCODE_PROVIDERS_VARIABLE} (a JSON array, e.g. ["DEEPSEEK"]);
           #     an unused line renders as CRYSK_OPENCODE__API_KEY= and is skipped.

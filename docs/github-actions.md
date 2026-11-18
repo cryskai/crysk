@@ -186,8 +186,8 @@ commands that put your setup where the workflow reads it. It reads your person c
 
 - `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY` to bill per token);
 - one `gh secret set CRYSK_OPENCODE_<P>_API_KEY` per OpenCode provider your `models` or your `profile` name
-  (fallbacks included, the judge's list skipped), and for `openai` also the line that sets
-  `CRYSK_OPENCODE_OPENAI_OAUTH` from your OpenCode login for a ChatGPT subscription;
+  (fallbacks included, the judge's list skipped), and for `openai` also a note that a ChatGPT plan is not
+  supported in this Action and needs the Crysk GitHub App;
 - `gh variable set CRYSK_MODELS --body "$(jq -c .models ~/.crysk/config.json)"` when your config has
   `models`, the same for `CRYSK_CREDENTIALS` when it has `credentials`,
   `gh variable set CRYSK_PROFILE --body openai` when it has `profile`, and
@@ -299,7 +299,7 @@ Each credential gets one secret, with one name per kind:
 | `CRYSK_CLAUDE_OAUTH_TOKEN` | Claude Code subscription: the token `claude setup-token` prints (replaces `CLAUDE_CODE_OAUTH_TOKEN`) |
 | `CRYSK_CLAUDE_API_KEY` | Claude Code on an Anthropic API key (replaces `ANTHROPIC_API_KEY`) |
 | `CRYSK_OPENCODE_<P>_API_KEY` | An OpenCode provider's API key |
-| `CRYSK_OPENCODE_<P>_OAUTH` | That provider's `opencode auth login` record, base64 on one line (`base64 -w0`) |
+| `CRYSK_OPENCODE_<P>_OAUTH` | A login record the Crysk platform writes for a connected repository (`openai` only). Do not set it yourself: a ChatGPT plan is not supported in this Action (see "A review never renews the login" below) |
 
 `<P>` is the [Models.dev](https://models.dev) provider id in upper case, with `-` and `.` written as `_`:
 `deepseek` becomes `DEEPSEEK`, `github-copilot` becomes `GITHUB_COPILOT`, and `wafer.ai` becomes `WAFER_AI`.
@@ -361,9 +361,10 @@ with mode `0600` (`$XDG_DATA_HOME/opencode/auth.json`, or
   OpenCode never reads that file: the credential broker hands it a copy of the record in a directory of its
   own, and for a provider which rotates its refresh token that copy's refresh token is empty (see "A review
   never renews the login" below).
-- **`_OAUTH` is read for `openai` only, for now.** That is the one subscription Crysk can project. An
-  `_OAUTH` secret for another provider your models use fails the step with `CRYSK-CRED-UNUSABLE`, naming
-  the secret and telling you to set that provider's `_API_KEY` instead.
+- **`_OAUTH` is read for `openai` only, for now.** That is the one login Crysk can project, and the one the
+  Crysk platform writes for a connected repository. An `_OAUTH` secret for another provider your models use
+  fails the step with `CRYSK-CRED-UNUSABLE`, naming the secret and telling you to set that provider's
+  `_API_KEY` instead.
 - **Subscription first.** When `openai` has both `CRYSK_OPENCODE_OPENAI_OAUTH` and
   `CRYSK_OPENCODE_OPENAI_API_KEY`, the subscription builds the record and the API key is not used.
 - **The bill follows the secret.** An `openai` model on `CRYSK_OPENCODE_OPENAI_API_KEY` is billed per
@@ -385,13 +386,11 @@ to authenticate. So the review's copy of an `_OAUTH` record carries no refresh t
 rotates it), a review refuses to start when the access token expires within two hours, and a step refuses a
 login that has already expired (`CRYSK-CRED-UNUSABLE`, `subscription_expiring`). On a repository connected to
 the Crysk platform, the platform renews the login ahead of time, on your runner (see
-[Subscription logins](#subscription-logins)). In a workflow you manage yourself, an OpenAI
-access token lasts about ten days: run `opencode auth login` again on your machine and set the secret anew
-before it expires:
+[Subscription logins](#subscription-logins)).
 
-```sh
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
-```
+In a workflow you manage yourself nothing renews the secret, so **a ChatGPT plan is not supported in the
+open-source Action**. Use an OpenAI API key (`CRYSK_OPENCODE_OPENAI_API_KEY`), or the Crysk GitHub App for a
+ChatGPT plan. See [Use OpenAI models](https://crysk.dev/docs/github-actions/openai/).
 
 A configuration whose models name several OpenCode providers runs each model on its own provider's secret,
 through its own OpenCode server that sees only that provider's record (see "Several OpenCode providers in
@@ -424,13 +423,13 @@ The Action is backend-agnostic: the next provider is data (a model name and a se
 
    Any step left on a `claude:` model needs a `CRYSK_CLAUDE_*` secret in the same run.
 2. **One secret per OpenCode provider**, `CRYSK_OPENCODE_<P>_API_KEY`, `<P>` being the provider id upper
-   case with `-` and `.` as `_` (see [`CRYSK_*` secrets](#crysk_-secrets)). For an OpenAI (ChatGPT)
-   subscription, `CRYSK_OPENCODE_OPENAI_OAUTH` instead, the `openai` record of your OpenCode login, base64
-   on one line:
+   case with `-` and `.` as `_` (see [`CRYSK_*` secrets](#crysk_-secrets)). OpenAI runs on
+   `CRYSK_OPENCODE_OPENAI_API_KEY`; a ChatGPT plan is not supported in this Action and needs the Crysk
+   GitHub App:
 
    ```bash
    gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY   # paste the key when asked; never echo it
-   jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH   # on macOS, drop -w0
+   gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
    ```
 
 3. **Repository variable `CRYSK_OPENCODE_PROVIDERS`**: a JSON array of the `<P>` tokens whose API keys the
@@ -443,8 +442,8 @@ The Action is backend-agnostic: the next provider is data (a model name and a se
    The scaffolded workflow has five slot lines after the fixed ones. Slot `i` reads the `i`-th token and
    forwards `CRYSK_OPENCODE_<token>_API_KEY` by that exact name, so the action never receives any other
    secret; an unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped. `CRYSK_OPENCODE_OPENAI_OAUTH`
-   has its own fixed line, so an OpenAI subscription needs no token here (an OpenAI API key does:
-   `OPENAI`). A repository connected to the Crysk platform gets the same five slots filled from the
+   has its own fixed line, which stays empty in a repository you manage yourself, so an OpenAI API key
+   needs its token here: `OPENAI`. A repository connected to the Crysk platform gets the same five slots filled from the
    platform's `opencode-providers` dispatch input instead, from the review's models.
 
 `crysk ci init` prints all three commands from your person config (see [`crysk ci init`](#scaffolding-with-crysk-ci-init)).
@@ -473,7 +472,7 @@ OpenCode-only `CRYSK_MODELS` included.
 |---|---|
 | A non-openai `CRYSK_OPENCODE_<P>_API_KEY` (tested: **deepseek**) | Metered: an invoice route, not an unlimited subscription, so the platform's dollar limits (Review > Limits) can skip it. |
 | `CRYSK_OPENCODE_OPENAI_API_KEY` | Metered, billed per token like any API key; the platform's dollar limits apply. |
-| `CRYSK_OPENCODE_OPENAI_OAUTH` | The ChatGPT subscription. With both OpenAI secrets set, the subscription is used. |
+| `CRYSK_OPENCODE_OPENAI_OAUTH` | A ChatGPT login the Crysk platform manages. Do not set it yourself: this Action cannot keep one valid. With both OpenAI secrets set, the login is used. |
 | An `_OAUTH` secret for another provider your models use | **Refused**, naming the secret: only OpenAI's subscription can be projected. Set that provider's `_API_KEY`. |
 | Several OpenCode providers in one run | Supported: each model runs through its own OpenCode server, projected with only its provider's record ([configuration.md](configuration.md), "Several OpenCode providers in one review"). |
 | `claude:` models beside OpenCode ones | Supported. Pass a `CRYSK_CLAUDE_*` secret beside the OpenCode ones. |
@@ -490,7 +489,7 @@ OpenCode-only `CRYSK_MODELS` included.
   credential stops before it spends.
 - **`profile: openai`** (the `profile` input from `vars.CRYSK_PROFILE`, or the platform, which sends it only
   to an engine that lists `profile` in `X-Crysk-Capabilities`) runs every step on OpenAI through OpenCode. It needs
-  `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH` and installs the OpenCode CLI. On a
+  `CRYSK_OPENCODE_OPENAI_API_KEY` (or the login the Crysk platform manages) and installs the OpenCode CLI. On a
   repository connected to the platform it also skips the Claude CLI, unless a `models` entry names a Claude
   model or a custom `agents_dir` may apply; a standalone workflow still installs the Claude CLI, unused. See
   [Profiles](configuration.md#profiles).
@@ -939,7 +938,7 @@ How a run bills is decided by the run itself. A run uses one Claude credential, 
 (`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice. A metered run is one on the API
 key (`CRYSK_CLAUDE_API_KEY`) or on a model of an OpenCode provider whose `CRYSK_OPENCODE_*` secret is an API
 key, on any route the run resolves: any role or fallback of `models`, `--model`, a spec agent, a prompt's
-frontmatter or an engine default. An OpenCode auth file alone (a ChatGPT subscription,
+frontmatter or an engine default. An OpenCode auth file alone (a ChatGPT login the platform manages,
 `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered.
 
 **Retired, and still accepted.** A workflow that sets `budget-usd`, a command line that passes `--budget-usd` or
