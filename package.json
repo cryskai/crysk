@@ -1,6 +1,7 @@
 {
   "name": "crysk",
   "version": "0.9.0",
+  "description": "Open-source AI pull request reviewer: specialist agents read the diff, an adversarial refuter challenges every severe finding, and deterministic code decides what blocks the merge. Runs in GitHub Actions or from your terminal.",
   "private": false,
   "license": "Apache-2.0",
   "repository": {

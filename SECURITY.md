@@ -2,14 +2,18 @@
 
 ## Supported Versions
 
+Crysk is pre-1.0. Security fixes ship in a new release of the latest version; earlier releases are not patched.
+
 | Version | Supported          |
 | ------- | ------------------ |
-| >= 1.0  | :white_check_mark: |
-| < 1.0   | :x:                |
+| Latest release (`crysk` on npm, the `v0` tag of `cryskai/crysk`) | :white_check_mark: |
+| Anything older | :x: |
+
+Upgrade with `crysk upgrade`, or point a workflow at `cryskai/crysk@v0`, which follows the latest release.
 
 ## Reporting a Vulnerability
 
-We take the security of `pr-hero` seriously. If you discover a vulnerability, please report it privately to our team:
+We take the security of `crysk` (formerly `pr-hero`) seriously. If you discover a vulnerability, please report it privately to our team:
 
 1. Go to the [Security Advisories](https://github.com/cryskai/crysk/security/advisories/new) tab of this repository.
 2. Click **Report a vulnerability** to submit a private report.
