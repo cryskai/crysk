@@ -53,7 +53,7 @@ inherits that CLI's authentication. `claude` is the engine; everything else here
 | **Claude Code CLI**, installed *and authenticated* | everything | nothing runs — it is the engine |
 | **git** | everything | nothing runs |
 | **Bun ≥ 1.3** on `PATH` | install options B and C only | option A carries its own runtime |
-| **GitHub CLI (`gh`)**, authenticated | `review --pr`, `--post`, `watch`, `reverts`, `corpus` | local review still works in full |
+| **GitHub CLI (`gh`)**, authenticated | everything that reads or writes a pull request: `review --pr`, `--post`, `status`, `triage reply`, `watch`, `reverts`, `corpus` | required: `crysk doctor` fails without it |
 | **codegraph** | optional code intelligence | hunters navigate with git and grep, with less structural context |
 
 Run `crysk doctor` first: it checks every one of these and prints what is missing. The one thing it

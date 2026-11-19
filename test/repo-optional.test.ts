@@ -14,7 +14,7 @@ describe("repo-optional commands", () => {
         cwd: undefined,
         checkToolsOptions: {
           which: (bin) =>
-            ["git", "claude"].includes(bin) ? `/usr/bin/${bin}` : null,
+            ["git", "claude", "gh"].includes(bin) ? `/usr/bin/${bin}` : null,
           exec: async () => ({
             exitCode: 0,
             stdout: "1.0.0",

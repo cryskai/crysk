@@ -370,7 +370,8 @@ describe("doctor tri-state evaluation", () => {
       );
     });
 
-    test("gh missing is degraded, not blocking", async () => {
+    // gh is required: status, triage replies and every PR command run through it.
+    test("gh missing is blocking", async () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
@@ -385,11 +386,34 @@ describe("doctor tri-state evaluation", () => {
         },
       });
 
-      expect(report.overall).toBe("degraded");
-      expect(report.exitCode).toBe(0);
+      expect(report.overall).toBe("blocking");
+      expect(report.exitCode).not.toBe(0);
       const ghCheck = report.checks.find((c) => c.name === "gh");
-      expect(ghCheck?.severity).toBe("degraded");
+      expect(ghCheck?.severity).toBe("blocking");
       expect(ghCheck?.hint).toBeDefined();
+    });
+
+    test("gh not authenticated is blocking", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) =>
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
+        readFile: () => "## Gotchas\nContent",
+        checkToolsOptions: {
+          which: (bin) => `/bin/${bin}`,
+          exec: async (cmd) =>
+            cmd.includes("auth")
+              ? { exitCode: 1, stdout: "", stderr: "not logged in" }
+              : { exitCode: 0, stdout: "", stderr: "" },
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      expect(report.overall).toBe("blocking");
+      const ghCheck = report.checks.find((c) => c.name === "gh");
+      expect(ghCheck?.severity).toBe("blocking");
     });
 
     test("codegraph unindexed is degraded, not blocking", async () => {

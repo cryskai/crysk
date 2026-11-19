@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **GitHub CLI is required.** `crysk doctor` now fails when `gh` is missing or not authenticated, instead of only warning. Every command that touches a pull request, including `status` and `triage reply`, runs through it.
 - **The user docs are on crysk.dev.** [crysk.dev/docs](https://crysk.dev/docs/) is the maintained home of the
   quickstart, the review guides, the Action reference, the config reference and the error codes, and
   [crysk.dev/llms.txt](https://crysk.dev/llms.txt) indexes them for agents. The README is now short: what Crysk
