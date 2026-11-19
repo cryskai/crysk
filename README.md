@@ -176,7 +176,7 @@ bun run typecheck      # tsc --noEmit, strict
 bun run check          # biome over src + test
 ```
 
-The architecture in one line each lives in `CLAUDE.md`; the stage plan lives in `ROADMAP.md`,
+The stage plan lives in `ROADMAP.md`,
 and the earlier phases in `docs/history/`. The short version: the flow is data (`ReviewSpec`), agents are
 prompt files, orchestration is testable TypeScript — models judge, code governs. See
 [`docs/`](docs/README.md) for how the folder is organised.

@@ -2241,26 +2241,23 @@ describe("Packaging & distribution configuration", () => {
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");
   });
 
-  test(".agents/skills/crysk-ci-setup/assets/workflow.yml matches the skills workflow asset", () => {
-    const skillsPath = path.join(
-      rootDir,
-      "skills",
-      "crysk-ci-setup",
-      "assets",
-      "workflow.yml",
-    );
-    const agentsPath = path.join(
-      rootDir,
-      ".agents",
-      "skills",
-      "crysk-ci-setup",
-      "assets",
-      "workflow.yml",
-    );
-    expect(existsSync(agentsPath)).toBe(true);
-    expect(readFileSync(agentsPath, "utf-8")).toBe(
-      readFileSync(skillsPath, "utf-8"),
-    );
+  test("agent harness files stay out of the public tree", () => {
+    const listed = Bun.spawnSync({
+      cmd: [
+        "git",
+        "ls-files",
+        "--",
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".agents",
+        ".claude",
+      ],
+      cwd: rootDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout.toString()).toBe("");
   });
 
   // A consumer repo has no copy of this action's source, so it must resolve
