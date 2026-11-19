@@ -14,16 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository's CI runs: the version that wrote the last review, else the version named by the `uses: cryskai/crysk@v…`
   line of a workflow on the default branch (read from git objects, never from the checkout), else the latest GitHub
   release. A moving tag and "latest" are resolved from GitHub, and an exact version must exist as a GitHub tag. When a
-  version cannot be resolved or loaded, the command prints its bundled copy with a warning on stderr. Run
+  version cannot be resolved or loaded, the command prints its bundled copy with a warning on stderr. The `npx` that
+  fetches another version runs from an empty directory with no `node_modules/.bin` on its `PATH`, so a branch's `node_modules` cannot supply what is cached; an
+  `npx` command an agent runs inside a checkout can still resolve that checkout's `node_modules`. Run
   `crysk skills install` one last time to get the stubs: it also removes the companion files an earlier install
   copied, keeping and reporting any you edited. After that, a release needs no reinstall.
 - **`crysk status --json` names the engine version.** `report.engine_version` is the Crysk version that wrote
-  the summary (read only from a summary a bot posted), and `skills_reload` is the command that loads the matching
-  playbook when the CLI running status is another version (`null` otherwise). The summary's admission block now
+  the summary (read only from a summary a bot posted). `skills_reload` is the running CLI's own
+  `skills load crysk-loop` command when the version recorded for the repository differs from that CLI (`null`
+  otherwise), so the loader's GitHub tag check applies to the recorded version. The summary's admission block now
   carries the version in its JSON; its header line is unchanged.
 - **`crysk status --json` gives agents data to branch on.** `reason_code` names why `next_action` is what it is, one
   closed value per decision. `forced_runs_on_head` counts the `/crysk review` and `/crysk recheck` commands that apply
-  to this head. Each finding gains `needs_reply` and `inconclusive_heads`. All are additive to `pr-hero.status/v1`,
+  to this head (if the status history cannot be read, it counts from the latest status). Each finding gains `needs_reply` and `inconclusive_heads`. All are additive to `pr-hero.status/v1`,
   and the `next_action` values are unchanged.
 
 ### Changed
@@ -51,8 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `inconclusive`. `crysk-pr` applies only in repositories that use Crysk and checks before running `npx`. The CI skill
   splits day-to-day handling into `references/ci-operations.md` and stops using `crysk doctor` to verify CI. The
   unused `assets/admission-config.example.json` is gone.
-- **`next_action: fix` now means there is something to push.** A carried red whose blocking findings are all answered returns `override-or-fix`
-  with its own reason code.
+- **`next_action: fix` now means there is something to push.** On a head no review read (a carried red, or a summary
+  of an earlier head), status never returns `fix`: an unruled dismissal returns `recheck`, and anything else returns
+  `override-or-fix` with its own reason code.
+- **A size or cost skip in advisory mode no longer reads as "no review yet".** Advisory mode writes no status for it, so
+  status now reports `review_skipped` from the skip notice, and the agent asks before forcing a review.
+- **The review loop can save a review.** With a green gate, after a review whose new findings were only 1 or 2 advisory
+  ones, all fixed, an agent posts `/crysk stop` before a push that holds only those fixes.
 
 ### Fixed
 

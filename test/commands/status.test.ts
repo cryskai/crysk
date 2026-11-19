@@ -17,6 +17,7 @@ import { renderStateBlock, stateFinding } from "#rereview/state";
 import { parseArgs } from "#review/preflight";
 import { triageMarker } from "#triage/triage";
 import { CliError, CliUsageError } from "../../src/errors";
+import { readEngineVersion, recordEngineVersion } from "../../src/skills-cache";
 
 type ScriptEntry = {
   match: string[];
@@ -1216,30 +1217,44 @@ describe("runStatusCommand — the engine version", () => {
         : entry,
     );
 
-  async function run(user: string) {
-    const { spawnFn } = makeFakeGh(stampedScript(user));
-    const recorded: string[] = [];
-    const written: string[] = [];
-    const code = await runStatusCommand({
-      operatorRoot: OPERATOR_ROOT,
-      pr: 12,
-      json: true,
-      spawnFn,
-      nowMs: NOW,
-      cliVersion: "0.9.5",
-      recordEngine: (version, at) => recorded.push(`${version} ${at}`),
-      out: (text) => written.push(text),
-    });
-    return { code, recorded, json: JSON.parse(written[0] ?? "{}") };
+  async function run(user: string, seed?: { version: string; at: string }) {
+    const home = await mkdtemp(path.join(tmpdir(), "crysk-status-engine-"));
+    try {
+      if (seed !== undefined) {
+        recordEngineVersion(home, OPERATOR_ROOT, seed.version, seed.at);
+      }
+      const { spawnFn } = makeFakeGh(stampedScript(user));
+      const recorded: string[] = [];
+      const written: string[] = [];
+      const code = await runStatusCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 12,
+        json: true,
+        spawnFn,
+        nowMs: NOW,
+        cliVersion: "0.9.5",
+        recordEngine: (version, at) => {
+          recorded.push(`${version} ${at}`);
+          recordEngineVersion(home, OPERATOR_ROOT, version, at);
+        },
+        recordedEngine: () => readEngineVersion(home, OPERATOR_ROOT),
+        out: (text) => written.push(text),
+      });
+      return { code, recorded, json: JSON.parse(written[0] ?? "{}") };
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   }
 
-  test("records the version and prints the reload command", async () => {
+  // WHY the CLI's own version: its loader checks the recorded version against GitHub's tags, and a
+  // version read off a comment never reaches a command the agent runs.
+  test("records the version and names this CLI's loader", async () => {
     const { code, recorded, json } = await run("github-actions[bot]");
     expect(code).toBe(0);
     expect(recorded).toEqual([`0.10.0 ${gateRow.created_at}`]);
     expect(json.report.engine_version).toBe("0.10.0");
     expect(json.skills_reload).toBe(
-      "npx -y crysk@0.10.0 skills load crysk-loop",
+      "npx -y crysk@0.9.5 skills load crysk-loop",
     );
   });
 
@@ -1247,6 +1262,33 @@ describe("runStatusCommand — the engine version", () => {
     const { recorded, json } = await run("someone");
     expect(recorded).toEqual([]);
     expect(json.skills_reload).toBeNull();
+  });
+
+  // Reloading could not change anything: the loader keeps serving the newer version it has recorded.
+  test("an older pull request names no reload when the recorded version is this CLI's", async () => {
+    const { json } = await run("github-actions[bot]", {
+      version: "0.9.5",
+      at: "2030-01-01T00:00:00Z",
+    });
+    expect(json.report.engine_version).toBe("0.10.0");
+    expect(json.skills_reload).toBeNull();
+  });
+
+  test("names no reload when nothing could be recorded", async () => {
+    const { spawnFn } = makeFakeGh(stampedScript("github-actions[bot]"));
+    const written: string[] = [];
+    await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      cliVersion: "0.9.5",
+      recordEngine: () => {},
+      recordedEngine: () => undefined,
+      out: (text) => written.push(text),
+    });
+    expect(JSON.parse(written[0] ?? "{}").skills_reload).toBeNull();
   });
 });
 
@@ -1375,21 +1417,23 @@ describe("runStatusCommand: forced_runs_on_head", () => {
     expect(JSON.parse(written[0] ?? "").forced_runs_on_head).toBe(1);
   });
 
-  // An undercount would let an agent force more paid reviews, so a failed read reports nothing.
-  test("a history read that fails exits with nothing on stdout", async () => {
+  // The count is one input to a limit the skill enforces, and a whole status read must not fail for it.
+  test("a history read that fails still reports, counting from the statuses it has", async () => {
     const { spawnFn } = makeFakeGh(script({ stderr: "HTTP 502", exitCode: 1 }));
     const written: string[] = [];
-    await expect(
-      runStatusCommand({
-        operatorRoot: OPERATOR_ROOT,
-        pr: 12,
-        json: true,
-        spawnFn,
-        nowMs: NOW,
-        out: (text) => written.push(text),
-      }),
-    ).rejects.toBeInstanceOf(CliError);
-    expect(written).toEqual([]);
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    const json = JSON.parse(written[0] ?? "");
+    expect(json.next_action).toBeString();
+    // The one command predates the head's latest status by more than the grace.
+    expect(json.forced_runs_on_head).toBe(0);
   });
 });
 

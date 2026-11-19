@@ -43,7 +43,7 @@ that still requires the old `pr-hero` status must move to `crysk`.
 | What you see | What to do |
 |---|---|
 | A review was skipped for size or cost | Ask the user. Then `/crysk review`, a smaller pull request, or a changed limit: `max_changed_lines` for size, the dashboard (Review > Limits) for cost. |
-| A push was skipped by a review rule | The last verdict carries. Answered blocking findings can turn it green, marked `fixes unverified`. See `ci-admission.md`. |
+| A push was skipped by a review rule | The last verdict carries. Answered blocking findings can turn it green, marked `fixes unverified`. See `references/ci-admission.md`. |
 | `crysk: waiting for a manual review` | The attempt budget is used up, or the policy is manual. A person chooses `/crysk review` or `/crysk override`. |
 | `crysk: review partial` | Some hunters failed and nothing blocking was found. `/crysk review` retries it. |
 | `crysk: review partial again` | The retry failed the same way. Fix those hunters' model or credential, or tell a maintainer. |
@@ -69,7 +69,7 @@ Full list: [error codes](https://crysk.dev/docs/reference/error-codes/) and
 
 - **Too many comments:** `post_min_severity: "blocking"` in `.crysk/config.json` posts only blocking findings. `"warning"`
   hides advisory suggestions. The gate does not change.
-- **Blocking findings that are real but improbable:** offer `materiality_gate: true`. See `ci-admission.md` for its cost and
+- **Blocking findings that are real but improbable:** offer `materiality_gate: true`. See `references/ci-admission.md` for its cost and
   limits.
 - **`materiality_gate` on, nothing demoted:** read the `materiality` record in the run's `pipeline.json` (in the
   `crysk-run-*` artifact). `unsupported_route`: `models.judge` lists none of the profile's judge models. `ceiling`: no room

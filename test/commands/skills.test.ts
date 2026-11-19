@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -174,6 +175,34 @@ describe("skillsInstallCommand", () => {
     expect(lines).toEqual([
       "removed the installed copy of crysk-loop/playbook.md from Claude Code; crysk skills load serves it now",
       "kept crysk-loop/adjudicator.md in Claude Code (edited since it was installed); nothing reads it now, delete it by hand when you no longer need it",
+      "skills already up to date for Claude Code",
+    ]);
+  });
+
+  test("does not promise a companion the package no longer ships", async () => {
+    const sha = (text: string) =>
+      crypto.createHash("sha256").update(text).digest("hex");
+    const { files, lines, deps } = makeDeps({}, [`${HOME}/.claude`]);
+    await skillsInstallCommand(install(), deps);
+    const digestFile = `${SKILL_DIR}/digest.json`;
+    const digest = JSON.parse(files.get(digestFile) ?? "{}");
+    digest.files["assets/retired.json"] = sha("old\n");
+    files.set(digestFile, JSON.stringify(digest));
+    files.set(`${SKILL_DIR}/assets/retired.json`, "old\n");
+    lines.length = 0;
+
+    const code = await skillsInstallCommand(install(), {
+      ...deps,
+      unlink: (p: string) => {
+        files.delete(p);
+      },
+      rmdir: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(files.has(`${SKILL_DIR}/assets/retired.json`)).toBe(false);
+    expect(lines).toEqual([
+      "removed the installed copy of crysk-loop/assets/retired.json from Claude Code; Crysk no longer uses it",
       "skills already up to date for Claude Code",
     ]);
   });
@@ -533,6 +562,25 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
       readCachedSkillFile(home, "0.42.0", "crysk-loop", "adjudicator.md"),
     ).toBe("adj");
   });
+
+  test.each([
+    ["empty", ""],
+    ["blank", " \n"],
+  ])(
+    "%s delegated output is neither printed nor cached",
+    async (_kind, delegated) => {
+      recordEngineVersion(home, repo, "0.42.0");
+      const result = await load({ resolved: "0.42.0", delegated });
+      expect(result.code).toBe(0);
+      expect(result.out).toBe(bundledPlaybook());
+      expect(result.err).toContain(
+        "could not load crysk-loop from crysk@0.42.0",
+      );
+      expect(
+        readCachedSkillFile(home, "0.42.0", "crysk-loop", "playbook.md"),
+      ).toBeUndefined();
+    },
+  );
 
   test("prints the bundled playbook with no npx when the version is its own", async () => {
     recordEngineVersion(home, repo, assets.version);
@@ -1005,4 +1053,76 @@ describe("delegateSkillsLoad", () => {
       }),
     ).toBeUndefined();
   });
+});
+
+// What npx runs must not depend on the checkout: a branch can commit node_modules/.bin/crysk, and
+// what the delegated run prints is stored in the per-version cache.
+describe("delegateSkillsLoad: where npx runs", () => {
+  // An outer `npx` started in the checkout puts its node_modules/.bin on PATH, and a branch can
+  // commit an `npx` there.
+  test("drops node_modules/.bin directories from the PATH it hands npx", async () => {
+    const before = process.env.PATH;
+    process.env.PATH = [
+      "/repo/node_modules/.bin",
+      "/usr/local/bin",
+      "/repo/packages/a/node_modules/.bin/",
+      "/usr/bin",
+    ].join(path.delimiter);
+    try {
+      let seen: string | undefined;
+      const spawnFn = ((
+        _argv: string[],
+        opts: { env: Record<string, string | undefined> },
+      ) => {
+        seen = opts.env.PATH;
+        return {
+          stdout: new Response("# pb\n").body,
+          exited: Promise.resolve(0),
+          kill: () => {},
+        };
+      }) as unknown as typeof Bun.spawn;
+      await delegateSkillsLoad("0.42.0", "crysk-loop", undefined, { spawnFn });
+      expect(seen).toBe(["/usr/local/bin", "/usr/bin"].join(path.delimiter));
+    } finally {
+      process.env.PATH = before;
+    }
+  });
+
+  function spawnRecording(exitCode: number, stdout: string) {
+    const seen: { cwd?: string; existed: boolean; entries: string[] }[] = [];
+    const spawnFn = ((_argv: string[], opts: { cwd?: string }) => {
+      const cwd = opts.cwd;
+      const existed = cwd !== undefined && existsSync(cwd);
+      seen.push({
+        ...(cwd === undefined ? {} : { cwd }),
+        existed,
+        entries: existed ? readdirSync(cwd) : [],
+      });
+      return {
+        stdout: new Response(stdout).body,
+        exited: Promise.resolve(exitCode),
+        kill: () => {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, seen };
+  }
+
+  test.each([
+    ["a run that succeeds", 0, "# pb\n", "# pb\n"],
+    ["a run that fails", 1, "", undefined],
+  ])(
+    "%s starts in an empty directory outside the checkout, then removes it",
+    async (_case, exitCode, stdout, expected) => {
+      const { spawnFn, seen } = spawnRecording(exitCode, stdout);
+      const out = await delegateSkillsLoad("0.42.0", "crysk-loop", undefined, {
+        spawnFn,
+      });
+      expect(out).toBe(expected);
+      const cwd = seen[0]?.cwd ?? "";
+      expect(seen[0]?.existed).toBe(true);
+      expect(seen[0]?.entries).toEqual([]);
+      expect(path.relative(process.cwd(), cwd).startsWith("..")).toBe(true);
+      expect(existsSync(cwd)).toBe(false);
+    },
+  );
 });

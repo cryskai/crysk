@@ -433,3 +433,45 @@ describe("the checks fail on a defect", () => {
     ]);
   });
 });
+
+describe("what the skills tell an agent to load or run", () => {
+  const ciOperations = readFileSync(
+    join(ROOT, "skills/crysk-ci-setup/references/ci-operations.md"),
+    "utf8",
+  );
+  const playbook = readFileSync(
+    join(ROOT, "skills/crysk-loop/playbook.md"),
+    "utf8",
+  );
+
+  test("ci-operations names companion files by the path the loader serves", () => {
+    const named = [...ciOperations.matchAll(/`([\w./-]*ci-[\w-]+\.md)`/g)].map(
+      (match) => match[1] ?? "",
+    );
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.filter((file) => !(file in CI_SETUP_SKILL_FILES))).toEqual([]);
+  });
+
+  test("the reload check accepts only the playbook's own pinned loader", () => {
+    const pinned = /npx -y crysk@(\d+\.\d+\.\d+) status --pr/.exec(
+      playbook,
+    )?.[1];
+    expect(pinned).toBeDefined();
+    const step = playbook.slice(
+      playbook.indexOf("**2. Check `skills_reload`.**"),
+      playbook.indexOf("**3. Check the checkout.**"),
+    );
+    expect(step).toContain(`\`npx -y crysk@${pinned} skills load crysk-loop\``);
+    expect(step).toContain("exactly");
+    expect(step).toContain("once");
+  });
+
+  test("a limit skip stays a question, and the first review stays automatic", () => {
+    const row = (code: string) =>
+      playbook.split("\n").find((line) => line.includes(`| \`${code}\` |`)) ??
+      "";
+    expect(row("review_skipped")).toContain("**ask**");
+    expect(row("no_gate_status")).toContain("| auto |");
+    expect(row("carried_red_findings_open")).toContain("`override-or-fix`");
+  });
+});

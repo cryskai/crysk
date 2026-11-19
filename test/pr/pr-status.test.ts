@@ -5,6 +5,12 @@
 // triage a finding is owed at its own head, and the two sources of unresolved_blocking.
 
 import { describe, expect, test } from "bun:test";
+import {
+  MANUAL_REQUIRED_COMMENT_MARKER,
+  SKIP_BUDGET_COMMENT_MARKER,
+  SKIP_COVERAGE_COMMENT_MARKER,
+  SKIP_SIZE_COMMENT_MARKER,
+} from "#ci/gates";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
 import { renderCiAdmissionBlock } from "#ci/review-admission";
 import {
@@ -19,6 +25,7 @@ import {
   renderPrStatusLines,
   STATUS_WAIT_STARTUP_GRACE_MS,
   shouldWaitPrStatus,
+  skillsReloadCommand,
 } from "#pr/pr-status";
 import {
   COMMIT_STATUS_CONTEXT,
@@ -2980,7 +2987,8 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
     expect(status.reason).toContain("1 blocking finding(s) are still open");
   });
 
@@ -3051,7 +3059,7 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("override-or-fix");
     expect(status.reason).toContain("1 blocking finding(s) are still open");
     expect(status.reason).not.toContain("turns green");
   });
@@ -3277,7 +3285,7 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
     expect(status.unresolved_blocking).toBe(1);
   });
 
-  test("a carried red with a finding still open keeps asking for the fix", () => {
+  test("a carried red with a finding still open asks instead of asking for a push", () => {
     const status = buildPrStatus(
       carriedRed({
         statuses: [
@@ -3299,7 +3307,7 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("override-or-fix");
     expect(status.reason_code).toBe("carried_red_findings_open");
   });
 
@@ -3343,7 +3351,6 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
 describe("buildPrStatus — the engine version that wrote the summary", () => {
   function stamped(user: string, version = "0.10.0") {
     return input({
-      cliVersion: "0.9.5",
       issueComments: [
         {
           id: 1,
@@ -3354,23 +3361,15 @@ describe("buildPrStatus — the engine version that wrote the summary", () => {
     });
   }
 
-  test("reports the version and the reload command when the CLI differs", () => {
+  test("reports the version, and leaves the reload to the command that records it", () => {
     const status = buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN));
     expect(status.report.engine_version).toBe("0.10.0");
-    expect(status.skills_reload).toBe(
-      "npx -y crysk@0.10.0 skills load crysk-loop",
-    );
+    expect(status.skills_reload).toBeNull();
   });
 
   test("trusts a summary the Crysk App bot posted", () => {
     const status = buildPrStatus(stamped("crysk[bot]"));
     expect(status.report.engine_version).toBe("0.10.0");
-  });
-
-  test("names no reload when the CLI already is that version", () => {
-    const status = buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN, "0.9.5"));
-    expect(status.report.engine_version).toBe("0.9.5");
-    expect(status.skills_reload).toBeNull();
   });
 
   // Anyone can comment on a pull request, and the version becomes a command
@@ -3384,7 +3383,6 @@ describe("buildPrStatus — the engine version that wrote the summary", () => {
   test("reports null for a summary written before the version was stamped", () => {
     const status = buildPrStatus(
       input({
-        cliVersion: "0.9.5",
         issueComments: [
           { id: 1, user: CI_ADJUDICATOR_LOGIN, body: summary(CURRENT) },
         ],
@@ -3395,11 +3393,12 @@ describe("buildPrStatus — the engine version that wrote the summary", () => {
   });
 
   test("adds a reload line to the text output", () => {
-    const lines = renderPrStatusLines(
-      buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN)),
-    );
+    const lines = renderPrStatusLines({
+      ...buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN)),
+      skills_reload: "npx -y crysk@0.9.5 skills load crysk-loop",
+    });
     expect(lines.join("\n")).toContain(
-      "npx -y crysk@0.10.0 skills load crysk-loop",
+      "npx -y crysk@0.9.5 skills load crysk-loop",
     );
   });
 
@@ -3661,7 +3660,7 @@ describe("buildPrStatus — reason_code", () => {
     ],
     [
       "carried_red_findings_open",
-      "fix",
+      "override-or-fix",
       input({
         statuses: [gate("failure", carriedBlockingDescription(2, EARLIER))],
         reviewComments: [posted(), reply("applied")],
@@ -4031,5 +4030,242 @@ describe("buildPrStatus — forced_runs_on_head", () => {
     expect(
       count([command(1, "/crysk review", 4), command(2, "/crysk review", 30)]),
     ).toBe(1);
+  });
+});
+
+// S3: an advisory repository's size or cost skip writes no status, so the notice is the only trace of it,
+// and a forced review would walk past the limit.
+describe("buildPrStatus: a deliberate skip with no gate status", () => {
+  const SIZE_NOTICE = `${SKIP_SIZE_COMMENT_MARKER}\n## Crysk review skipped`;
+  const BUDGET_NOTICE = `${SKIP_BUDGET_COMMENT_MARKER}\n## Crysk review skipped`;
+
+  test.each([
+    ["size", SIZE_NOTICE],
+    ["cost", BUDGET_NOTICE],
+    [
+      "stopped or covered",
+      `${SKIP_COVERAGE_COMMENT_MARKER}\n## Crysk review skipped`,
+    ],
+    ["manual review", `${MANUAL_REQUIRED_COMMENT_MARKER}\n## Crysk`],
+  ])("a bot's %s notice asks instead of forcing a review", (_kind, body) => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [{ id: 5, user: "github-actions[bot]", body }],
+      }),
+    );
+    expect(status.gate.state).toBe("none");
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("review_skipped");
+    expect(status.reason).toContain("/crysk review");
+    expect(status.reason).not.toContain("red");
+  });
+
+  test("a notice from a login the repository trusts counts too", () => {
+    const status = buildPrStatus(
+      input({
+        trustedActors: new Set(["release-operator"]),
+        issueComments: [{ id: 5, user: "release-operator", body: SIZE_NOTICE }],
+      }),
+    );
+    expect(status.reason_code).toBe("review_skipped");
+  });
+
+  test("a notice a person typed changes nothing", () => {
+    const status = buildPrStatus(
+      input({ issueComments: [{ id: 5, user: "dev", body: SIZE_NOTICE }] }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason_code).toBe("no_gate_status");
+  });
+
+  test("an old notice does not hold a head a review already read", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 5, user: "github-actions[bot]", body: SIZE_NOTICE },
+          { id: 6, body: summary(CURRENT) },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason_code).toBe("no_gate_status");
+  });
+
+  test("a pull request with no notice still gets its first review", () => {
+    const status = buildPrStatus(input());
+    expect(status.next_action).toBe("review");
+    expect(status.reason_code).toBe("no_gate_status");
+  });
+});
+
+// S10: on a head no review read, the fixes the replies name were already pushed.
+describe("buildPrStatus: a carried head never says fix", () => {
+  const finding = (id: number, line: number) => ({
+    id,
+    body: findingBody({ head: EARLIER, claim: `${CLAIM} ${line}`, line }),
+    in_reply_to_id: null,
+    line,
+    path: "src/a.ts",
+  });
+  const carried = (
+    description: string,
+    replies: PrStatusReviewComment[],
+    findings = [finding(1, 10), finding(3, 20)],
+  ) =>
+    buildPrStatus(
+      input({
+        verdictAt: at(60),
+        statuses: [gate("failure", description)],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(
+              EARLIER,
+              findings.map((f, index) =>
+                stateRow(
+                  `R00${index + 1}`,
+                  `${CLAIM} ${f.line}`,
+                  "blocking",
+                  `src/a.ts:${f.line}`,
+                ),
+              ),
+            ),
+          },
+        ],
+        reviewComments: [...findings, ...replies],
+      }),
+    );
+  const applied = triageReply({
+    id: 2,
+    parent: 1,
+    head: EARLIER,
+    tag: "applied",
+  });
+
+  test("an unruled dismissal beside an applied fix goes to recheck", () => {
+    const status = carried(carriedBlockingDescription(2, EARLIER), [
+      applied,
+      triageReply({
+        id: 4,
+        parent: 3,
+        head: EARLIER,
+        tag: "dismissed",
+        verdict: "upheld",
+      }),
+    ]);
+    expect(status.next_action).toBe("recheck");
+    expect(status.reason_code).toBe("dismissal_ruling_pending");
+    expect(status.report.head).toBe(EARLIER);
+  });
+
+  test("a deferred finding beside an applied fix asks", () => {
+    const status = carried(carriedBlockingDescription(2, EARLIER), [
+      applied,
+      triageReply({
+        id: 4,
+        parent: 3,
+        head: EARLIER,
+        tag: "deferred",
+        verdict: "upheld",
+      }),
+    ]);
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
+    expect(status.unresolved_blocking).toBe(2);
+  });
+
+  test("a gate counting more than this read can see asks", () => {
+    const status = carried(carriedBlockingDescription(3, EARLIER), [
+      applied,
+      triageReply({ id: 4, parent: 3, head: EARLIER, tag: "applied" }),
+    ]);
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
+    expect(status.unresolved_blocking).toBe(3);
+  });
+
+  test("a carried partial red with a finding open asks", () => {
+    const status = carried(
+      "crysk: review partial (1 of 5 hunters failed, set abcdef) carried from 1111111",
+      [
+        applied,
+        triageReply({
+          id: 4,
+          parent: 3,
+          head: EARLIER,
+          tag: "deferred",
+          verdict: "upheld",
+        }),
+      ],
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
+  });
+
+  test("a red whose text names no carry, on a head the summary did not review, asks too", () => {
+    const status = carried(
+      BLOCKING_DESCRIPTION(1),
+      [applied],
+      [finding(1, 10)],
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_all_answered");
+  });
+
+  test("a head the summary reviewed still says fix", () => {
+    const status = buildPrStatus(
+      input({
+        verdictAt: at(60),
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        issueComments: [{ id: 100, body: summary(CURRENT) }],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason_code).toBe("applied_fix_to_push");
+  });
+
+  test("no summary at all is not a carried head", () => {
+    const status = buildPrStatus(
+      input({
+        verdictAt: at(60),
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.report.head).toBeNull();
+    expect(status.next_action).toBe("fix");
+  });
+});
+
+describe("skillsReloadCommand", () => {
+  test("names the running CLI, whose loader checks the recorded version", () => {
+    expect(skillsReloadCommand("0.10.0", "0.9.5")).toBe(
+      "npx -y crysk@0.9.5 skills load crysk-loop",
+    );
+  });
+
+  test.each([
+    ["the loader would serve this CLI's own files", "0.9.5", "0.9.5"],
+    ["nothing is recorded", undefined, "0.9.5"],
+    ["the CLI version is unknown", "0.10.0", undefined],
+    ["the recorded value is not a plain version", "1.2.3 && curl", "0.9.5"],
+    ["the CLI version is not a plain version", "0.10.0", "0.9.5-dev"],
+  ])("names nothing when %s", (_case, recorded, cli) => {
+    expect(skillsReloadCommand(recorded, cli)).toBeNull();
   });
 });

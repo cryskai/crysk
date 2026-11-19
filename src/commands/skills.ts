@@ -25,9 +25,16 @@
 // Otherwise the file comes from the per-version cache, or from
 // `npx -y crysk@<version> skills load …`; if the tag check or that run fails the
 // bundled file is printed with a warning on stderr.
+// WHY that npx starts in an empty directory, with no node_modules/.bin on PATH:
+// run from the checkout it prefers a `node_modules/.bin/crysk` the branch committed,
+// an outer `npx` puts that directory on PATH, where a committed `npx` would be the
+// one started, and the output is cached for the version. This covers only the run
+// started here: an `npx` the agent runs
+// inside a checkout still resolves that checkout's `node_modules`.
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { isPlainEngineVersion } from "#ci/review-admission";
 import { remoteHeadRef, resolveRepoRoot } from "#git/git";
 import { detectAgentEnvironments, syncSkills } from "../agent-env";
@@ -88,10 +95,12 @@ async function runBounded(
     env: Record<string, string | undefined>;
     timeoutMs: number;
     spawnFn: typeof Bun.spawn;
+    cwd?: string;
   },
 ): Promise<string | undefined> {
   try {
     const proc = options.spawnFn(argv, {
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       env: options.env,
       stdout: "pipe",
       stderr: "ignore",
@@ -264,6 +273,21 @@ export async function resolveCryskVersion(
   return stdout === undefined ? undefined : releaseOnMovingTag(stdout, spec);
 }
 
+// The environment without PATH entries that are a node_modules/.bin directory.
+function withoutLocalBins(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const cleaned = { ...env };
+  for (const key of Object.keys(cleaned)) {
+    if (key.toUpperCase() !== "PATH") continue;
+    cleaned[key] = cleaned[key]
+      ?.split(path.delimiter)
+      .filter((entry) => !/[\\/]node_modules[\\/]\.bin[\\/]?$/.test(entry))
+      .join(path.delimiter);
+  }
+  return cleaned;
+}
+
 // What the crysk at this exact version prints for this skill file, or undefined
 // when it could not be run (offline, a version without `skills load`, a timeout).
 export async function delegateSkillsLoad(
@@ -272,22 +296,40 @@ export async function delegateSkillsLoad(
   skillFile: string | undefined,
   deps: { spawnFn?: typeof Bun.spawn; timeoutMs?: number } = {},
 ): Promise<string | undefined> {
-  return runBounded(
-    [
-      "npx",
-      "-y",
-      `crysk@${version}`,
-      "skills",
-      "load",
-      skillName,
-      ...(skillFile === undefined ? [] : [skillFile]),
-    ],
-    {
-      env: { ...process.env, [DELEGATED_ENV]: "1" },
-      timeoutMs: deps.timeoutMs ?? SKILLS_DELEGATE_TIMEOUT_MS,
-      spawnFn: deps.spawnFn ?? Bun.spawn,
-    },
-  );
+  let cwd: string;
+  try {
+    cwd = mkdtempSync(
+      path.join(realpathSync(os.tmpdir()), "crysk-skills-load-"),
+    );
+  } catch {
+    // Never the checkout instead: no directory means no delegated run.
+    return undefined;
+  }
+  try {
+    return await runBounded(
+      [
+        "npx",
+        "-y",
+        `crysk@${version}`,
+        "skills",
+        "load",
+        skillName,
+        ...(skillFile === undefined ? [] : [skillFile]),
+      ],
+      {
+        cwd,
+        env: { ...withoutLocalBins(process.env), [DELEGATED_ENV]: "1" },
+        timeoutMs: deps.timeoutMs ?? SKILLS_DELEGATE_TIMEOUT_MS,
+        spawnFn: deps.spawnFn ?? Bun.spawn,
+      },
+    );
+  } finally {
+    try {
+      rmSync(cwd, { recursive: true, force: true });
+    } catch {
+      // Best-effort: a leftover empty directory under the system's temp.
+    }
+  }
 }
 
 export interface SkillsInstallDeps {
@@ -319,6 +361,17 @@ export interface SkillsLoadDeps {
   writeStderr?: (text: string) => void;
 }
 
+function skillFilesByName(
+  assets: EngineAssets,
+): Record<string, Record<string, string>> {
+  return {
+    [SKILL_NAMES.general]: assets.generalSkillFiles,
+    [SKILL_NAMES.triage]: assets.triageSkillFiles,
+    [SKILL_NAMES.pr]: assets.prSkillFiles,
+    [SKILL_NAMES.ciSetup]: assets.ciSetupSkillFiles,
+  };
+}
+
 export async function skillsCommand(options: CliOptions): Promise<number> {
   if (options.skills === "load") {
     return skillsLoadCommand(options);
@@ -331,12 +384,7 @@ export async function skillsLoadCommand(
   deps: SkillsLoadDeps = {},
 ): Promise<number> {
   const assets = deps.assets ?? resolveEngineAssets();
-  const bySkill: Record<string, Record<string, string>> = {
-    [SKILL_NAMES.general]: assets.generalSkillFiles,
-    [SKILL_NAMES.triage]: assets.triageSkillFiles,
-    [SKILL_NAMES.pr]: assets.prSkillFiles,
-    [SKILL_NAMES.ciSetup]: assets.ciSetupSkillFiles,
-  };
+  const bySkill = skillFilesByName(assets);
   const skillName = options.skillName;
   const files =
     skillName && Object.hasOwn(bySkill, skillName)
@@ -407,7 +455,7 @@ export async function skillsLoadCommand(
     if (isOnGithub) {
       const delegate = deps.delegate ?? delegateSkillsLoad;
       const delegated = await delegate(version, skillName, options.skillFile);
-      if (delegated !== undefined) {
+      if (delegated !== undefined && delegated.trim() !== "") {
         writeCachedSkillFile(home, version, skillName, targetFile, delegated);
         return print(delegated);
       }
@@ -431,6 +479,7 @@ export async function skillsInstallCommand(
     which: deps.which,
   });
   const assets = resolveEngineAssets();
+  const shippedFiles = skillFilesByName(assets);
 
   let withSkillsDir = 0;
   let failed = false;
@@ -456,9 +505,17 @@ export async function skillsInstallCommand(
     // A copy of a companion file from an install that wrote all of them.
     for (const companion of res.companions ?? []) {
       const name = `${companion.skill}/${companion.file}`;
+      const stillShipped = Object.hasOwn(
+        shippedFiles[companion.skill] ?? {},
+        companion.file,
+      );
       log(
         companion.status === "removed"
-          ? `removed the installed copy of ${name} from ${env.displayName}; crysk skills load serves it now`
+          ? `removed the installed copy of ${name} from ${env.displayName}; ${
+              stillShipped
+                ? "crysk skills load serves it now"
+                : "Crysk no longer uses it"
+            }`
           : `kept ${name} in ${env.displayName} (${companion.reason}); nothing reads it now, delete it by hand when you no longer need it`,
       );
     }

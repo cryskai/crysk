@@ -19,8 +19,9 @@ budget (`ci_max_attempts`) used up, or `manual_only`. The head then inherits the
 `deferred` and `misclassified` never leave the count. They name something real, so the gate stays red until a
 fix or a maintainer's override.
 
-Size and cost limits are different: they skip the review and turn the gate red
-(`reason_code=review_skipped`). A forced review bypasses them and spends money, so it is the user's call.
+Size and cost limits are different: they skip the review (`reason_code=review_skipped`). The gate turns red,
+or stays absent in advisory mode, where status reads the skip from Crysk's notice on the pull request, which
+may come from an earlier push. A forced review bypasses them and spends money, so it is the user's call.
 
 ## What to tell the user on an **ask** row
 
@@ -32,6 +33,7 @@ choices, with your recommendation:
 | `reason_code=review_skipped` | Force a review with `/crysk review`, reduce the pull request, or a maintainer overrides. For a cost limit, the limit itself is a setting in the Crysk dashboard. |
 | `reason_code=manual_review_hold` | `/crysk review` to verify the head, or a maintainer's `/crysk override` to merge it unverified. |
 | `reason_code=carried_red_all_answered` | `/crysk review` to verify this head, or a maintainer's override. |
+| `reason_code=carried_red_findings_open` | Answer or fix what is open, `/crysk review` to verify this head, or a maintainer's override. |
 | `reason_code=carried_partial_all_answered` | `/crysk review` to retry the partial review, or a maintainer's override. |
 | `reason_code=review_needs_trigger` | `/crysk review`, or a maintainer's override. |
 
@@ -65,6 +67,11 @@ is not the author's to take.
 
 After the push, always run `status --wait` and act on what it returns. A skip can leave the head `pending` or
 red, so never assume it is green.
+
+Use it to save a review under the playbook's "Save the next review" rule. On platform data, the review after
+1 or 2 fixed advisory findings found a new blocker about 9% of the time, against about 39% after fixed
+blockers. Those numbers are a guide, to weigh with "Diminishing returns" below. If a later push adds behaviour
+while the stop is in force, comment `/crysk review` so it gets read.
 
 ## When an unreviewed delta matters
 

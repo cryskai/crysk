@@ -1544,25 +1544,27 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   this head: those from the head's first `crysk` status on, plus those up to 3 minutes before it, the time a command
   takes to start the run that writes that status. With no status yet it counts the last 3 minutes. No field links a
   status to its comment, so the window can miss both ways: a command left on the previous head just before a push is
-  counted, and one whose run sat queued for longer than 3 minutes is not. It reads the head's status history, and a
-  failed read fails the command.
-- `skills_reload` is the command that loads the crysk-loop playbook of that version
-  (`npx -y crysk@<engine_version> skills load crysk-loop`) when the CLI running status is another version, and `null`
-  otherwise. The installed skill runs it so the agent's instructions match the engine that reviewed the pull request.
-  Status also records the version in `~/.crysk/skills/engines.json`, which `crysk skills load` reads.
+  counted, and one whose run sat queued for longer than 3 minutes is not. It reads the head's status history. If
+  that read fails, it counts from the head's latest `crysk` status instead, which can undercount.
+- `skills_reload` is `npx -y crysk@<running CLI version> skills load crysk-loop` when the version recorded for this
+  repository in `~/.crysk/skills/engines.json` differs from the CLI running status, and `null` otherwise. Status
+  records `engine_version` there first, and an older pull request does not replace a newer entry. The loader checks
+  that the recorded version exists as a GitHub tag before it runs it, from an empty directory and with no `node_modules/.bin`
+  on `PATH`, so the checkout cannot supply the output. An `npx` command an agent runs inside a checkout, this one included, can still resolve that
+  checkout's `node_modules`.
 
 `next_action` is decided in this order, and the first match wins:
 
 | `next_action` | When |
 | --- | --- |
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
-| `review` | No `crysk` (or `pr-hero`) status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
+| `review` | No `crysk` (or `pr-hero`) status is on the head and no size or cost skip notice applies, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
 | `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. A green over answered findings no review verified (`crysk: N answered finding(s), fixes unverified`) is `done` too, and its reason says so. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. A finding that lives only in the summary comment (outside the diff, `comment_id: null`) has no thread a reply could land in, so it is never owed, but the reason counts it ("N finding(s) live only in the summary comment … read them there before merging"). |
 | `triage` | The gate is red and a live blocking finding on this head has no triage reply that answers this review: the newest reply the gate counts must name it (a reply from an earlier review of a carried finding does not, and a reply from a login without write access is not counted; the reason names such logins). A finding with no comment counts too: it is answered by a top-level reply that names its row. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
-| `fix` | The gate is red, every live blocking finding has a reply to this review, and one of them is tagged `applied`, so there is a fix to push. Push it; the next review verifies it. A carried red (a review rule skipped the head) is `fix` only while a blocking finding is still open; with all of them answered it is `override-or-fix`. |
+| `fix` | The gate is red, every live blocking finding has a reply to this review, and one of them is tagged `applied`, so there is a fix to push. Push it; the next review verifies it. A head no review read (a carried red, or `report.head` differs from `head`) is never `fix`: those fixes were already pushed. |
 | `recheck` | The gate is red and a live blocking finding with a review thread, or one listed only in the summary, is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. A finding listed only in the summary counts here only under a gate that states a blocking count. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |
-| `override-or-fix` | A carried red (a blocking red, or a partial review) with every live blocking finding answered: the replies leave nothing to push, so comment `/crysk review` or ask for `/crysk override`. A fix that is still local is pushed first: on a skipped push the gate reads the replies and can turn green, marked unverified, or, under a used-up budget or `manual_only`, hold the head for a manual review. Or the gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or a dismissed legacy top-level finding comment, which nothing can rule on). A size- or spend-ceiling-skipped review also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. The gate is also `pending` on a manual-review hold (`crysk: waiting for a manual review (<reason>)`, checked before `wait`): no review read the head and none will on its own, so comment `/crysk review` to verify it or `/crysk override` to merge it unverified. |
+| `override-or-fix` | A carried red (a blocking red, or a partial review), or a red on a head `report.head` does not name, with an `applied` reply: the replies leave nothing to push, so comment `/crysk review` or ask for `/crysk override`. An unruled dismissal there goes to `recheck` first. A fix that is still local is pushed first: on a skipped push the gate reads the replies and can turn green, marked unverified, or, under a used-up budget or `manual_only`, hold the head for a manual review. Or the gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or a dismissed legacy top-level finding comment, which nothing can rule on). A size- or spend-ceiling-skipped review also lands here, including in advisory mode, which writes no status: there a size or cost skip notice from a bot or a `ci_trusted_actors` login, on a head with no summary, is the signal. The notice names no head, so it can come from an earlier push. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. The gate is also `pending` on a manual-review hold (`crysk: waiting for a manual review (<reason>)`, checked before `wait`): no review read the head and none will on its own, so comment `/crysk review` to verify it or `/crysk override` to merge it unverified. |
 
 `reason_code` is one of:
 
@@ -1572,11 +1574,11 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | `review` | `pending_status_stale`, `no_gate_status`, `review_did_not_finish`, `partial_review_on_green`, `review_needs_trigger`, `dismissals_upheld`, `partial_review` |
 | `done` | `override_active`, `green_fixes_unverified`, `nothing_to_review`, `review_passed` |
 | `triage` | `green_replies_owed`, `blocking_replies_owed` |
-| `fix` | `carried_red_findings_open`, `applied_fix_to_push` |
+| `fix` | `applied_fix_to_push` |
 | `recheck` | `dismissal_ruling_pending` |
-| `override-or-fix` | `manual_review_hold`, `carried_red_all_answered`, `carried_partial_all_answered`, `review_skipped`, `partial_review_repeated`, `blocking_answered_still_open`, `red_without_live_finding` |
+| `override-or-fix` | `manual_review_hold`, `carried_red_findings_open`, `carried_red_all_answered`, `carried_partial_all_answered`, `review_skipped`, `partial_review_repeated`, `blocking_answered_still_open`, `red_without_live_finding` |
 
-The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list,
+The command fails closed, except for the status history above. A failed `gh` read, a read that never answers within its bound, a truncated comment list,
 a reply author's permission that does not read, or a gate status it cannot read exits 1 with nothing on stdout, so a
 partial answer never looks like a clean PR.
 
