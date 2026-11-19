@@ -23,8 +23,9 @@ import refuterPrompt from "../prompts/default/review-refuter.md" with {
 import materialityPrompt from "../prompts/materiality.md" with { type: "file" };
 import summarizerPrompt from "../prompts/summarizer.md" with { type: "file" };
 import verifierPrompt from "../prompts/verifier.md" with { type: "file" };
-import generalPlaybook from "../skill-content/crysk/playbook.md" with { type: "file" };
-import generalSkill from "../skills/crysk/SKILL.md" with { type: "file" };
+import generalPlaybook from "../skill-content/crysk/playbook.md" with {
+  type: "file",
+};
 import ciSetupWorkflow from "../skill-content/crysk-ci-setup/assets/workflow.yml" with {
   type: "file",
 };
@@ -38,9 +39,6 @@ import ciSetupOperationsRef from "../skill-content/crysk-ci-setup/references/ci-
   type: "file",
 };
 import ciSetupOpenCodeRef from "../skill-content/crysk-ci-setup/references/opencode-ci.md" with {
-  type: "file",
-};
-import ciSetupSkill from "../skills/crysk-ci-setup/SKILL.md" with {
   type: "file",
 };
 import triageAdjudicator from "../skill-content/crysk-loop/adjudicator.md" with {
@@ -58,8 +56,14 @@ import triageGateRules from "../skill-content/crysk-loop/gate-rules.md" with {
 import triagePlaybook from "../skill-content/crysk-loop/playbook.md" with {
   type: "file",
 };
+import prPlaybook from "../skill-content/crysk-pr/playbook.md" with {
+  type: "file",
+};
+import generalSkill from "../skills/crysk/SKILL.md" with { type: "file" };
+import ciSetupSkill from "../skills/crysk-ci-setup/SKILL.md" with {
+  type: "file",
+};
 import triageSkill from "../skills/crysk-loop/SKILL.md" with { type: "file" };
-import prPlaybook from "../skill-content/crysk-pr/playbook.md" with { type: "file" };
 import prSkill from "../skills/crysk-pr/SKILL.md" with { type: "file" };
 
 export const BUNDLED_AGENT_FILES: Record<string, string> = {
