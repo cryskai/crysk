@@ -60,7 +60,14 @@ describe("resolveEngineAssets", () => {
 
     // Triage skill files all exist on disk
     expect(Object.keys(assets.triageSkillFiles).sort()).toEqual(
-      ["SKILL.md", "adjudicator.md", "playbook.md"].sort(),
+      [
+        "SKILL.md",
+        "adjudicator.md",
+        "dismissal.md",
+        "fix-the-class.md",
+        "gate-rules.md",
+        "playbook.md",
+      ].sort(),
     );
     for (const [logicalName, filePath] of Object.entries(
       assets.triageSkillFiles,
@@ -75,9 +82,9 @@ describe("resolveEngineAssets", () => {
       [
         "SKILL.md",
         "playbook.md",
-        "assets/admission-config.example.json",
         "assets/workflow.yml",
         "references/ci-admission.md",
+        "references/ci-operations.md",
         "references/opencode-ci.md",
       ].sort(),
     );

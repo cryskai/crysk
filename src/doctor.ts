@@ -710,6 +710,18 @@ export async function runDoctor(
             hint: "Run 'crysk setup' to remove the unedited ones, then delete the rest by hand once you have copied any edits you want to keep.",
           });
         }
+        // Only the stub is installed now, and nothing reads a copy beside it.
+        if (syncStatus.companions.length > 0) {
+          const files = syncStatus.companions
+            .map((file) => path.join(env.skillsDir as string, file))
+            .join(", ");
+          checks.push({
+            name: `skills-companions:${env.id}`,
+            severity: "degraded",
+            message: `Skill files from an earlier install remain for ${env.displayName}, and nothing reads them: ${files}`,
+            hint: "Run 'crysk skills install' to remove the unedited ones, then delete the rest by hand once you have copied any edits you want to keep.",
+          });
+        }
       }
 
       if (env.mcpConfigFile && isNpxCacheInvocation(self)) {

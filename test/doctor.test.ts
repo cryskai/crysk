@@ -67,9 +67,6 @@ describe("doctor tri-state evaluation", () => {
           return JSON.stringify({
             files: {
               "SKILL.md": "mock_hash",
-              "playbook.md": "mock_hash",
-              "adjudicator.md": "mock_hash",
-              "assets/workflow.yml": "mock_hash",
             },
           });
         }
@@ -501,6 +498,40 @@ describe("doctor tri-state evaluation", () => {
       expect(legacy?.hint).toBeDefined();
       // Only the dir that exists is named.
       expect(legacy?.message).not.toContain("pr-hero-pr");
+    });
+
+    test("a companion file left beside a stub is reported degraded with a hint", async () => {
+      const skillDir = "/home/user/.claude/skills/crysk-loop";
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) =>
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.claude/mcp.json" ||
+          p === `${skillDir}/digest.json` ||
+          p === `${skillDir}/playbook.md`,
+        readFile: (p) => {
+          if (p === `${skillDir}/digest.json`) {
+            return JSON.stringify({
+              files: { "SKILL.md": "a", "playbook.md": "b", "gone.md": "c" },
+            });
+          }
+          return bundledPromptBody(p);
+        },
+        checkToolsOptions: {
+          which: (bin) => (bin === "claude" ? "/bin/claude" : `/bin/${bin}`),
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      const leftover = report.checks.find(
+        (c) => c.name === "skills-companions:claude",
+      );
+      expect(leftover?.severity).toBe("degraded");
+      expect(leftover?.message).toContain(`${skillDir}/playbook.md`);
+      expect(leftover?.message).not.toContain("gone.md");
+      expect(leftover?.hint).toContain("crysk skills install");
     });
 
     test("no legacy check when no pre-rename skill dir exists", async () => {

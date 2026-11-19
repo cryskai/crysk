@@ -1,129 +1,70 @@
-# CI review admission — setup reference
+# CI review admission: settings reference
 
-Read this when configuring `.crysk/config.json` during CI setup. User docs:
-[Re-review levels](https://crysk.dev/docs/reviews/review-levels/) and the [config reference](https://crysk.dev/docs/reference/config/). Full engine notes:
-`docs/github-actions.md` (section **CI review admission**).
+Read this when choosing what goes in `.crysk/config.json`. User docs:
+[re-review levels](https://crysk.dev/docs/reviews/review-levels/), [config reference](https://crysk.dev/docs/reference/config/).
+Commit the file through a pull request and merge it to the default branch and to any branch pull requests target.
+Check the result with `crysk config`.
 
-## Where config lives
-
-- **Repository** `.crysk/config.json` on the default branch — authoritative.
-- NOT in the PR branch worktree. Authors cannot change admission to suppress their own PR.
-- Verify with `crysk config` after editing.
-
-## Keys and defaults
+## Keys
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ci_review_policy` | `risk_aware` | When to spend on `synchronize` pushes |
-| `ci_max_attempts` | `2` | Automatic attempt budget per PR |
-| `ci_rereview_min_score` | `4` | Prior score floor for re-review |
-| `ci_blocking_weight` | `2` | Score weight per blocking-tier finding |
-| `ci_advisory_weight` | `1` | Score weight per advisory-tier finding |
-| `ci_trusted_actors` | `[]` | Extra GitHub logins for authoritative markers (+ `GITHUB_ACTOR`) |
-| `ci_admission_observe_only` | `false` | Log would-be skip/manual decisions but always run |
-| `max_verification_steps` | `8` | Max prior open findings verified per re-review (`0` pauses verification; capped key) |
+| `ci_review_policy` | `risk_aware` | When a push earns an automatic review |
+| `ci_max_attempts` | `2` | Automatic reviews per pull request |
+| `ci_rereview_min_score` | `4` | Score floor for a re-review |
+| `ci_blocking_weight` / `ci_advisory_weight` | `2` / `1` | Score = blocking × weight + advisory × weight |
+| `ci_trusted_actors` | `[]` | Extra logins whose Crysk markers count |
+| `ci_admission_observe_only` | `false` | Log what would be skipped, but review every push |
+| `max_verification_steps` | `8` | Earlier open findings a re-review verifies (`0` pauses it) |
+| `max_changed_lines` / `max_changed_files` | see below | A larger pull request is skipped |
+| `post_min_severity` | `warning` from setup | Lowest severity posted |
+| `materiality_gate` | off | Judge whether blocking findings matter in normal use |
 
-`ci_max_reviews` is legacy — use `ci_max_attempts` (same fallback).
+## Levels (what `setup --ci` writes)
 
-**Score:** `blocking × ci_blocking_weight + advisory × ci_advisory_weight`
+| Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` |
+|---|---|---|---|
+| `minimal` | `once_per_pr` | 1 | unset |
+| `balanced` | `risk_aware` | 2 | 4 |
+| `thorough` | `every_push` | 4 | unset |
+| `manual` | `manual_only` | 1 | unset |
 
-**How a re-review depends on the previous pass:**
-- **Whether it runs (admission):** in `risk_aware` and `thresholded` modes, the previous review's finding score (`blocking × 2 + advisory × 1` by default) is compared against `ci_rereview_min_score`, bounded by `ci_max_attempts` total automatic passes per PR.
-- **What it does when it runs:** discovery is incremental by default (hunters examine only commits since the last completed review's head SHA; `/crysk review --full` widens to the full PR), and up to `max_verification_steps` verifier steps check whether prior open findings were fixed by the new push.
+## Policies
 
-## Review levels (what setup --ci asks)
-
-`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode` and `--max-changed-lines`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
-
-| Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` | `max_verification_steps` |
-|---|---|---|---|---|
-| `minimal` | `once_per_pr` | 1 | (unset) | 8 |
-| `balanced` (default) | `risk_aware` | 2 | 4 | 8 |
-| `thorough` | `every_push` | 4 | (unset) | 8 |
-| `manual` | `manual_only` | 1 | (unset) | 8 |
-
-Dollar limits: setup does not ask how CI pays and writes no `budget-usd`. The per-review and per-month cost limits belong to the Crysk platform (dashboard, Review > Limits); the engine only skips a run that bills an API key (`CRYSK_CLAUDE_API_KEY`, which `credentials.claude` decides, or an OpenCode API-key provider) when the platform's estimate is over them, and a subscription run is never skipped for cost. `--billing` and `--budget-usd` are retired: accepted, no effect, one warning each, and `--billing` no longer implies anything about the workflow.
-
-Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` unless a flag names it and drops a `budget-usd` line it still carried, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
-
-Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). It applies on any route: left unset, a subscription route reviews a PR of any size.
-
-Posting floor: setup writes `post_min_severity: "warning"` only when the repo config has no value, so a re-run never replaces a chosen floor. `warning` hides advisory suggestions, `blocking` hides every advisory finding, `suggestion` (or unset) posts everything. Hidden findings are counted in the summary comment. The gate is unchanged, since a blocking finding always posts; admission scores only posted findings, so a hidden one never triggers a re-review.
-
-Materiality gate: `materiality_gate: true` (opt-in; setup never writes it) sends each blocking finding the safety guard does not protect to an isolated sonnet judge (no tools, no MCP, PR title + claim + a ±25-line code window as untrusted data) that applies Crysk's written posting policy. When the repository has review instructions (root `REVIEW.md`, else `.crysk/gotchas.md`), the judge also applies their "Not blocking here" rules, but only to style, naming, test-hygiene, generated-code and dev-script findings: it never demotes a logic, correctness, data, contract or security finding, whatever the file says, and nothing filters advisory findings by it. An `immaterial` verdict demotes the finding to advisory with the reason in its comment, so the gate stops counting it; with `post_min_severity: "blocking"` it is not posted at all. Findings about security, credentials, permissions, sandboxing, injection or data loss are never sent and never demoted, including when consolidation merged them into another finding. Any failure (spawn, parse, unsafe input, unsupported route, ceiling) leaves the finding blocking. The key is capped: a global config can turn it off for every repo. Every run's `pipeline.json` carries a `materiality` record (`status`, `judged`, `demoted`, `protected`). Known limit: a finding that blocked on an earlier push still counts toward the gate on a re-review, so the effect shows mostly on first reviews and on new findings in later rounds.
-
-## Policy modes
-
-| Mode | Use when |
+| Policy | Behaviour |
 |---|---|
-| `risk_aware` | Default — re-review on risky delta OR score ≥ floor |
-| `thresholded` | Score-only; ignore path risk classification |
-| `once_per_pr` | One automatic review; later pushes reported as not reviewed |
-| `every_push` | Review every push (still capped by `ci_max_attempts`) |
-| `manual_only` | No automatic re-review; operator override only |
+| `risk_aware` | Re-review a risky delta, or when the last score reaches the floor |
+| `thresholded` | Score only, ignoring path risk |
+| `once_per_pr` | One automatic review; later pushes are not reviewed |
+| `every_push` | Every push, still capped by `ci_max_attempts` |
+| `manual_only` | Nothing automatic after the first review |
 
-## Outcomes users see
+A skipped push is **not** a clean review. It inherits the last verdict. A red whose blocking findings are all answered turns
+green marked `fixes unverified`. Under a used-up budget or `manual_only`, that green is held `pending` until `/crysk review`
+or `/crysk override`.
 
-| Outcome | Meaning |
-|---|---|
-| Review runs | Normal pipeline |
-| **Skipped** | Push did not justify spend (same head, low score, docs-only delta, etc.) — **not** “clean” |
-| **Automatic reviews done** | Budget exhausted or `manual_only` — a red verdict carries; a green one, or a red whose blocking findings are all answered, is held `pending` until `/crysk review` runs another round or `/crysk override` merges it unverified |
+## Size limits
 
-Skipped and automatic-reviews-done posts include admission metadata in the step summary. The automatic-reviews-done
-comment explains the end of the budget by the repository's rules (policy, attempts used, last reviewed head) and how to
-ask for more rounds.
+Setup always writes `max_changed_lines` (default 4000, `0` for none). When neither the workflow nor the config sets a limit, a
+Claude subscription route has none, and a pay-per-token route uses 4000 lines and 50 files.
 
-## Durable ledger
+## Posting floor and materiality
 
-- Check Runs named `crysk/ci-admission` on the reviewed commit (`pr-hero/ci-admission` on a commit first reviewed by an older release; both are read).
-- Requires workflow permission **`checks: write`** (template includes it).
-- Requires **`actions: read`** too: the gate lists this workflow's past runs, which a private repo refuses without it (HTTP 403).
-- PR comments are presentation. The ledger counts a run that reached the provider (completed, failed, or still provider-started) and an admission skip. It does not count a run that yielded to an in-flight review, a size or budget gate skip, or a cancelled row (#164). A workflow run that concluded success or failure is dropped from the attempt count only when every ledger row on its head is a gate skip or a yield, because both are written before any provider spend. A cancelled row is not that proof: the signal handler that writes it can run after the provider started, so a run killed by `timeout-minutes` (concluded `failure`) still counts. A run whose row is still `reserved` stays counted too, because the provider-started write is best-effort and the run may have spent anyway.
+`post_min_severity`: `suggestion` posts everything, `warning` hides advisory suggestions, `blocking` posts only blocking
+findings. Hidden findings are counted in the summary. The gate is unchanged, and hidden findings never trigger a re-review.
 
-## Rollout (recommended)
+`materiality_gate: true` sends each blocking finding the safety guard does not protect to an isolated judge, about one call
+and 10 seconds per pull request. An immaterial finding is posted as advisory and stops blocking. Security, credential,
+permission, sandbox, injection and data-loss findings are never demoted, and any judge failure keeps the finding blocking. It
+runs only on its profile's judge models (`claude:sonnet-latest` or `claude:opus-latest`; the `openai` profile adds
+`opencode:openai/gpt-6.1-terra`), so the default profile needs a Claude secret. A finding that blocked on an earlier push still
+counts on a re-review. A global config can turn the key off.
 
-1. Ship workflow + secrets first.
-2. Add `.crysk/config.json` with `"ci_admission_observe_only": true`.
-3. Open a test PR; read `::notice::` lines for would-be skip/manual decisions.
-4. Set `ci_admission_observe_only` to `false` when behavior matches intent.
+## Rollout
 
-## Example config
+1. Ship the workflow and secrets.
+2. Set `"ci_admission_observe_only": true`.
+3. Open a test pull request and read the `::notice::` lines for what would have been skipped.
+4. Set it back to `false` when the behaviour matches what you want.
 
-```json
-{
-  "ci_review_policy": "risk_aware",
-  "ci_max_attempts": 2,
-  "ci_rereview_min_score": 4,
-  "ci_blocking_weight": 2,
-  "ci_advisory_weight": 1,
-  "ci_trusted_actors": [],
-  "ci_admission_observe_only": true
-}
-```
-
-## Manual override
-
-Comment `/crysk review` on the pull request. GitHub Actions runs the review with `--force`. Posting the comment does not review anything on the machine that sends it:
-
-```bash
-gh pr comment <n> --body "/crysk review"
-```
-
-`/crysk review --full` also re-discovers the whole range. The comment must be exactly one of those two, and it works only once the workflow file (`crysk.yml`, or `pr-hero.yml` in a repo set up before the rename; with its `issue_comment` trigger) is on the default branch.
-
-It bypasses the size gate, the admission rules (same commit, `once_per_pr`, score, low-risk delta, exhausted attempts, `manual_only`), and the platform's cost limits (the platform sends none for a forced run). It does not reset the ledger.
-
-Who can force: anyone with write access to the repository; a comment from anyone else is refused. A fork PR is reviewed only this way, since its own pushes are skipped. `gh run rerun` on a skipped run re-evaluates the gates and does not force.
-
-A workflow scaffolded before the comment trigger has no `issue_comment` listener. There, use the legacy `gh workflow run pr-hero-force.yml -f pr=<n>`, or re-scaffold with `crysk ci init --force`.
-
-A local agent posts the comment. It does not run `crysk review --pr <n> --force` when the review should happen in CI.
-
-A red gate with blocking findings that the team accepts is unlocked by commenting exactly `/crysk override` on the pull request, not by `/crysk review`. In gate mode a same-head review re-runs the same blocking count and leaves the `failure` in place, so the gate clears only when a pushed fix is verified gone or the override is posted:
-
-```bash
-gh pr comment <n> --body "/crysk override"
-```
-
-The override sets the `crysk` status on that head to `success` with no review, no spend, and no credential, and only a user with write or admin access may post it. Each override is recorded: the status names who acted, and a `<!-- crysk-override` comment names who, which head, and when. It is valid only for the head it names, so a new push or a later `/crysk review` on that head replaces it, and it works only on pull requests from this repository, never on forks.
+The gate needs the workflow's `checks: write` (its `crysk/ci-admission` check runs are the attempt ledger) and `actions: read`.

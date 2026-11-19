@@ -8,9 +8,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -127,6 +127,86 @@ describe("skillsInstallCommand", () => {
     ]);
   });
 
+  test("writes only SKILL.md and digest.json for each skill", async () => {
+    const { files, deps } = makeDeps({}, [`${HOME}/.claude`]);
+
+    expect(await skillsInstallCommand(install(), deps)).toBe(0);
+
+    const written = [...files.keys()]
+      .map((p) => p.slice(`${HOME}/.claude/skills/`.length))
+      .sort();
+    expect(written).toEqual([
+      "crysk-ci-setup/SKILL.md",
+      "crysk-ci-setup/digest.json",
+      "crysk-loop/SKILL.md",
+      "crysk-loop/digest.json",
+      "crysk-pr/SKILL.md",
+      "crysk-pr/digest.json",
+      "crysk/SKILL.md",
+      "crysk/digest.json",
+    ]);
+  });
+
+  test("reports each companion copy it removed or kept, and still succeeds", async () => {
+    const sha = (text: string) =>
+      crypto.createHash("sha256").update(text).digest("hex");
+    const { files, lines, deps } = makeDeps({}, [`${HOME}/.claude`]);
+    await skillsInstallCommand(install(), deps);
+    const digestFile = `${SKILL_DIR}/digest.json`;
+    const digest = JSON.parse(files.get(digestFile) ?? "{}");
+    digest.files["playbook.md"] = sha("old playbook\n");
+    digest.files["adjudicator.md"] = sha("old adjudicator\n");
+    files.set(digestFile, JSON.stringify(digest));
+    files.set(`${SKILL_DIR}/playbook.md`, "old playbook\n");
+    files.set(`${SKILL_DIR}/adjudicator.md`, "my notes\n");
+    lines.length = 0;
+
+    const code = await skillsInstallCommand(install(), {
+      ...deps,
+      unlink: (p: string) => {
+        files.delete(p);
+      },
+      rmdir: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(files.has(`${SKILL_DIR}/playbook.md`)).toBe(false);
+    expect(files.get(`${SKILL_DIR}/adjudicator.md`)).toBe("my notes\n");
+    expect(lines).toEqual([
+      "removed the installed copy of crysk-loop/playbook.md from Claude Code; crysk skills load serves it now",
+      "kept crysk-loop/adjudicator.md in Claude Code (edited since it was installed); nothing reads it now, delete it by hand when you no longer need it",
+      "skills already up to date for Claude Code",
+    ]);
+  });
+
+  test("does not promise a companion the package no longer ships", async () => {
+    const sha = (text: string) =>
+      crypto.createHash("sha256").update(text).digest("hex");
+    const { files, lines, deps } = makeDeps({}, [`${HOME}/.claude`]);
+    await skillsInstallCommand(install(), deps);
+    const digestFile = `${SKILL_DIR}/digest.json`;
+    const digest = JSON.parse(files.get(digestFile) ?? "{}");
+    digest.files["assets/retired.json"] = sha("old\n");
+    files.set(digestFile, JSON.stringify(digest));
+    files.set(`${SKILL_DIR}/assets/retired.json`, "old\n");
+    lines.length = 0;
+
+    const code = await skillsInstallCommand(install(), {
+      ...deps,
+      unlink: (p: string) => {
+        files.delete(p);
+      },
+      rmdir: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(files.has(`${SKILL_DIR}/assets/retired.json`)).toBe(false);
+    expect(lines).toEqual([
+      "removed the installed copy of crysk-loop/assets/retired.json from Claude Code; Crysk no longer uses it",
+      "skills already up to date for Claude Code",
+    ]);
+  });
+
   // The old-name cleanup is real file removal, so these use a real temporary HOME.
   describe("pre-rename skill dirs", () => {
     const sha = (text: string) =>
@@ -225,8 +305,23 @@ describe("skillsLoadCommand", () => {
       ],
       [
         "crysk-ci-setup",
-        "assets/admission-config.example.json",
-        assets.ciSetupSkillFiles["assets/admission-config.example.json"] ?? "",
+        "references/ci-operations.md",
+        assets.ciSetupSkillFiles["references/ci-operations.md"] ?? "",
+      ],
+      [
+        "crysk-loop",
+        "dismissal.md",
+        assets.triageSkillFiles["dismissal.md"] ?? "",
+      ],
+      [
+        "crysk-loop",
+        "fix-the-class.md",
+        assets.triageSkillFiles["fix-the-class.md"] ?? "",
+      ],
+      [
+        "crysk-loop",
+        "gate-rules.md",
+        assets.triageSkillFiles["gate-rules.md"] ?? "",
       ],
       [
         "crysk-ci-setup",
@@ -348,19 +443,56 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
   beforeEach(() => {
     home = mkdtempSync(path.join(tmpdir(), "crysk-skills-load-home-"));
     repo = mkdtempSync(path.join(tmpdir(), "crysk-skills-load-repo-"));
+    git("init", "-q", "-b", "main");
   });
   afterEach(() => {
     rmSync(home, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
   });
 
-  function writeWorkflow(ref: string) {
+  function git(...args: string[]): string {
+    const result = Bun.spawnSync([
+      "git",
+      "-C",
+      repo,
+      "-c",
+      "user.name=test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      ...args,
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(`git ${args[0]}: ${result.stderr.toString()}`);
+    }
+    return result.stdout.toString().trim();
+  }
+
+  const usesLine = (ref: string) =>
+    `jobs:\n  r:\n    steps:\n      - uses: cryskai/crysk@${ref}\n`;
+
+  function writeWorktreeFile(name: string, content: string) {
     const dir = path.join(repo, ".github", "workflows");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      path.join(dir, "crysk.yml"),
-      `jobs:\n  r:\n    steps:\n      - uses: cryskai/crysk@${ref}\n`,
-    );
+    writeFileSync(path.join(dir, name), content);
+  }
+
+  function commitAll() {
+    git("add", "-A");
+    git("commit", "-q", "--allow-empty", "-m", "change");
+  }
+
+  // Commits the tree and makes that commit what origin/HEAD names.
+  function publishDefaultBranch() {
+    commitAll();
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  }
+
+  function writeWorkflow(ref: string) {
+    writeWorktreeFile("crysk.yml", usesLine(ref));
+    publishDefaultBranch();
   }
 
   async function load(
@@ -398,8 +530,12 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
 
   test("delegates to the version status recorded and caches what it printed", async () => {
     recordEngineVersion(home, repo, "0.42.0");
-    const first = await load({ delegated: "# playbook 0.42.0\n" });
+    const first = await load({
+      resolved: "0.42.0",
+      delegated: "# playbook 0.42.0\n",
+    });
     expect(first.code).toBe(0);
+    expect(first.lookups).toEqual(["0.42.0"]);
     expect(first.calls).toEqual([["0.42.0", "crysk-loop", undefined]]);
     expect(first.out).toBe("# playbook 0.42.0\n");
     expect(
@@ -409,12 +545,17 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
     // The second load is served from the per-version cache, with no npx.
     const second = await load({ delegated: "never used" });
     expect(second.calls).toEqual([]);
+    expect(second.lookups).toEqual([]);
     expect(second.out).toBe("# playbook 0.42.0\n");
   });
 
   test("delegates a companion file by its name and caches it under that name", async () => {
     recordEngineVersion(home, repo, "0.42.0");
-    const result = await load({ file: "adjudicator.md", delegated: "adj" });
+    const result = await load({
+      file: "adjudicator.md",
+      resolved: "0.42.0",
+      delegated: "adj",
+    });
     expect(result.calls).toEqual([["0.42.0", "crysk-loop", "adjudicator.md"]]);
     expect(result.out).toBe("adj\n");
     expect(
@@ -422,10 +563,30 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
     ).toBe("adj");
   });
 
+  test.each([
+    ["empty", ""],
+    ["blank", " \n"],
+  ])(
+    "%s delegated output is neither printed nor cached",
+    async (_kind, delegated) => {
+      recordEngineVersion(home, repo, "0.42.0");
+      const result = await load({ resolved: "0.42.0", delegated });
+      expect(result.code).toBe(0);
+      expect(result.out).toBe(bundledPlaybook());
+      expect(result.err).toContain(
+        "could not load crysk-loop from crysk@0.42.0",
+      );
+      expect(
+        readCachedSkillFile(home, "0.42.0", "crysk-loop", "playbook.md"),
+      ).toBeUndefined();
+    },
+  );
+
   test("prints the bundled playbook with no npx when the version is its own", async () => {
     recordEngineVersion(home, repo, assets.version);
     const result = await load({ delegated: "never used" });
     expect(result.calls).toEqual([]);
+    expect(result.lookups).toEqual([]);
     expect(result.out).toBe(bundledPlaybook());
   });
 
@@ -447,34 +608,171 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
     expect(newer.out).toBe("# 0.43.0\n");
   });
 
-  // Workflow files come from the checked-out branch, which a pull request's
-  // author controls, and this runs before the agent does anything else.
-  test("skips a workflow that is a symlink or oversized", async () => {
-    const dir = path.join(repo, ".github", "workflows");
-    mkdirSync(dir, { recursive: true });
-    const outside = path.join(home, "outside.yml");
-    writeFileSync(outside, "- uses: cryskai/crysk@v0.8.1\n");
-    symlinkSync(outside, path.join(dir, "link.yml"));
-    writeFileSync(
-      path.join(dir, "big.yml"),
-      `- uses: cryskai/crysk@v0.7.0\n${"#".repeat(300_000)}\n`,
-    );
-    const result = await load({ resolved: "0.50.0", delegated: "# latest\n" });
-    expect(result.lookups).toEqual(["latest"]);
+  // A pull request's author controls the checked-out branch and every file in
+  // the worktree, and what this picks is run and handed to the agent.
+  describe("the workflow comes from the default branch", () => {
+    test("an uncommitted edit in the worktree is not read", async () => {
+      writeWorkflow("v0.8.1");
+      writeWorktreeFile("crysk.yml", usesLine("v0.9.9"));
+
+      const result = await load({ resolved: "0.8.1", delegated: "# 0.8.1\n" });
+
+      expect(result.lookups).toEqual(["0.8.1"]);
+      expect(result.calls).toEqual([["0.8.1", "crysk-loop", undefined]]);
+      expect(result.out).toBe("# 0.8.1\n");
+    });
+
+    test("a checked-out branch cannot change it, even one named like the remote ref", async () => {
+      writeWorkflow("v0.8.1");
+      git("checkout", "-q", "-b", "attacker");
+      writeWorktreeFile("crysk.yml", usesLine("v0.9.9"));
+      commitAll();
+      git("branch", "origin/main", "attacker");
+      git("tag", "origin/main", "attacker");
+
+      const result = await load({ resolved: "0.8.1", delegated: "# 0.8.1\n" });
+
+      expect(result.lookups).toEqual(["0.8.1"]);
+      expect(result.calls).toEqual([["0.8.1", "crysk-loop", undefined]]);
+    });
+
+    test("no resolvable default branch means no workflow", async () => {
+      writeWorktreeFile("crysk.yml", usesLine("v0.8.1"));
+      commitAll();
+
+      const result = await load({
+        resolved: "0.50.0",
+        delegated: "# latest\n",
+      });
+
+      expect(result.lookups).toEqual(["latest"]);
+      expect(result.calls).toEqual([["0.50.0", "crysk-loop", undefined]]);
+    });
+
+    test("a symlink entry is skipped even when its blob reads as a pin", async () => {
+      const blob = path.join(home, "blob");
+      writeFileSync(blob, usesLine("v0.8.1"));
+      const sha = git("hash-object", "-w", blob);
+      git(
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `120000,${sha},.github/workflows/link.yml`,
+      );
+      git("commit", "-q", "-m", "link");
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      git(
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+      );
+
+      const result = await load({
+        resolved: "0.50.0",
+        delegated: "# latest\n",
+      });
+
+      expect(result.lookups).toEqual(["latest"]);
+    });
+
+    test("a blob over 256 KiB or another file type is skipped", async () => {
+      writeWorktreeFile(
+        "big.yml",
+        `${usesLine("v0.7.0")}${"#".repeat(256 * 1024)}\n`,
+      );
+      writeWorktreeFile("notes.txt", usesLine("v0.6.0"));
+      publishDefaultBranch();
+
+      const result = await load({
+        resolved: "0.50.0",
+        delegated: "# latest\n",
+      });
+
+      expect(result.lookups).toEqual(["latest"]);
+    });
+
+    test("a blob of exactly 256 KiB still counts, as does an executable one", async () => {
+      const line = usesLine("v0.8.1");
+      writeWorktreeFile(
+        "exact.yaml",
+        `${line}${"#".repeat(256 * 1024 - line.length)}`,
+      );
+      publishDefaultBranch();
+      expect((await load({ resolved: "0.8.1" })).lookups).toEqual(["0.8.1"]);
+
+      rmSync(path.join(repo, ".github", "workflows", "exact.yaml"));
+      writeWorktreeFile("run.yml", usesLine("v0.8.2"));
+      git("add", "-A");
+      git("update-index", "--chmod=+x", ".github/workflows/run.yml");
+      git("commit", "-q", "-m", "exec");
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      expect((await load({ resolved: "0.8.2" })).lookups).toEqual(["0.8.2"]);
+    });
   });
 
-  test("follows an exact workflow pin with no version lookup", async () => {
-    writeWorkflow("v0.8.1");
-    const result = await load({ delegated: "# 0.8.1\n" });
-    expect(result.lookups).toEqual([]);
-    expect(result.calls).toEqual([["0.8.1", "crysk-loop", undefined]]);
-  });
+  // npm alone must not be able to put a version in front of the agent: an exact
+  // version from a workflow or a review comment has to be a release tag first.
+  describe("an exact version must exist as a GitHub tag", () => {
+    test("a pinned version with its tag is delegated", async () => {
+      writeWorkflow("v0.8.1");
+      const result = await load({ resolved: "0.8.1", delegated: "# 0.8.1\n" });
+      expect(result.lookups).toEqual(["0.8.1"]);
+      expect(result.calls).toEqual([["0.8.1", "crysk-loop", undefined]]);
+      expect(result.out).toBe("# 0.8.1\n");
+      expect(result.err).toBe("");
+    });
 
-  test("a recorded engine version needs no lookup", async () => {
-    recordEngineVersion(home, repo, "0.42.0");
-    writeWorkflow("v0");
-    const result = await load({ delegated: "# 0.42.0\n" });
-    expect(result.lookups).toEqual([]);
+    test("a recorded version outranks the workflow and is checked too", async () => {
+      recordEngineVersion(home, repo, "0.42.0");
+      writeWorkflow("v0");
+      const result = await load({
+        resolved: "0.42.0",
+        delegated: "# 0.42.0\n",
+      });
+      expect(result.lookups).toEqual(["0.42.0"]);
+      expect(result.calls).toEqual([["0.42.0", "crysk-loop", undefined]]);
+    });
+
+    for (const [label, resolved] of [
+      ["has no tag or cannot be checked", undefined],
+      ["resolves to another version", "0.8.2"],
+    ] as const) {
+      test(`a pinned version that ${label} is never run`, async () => {
+        writeWorkflow("v0.8.1");
+        const result = await load({ resolved, delegated: "# planted\n" });
+
+        expect(result.code).toBe(0);
+        expect(result.calls).toEqual([]);
+        expect(result.out).toBe(bundledPlaybook());
+        expect(result.err).toContain(
+          "could not load crysk-loop from crysk@0.8.1;",
+        );
+        expect(
+          readCachedSkillFile(home, "0.8.1", "crysk-loop", "playbook.md"),
+        ).toBeUndefined();
+      });
+    }
+
+    test("a recorded version with no tag is never run", async () => {
+      recordEngineVersion(home, repo, "0.42.0");
+      const result = await load({ delegated: "# planted\n" });
+
+      expect(result.calls).toEqual([]);
+      expect(result.out).toBe(bundledPlaybook());
+      expect(result.err).toContain(
+        "could not load crysk-loop from crysk@0.42.0",
+      );
+    });
+
+    test("a version a moving tag resolved to is looked up once", async () => {
+      writeWorkflow("v0");
+      const result = await load({
+        resolved: "0.42.0",
+        delegated: "# 0.42.0\n",
+      });
+      expect(result.lookups).toEqual(["0"]);
+      expect(result.calls).toEqual([["0.42.0", "crysk-loop", undefined]]);
+    });
   });
 
   test("loads the exact latest version outside a repository", async () => {
@@ -507,7 +805,8 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
 
   test("prints the bundled playbook and warns when the delegation fails", async () => {
     recordEngineVersion(home, repo, "0.42.0");
-    const result = await load({ delegated: undefined });
+    const result = await load({ resolved: "0.42.0", delegated: undefined });
+    expect(result.calls).toEqual([["0.42.0", "crysk-loop", undefined]]);
     expect(result.code).toBe(0);
     expect(result.out).toBe(bundledPlaybook());
     expect(result.err).toContain("could not load crysk-loop from crysk@0.42.0");
@@ -629,6 +928,29 @@ describe("delegateSkillsLoad", () => {
     expect(seen[0]?.env.GIT_TERMINAL_PROMPT).toBe("0");
   });
 
+  // The check `skills load` makes before running a recorded or pinned version.
+  test("an exact version comes back only when its own tag exists", async () => {
+    const present = fakeSpawn(
+      tagLines([
+        ["1".repeat(40), "refs/tags/v0.8.1"],
+        [COMMIT, "refs/tags/v0.8.1^{}"],
+      ]),
+      0,
+    );
+    expect(
+      await resolveCryskVersion("0.8.1", { spawnFn: present.spawnFn }),
+    ).toBe("0.8.1");
+    expect(present.seen[0]?.argv.slice(4, 6)).toEqual([
+      "refs/tags/v0.8.1",
+      "refs/tags/v0.8.1^{}",
+    ]);
+
+    const absent = fakeSpawn("", 0);
+    expect(
+      await resolveCryskVersion("0.8.1", { spawnFn: absent.spawnFn }),
+    ).toBeUndefined();
+  });
+
   test("reads lightweight tags and takes the newest release on the commit", async () => {
     const { spawnFn } = fakeSpawn(
       tagLines([
@@ -731,4 +1053,76 @@ describe("delegateSkillsLoad", () => {
       }),
     ).toBeUndefined();
   });
+});
+
+// What npx runs must not depend on the checkout: a branch can commit node_modules/.bin/crysk, and
+// what the delegated run prints is stored in the per-version cache.
+describe("delegateSkillsLoad: where npx runs", () => {
+  // An outer `npx` started in the checkout puts its node_modules/.bin on PATH, and a branch can
+  // commit an `npx` there.
+  test("drops node_modules/.bin directories from the PATH it hands npx", async () => {
+    const before = process.env.PATH;
+    process.env.PATH = [
+      "/repo/node_modules/.bin",
+      "/usr/local/bin",
+      "/repo/packages/a/node_modules/.bin/",
+      "/usr/bin",
+    ].join(path.delimiter);
+    try {
+      let seen: string | undefined;
+      const spawnFn = ((
+        _argv: string[],
+        opts: { env: Record<string, string | undefined> },
+      ) => {
+        seen = opts.env.PATH;
+        return {
+          stdout: new Response("# pb\n").body,
+          exited: Promise.resolve(0),
+          kill: () => {},
+        };
+      }) as unknown as typeof Bun.spawn;
+      await delegateSkillsLoad("0.42.0", "crysk-loop", undefined, { spawnFn });
+      expect(seen).toBe(["/usr/local/bin", "/usr/bin"].join(path.delimiter));
+    } finally {
+      process.env.PATH = before;
+    }
+  });
+
+  function spawnRecording(exitCode: number, stdout: string) {
+    const seen: { cwd?: string; existed: boolean; entries: string[] }[] = [];
+    const spawnFn = ((_argv: string[], opts: { cwd?: string }) => {
+      const cwd = opts.cwd;
+      const existed = cwd !== undefined && existsSync(cwd);
+      seen.push({
+        ...(cwd === undefined ? {} : { cwd }),
+        existed,
+        entries: existed ? readdirSync(cwd) : [],
+      });
+      return {
+        stdout: new Response(stdout).body,
+        exited: Promise.resolve(exitCode),
+        kill: () => {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, seen };
+  }
+
+  test.each([
+    ["a run that succeeds", 0, "# pb\n", "# pb\n"],
+    ["a run that fails", 1, "", undefined],
+  ])(
+    "%s starts in an empty directory outside the checkout, then removes it",
+    async (_case, exitCode, stdout, expected) => {
+      const { spawnFn, seen } = spawnRecording(exitCode, stdout);
+      const out = await delegateSkillsLoad("0.42.0", "crysk-loop", undefined, {
+        spawnFn,
+      });
+      expect(out).toBe(expected);
+      const cwd = seen[0]?.cwd ?? "";
+      expect(seen[0]?.existed).toBe(true);
+      expect(seen[0]?.entries).toEqual([]);
+      expect(path.relative(process.cwd(), cwd).startsWith("..")).toBe(true);
+      expect(existsSync(cwd)).toBe(false);
+    },
+  );
 });

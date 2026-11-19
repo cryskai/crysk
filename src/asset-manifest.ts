@@ -25,9 +25,6 @@ import summarizerPrompt from "../prompts/summarizer.md" with { type: "file" };
 import verifierPrompt from "../prompts/verifier.md" with { type: "file" };
 import generalPlaybook from "../skills/crysk/playbook.md" with { type: "file" };
 import generalSkill from "../skills/crysk/SKILL.md" with { type: "file" };
-import ciSetupAdmissionExample from "../skills/crysk-ci-setup/assets/admission-config.example.json" with {
-  type: "file",
-};
 import ciSetupWorkflow from "../skills/crysk-ci-setup/assets/workflow.yml" with {
   type: "file",
 };
@@ -37,6 +34,9 @@ import ciSetupPlaybook from "../skills/crysk-ci-setup/playbook.md" with {
 import ciSetupAdmissionRef from "../skills/crysk-ci-setup/references/ci-admission.md" with {
   type: "file",
 };
+import ciSetupOperationsRef from "../skills/crysk-ci-setup/references/ci-operations.md" with {
+  type: "file",
+};
 import ciSetupOpenCodeRef from "../skills/crysk-ci-setup/references/opencode-ci.md" with {
   type: "file",
 };
@@ -44,6 +44,15 @@ import ciSetupSkill from "../skills/crysk-ci-setup/SKILL.md" with {
   type: "file",
 };
 import triageAdjudicator from "../skills/crysk-loop/adjudicator.md" with {
+  type: "file",
+};
+import triageDismissal from "../skills/crysk-loop/dismissal.md" with {
+  type: "file",
+};
+import triageFixTheClass from "../skills/crysk-loop/fix-the-class.md" with {
+  type: "file",
+};
+import triageGateRules from "../skills/crysk-loop/gate-rules.md" with {
   type: "file",
 };
 import triagePlaybook from "../skills/crysk-loop/playbook.md" with {
@@ -81,15 +90,17 @@ export const TRIAGE_SKILL_FILES: Record<string, string> = {
   "SKILL.md": triageSkill,
   "playbook.md": triagePlaybook,
   "adjudicator.md": triageAdjudicator,
+  "dismissal.md": triageDismissal,
+  "fix-the-class.md": triageFixTheClass,
+  "gate-rules.md": triageGateRules,
 };
 
 export const CI_SETUP_SKILL_FILES: Record<string, string> = {
   "SKILL.md": ciSetupSkill,
   "playbook.md": ciSetupPlaybook,
-  "assets/admission-config.example.json":
-    ciSetupAdmissionExample as unknown as string,
   "assets/workflow.yml": ciSetupWorkflow,
   "references/ci-admission.md": ciSetupAdmissionRef,
+  "references/ci-operations.md": ciSetupOperationsRef,
   "references/opencode-ci.md": ciSetupOpenCodeRef,
 };
 

@@ -13,8 +13,12 @@ import {
 import { renderStateBlock, stateFinding } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
-import { triageMarker } from "#triage/triage";
-import { CliUsageError } from "../../src/errors";
+import {
+  type TriageTag,
+  type TriageVerdict,
+  triageMarker,
+} from "#triage/triage";
+import { CliError, CliUsageError } from "../../src/errors";
 
 interface ScriptedResponse {
   stdout?: string;
@@ -346,7 +350,7 @@ function greptileCollisionScript(input?: {
           },
           {
             id: 22,
-            user: "pr-hero",
+            user: "github-actions[bot]",
             body: `${findingMarker({
               path: findingPath,
               line: postLine,
@@ -443,7 +447,9 @@ function carriedScript(
   script[0] = {
     match: ["issues/42/comments", "--paginate"],
     response: {
-      stdout: ndjson([{ id: 5, user: "pr-hero", body: summaryBody }]),
+      stdout: ndjson([
+        { id: 5, user: "github-actions[bot]", body: summaryBody },
+      ]),
     },
   };
   script[1] = {
@@ -461,7 +467,7 @@ function carriedScript(
         },
         {
           id: 22,
-          user: "pr-hero",
+          user: "github-actions[bot]",
           body: `${findingMarker({
             path: F001_PATH,
             line: 144,
@@ -591,7 +597,11 @@ describe("runTriageReplyCommand", () => {
         match: ["issues/42/comments", "--paginate"],
         response: {
           stdout: ndjson([
-            { id: 555, user: "pr-hero", body: `${finding}\n${F001_CLAIM}` },
+            {
+              id: 555,
+              user: "github-actions[bot]",
+              body: `${finding}\n${F001_CLAIM}`,
+            },
           ]),
         },
       },
@@ -986,7 +996,14 @@ describe("runTriageReplyCommand — with a run directory, a reply already at the
   }
 
   // Runs the reply from the run directory and returns the POSTs it made and what it logged.
-  async function replyFromRunDir(script: ScriptEntry[]): Promise<{
+  async function replyFromRunDir(
+    script: ScriptEntry[],
+    answer: {
+      tag: TriageTag;
+      verdict?: TriageVerdict;
+      dryRun?: boolean;
+    } = { tag: "applied" },
+  ): Promise<{
     exitCode: number;
     calls: RecordedCall[];
     written: string;
@@ -1006,9 +1023,10 @@ describe("runTriageReplyCommand — with a run directory, a reply already at the
         pr: 42,
         from: dir,
         findingId: "F001",
-        tag: "applied",
+        tag: answer.tag,
+        ...(answer.verdict === undefined ? {} : { verdict: answer.verdict }),
         bodyFile,
-        dryRun: false,
+        dryRun: answer.dryRun ?? false,
         spawnFn,
       });
       return { exitCode, calls, written: written.join("") };
@@ -1020,6 +1038,91 @@ describe("runTriageReplyCommand — with a run directory, a reply already at the
 
   const postsOf = (calls: RecordedCall[]) =>
     calls.filter((call) => call.argv.includes("--method"));
+
+  // S11: `already` used to ignore the tag, so a changed answer exited 0 and was silently dropped.
+  test.each([
+    ["posting", false],
+    ["a dry run", true],
+  ])(
+    "%s refuses a different tag at the head it is already answered at",
+    async (_name, dryRun) => {
+      const outcome = await replyFromRunDir(replyScript("dev", "write"), {
+        tag: "dismissed",
+        verdict: "upheld",
+        dryRun,
+      }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(outcome).toBeInstanceOf(CliError);
+      expect((outcome as Error).message).toContain("already answered applied");
+      expect((outcome as Error).message).toContain("nothing was posted");
+      expect((outcome as Error).message).toContain("next review");
+      expect((outcome as Error).message).not.toContain("next push");
+    },
+  );
+
+  test("a refused tag posts nothing and resolves no thread", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    const { spawnFn, calls } = makeFakeGh(replyScript("dev", "write"));
+    try {
+      await expect(
+        runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          from: dir,
+          findingId: "F001",
+          tag: "deferred",
+          verdict: "upheld",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+        }),
+      ).rejects.toThrow(/already answered applied/);
+      expect(postsOf(calls)).toHaveLength(0);
+      expect(
+        calls.some((call) =>
+          call.argv.join(" ").includes("resolveReviewThread"),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // A local `review --pr` posts under the operator's own login, and the run directory names that comment.
+  test("a run's finding posted under a person's login still counts as answered", async () => {
+    const script = replyScript("dev", "write").map((entry) => {
+      if (entry.match[0] !== "pulls/42/comments") return entry;
+      const rows = (entry.response?.stdout ?? "")
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line))
+        .map((row) =>
+          row.user === "github-actions[bot]"
+            ? { ...row, user: "local-operator" }
+            : row,
+        );
+      return { match: entry.match, response: { stdout: ndjson(rows) } };
+    });
+    const { exitCode, calls, written } = await replyFromRunDir(script);
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(0);
+    expect(written).toContain("skip post");
+  });
+
+  // The documented retry: the reply is on GitHub, resolve failed, the same command runs again.
+  test("the same tag at the same head still skips the post and resolves the thread", async () => {
+    const { exitCode, calls, written } = await replyFromRunDir(
+      replyScript("dev", "write"),
+    );
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(0);
+    expect(written).toContain("skip post");
+    expect(
+      calls.some((call) => call.argv.join(" ").includes("resolveReviewThread")),
+    ).toBe(true);
+  });
 
   test("with a run directory, a writer's reply at the run's head is a repeat", async () => {
     // A writer (write permission) already answered this finding at the run's head: the driver skips.
@@ -1111,8 +1214,12 @@ describe("runTriageReplyCommand — with a run directory, a reply already at the
         match: ["issues/42/comments", "--paginate"],
         response: {
           stdout: ndjson([
-            { id: 5, user: "pr-hero", body: summary },
-            { id: 20, user: "pr-hero", body: `${topLevel}\n${F001_CLAIM}` },
+            { id: 5, user: "github-actions[bot]", body: summary },
+            {
+              id: 20,
+              user: "github-actions[bot]",
+              body: `${topLevel}\n${F001_CLAIM}`,
+            },
           ]),
         },
       },
@@ -1122,7 +1229,7 @@ describe("runTriageReplyCommand — with a run directory, a reply already at the
           stdout: ndjson([
             {
               id: 20,
-              user: "pr-hero",
+              user: "github-actions[bot]",
               body: `${inlineMarker}\n${inlineClaim}`,
               path: inlinePath,
               line: 20,
@@ -1201,7 +1308,9 @@ describe("runTriageReplyCommand — without a run directory", () => {
     script[0] = {
       match: ["issues/42/comments", "--paginate"],
       response: {
-        stdout: ndjson([{ id: 5, user: "pr-hero", body: summaryBody }]),
+        stdout: ndjson([
+          { id: 5, user: "github-actions[bot]", body: summaryBody },
+        ]),
       },
     };
     return script;
@@ -1880,7 +1989,7 @@ function rowScript(
     match: ["issues/42/comments", "--paginate"],
     response: {
       stdout: ndjson([
-        { id: 5, user: "pr-hero", body: summaryBody },
+        { id: 5, user: "github-actions[bot]", body: summaryBody },
         ...extraIssueComments,
       ]),
     },
@@ -1969,6 +2078,126 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
       await cleanup();
     }
   });
+
+  // S8: a person can type a summary marker; the link must name the summary the engine posted.
+  test("a summary-shaped comment from a person is neither read nor linked", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        rowScript([
+          {
+            id: 70,
+            user: "mallory",
+            body: `<!-- pr-hero-report head=${HEAD} -->\n\nnothing to see`,
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const stdin = rowPosts(calls)[0]?.stdin ?? "";
+      expect(stdin).toContain("#issuecomment-5");
+      expect(stdin).not.toContain("#issuecomment-70");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // The count is status's to report: a reply does not depend on the read that feeds it.
+  test("a reply does not need the head's status history", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh([
+        {
+          match: [`commits/${HEAD}/statuses`],
+          response: { stderr: "HTTP 502", exitCode: 1 },
+        },
+        ...rowScript(),
+      ]);
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(rowPosts(calls)).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a different tag on a row already answered at this head is refused", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        rowScript([
+          {
+            id: 60,
+            user: "dev",
+            body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent", row: "R001" })}\n\nearlier`,
+          },
+        ]).concat(permissionEntry("dev", { stdout: "write\n" })),
+      );
+      await expect(
+        runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "dismissed",
+          verdict: "upheld",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+        }),
+      ).rejects.toThrow(/already answered applied/);
+      expect(rowPosts(calls)).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // S11: a rejected dismissal says the finding stands, so posting it would resolve a live thread.
+  test.each([
+    ["posting", false],
+    ["a dry run", true],
+  ])(
+    "%s refuses --tag dismissed --verdict rejected before any read",
+    async (_name, dryRun) => {
+      const { bodyFile, cleanup } = await bodyOnly();
+      try {
+        const { spawnFn, calls } = makeFakeGh(rowScript());
+        const outcome = await runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "dismissed",
+          verdict: "rejected",
+          bodyFile,
+          dryRun,
+          spawnFn,
+        }).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(outcome).toBeInstanceOf(CliUsageError);
+        expect((outcome as Error).message).toContain("--verdict rejected");
+        expect(calls).toHaveLength(0);
+      } finally {
+        await cleanup();
+      }
+    },
+  );
 
   test("a dismissal carries its verdict before the row", async () => {
     const { bodyFile, cleanup } = await bodyOnly();
@@ -2298,7 +2527,7 @@ describe("runTriageReplyCommand — a finding posted as a top-level comment", ()
   const AFTER = "2026-10-30T11:00:00Z";
   const issueFinding = {
     id: 20,
-    user: "pr-hero",
+    user: "github-actions[bot]",
     body: `${findingMarker({ path: F001_PATH, line: 144, headSha: HEAD, claim: F001_CLAIM })}\n${F001_CLAIM}`,
   };
 
@@ -2331,7 +2560,7 @@ describe("runTriageReplyCommand — a finding posted as a top-level comment", ()
         match: ["issues/42/comments", "--paginate"],
         response: {
           stdout: ndjson([
-            { id: 5, user: "pr-hero", body: summaryBody },
+            { id: 5, user: "github-actions[bot]", body: summaryBody },
             issueFinding,
             ...issueReplies,
           ]),

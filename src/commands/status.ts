@@ -4,21 +4,23 @@
 // gate, and both comment streams, all through gh. Nothing is written to GitHub, and no run
 // dir or local store is read.
 //
-// Fail closed: every read here throws on failure (a gh error, a truncated comment list, a
-// head that is not a commit id), so the command exits 1 with nothing on stdout. An empty
-// answer from a failed read would read as "no review yet" and send a review out blind.
+// Fail closed: every read a decision rests on throws on failure (a gh error, a truncated comment
+// list, a head that is not a commit id), so the command exits 1 with nothing on stdout. An empty
+// answer from a failed read would read as "no review yet" and send a review out blind. The status
+// history is the exception: only forced_runs_on_head reads it (readPrStatus).
 
 import os from "node:os";
-import { resolveRepoRoot } from "#git/git";
+import { git, remoteHeadRef, resolveRepoRoot } from "#git/git";
 import {
   carriedReviewVerdictTime,
   headStatusRed,
   ownReviewVerdictTime,
 } from "#pr/admission";
-import { requireReplyWriters } from "#pr/ci-admission-gate";
+import { lookUpReplyWriters, requireReplyWriters } from "#pr/ci-admission-gate";
 import {
   CommentsTruncatedError,
   fetchCommitStatuses,
+  fetchCommitStatusList,
   fetchPrComments,
   fetchPrReviewComments,
   ghPrView,
@@ -26,21 +28,24 @@ import {
 } from "#pr/pr";
 import {
   buildPrStatus,
+  oldestGateStatusAt,
   type PrStatusJson,
   renderPrStatusLines,
   reviewedHeadOf,
   STATUS_WAIT_MAX_MS,
   STATUS_WAIT_POLL_INTERVAL_MS,
   shouldWaitPrStatus,
+  skillsReloadCommand,
   verdictAtMs,
 } from "#pr/pr-status";
 import { resolvePrTarget } from "#pr/preflight";
-import type { CliOptions } from "#review/preflight";
+import { type CliOptions, parseLocalConfig } from "#review/preflight";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
+import { parseTriageMarker } from "#triage/triage";
 import { log } from "#ui/primitives";
 import { resolveEngineAssets } from "../assets";
 import { CliError, CliUsageError } from "../errors";
-import { recordEngineVersion } from "../skills-cache";
+import { readEngineVersion, recordEngineVersion } from "../skills-cache";
 
 export async function statusCommand(options: CliOptions): Promise<number> {
   // parseArgs already requires a numeric --pr for this command; the check is the type
@@ -58,14 +63,56 @@ export async function statusCommand(options: CliOptions): Promise<number> {
     cliVersion: resolveEngineAssets().version,
     recordEngine: (version, at) =>
       recordEngineVersion(home, operatorRoot, version, at),
+    recordedEngine: () => readEngineVersion(home, operatorRoot),
   });
 }
 
-// What a --wait run, or one command, remembers between reads: each reply author's permission, and
-// the walk to a carried review's verdict.
+// What a --wait run, or one command, remembers between reads: each reply author's permission, the
+// walk to a carried review's verdict, and the logins the repository trusts.
 export interface PrStatusReadMemo {
   writers: Map<string, boolean>;
   walked?: { head: string; at: string | null };
+  trustedActors?: ReadonlySet<string>;
+  // A head's first gate status never changes once it exists, so a --wait run reads it once.
+  firstStatus?: { head: string; at: string };
+}
+
+const REPO_CONFIG_PATHS = [".crysk/config.json", ".prhero/config.json"];
+const REGULAR_FILE_MODES = new Set(["100644", "100755"]);
+
+// The repository's ci_trusted_actors, read from the default branch's objects with local git only.
+// WHY not the working tree: the checkout is often the pull request, and its author must not be able
+// to name themselves. Anything unreadable (no origin/HEAD, no file, a file that does not parse) is an
+// empty list, so status falls back to reading bots alone, which can only read less.
+export async function defaultBranchTrustedActors(
+  operatorRoot: string,
+): Promise<ReadonlySet<string>> {
+  try {
+    const branch = await remoteHeadRef(operatorRoot);
+    if (branch === undefined) return new Set();
+    for (const file of REPO_CONFIG_PATHS) {
+      const listed = await git(operatorRoot, [
+        "ls-tree",
+        "--full-tree",
+        `refs/remotes/origin/${branch}`,
+        "--",
+        file,
+      ]);
+      if (!listed.ok) return new Set();
+      const [meta] = listed.stdout.split("\t");
+      const [mode, type, sha] = (meta ?? "").trim().split(" ");
+      if (sha === undefined) continue;
+      if (type !== "blob" || !REGULAR_FILE_MODES.has(mode ?? "")) {
+        return new Set();
+      }
+      const blob = await git(operatorRoot, ["cat-file", "blob", sha]);
+      if (!blob.ok) return new Set();
+      return new Set(parseLocalConfig(blob.stdout, file).ci_trusted_actors);
+    }
+    return new Set();
+  } catch {
+    return new Set();
+  }
 }
 
 // One read of a pull request as `crysk status` reports it: the head, its statuses, the time of the
@@ -84,13 +131,17 @@ export async function readPrStatus(input: {
   // Called with the head as soon as the pull request is read, before the reads that can still
   // fail: a --wait run dates its grace window from the moment it first saw a head.
   onHead?: (head: string) => void;
-  // The running CLI's version, for the skills reload hint (pr-status.ts skills_reload).
-  cliVersion?: string;
+  // Off for `crysk triage reply`, which never reads forced_runs_on_head and must not fail on its read.
+  countForcedRuns?: boolean;
+  // A comment the caller already bound by its exact marker (`triage reply --from`): its author is read
+  // as trusted for this read. A local `review --pr` posts under the operator's own login.
+  trustPosterOf?: { id: number; channel: "review" | "issue" };
 }): Promise<{
   status: PrStatusJson;
   head: string;
   issueComments: Awaited<ReturnType<typeof fetchPrComments>>;
   reviewComments: Awaited<ReturnType<typeof fetchPrReviewComments>>;
+  trustedActors: ReadonlySet<string>;
 }> {
   const { operatorRoot, pr, nowMs, spawnFn, sleepFn, memo } = input;
   const viewTimeoutMs = input.viewTimeoutMs ?? GH_PR_VIEW_TIMEOUT_MS;
@@ -133,18 +184,63 @@ export async function readPrStatus(input: {
     spawnFn,
     timeoutMs: commentTimeoutMs,
   });
+  let firstStatusAt: string | null | undefined;
+  if (input.countForcedRuns !== false) {
+    if (memo.firstStatus?.head === head) {
+      firstStatusAt = memo.firstStatus.at;
+    } else {
+      const history = await fetchCommitStatusList(operatorRoot, head, {
+        spawnFn,
+      }).catch(() => null);
+      // WHY an unread history does not fail status: every decision here stands without it, and the
+      // count is one input to the skill's limit. buildPrStatus then counts from the statuses already
+      // read, which can undercount: the latest status can be newer than the head's first.
+      if (history !== null) {
+        firstStatusAt = oldestGateStatusAt(history);
+        if (firstStatusAt !== null) {
+          memo.firstStatus = { head, at: firstStatusAt };
+        }
+      }
+    }
+  }
+  memo.trustedActors ??= await defaultBranchTrustedActors(operatorRoot);
+  const bound = input.trustPosterOf;
+  const boundPoster =
+    bound === undefined
+      ? undefined
+      : (bound.channel === "review" ? reviewComments : issueComments).find(
+          (comment) => comment.id === bound.id,
+        )?.user;
+  const trustedActors =
+    boundPoster === undefined
+      ? memo.trustedActors
+      : new Set([...memo.trustedActors, boundPoster]);
   // Only authors whose replies can count are asked: a stale reply is dropped before its author matters.
   const writers = await requireReplyWriters({
     operatorRoot,
     comments: [...reviewComments, ...issueComments],
     known: memo.writers,
     cutoff: {
-      reviewedHead: reviewedHeadOf(issueComments),
+      reviewedHead: reviewedHeadOf(issueComments, trustedActors),
       verdictAt: verdictAtMs(verdictAt),
     },
     spawnFn,
     sleepFn,
   });
+  // inconclusive_heads reads replies the gate drops as stale, so their authors are asked here. Best
+  // effort: an answer that does not read leaves that reply out and fails nothing.
+  const streakAuthors = await lookUpReplyWriters({
+    operatorRoot,
+    comments: [...reviewComments, ...issueComments].filter(
+      (comment) => parseTriageMarker(comment.body)?.verdict === "inconclusive",
+    ),
+    known: memo.writers,
+    spawnFn,
+    sleepFn,
+  });
+  for (const [login, writer] of streakAuthors) {
+    if (writer !== null) writers.set(login, writer);
+  }
   const status = buildPrStatus({
     pr,
     head,
@@ -154,11 +250,12 @@ export async function readPrStatus(input: {
     issueComments,
     reviewComments,
     writers,
+    trustedActors,
+    ...(firstStatusAt === undefined ? {} : { firstStatusAt }),
     // A developer's machine never learns the platform's login (src/triage/adjudication.ts).
     adjudicatorTrust: { kind: "local" },
-    ...(input.cliVersion === undefined ? {} : { cliVersion: input.cliVersion }),
   });
-  return { status, head, issueComments, reviewComments };
+  return { status, head, issueComments, reviewComments, trustedActors };
 }
 
 // Exported with its gh seam (spawnFn), the clock (nowMs) and the stdout writer (out) injectable,
@@ -180,13 +277,16 @@ export async function runStatusCommand(input: {
   // Overrides every bound below. The tests use it to see a timeout without waiting the real one.
   ghTimeoutMs?: number;
   out?: (text: string) => void;
-  // The running CLI's version, for the skills reload hint. Absent: none is named.
+  // The running CLI's version, for the skills reload command. Absent: none is named.
   cliVersion?: string;
   // Records the engine version the summary names and when the gate was set, so
   // `skills load` serves that version's playbook with no network call and an
   // older pull request does not undo a newer one (skills-cache.ts). Absent:
   // nothing is recorded.
   recordEngine?: (version: string, at: string | null) => void;
+  // The version `skills load` would now serve this repository, read after recording. Absent or
+  // undefined: nothing is recorded, and no reload is named.
+  recordedEngine?: () => string | undefined;
 }): Promise<number> {
   const { operatorRoot, pr, spawnFn } = input;
   // Every gh call here is bounded, so a call that never answers is a timeout CliError and the
@@ -230,9 +330,6 @@ export async function runStatusCommand(input: {
         viewTimeoutMs,
         commentTimeoutMs,
         memo,
-        ...(input.cliVersion === undefined
-          ? {}
-          : { cliVersion: input.cliVersion }),
         onHead: (head) => {
           if (head !== lastHead) {
             lastHead = head;
@@ -282,6 +379,14 @@ export async function runStatusCommand(input: {
   if (status.report.engine_version !== null) {
     input.recordEngine?.(status.report.engine_version, status.gate.created_at);
   }
+  // After recording, so an older pull request, whose version recording refuses, names nothing.
+  status = {
+    ...status,
+    skills_reload: skillsReloadCommand(
+      input.recordedEngine?.(),
+      input.cliVersion,
+    ),
+  };
   if (input.json) {
     const write = input.out ?? ((text: string) => process.stdout.write(text));
     write(`${JSON.stringify(status)}\n`);
