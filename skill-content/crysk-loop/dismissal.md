@@ -10,7 +10,7 @@ Spawn it for every `dismissed`, `deferred` or `misclassified` you are about to p
 one. Its system prompt comes from:
 
 ```bash
-npx -y crysk@0.9.0 skills load crysk-loop adjudicator.md
+npx -y crysk@0.10.0 skills load crysk-loop adjudicator.md
 ```
 
 **Isolation is load-bearing.** It receives only:
@@ -72,7 +72,7 @@ On `next_action=recheck` (`reason_code=dismissal_ruling_pending`):
 1. Post `gh pr comment <n> --body "/crysk recheck"`. It reviews the head and asks the CI adjudicator to rule
    on pending dismissals of blocking findings. Forks are refused: on a pull request with
    `isCrossRepository: true`, stop and tell the user.
-2. Wait with `npx -y crysk@0.9.0 status --pr <n> --wait --json`.
+2. Wait with `npx -y crysk@0.10.0 status --pr <n> --wait --json`.
 3. Read each finding's `ci_verdict`:
 
 | `ci_verdict` | Meaning | What to do |
