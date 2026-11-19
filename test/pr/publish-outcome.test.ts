@@ -362,7 +362,9 @@ describe("publishRunOutcome", () => {
 
   // #572: an account outage must not use up a pull request's automatic reviews.
   describe("attempt budget of a run where every hunter failed", () => {
-    async function settle(failures: readonly { cause?: string }[]) {
+    async function settle(
+      failures: readonly { cause?: string; credential?: string }[],
+    ) {
       const record: AdmissionRecord = {
         schemaVersion: 1,
         prNumber: 42,
@@ -414,7 +416,11 @@ describe("publishRunOutcome", () => {
       ["quota_exhausted", "usage limit"],
     ] as const) {
       test(`every hunter refused for ${cause} spends no attempt`, async () => {
-        const run = await settle([{ cause }, { cause }]);
+        const credential = "CRYSK_OPENCODE_OPENAI_OAUTH";
+        const run = await settle([
+          { cause, credential },
+          { cause, credential },
+        ]);
         expect(run.settled.status).toBe("gate-skipped");
         expect(run.settled.decisionReason).toContain(words);
         expect(run.ledgerCount).toBe(0);
@@ -424,12 +430,26 @@ describe("publishRunOutcome", () => {
     }
 
     for (const [label, failures] of [
-      ["a cause the account did not decide", [{ cause: "rate_limit" }]],
+      [
+        "a cause the account did not decide",
+        [{ cause: "rate_limit", credential: "ANTHROPIC_API_KEY" }],
+      ],
+      // The login phrase can come from the model's own text, and then no credential is named.
+      [
+        "an account cause with no credential behind it",
+        [{ cause: "auth_invalid" }],
+      ],
       [
         "hunters that disagree",
-        [{ cause: "auth_invalid" }, { cause: "quota_exhausted" }],
+        [
+          { cause: "auth_invalid", credential: "ANTHROPIC_API_KEY" },
+          { cause: "quota_exhausted", credential: "ANTHROPIC_API_KEY" },
+        ],
       ],
-      ["a hunter with no cause", [{ cause: "auth_invalid" }, {}]],
+      [
+        "a hunter with no cause",
+        [{ cause: "auth_invalid", credential: "ANTHROPIC_API_KEY" }, {}],
+      ],
       ["no recorded failure", []],
     ] as const) {
       test(`${label} still counts (previous behavior)`, async () => {
