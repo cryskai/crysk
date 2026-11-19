@@ -1073,6 +1073,56 @@ describe("ghPrView", () => {
   });
 });
 
+// #561: GitHub CLI 2.60 does not know `baseRefOid` and refuses the whole field list.
+describe("ghPrView on a gh without baseRefOid", () => {
+  const BASE = "c".repeat(40);
+  const OLD_GH = {
+    stdout: "",
+    stderr: 'Unknown JSON field: "baseRefOid"\nAvailable fields: ...',
+    exitCode: 1,
+  };
+
+  test("reads the base sha through the REST API and returns the same record", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      { match: ["pr", "view", "baseRefOid"], response: OLD_GH },
+      {
+        match: ["pr", "view"],
+        response: { stdout: JSON.stringify({ number: 42, headRefOid: HEAD }) },
+      },
+      { match: ["api", "pulls/42"], response: { stdout: `${BASE}\n` } },
+    ]);
+    const record = JSON.parse(await ghPrView(OPERATOR_ROOT, 42, { spawnFn }));
+    expect(record).toEqual({ number: 42, headRefOid: HEAD, baseRefOid: BASE });
+    expect(calls).toHaveLength(3);
+    expect(calls[1]?.argv.join(" ")).not.toContain("baseRefOid");
+    expect(calls[2]?.argv).toContain("repos/{owner}/{repo}/pulls/42");
+  });
+
+  test("any other gh failure still throws with gh's words (previous behavior)", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["pr", "view"],
+        response: { stdout: "", stderr: "no pull requests found", exitCode: 1 },
+      },
+    ]);
+    await expect(ghPrView(OPERATOR_ROOT, 42, { spawnFn })).rejects.toThrow(
+      "no pull requests found",
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a base sha the API cannot give fails loud instead of guessing", async () => {
+    const { spawnFn } = makeFakeGh([
+      { match: ["pr", "view", "baseRefOid"], response: OLD_GH },
+      { match: ["pr", "view"], response: { stdout: "{}" } },
+      { match: ["api", "pulls/42"], response: { stdout: "not-a-sha\n" } },
+    ]);
+    await expect(ghPrView(OPERATOR_ROOT, 42, { spawnFn })).rejects.toThrow(
+      "base",
+    );
+  });
+});
+
 describe("ghPrHeadSha", () => {
   test("asks for exactly one field and returns the trimmed sha", async () => {
     const { spawnFn, calls } = makeFakeGh([

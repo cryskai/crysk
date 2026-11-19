@@ -223,6 +223,30 @@ export const PENDING_AT_FILE = "pending-at";
 // (src/ci/platform-trace.ts) still needs the files of exactly those runs.
 export const RUN_DIR_FILE = "run-dir";
 
+// #562: the review comment ids whose verified-gone reply posted and whose thread resolve
+// the workflow token was refused (`Resource not accessible by integration`). Written by
+// recordResolveThreads (src/ci/cli-record.ts) as a JSON array; the platform report
+// (src/ci/platform-report.ts) sends them as `resolve_threads`, and the platform resolves
+// those threads with the App's installation. Absent when no resolve was refused.
+export const RESOLVE_THREADS_FILE = "resolve-threads.json";
+// The platform's own bound on `resolve_threads`.
+export const MAX_RESOLVE_THREADS = 100;
+
+// The ids the contract accepts, from any value: positive safe integers only, each once, in
+// first-seen order, at most MAX_RESOLVE_THREADS. Anything else is dropped, never the list:
+// a body the platform refuses would cost the whole run report.
+export function resolveThreadIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set<number>();
+  for (const id of value) {
+    if (ids.size >= MAX_RESOLVE_THREADS) break;
+    if (typeof id === "number" && Number.isSafeInteger(id) && id > 0) {
+      ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
 // The URL of this run's attempt, or undefined outside GitHub Actions. The CLI's pending names
 // it as its target_url, and the cancel settle compares a pending with it (SB3 follow-up), so
 // the CLI and the publisher share this one builder: they cannot disagree on the URL. An attempt
@@ -1184,8 +1208,10 @@ const TRANSPORT_PHRASE: Record<
   legacy_terminal: "the run ended in a state Crysk no longer produces",
 };
 
-const DOCS_BASE =
-  "https://github.com/cryskai/crysk/blob/v0/docs/github-actions.md#";
+// The published error-code page. Its anchors are the lowercased codes
+// (`#crysk-cred-missing`), the same slugs docs/github-actions.md keeps for
+// the annotations already posted that link there.
+const DOCS_BASE = "https://crysk.dev/docs/reference/error-codes/#";
 
 const ENGINE_DEFECT_ISSUE =
   'gh issue create -R cryskai/crysk --title "CRYSK-ENGINE-DEFECT {detail}" --body "{runUrl}"';
@@ -1198,8 +1224,26 @@ const OPENCODE_API_KEY_SECRET =
   "$ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY";
 const OPENCODE_PROVIDER_TOKEN_NOTE =
   "<PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).";
-const OPENAI_OAUTH_SECRET =
-  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH";
+// The scaffolded workflow forwards an OpenCode API key only for the tokens listed in
+// CRYSK_OPENCODE_PROVIDERS, so the secret alone never reaches the action. The variable
+// holds the whole list and `gh variable set` replaces it.
+const PROVIDER_LIST_REPLACED =
+  "This command replaces the list, so include every provider you use:";
+const OPENCODE_PROVIDER_VARIABLE_STEPS = [
+  `Then add <PROVIDER> to the workflow's provider variable. ${PROVIDER_LIST_REPLACED}`,
+  `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["<PROVIDER>"]'`,
+];
+// A workflow secret cannot hold a ChatGPT login: OpenAI replaces the refresh token
+// on every renewal and nothing renews the secret. So no fix tells a standalone
+// user to store one; OpenAI runs on an API key, and a ChatGPT plan goes through
+// the Crysk GitHub App.
+const CHATGPT_PLAN_NOTE =
+  "A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).";
+const OPENAI_API_KEY_STEPS = [
+  "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+  `Then add OPENAI to the workflow's provider variable. ${PROVIDER_LIST_REPLACED}`,
+  `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,
+];
 const CRED_STORE_WHY =
   "the credential store does not hold what this route needs";
 // missing_subscription_record is raised for a Claude keychain record and for an
@@ -1213,11 +1257,11 @@ const CLAUDE_SUBSCRIPTION_FIXES = [
 const OPENAI_API_KEY_INSTEAD =
   "Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):";
 const OPENCODE_SUBSCRIPTION_FIXES = [
-  "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then set its record, base64 on one line (on macOS, drop -w0):",
-  "$ opencode auth login",
-  OPENAI_OAUTH_SECRET,
-  "Or bill per token with an OpenAI API key instead:",
-  "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+  "Provider `openai` has no usable ChatGPT login. In GitHub Actions, bill per token with an OpenAI API key:",
+  ...OPENAI_API_KEY_STEPS,
+  `Stop passing CRYSK_OPENCODE_OPENAI_OAUTH in the crysk-secrets input: the login is used while it is passed. ${CHATGPT_PLAN_NOTE}`,
+  "On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.",
+  "Locally, run `opencode auth login` and choose ChatGPT.",
 ];
 // Only the OpenCode route stores a ChatGPT login; any other backend, or none, is
 // the Claude route.
@@ -1235,8 +1279,9 @@ function isCryskSecretsDetail(params: ErrorParams): boolean {
   );
 }
 const CRYSK_SECRETS_FIXES = [
-  "Re-set the CRYSK_* secret the message names. An _OAUTH secret is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
-  OPENAI_OAUTH_SECRET,
+  "Re-set the CRYSK_* secret the message names. For OpenAI, set an API key and stop passing the _OAUTH secret in the crysk-secrets input:",
+  ...OPENAI_API_KEY_STEPS,
+  CHATGPT_PLAN_NOTE,
   "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
 ];
 // U5: the platform's stub forwards OpenCode API keys through provider slots,
@@ -1293,7 +1338,7 @@ function cryskSecretsAnnotationFix(params: ErrorParams): string {
     return "the Crysk platform forwarded an OpenCode key in a slot with no provider: save that OpenCode provider again in the platform's model settings, then re-run";
   }
   return unsupportedOAuthApiKeyNames(params.detail ?? "") === undefined
-    ? "re-set the CRYSK_* secret it names (an _OAUTH secret is base64 -w0 of the provider's OpenCode record)"
+    ? "re-set the CRYSK_* secret it names (for OpenAI, set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing the _OAUTH secret)"
     : "remove that _OAUTH secret from the crysk-secrets input and set the provider's _API_KEY secret instead (only openai reads an _OAUTH secret for now)";
 }
 const MODEL_NOT_SERVED: CatalogVariant = {
@@ -1337,8 +1382,9 @@ const OPENCODE_CREDENTIAL_FIXES = [
   "Set the OpenCode credential of each provider your models use:",
   OPENCODE_API_KEY_SECRET,
   OPENCODE_PROVIDER_TOKEN_NOTE,
-  "For an OpenAI subscription, set its record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
-  OPENAI_OAUTH_SECRET,
+  ...OPENCODE_PROVIDER_VARIABLE_STEPS,
+  `For OpenAI, set an OpenAI API key. ${CHATGPT_PLAN_NOTE}`,
+  ...OPENAI_API_KEY_STEPS,
   `If the secret is already set, check that the workflow passes it to the action in the \`crysk-secrets\` input, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_OPENCODE_DEEPSEEK_API_KEY")}\`: a secret the workflow does not pass never reaches Crysk.`,
   "Dependabot PRs read Dependabot secrets, so set this one too:",
   "$ gh secret set --app dependabot CRYSK_OPENCODE_<PROVIDER>_API_KEY",
@@ -1367,8 +1413,7 @@ const REMOVED_INPUT_FIXES = [
   "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
   "$ gh secret set CRYSK_CLAUDE_API_KEY",
   "$ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY",
-  "claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. An OpenAI subscription is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
-  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+  "claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. For OpenAI that is CRYSK_OPENCODE_OPENAI_API_KEY. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).",
   `In the workflow, delete the old lines under \`with:\` and pass the secrets in one \`crysk-secrets: |\` block, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_CLAUDE_OAUTH_TOKEN")}\`.`,
   `The routing input becomes the \`models\` input: set your models per role in the CRYSK_MODELS variable, and pass it as \`${MODELS_INPUT_LINE}\` (a repository connected to the Crysk platform takes them from its model settings instead).`,
   '$ gh variable set CRYSK_MODELS --body \'{"default": ["claude:sonnet-latest"]}\'',
@@ -1457,6 +1502,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Set {provider}'s secret and pass it in the crysk-secrets input:",
           OPENCODE_API_KEY_SECRET,
           OPENCODE_PROVIDER_TOKEN_NOTE,
+          ...OPENCODE_PROVIDER_VARIABLE_STEPS,
         ],
         annotationFix:
           "set {provider}'s CRYSK_OPENCODE_<PROVIDER>_API_KEY secret and pass it in the crysk-secrets input",
@@ -1469,7 +1515,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
             : CLAUDE_SUBSCRIPTION_FIXES,
         annotationFix: (params) =>
           isOpencodeRoute(params)
-            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then set CRYSK_OPENCODE_OPENAI_OAUTH from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY to bill per token"
+            ? "set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing CRYSK_OPENCODE_OPENAI_OAUTH to bill per token (a ChatGPT plan needs the Crysk GitHub App; locally, run `opencode auth login`)"
             : "log in again with `claude setup-token` and set `CRYSK_CLAUDE_OAUTH_TOKEN` (`gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`)",
       },
       // The review would outlive the login's access token, and a review never renews
@@ -1479,11 +1525,13 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         why: "A review never renews a subscription login whose provider rotates its refresh token: renewing it inside the run would spend the stored login and lose the new one with the run's copy",
         fixes: [
           "On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.",
-          "On a workflow you manage yourself, run `opencode auth login` again and set the `CRYSK_OPENCODE_<PROVIDER>_OAUTH` secret from its new record: the secret is a snapshot, and nothing renews it for you.",
+          "On a workflow you manage yourself, nothing renews the secret, so a ChatGPT login does not last. Set an OpenAI API key and stop passing the `_OAUTH` secret in the crysk-secrets input:",
+          ...OPENAI_API_KEY_STEPS,
+          CHATGPT_PLAN_NOTE,
           "Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.",
         ],
         annotationFix:
-          "reconnect {provider} in the Crysk dashboard, or on a self-managed workflow run `opencode auth login` and set its `_OAUTH` secret again",
+          "reconnect {provider} in the Crysk dashboard, or on a self-managed workflow set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing the `_OAUTH` secret",
       },
       malformed_payload: {
         // WHY no route in the sentence: this class is raised for the OpenCode auth
@@ -1557,16 +1605,15 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       opencode_oauth: {
         why: "the ChatGPT login recorded in that secret is expired or revoked",
         fixes: [
-          "Log in again with `opencode auth login` and choose ChatGPT, then set the provider's record, base64 on one line (on macOS, drop -w0):",
-          "$ opencode auth login",
-          OPENAI_OAUTH_SECRET,
-          OPENAI_API_KEY_INSTEAD,
-          "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+          "This Action cannot renew a ChatGPT login. Bill per token instead: set an OpenAI API key and stop passing {secret} in the crysk-secrets input (the login is used while it is passed):",
+          ...OPENAI_API_KEY_STEPS,
+          CHATGPT_PLAN_NOTE,
+          "On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.",
           "Then ask for a new review:",
           REVIEW_AGAIN,
         ],
         annotationFix:
-          "log in again with `opencode auth login`, choose ChatGPT and set {secret} from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} to bill per token",
+          "set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} to bill per token (a ChatGPT plan needs the Crysk GitHub App)",
       },
       default: {
         why: "it is expired, revoked, or a short-lived /login session token",
@@ -1892,7 +1939,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Re-run after the limit resets:",
           REVIEW_AGAIN,
           OPENAI_API_KEY_INSTEAD,
-          "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
+          ...OPENAI_API_KEY_STEPS,
         ],
         annotationFix:
           "re-run after the limit resets, or set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} to bill per token",
@@ -2096,6 +2143,39 @@ function secretNameOf(
 ): string {
   if (ctx !== "action" || isOpenCodeCredential(credential)) return credential;
   return CRYSK_SECRET_OF_CREDENTIAL[credential] ?? credential;
+}
+
+// Every hunter stopped on the same refusal of the account behind it, and each names the
+// credential refused. WHY the credential is required: the Claude transport can also read
+// `auth_invalid` from the model's own final text, which a pull request can steer. A transport
+// names the credential only for a refusal the provider really returned, so a cause without
+// one proves nothing. The attempt budget and the platform's holds both act on this answer.
+export interface AccountRefusal {
+  readonly cause: "auth_invalid" | "quota_exhausted";
+  readonly credentials: readonly FailureCredential[];
+}
+
+export function accountRefusalOf(
+  failures: readonly {
+    readonly cause?: TransportFailureCause;
+    readonly credential?: FailureCredential;
+  }[],
+): AccountRefusal | undefined {
+  const cause = failures[0]?.cause;
+  if (cause !== "auth_invalid" && cause !== "quota_exhausted") return undefined;
+  const credentials = new Set<FailureCredential>();
+  for (const failure of failures) {
+    if (failure.cause !== cause || failure.credential === undefined) {
+      return undefined;
+    }
+    credentials.add(failure.credential);
+  }
+  return { cause, credentials: [...credentials] };
+}
+
+// The name of the repository secret a credential came from, in the action.
+export function actionSecretName(credential: FailureCredential): string {
+  return secretNameOf(credential, "action");
 }
 
 // For a code the caller requests directly. `variant` picks the sub-class, which

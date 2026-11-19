@@ -1,8 +1,16 @@
 # GitHub Actions Integration
 
+> **The maintained user docs are on [crysk.dev/docs](https://crysk.dev/docs/)** (index for agents:
+> [crysk.dev/llms.txt](https://crysk.dev/llms.txt)). Start with the
+> [Quickstart](https://crysk.dev/docs/quickstart-github-actions/), and use the
+> [Action reference](https://crysk.dev/docs/github-actions/action-reference/) and the
+> [error codes](https://crysk.dev/docs/reference/error-codes/). This file is the engine's longer CI guide. It
+> stays because tests and links already posted on pull requests point at its sections and error-code anchors,
+> and the site is the source for anything that differs.
+
 Crysk reviews every pull request automatically: a multi-agent hunt with adversarial refutation runs
 inside a GitHub Actions job, posts findings as PR comments, and writes a step summary. Its commit status
-(`crysk`; `pr-hero` is still posted for one version) is a gate by default: blocking findings turn it red, so
+(`crysk`; the legacy `pr-hero` status is no longer posted, so a branch-protection rule on it must move to `crysk`) is a gate by default: blocking findings turn it red, so
 require `crysk` in branch protection to block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mode-the-status-is-the-check).
 
 ## Quick path
@@ -186,8 +194,8 @@ commands that put your setup where the workflow reads it. It reads your person c
 
 - `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY` to bill per token);
 - one `gh secret set CRYSK_OPENCODE_<P>_API_KEY` per OpenCode provider your `models` or your `profile` name
-  (fallbacks included, the judge's list skipped), and for `openai` also the line that sets
-  `CRYSK_OPENCODE_OPENAI_OAUTH` from your OpenCode login for a ChatGPT subscription;
+  (fallbacks included, the judge's list skipped), and for `openai` also a note that a ChatGPT plan is not
+  supported in this Action and needs the Crysk GitHub App;
 - `gh variable set CRYSK_MODELS --body "$(jq -c .models ~/.crysk/config.json)"` when your config has
   `models`, the same for `CRYSK_CREDENTIALS` when it has `credentials`,
   `gh variable set CRYSK_PROFILE --body openai` when it has `profile`, and
@@ -299,7 +307,7 @@ Each credential gets one secret, with one name per kind:
 | `CRYSK_CLAUDE_OAUTH_TOKEN` | Claude Code subscription: the token `claude setup-token` prints (replaces `CLAUDE_CODE_OAUTH_TOKEN`) |
 | `CRYSK_CLAUDE_API_KEY` | Claude Code on an Anthropic API key (replaces `ANTHROPIC_API_KEY`) |
 | `CRYSK_OPENCODE_<P>_API_KEY` | An OpenCode provider's API key |
-| `CRYSK_OPENCODE_<P>_OAUTH` | That provider's `opencode auth login` record, base64 on one line (`base64 -w0`) |
+| `CRYSK_OPENCODE_<P>_OAUTH` | A login record the Crysk platform writes for a connected repository (`openai` only). Do not set it yourself: a ChatGPT plan is not supported in this Action (see "A review never renews the login" below) |
 
 `<P>` is the [Models.dev](https://models.dev) provider id in upper case, with `-` and `.` written as `_`:
 `deepseek` becomes `DEEPSEEK`, `github-copilot` becomes `GITHUB_COPILOT`, and `wafer.ai` becomes `WAFER_AI`.
@@ -361,9 +369,10 @@ with mode `0600` (`$XDG_DATA_HOME/opencode/auth.json`, or
   OpenCode never reads that file: the credential broker hands it a copy of the record in a directory of its
   own, and for a provider which rotates its refresh token that copy's refresh token is empty (see "A review
   never renews the login" below).
-- **`_OAUTH` is read for `openai` only, for now.** That is the one subscription Crysk can project. An
-  `_OAUTH` secret for another provider your models use fails the step with `CRYSK-CRED-UNUSABLE`, naming
-  the secret and telling you to set that provider's `_API_KEY` instead.
+- **`_OAUTH` is read for `openai` only, for now.** That is the one login Crysk can project, and the one the
+  Crysk platform writes for a connected repository. An `_OAUTH` secret for another provider your models use
+  fails the step with `CRYSK-CRED-UNUSABLE`, naming the secret and telling you to set that provider's
+  `_API_KEY` instead.
 - **Subscription first.** When `openai` has both `CRYSK_OPENCODE_OPENAI_OAUTH` and
   `CRYSK_OPENCODE_OPENAI_API_KEY`, the subscription builds the record and the API key is not used.
 - **The bill follows the secret.** An `openai` model on `CRYSK_OPENCODE_OPENAI_API_KEY` is billed per
@@ -385,13 +394,11 @@ to authenticate. So the review's copy of an `_OAUTH` record carries no refresh t
 rotates it), a review refuses to start when the access token expires within two hours, and a step refuses a
 login that has already expired (`CRYSK-CRED-UNUSABLE`, `subscription_expiring`). On a repository connected to
 the Crysk platform, the platform renews the login ahead of time, on your runner (see
-[Subscription logins](#subscription-logins)). In a workflow you manage yourself, an OpenAI
-access token lasts about ten days: run `opencode auth login` again on your machine and set the secret anew
-before it expires:
+[Subscription logins](#subscription-logins)).
 
-```sh
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
-```
+In a workflow you manage yourself nothing renews the secret, so **a ChatGPT plan is not supported in the
+open-source Action**. Use an OpenAI API key (`CRYSK_OPENCODE_OPENAI_API_KEY`), or the Crysk GitHub App for a
+ChatGPT plan. See [Use OpenAI models](https://crysk.dev/docs/github-actions/openai/).
 
 A configuration whose models name several OpenCode providers runs each model on its own provider's secret,
 through its own OpenCode server that sees only that provider's record (see "Several OpenCode providers in
@@ -424,13 +431,13 @@ The Action is backend-agnostic: the next provider is data (a model name and a se
 
    Any step left on a `claude:` model needs a `CRYSK_CLAUDE_*` secret in the same run.
 2. **One secret per OpenCode provider**, `CRYSK_OPENCODE_<P>_API_KEY`, `<P>` being the provider id upper
-   case with `-` and `.` as `_` (see [`CRYSK_*` secrets](#crysk_-secrets)). For an OpenAI (ChatGPT)
-   subscription, `CRYSK_OPENCODE_OPENAI_OAUTH` instead, the `openai` record of your OpenCode login, base64
-   on one line:
+   case with `-` and `.` as `_` (see [`CRYSK_*` secrets](#crysk_-secrets)). OpenAI runs on
+   `CRYSK_OPENCODE_OPENAI_API_KEY`; a ChatGPT plan is not supported in this Action and needs the Crysk
+   GitHub App:
 
    ```bash
    gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY   # paste the key when asked; never echo it
-   jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH   # on macOS, drop -w0
+   gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
    ```
 
 3. **Repository variable `CRYSK_OPENCODE_PROVIDERS`**: a JSON array of the `<P>` tokens whose API keys the
@@ -443,8 +450,8 @@ The Action is backend-agnostic: the next provider is data (a model name and a se
    The scaffolded workflow has five slot lines after the fixed ones. Slot `i` reads the `i`-th token and
    forwards `CRYSK_OPENCODE_<token>_API_KEY` by that exact name, so the action never receives any other
    secret; an unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped. `CRYSK_OPENCODE_OPENAI_OAUTH`
-   has its own fixed line, so an OpenAI subscription needs no token here (an OpenAI API key does:
-   `OPENAI`). A repository connected to the Crysk platform gets the same five slots filled from the
+   has its own fixed line, which stays empty in a repository you manage yourself, so an OpenAI API key
+   needs its token here: `OPENAI`. A repository connected to the Crysk platform gets the same five slots filled from the
    platform's `opencode-providers` dispatch input instead, from the review's models.
 
 `crysk ci init` prints all three commands from your person config (see [`crysk ci init`](#scaffolding-with-crysk-ci-init)).
@@ -473,7 +480,7 @@ OpenCode-only `CRYSK_MODELS` included.
 |---|---|
 | A non-openai `CRYSK_OPENCODE_<P>_API_KEY` (tested: **deepseek**) | Metered: an invoice route, not an unlimited subscription, so the platform's dollar limits (Review > Limits) can skip it. |
 | `CRYSK_OPENCODE_OPENAI_API_KEY` | Metered, billed per token like any API key; the platform's dollar limits apply. |
-| `CRYSK_OPENCODE_OPENAI_OAUTH` | The ChatGPT subscription. With both OpenAI secrets set, the subscription is used. |
+| `CRYSK_OPENCODE_OPENAI_OAUTH` | A ChatGPT login the Crysk platform manages. Do not set it yourself: this Action cannot keep one valid. With both OpenAI secrets set, the login is used. |
 | An `_OAUTH` secret for another provider your models use | **Refused**, naming the secret: only OpenAI's subscription can be projected. Set that provider's `_API_KEY`. |
 | Several OpenCode providers in one run | Supported: each model runs through its own OpenCode server, projected with only its provider's record ([configuration.md](configuration.md), "Several OpenCode providers in one review"). |
 | `claude:` models beside OpenCode ones | Supported. Pass a `CRYSK_CLAUDE_*` secret beside the OpenCode ones. |
@@ -490,7 +497,7 @@ OpenCode-only `CRYSK_MODELS` included.
   credential stops before it spends.
 - **`profile: openai`** (the `profile` input from `vars.CRYSK_PROFILE`, or the platform, which sends it only
   to an engine that lists `profile` in `X-Crysk-Capabilities`) runs every step on OpenAI through OpenCode. It needs
-  `CRYSK_OPENCODE_OPENAI_API_KEY` or `CRYSK_OPENCODE_OPENAI_OAUTH` and installs the OpenCode CLI. On a
+  `CRYSK_OPENCODE_OPENAI_API_KEY` (or the login the Crysk platform manages) and installs the OpenCode CLI. On a
   repository connected to the platform it also skips the Claude CLI, unless a `models` entry names a Claude
   model or a custom `agents_dir` may apply; a standalone workflow still installs the Claude CLI, unused. See
   [Profiles](configuration.md#profiles).
@@ -516,6 +523,9 @@ The workflow's `permissions:` block needs six scopes, each for a specific reason
 The workflow token may also be unable to resolve review threads, even with `issues: write`. GitHub returns
 `Resource not accessible by integration` for that mutation, and the log says so once per run. The
 verified-gone reply is still posted, and the gate is unaffected: the thread stays open for a person to close.
+In [platform mode](#platform-mode) the run reports those threads to the Crysk platform, which resolves them with
+the Crysk App's installation, so the runner's token keeps its permissions. Without the platform, the limitation
+stands.
 
 ## Platform mode
 
@@ -939,7 +949,7 @@ How a run bills is decided by the run itself. A run uses one Claude credential, 
 (`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice. A metered run is one on the API
 key (`CRYSK_CLAUDE_API_KEY`) or on a model of an OpenCode provider whose `CRYSK_OPENCODE_*` secret is an API
 key, on any route the run resolves: any role or fallback of `models`, `--model`, a spec agent, a prompt's
-frontmatter or an engine default. An OpenCode auth file alone (a ChatGPT subscription,
+frontmatter or an engine default. An OpenCode auth file alone (a ChatGPT login the platform manages,
 `CRYSK_OPENCODE_OPENAI_OAUTH`, or a file left by an earlier run) does not make a run metered.
 
 **Retired, and still accepted.** A workflow that sets `budget-usd`, a command line that passes `--budget-usd` or
@@ -990,7 +1000,7 @@ Posting floor: setup writes `post_min_severity: "warning"` only when the repo co
 
 These keys live in the **repository** config (not the PR branch worktree). A PR author cannot change
 them to suppress review of their own PR. The same rule applies to `.cryskignore` (size-gate/diff
-exclusions, see the README): under CI it is read from the PR's base ref, never the PR's own branch.
+exclusions, see [Exclude files](https://crysk.dev/docs/reviews/exclude-files/)): under CI it is read from the PR's base ref, never the PR's own branch.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1000,7 +1010,7 @@ exclusions, see the README): under CI it is read from the PR's base ref, never t
 | `ci_blocking_weight` | `2` | Score weight for blocking-tier findings. |
 | `ci_advisory_weight` | `1` | Score weight for advisory-tier findings. |
 | `ci_trusted_actors` | `[]` (+ `GITHUB_ACTOR`) | GitHub logins whose finding markers count as authoritative. |
-| `materiality_gate` | `false` | When `true`, an extra judge checks each blocking finding and posts it as advisory if it is not material under normal use. Security, credential and data-loss findings are never demoted. One judge call per blocking finding; Claude route only. |
+| `materiality_gate` | `false` | When `true`, an extra judge checks each blocking finding and posts it as advisory if it is not material under normal use. A safety guard keeps findings about security, credentials, isolation or data loss away from the judge, so they are never demoted. One judge call per blocking finding the guard does not protect, on the profile's judge model (Claude Sonnet or Opus on `claude`, OpenAI Terra on `openai`); on any other route findings stay blocking. It is on only when no config layer turns it off: a repo file cannot switch it on over a global `false`. |
 | `ci_admission_observe_only` | `false` | When `true`, admission still evaluates and emits a `::notice::` with the would-be decision but **always runs** the review. Use during rollout. A `/crysk stop` still skips: it is a maintainer's decision, not an automatic one. |
 
 #### `ci_review_policy` modes
@@ -1123,7 +1133,7 @@ Check Run ledger is authoritative.
 An attempt counts toward `ci_max_attempts` when its run reached the provider (completed, failed, or
 still in progress) or when admission itself skipped it. Two outcomes spend nothing and do not count: a
 run that stood down for a review already in flight on the same head, and a run the size gate or the
-platform's limits skipped before any agent started. A run that stopped on a configuration error (a bad gotchas file or prompt set) before it reviewed anything spends nothing either, and so do forced comment runs (`/crysk review`, `/crysk recheck`): the budget bounds automatic reviews, and a deliberate comment is a spend outside it. A cancelled row does not count either, but it is not
+platform's limits skipped before any agent started. A run where every hunter stopped on the same rejected credential or spent usage limit does not count either: it reviewed nothing, and nothing in the pull request caused it. A run that stopped on a configuration error (a bad gotchas file or prompt set) before it reviewed anything spends nothing either, and so do forced comment runs (`/crysk review`, `/crysk recheck`): the budget bounds automatic reviews, and a deliberate comment is a spend outside it. A cancelled row does not count either, but it is not
 proof that nothing was spent: a cancel signal can arrive after the provider started, so a run that
 GitHub concludes as `failure` (for example one killed by `timeout-minutes`) still counts. A skipped run
 still shows as a skipped check on the commit.
@@ -1395,6 +1405,13 @@ A finding GitHub could not anchor has no comment: it is listed under `Comments O
 A plain reply in the finding's thread that starts with `applied`, from someone with write access,
 also counts as `applied` for the gate. `dismissed`, `deferred` and `misclassified` need the driver.
 
+The driver refuses two replies, exits non-zero and posts nothing, in a dry run too:
+
+- A different `--tag` on a finding already answered at this head. A finding keeps one answer per review, so it can be answered again after the next review. Running the
+  same command again with the same tag stays safe: it skips the post and retries resolving the thread.
+- `--tag dismissed --verdict rejected`. A rejected dismissal means the finding stands, so fix it or answer it with
+  another tag.
+
 With the run directory at hand, `--from` names it and `--finding` takes the run's own `F###` id:
 
 ```bash
@@ -1476,20 +1493,28 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   "pr": 12,
   "head": "<40-hex headRefOid>",
   "gate": { "state": "failure", "description": "crysk: 1 blocking finding(s) — fix and push, or /crysk override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
-  "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null },
+  "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null, "engine_version": "0.10.0" },
   "findings": [
     { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
       "severity": "CRITICAL", "tier": "blocking", "blocking": true, "live_on_head": true,
       "triage": { "tag": "dismissed", "verdict": "upheld", "actor": "agent", "head": "<40-hex>" },
-      "ci_verdict": null }
+      "ci_verdict": null, "needs_reply": true, "inconclusive_heads": 0 }
   ],
   "unresolved_blocking": 1,
   "next_action": "triage",
-  "reason": "1 live blocking finding(s) on this head have no triage reply that answers this review; triage them first."
+  "reason": "1 live blocking finding(s) on this head have no triage reply that answers this review; triage them first.",
+  "reason_code": "blocking_replies_owed",
+  "forced_runs_on_head": 0,
+  "skills_reload": null
 }
 ```
 
 - `gate` is Crysk's own commit status on the head. `state: "none"` means no `crysk` status is on it.
+- Finding and summary comments are read only from a bot login (`github-actions[bot]` or a GitHub App) or a login in
+  `ci_trusted_actors`, because anyone who can comment can type those markers. `ci_trusted_actors` is read from the
+  default branch through local git (`origin/HEAD`), never from the checkout, which may be the pull request itself.
+  When it cannot be read, only bots count. A review posted under a person's account that is not listed there is not
+  read.
 - `findings` covers every posted `<!-- crysk-finding` comment, on every head. `channel` is `inline` for a review
   thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread that the gate
   counts: from a login with write access, and not older than the review's verdict unless it names the reviewed head;
@@ -1505,25 +1530,58 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   when neither can give one (the engine's own sentinel). It is never `null`. `blocking` is true for every tier but
   `advisory`, because the gate counts an unrecoverable row as blocking too: a finding that cannot be read as advisory
   is never read as clear. `unresolved_blocking` and `next_action` read `blocking`, never `tier`.
+- `needs_reply` is true for the findings the `triage` decision is waiting on, so `next_action` is `triage` exactly
+  when some finding has it. `inconclusive_heads` counts the heads in a row, newest first, whose newest reply to this
+  finding carries the verdict `inconclusive`. It reads replies from earlier reviews too, and counts only logins with
+  write access: a reply whose author's permission cannot be read is left out.
 - `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
   live blocking findings in `findings`.
 - `report.outcome_code` is the `CRYSK-*` code of the newest outcome comment, when that comment has one. A comment
   posted before the codes were renamed names a `PRH-*` code, reported as the `CRYSK-*` code it became.
+- `report.engine_version` is the Crysk version that wrote the summary, from the summary's admission block. It is
+  read only from a summary a bot posted (`github-actions[bot]` or a GitHub App), and is `null` for a summary from an
+  engine older than the field, or one a person posted.
+- `reason_code` names the decision behind `next_action`, one code per decision, so a tool branches on it instead of
+  on gate text. `reason` stays the sentence for a person. The codes are listed below.
+- `forced_runs_on_head` counts the `/crysk review`, `/crysk review --full` and `/crysk recheck` comments that apply to
+  this head: those from the head's first `crysk` status on, plus those up to 3 minutes before it, the time a command
+  takes to start the run that writes that status. With no status yet it counts the last 3 minutes. No field links a
+  status to its comment, so the window can miss both ways: a command left on the previous head just before a push is
+  counted, and one whose run sat queued for longer than 3 minutes is not. It reads the head's status history. If
+  that read fails, it counts from the head's latest `crysk` status instead, which can undercount.
+- `skills_reload` is `npx -y crysk@<running CLI version> skills load crysk-loop` when the version recorded for this
+  repository in `~/.crysk/skills/engines.json` differs from the CLI running status, and `null` otherwise. Status
+  records `engine_version` there first, and an older pull request does not replace a newer entry. The loader checks
+  that the recorded version exists as a GitHub tag before it runs it, from an empty directory and with no `node_modules/.bin`
+  on `PATH`, so the checkout cannot supply the output. An `npx` command an agent runs inside a checkout, this one included, can still resolve that
+  checkout's `node_modules`.
 
 `next_action` is decided in this order, and the first match wins:
 
 | `next_action` | When |
 | --- | --- |
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
-| `review` | No `crysk` (or `pr-hero`) status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
+| `review` | No `crysk` (or `pr-hero`) status is on the head and no size or cost skip notice applies, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
 | `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. A green over answered findings no review verified (`crysk: N answered finding(s), fixes unverified`) is `done` too, and its reason says so. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. A finding that lives only in the summary comment (outside the diff, `comment_id: null`) has no thread a reply could land in, so it is never owed, but the reason counts it ("N finding(s) live only in the summary comment … read them there before merging"). |
 | `triage` | The gate is red and a live blocking finding on this head has no triage reply that answers this review: the newest reply the gate counts must name it (a reply from an earlier review of a carried finding does not, and a reply from a login without write access is not counted; the reason names such logins). A finding with no comment counts too: it is answered by a top-level reply that names its row. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
-| `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. When the red is carried (a review rule skipped the head), no review will run: the gate reads the replies on that push instead, and turns green marked unverified, or, under a used-up budget or `manual_only`, holds the head for a manual review. |
+| `fix` | The gate is red, every live blocking finding has a reply to this review, and one of them is tagged `applied`, so there is a fix to push. Push it; the next review verifies it. A head no review read (a carried red, or `report.head` differs from `head`) is never `fix`: those fixes were already pushed. |
 | `recheck` | The gate is red and a live blocking finding with a review thread, or one listed only in the summary, is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. A finding listed only in the summary counts here only under a gate that states a blocking count. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |
-| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or a dismissed legacy top-level finding comment, which nothing can rule on). A size- or spend-ceiling-skipped review also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. The gate is also `pending` on a manual-review hold (`crysk: waiting for a manual review (<reason>)`, checked before `wait`): no review read the head and none will on its own, so comment `/crysk review` to verify it or `/crysk override` to merge it unverified. |
+| `override-or-fix` | A carried red (a blocking red, or a partial review), or a red on a head `report.head` does not name, with an `applied` reply: the replies leave nothing to push, so comment `/crysk review` or ask for `/crysk override`. An unruled dismissal there goes to `recheck` first. A fix that is still local is pushed first: on a skipped push the gate reads the replies and can turn green, marked unverified, or, under a used-up budget or `manual_only`, hold the head for a manual review. Or the gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or a dismissed legacy top-level finding comment, which nothing can rule on). A size- or spend-ceiling-skipped review also lands here, including in advisory mode, which writes no status: there a size or cost skip notice from a bot or a `ci_trusted_actors` login, on a head with no summary, is the signal. The notice names no head, so it can come from an earlier push. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. The gate is also `pending` on a manual-review hold (`crysk: waiting for a manual review (<reason>)`, checked before `wait`): no review read the head and none will on its own, so comment `/crysk review` to verify it or `/crysk override` to merge it unverified. |
 
-The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list,
+`reason_code` is one of:
+
+| `next_action` | `reason_code` |
+| --- | --- |
+| `wait` | `review_in_flight` |
+| `review` | `pending_status_stale`, `no_gate_status`, `review_did_not_finish`, `partial_review_on_green`, `review_needs_trigger`, `dismissals_upheld`, `partial_review` |
+| `done` | `override_active`, `green_fixes_unverified`, `nothing_to_review`, `review_passed` |
+| `triage` | `green_replies_owed`, `blocking_replies_owed` |
+| `fix` | `applied_fix_to_push` |
+| `recheck` | `dismissal_ruling_pending` |
+| `override-or-fix` | `manual_review_hold`, `carried_red_findings_open`, `carried_red_all_answered`, `carried_partial_all_answered`, `review_skipped`, `partial_review_repeated`, `blocking_answered_still_open`, `red_without_live_finding` |
+
+The command fails closed, except for the status history above. A failed `gh` read, a read that never answers within its bound, a truncated comment list,
 a reply author's permission that does not read, or a gate status it cannot read exits 1 with nothing on stdout, so a
 partial answer never looks like a clean PR.
 
@@ -1599,10 +1657,22 @@ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 
 <PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).
 
-For an OpenAI subscription, set its record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):
+Then add <PROVIDER> to the workflow's provider variable. This command replaces the list, so include every provider you use:
 
 ```bash
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["<PROVIDER>"]'
+```
+
+For OpenAI, set an OpenAI API key. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
+
+```bash
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
+
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
 ```
 
 If the secret is already set, check that the workflow passes it to the action in the `crysk-secrets` input, one NAME=value line per secret, for example `CRYSK_OPENCODE_DEEPSEEK_API_KEY=${{ secrets.CRYSK_OPENCODE_DEEPSEEK_API_KEY }}`: a secret the workflow does not pass never reaches Crysk.
@@ -1643,11 +1713,7 @@ gh secret set CRYSK_CLAUDE_API_KEY
 gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
-claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. An OpenAI subscription is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):
-
-```bash
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
-```
+claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. For OpenAI that is CRYSK_OPENCODE_OPENAI_API_KEY. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 In the workflow, delete the old lines under `with:` and pass the secrets in one `crysk-secrets: |` block, one NAME=value line per secret, for example `CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}`.
 
@@ -1689,6 +1755,12 @@ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 
 <PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).
 
+Then add <PROVIDER> to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["<PROVIDER>"]'
+```
+
 #### `missing_subscription_record`
 
 On the Claude route (`backend` is `claude-code`, or no OpenCode backend):
@@ -1701,18 +1773,23 @@ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN
 
 On the OpenCode route (`backend` is `opencode`):
 
-Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then set its record, base64 on one line (on macOS, drop -w0):
-
-```bash
-opencode auth login
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
-```
-
-Or bill per token with an OpenAI API key instead:
+Provider `openai` has no usable ChatGPT login. In GitHub Actions, bill per token with an OpenAI API key:
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
+```
+
+Stop passing CRYSK_OPENCODE_OPENAI_OAUTH in the crysk-secrets input: the login is used while it is passed. A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
+
+On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.
+
+Locally, run `opencode auth login` and choose ChatGPT.
 
 #### `subscription_expiring`
 
@@ -1722,7 +1799,19 @@ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 
 On a repository connected to Crysk, the platform renews the login before it expires. If it did not, reconnect the provider in the Crysk dashboard.
 
-On a workflow you manage yourself, run `opencode auth login` again and set the `CRYSK_OPENCODE_<PROVIDER>_OAUTH` secret from its new record: the secret is a snapshot, and nothing renews it for you.
+On a workflow you manage yourself, nothing renews the secret, so a ChatGPT login does not last. Set an OpenAI API key and stop passing the `_OAUTH` secret in the crysk-secrets input:
+
+```bash
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
+
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
+```
+
+A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 Locally, run any `opencode` request once (it renews your login in place), or `opencode auth login` again.
 
@@ -1747,12 +1836,19 @@ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
 When `{detail}` names a `CRYSK_*` secret, the `crysk-secrets` input was refused. See
-[`CRYSK_*` secrets](#crysk_-secrets). Re-set an `_OAUTH` secret from the provider's record in your
-OpenCode auth file, encoded on one line (on macOS, `base64` does not wrap, so drop `-w0`):
+[`CRYSK_*` secrets](#crysk_-secrets). Re-set the CRYSK_* secret the message names. For OpenAI, set an API key and stop passing the _OAUTH secret in the crysk-secrets input:
 
 ```bash
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
+```
+
+A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
 
 When `{detail}` is `CRYSK_OPENCODE__API_KEY has a value but no provider: an unused OpenCode slot must be empty`,
 the Crysk platform passed an OpenCode key through a provider slot with no provider name, so Crysk cannot tell
@@ -1897,18 +1993,21 @@ The rejected secret is the OpenAI subscription record, `CRYSK_OPENCODE_OPENAI_OA
 
 **Fix:**
 
-Log in again with `opencode auth login` and choose ChatGPT, then set the provider's record, base64 on one line (on macOS, drop -w0):
-
-```bash
-opencode auth login
-jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
-```
-
-Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} in the crysk-secrets input (the subscription is used while it is passed):
+This Action cannot renew a ChatGPT login. Bill per token instead: set an OpenAI API key and stop passing {secret} in the crysk-secrets input (the login is used while it is passed):
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
+
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
+```
+
+A ChatGPT plan is not supported in this Action: it needs the Crysk GitHub App (https://crysk.dev/docs/github-actions/openai/).
+
+On a repository connected to Crysk, reconnect the provider in the Crysk dashboard.
 
 Then ask for a new review:
 
@@ -2396,6 +2495,12 @@ Or bill per token: set CRYSK_OPENCODE_OPENAI_API_KEY and stop passing {secret} i
 
 ```bash
 gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
+
+Then add OPENAI to the workflow's provider variable. This command replaces the list, so include every provider you use:
+
+```bash
+gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
 ```
 
 <a id="prh-provider-unavailable"></a>

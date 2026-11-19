@@ -49,7 +49,9 @@ import {
   knownTransportCause,
   PENDING_AT_FILE,
   parseCliRecord,
+  RESOLVE_THREADS_FILE,
   RUN_DIR_FILE,
+  resolveThreadIds,
   safeFailureDetail,
   safeModelName,
   safeProviderName,
@@ -180,6 +182,33 @@ export function recordRunDir(
   } catch (error) {
     process.stderr.write(
       `crysk: could not write the run directory record: ${errnoCode(error)}\n`,
+    );
+  }
+}
+
+// #562: the refused-resolve writer. postInlineFindings (src/pr/pr.ts) calls it once after
+// the verified-gone collapse loop, with the comment ids whose reply posted and whose thread
+// resolve the workflow token was refused. The platform report step reads the file back and
+// asks the platform to resolve those threads with the App's installation. An empty list
+// writes nothing. Never throws, and writes nothing outside action mode.
+export function recordResolveThreads(
+  commentIds: readonly number[],
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
+  if (dir === "") return;
+  const ids = resolveThreadIds(commentIds);
+  if (ids.length === 0) return;
+  try {
+    writeRecordAtomically(
+      dir,
+      RESOLVE_THREADS_FILE,
+      `${JSON.stringify(ids)}\n`,
+      NODE_FS,
+    );
+  } catch (error) {
+    process.stderr.write(
+      `crysk: could not write the refused thread resolves: ${errnoCode(error)}\n`,
     );
   }
 }

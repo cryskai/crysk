@@ -30,6 +30,7 @@ import {
   parseAdmissionRecord,
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
+import { recordResolveThreads } from "#ci/cli-record";
 import { CI_FORCE_WORKFLOW_FILE } from "#ci/force-comment";
 import {
   canonicalAdmissionFindings,
@@ -202,10 +203,51 @@ export async function ghPrView(
     options?.spawnFn,
     options?.timeoutMs,
   );
+  if (!result.ok && OLD_GH_NO_BASE_REF_OID.test(result.stderr)) {
+    return ghPrViewWithoutBaseRefOid(operatorRoot, pr, options);
+  }
   if (!result.ok) {
     throw new CliError(`gh pr view ${pr} failed: ${result.stderr.trim()}`);
   }
   return result.stdout;
+}
+
+// #561: GitHub CLI 2.60 does not know `baseRefOid` and refuses the whole field list. The same
+// sha comes from the REST pull request, which every gh can read, so an older gh still works.
+const OLD_GH_NO_BASE_REF_OID = /Unknown JSON field: "baseRefOid"/;
+
+async function ghPrViewWithoutBaseRefOid(
+  operatorRoot: string,
+  pr: number,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
+): Promise<string> {
+  const fields = PR_VIEW_JSON_FIELDS.split(",")
+    .filter((field) => field !== "baseRefOid")
+    .join(",");
+  const view = await gh(
+    operatorRoot,
+    ["pr", "view", String(pr), "--json", fields],
+    undefined,
+    options?.spawnFn,
+    options?.timeoutMs,
+  );
+  if (!view.ok) {
+    throw new CliError(`gh pr view ${pr} failed: ${view.stderr.trim()}`);
+  }
+  const base = await gh(
+    operatorRoot,
+    ["api", `repos/{owner}/{repo}/pulls/${pr}`, "--jq", ".base.sha"],
+    undefined,
+    options?.spawnFn,
+    options?.timeoutMs,
+  );
+  const baseSha = base.stdout.trim();
+  if (!base.ok || !/^[0-9a-f]{40}$/.test(baseSha)) {
+    throw new CliError(
+      `gh pr view ${pr}: this gh cannot read baseRefOid, and the base sha could not be read from the API either: ${base.stderr.trim() || baseSha}`,
+    );
+  }
+  return JSON.stringify({ ...JSON.parse(view.stdout), baseRefOid: baseSha });
 }
 
 // The NO-ARGUMENT `gh pr view`: gh resolves the PR belonging to the
@@ -2461,6 +2503,8 @@ function admissionCheckRunConclusion(
       return "skipped";
     // #326: a size or budget gate skip. It was `skipped` (grey) before the
     // status split, so it stays grey; `neutral` would change how the PR reads.
+    // #572: an account refusal lands here too. This check reports the attempt,
+    // which was not spent; the job and the `crysk` status still report the failure.
     case "gate-skipped":
       return "skipped";
     default:
@@ -2996,6 +3040,9 @@ export async function postInlineFindings(input: {
   force?: boolean;
   // The `post_min_severity` config key (pr/post-floor.ts). Absent posts all.
   postMinSeverity?: PostMinSeverity;
+  // Where the refused thread resolves are recorded (CRYSK_OUTCOME_DIR, #562). A seam, like
+  // `spawnFn`: production callers omit it and the writer reads the process environment.
+  env?: Readonly<Record<string, string | undefined>>;
 }): Promise<InlinePostOutcome> {
   const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
@@ -3258,6 +3305,7 @@ export async function postInlineFindings(input: {
       doc.head_sha,
       counts,
       postedReviewCount,
+      doc.engine?.version,
     );
     if (state === undefined) {
       return `${body}${admissionBlock}`;
@@ -3461,6 +3509,11 @@ export async function postInlineFindings(input: {
     // WHY one notice per run: a token that cannot resolve threads cannot do it
     // for any prior, so one line says so instead of one failure per prior.
     let threadResolveNoticeLogged = false;
+    // #562: the threads the token was refused, for the platform to resolve with the App's
+    // installation. Only a refusal after a posted reply lands here: the loop `continue`s past
+    // the resolve when the reply did not post, and a resolved, already-resolved or not-found
+    // thread needs nothing more.
+    const refusedResolves = new Set<number>();
     for (const target of targets) {
       if (target.channel !== "review") continue;
       // The reply is bounded AND caught, and a failure `continue`s past the
@@ -3510,6 +3563,7 @@ export async function postInlineFindings(input: {
         // WHY a notice, not a failure: the reply is posted and the gate does not
         // depend on the resolve, so the run continues as designed.
         if (message.includes(WORKFLOW_TOKEN_CANNOT_RESOLVE)) {
+          refusedResolves.add(target.commentId);
           if (!threadResolveNoticeLogged) {
             threadResolveNoticeLogged = true;
             log(
@@ -3525,6 +3579,7 @@ export async function postInlineFindings(input: {
         );
       }
     }
+    recordResolveThreads([...refusedResolves], input.env);
   }
 
   // Closes a RE-review with a visible comment. Everything above only PATCHed

@@ -403,18 +403,18 @@ export async function runDoctor(
     });
   }
 
-  // GitHub CLI (optional, PR mode)
+  // GitHub CLI (required: status, triage replies and every pull request command run through it)
   if (!tools.gh.installed) {
     checks.push({
       name: "gh",
-      severity: "degraded",
-      message: "GitHub CLI is not installed (needed for PR review mode)",
+      severity: "blocking",
+      message: "GitHub CLI is not installed (Crysk requires it)",
       hint: tools.gh.hint,
     });
   } else if (!tools.gh.authOk) {
     checks.push({
       name: "gh",
-      severity: "degraded",
+      severity: "blocking",
       message: `GitHub CLI is installed (${tools.gh.version ?? "unknown"}) but not authenticated with GitHub`,
       hint: tools.gh.hint,
     });
@@ -708,6 +708,18 @@ export async function runDoctor(
             severity: "degraded",
             message: `Skills installed under their old names remain for ${env.displayName}: ${dirs}`,
             hint: "Run 'crysk setup' to remove the unedited ones, then delete the rest by hand once you have copied any edits you want to keep.",
+          });
+        }
+        // Only the stub is installed now, and nothing reads a copy beside it.
+        if (syncStatus.companions.length > 0) {
+          const files = syncStatus.companions
+            .map((file) => path.join(env.skillsDir as string, file))
+            .join(", ");
+          checks.push({
+            name: `skills-companions:${env.id}`,
+            severity: "degraded",
+            message: `Skill files from an earlier install remain for ${env.displayName}, and nothing reads them: ${files}`,
+            hint: "Run 'crysk skills install' to remove the unedited ones, then delete the rest by hand once you have copied any edits you want to keep.",
           });
         }
       }

@@ -23,23 +23,44 @@ import refuterPrompt from "../prompts/default/review-refuter.md" with {
 import materialityPrompt from "../prompts/materiality.md" with { type: "file" };
 import summarizerPrompt from "../prompts/summarizer.md" with { type: "file" };
 import verifierPrompt from "../prompts/verifier.md" with { type: "file" };
+import generalPlaybook from "../skill-content/crysk/playbook.md" with {
+  type: "file",
+};
+import ciSetupWorkflow from "../skill-content/crysk-ci-setup/assets/workflow.yml" with {
+  type: "file",
+};
+import ciSetupPlaybook from "../skill-content/crysk-ci-setup/playbook.md" with {
+  type: "file",
+};
+import ciSetupAdmissionRef from "../skill-content/crysk-ci-setup/references/ci-admission.md" with {
+  type: "file",
+};
+import ciSetupOperationsRef from "../skill-content/crysk-ci-setup/references/ci-operations.md" with {
+  type: "file",
+};
+import ciSetupOpenCodeRef from "../skill-content/crysk-ci-setup/references/opencode-ci.md" with {
+  type: "file",
+};
+import triageAdjudicator from "../skill-content/crysk-loop/adjudicator.md" with {
+  type: "file",
+};
+import triageDismissal from "../skill-content/crysk-loop/dismissal.md" with {
+  type: "file",
+};
+import triageFixTheClass from "../skill-content/crysk-loop/fix-the-class.md" with {
+  type: "file",
+};
+import triageGateRules from "../skill-content/crysk-loop/gate-rules.md" with {
+  type: "file",
+};
+import triagePlaybook from "../skill-content/crysk-loop/playbook.md" with {
+  type: "file",
+};
+import prPlaybook from "../skill-content/crysk-pr/playbook.md" with {
+  type: "file",
+};
 import generalSkill from "../skills/crysk/SKILL.md" with { type: "file" };
-import ciSetupAdmissionExample from "../skills/crysk-ci-setup/assets/admission-config.example.json" with {
-  type: "file",
-};
-import ciSetupWorkflow from "../skills/crysk-ci-setup/assets/workflow.yml" with {
-  type: "file",
-};
-import ciSetupAdmissionRef from "../skills/crysk-ci-setup/references/ci-admission.md" with {
-  type: "file",
-};
-import ciSetupOpenCodeRef from "../skills/crysk-ci-setup/references/opencode-ci.md" with {
-  type: "file",
-};
 import ciSetupSkill from "../skills/crysk-ci-setup/SKILL.md" with {
-  type: "file",
-};
-import triageAdjudicator from "../skills/crysk-loop/adjudicator.md" with {
   type: "file",
 };
 import triageSkill from "../skills/crysk-loop/SKILL.md" with { type: "file" };
@@ -71,22 +92,28 @@ export const VERIFIER_PROMPT_PATH = verifierPrompt;
 
 export const TRIAGE_SKILL_FILES: Record<string, string> = {
   "SKILL.md": triageSkill,
+  "playbook.md": triagePlaybook,
   "adjudicator.md": triageAdjudicator,
+  "dismissal.md": triageDismissal,
+  "fix-the-class.md": triageFixTheClass,
+  "gate-rules.md": triageGateRules,
 };
 
 export const CI_SETUP_SKILL_FILES: Record<string, string> = {
   "SKILL.md": ciSetupSkill,
-  "assets/admission-config.example.json":
-    ciSetupAdmissionExample as unknown as string,
+  "playbook.md": ciSetupPlaybook,
   "assets/workflow.yml": ciSetupWorkflow,
   "references/ci-admission.md": ciSetupAdmissionRef,
+  "references/ci-operations.md": ciSetupOperationsRef,
   "references/opencode-ci.md": ciSetupOpenCodeRef,
 };
 
 export const PR_SKILL_FILES: Record<string, string> = {
   "SKILL.md": prSkill,
+  "playbook.md": prPlaybook,
 };
 
 export const GENERAL_SKILL_FILES: Record<string, string> = {
   "SKILL.md": generalSkill,
+  "playbook.md": generalPlaybook,
 };

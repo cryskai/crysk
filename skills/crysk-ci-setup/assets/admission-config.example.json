@@ -1,9 +1,0 @@
-{
-  "ci_review_policy": "risk_aware",
-  "ci_max_attempts": 2,
-  "ci_rereview_min_score": 4,
-  "ci_blocking_weight": 2,
-  "ci_advisory_weight": 1,
-  "ci_trusted_actors": [],
-  "ci_admission_observe_only": true
-}

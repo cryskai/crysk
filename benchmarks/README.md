@@ -18,4 +18,4 @@ own folder, with a `README.md` that explains how to run it.
 
 Never commit run output here: this repository is public. Raw data goes to
 `../deep-review/bench/experiments/<date>-<slug>/`, and each live run gets a section in
-`../deep-review/bench/METRICS.md` on the day it runs. See rule 6 in `CLAUDE.md`.
+`../deep-review/bench/METRICS.md` on the day it runs.

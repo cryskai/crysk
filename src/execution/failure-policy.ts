@@ -11,6 +11,12 @@ import {
 
 export type { TransportFailureCause };
 
+// A 429's words, read by every transport once the status picked that branch: a usage window
+// or spend cap that will not clear within minutes, against a rate limit that will. Never read
+// alone, and never on another status.
+export const SUBSCRIPTION_OR_SPEND_CAP =
+  /hit your .*limit|usage limit|spend cap|spend limit/i;
+
 // §7 lines 390-395, verbatim.
 export type HarnessFailureCause =
   | "format_violation"

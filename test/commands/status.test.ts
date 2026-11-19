@@ -4,7 +4,11 @@
 // exits. A gh failure or a truncated comment read is a CliError and writes nothing to stdout.
 
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
+import { renderCiAdmissionBlock } from "#ci/review-admission";
 import { runStatusCommand, statusCommand } from "#commands/status";
 import { carriedBlockingDescription } from "#pr/admission";
 import { CommentsTruncatedError, GRAPHQL_COMMENT_MAX_PAGES } from "#pr/pr";
@@ -13,6 +17,7 @@ import { renderStateBlock, stateFinding } from "#rereview/state";
 import { parseArgs } from "#review/preflight";
 import { triageMarker } from "#triage/triage";
 import { CliError, CliUsageError } from "../../src/errors";
+import { readEngineVersion, recordEngineVersion } from "../../src/skills-cache";
 
 type ScriptEntry = {
   match: string[];
@@ -182,7 +187,9 @@ const happyScript: ScriptEntry[] = [
   {
     match: ["issues/12/comments"],
     response: {
-      stdout: ndjson([{ id: 100, user: "pr-hero", body: summaryBody }]),
+      stdout: ndjson([
+        { id: 100, user: "github-actions[bot]", body: summaryBody },
+      ]),
     },
   },
   {
@@ -191,7 +198,7 @@ const happyScript: ScriptEntry[] = [
       stdout: ndjson([
         {
           id: 41,
-          user: "pr-hero",
+          user: "github-actions[bot]",
           body: findingBody,
           path: "src/a.ts",
           line: 10,
@@ -513,7 +520,7 @@ describe("runStatusCommand --wait", () => {
     const base = makeFakeGh(happyScript).spawnFn;
     const encoder = new TextEncoder();
     const spawnFn = ((argv: string[], opts?: unknown) => {
-      if (argv.join(" ").includes(`commits/${HEAD}/status`)) {
+      if (argv.join(" ").includes(`commits/${HEAD}/status?`)) {
         statusPolls += 1;
         if (statusPolls < 3) {
           const pendingRow = {
@@ -609,7 +616,7 @@ describe("runStatusCommand --wait", () => {
     const base = makeFakeGh(happyScript).spawnFn;
     const encoder = new TextEncoder();
     const spawnFn = ((argv: string[], opts?: unknown) => {
-      if (argv.join(" ").includes(`commits/${HEAD}/status`)) {
+      if (argv.join(" ").includes(`commits/${HEAD}/status?`)) {
         statusPolls += 1;
         const stream = (text: string) =>
           new ReadableStream<Uint8Array>({
@@ -757,7 +764,9 @@ describe("crysk status — the review's verdict time", () => {
     {
       match: ["issues/12/comments"],
       response: {
-        stdout: ndjson([{ id: 100, user: "pr-hero", body: summaryFor(OLDER) }]),
+        stdout: ndjson([
+          { id: 100, user: "github-actions[bot]", body: summaryFor(OLDER) },
+        ]),
       },
     },
     {
@@ -766,7 +775,7 @@ describe("crysk status — the review's verdict time", () => {
         stdout: ndjson([
           {
             id: 41,
-            user: "pr-hero",
+            user: "github-actions[bot]",
             body: findingAt(EARLIER),
             path: "src/a.ts",
             line: 10,
@@ -884,7 +893,7 @@ describe("crysk status — the review's verdict time", () => {
     const { next, calls } = await runCarried(
       carriedScript("2026-10-30T11:00:00Z"),
     );
-    expect(next).toBe("fix");
+    expect(next).toBe("override-or-fix");
     expect(
       calls.filter((c) => c.argv.join(" ").includes("pulls/12/commits")),
     ).toHaveLength(1);
@@ -911,7 +920,7 @@ describe("crysk status — the review's verdict time", () => {
     const spawnFn = ((argv: string[], opts?: unknown) => {
       const joined = argv.join(" ");
       if (joined.includes("pulls/12/commits")) commitListings += 1;
-      if (joined.includes(`commits/${HEAD}/status`)) {
+      if (joined.includes(`commits/${HEAD}/status?`)) {
         statusPolls += 1;
         if (statusPolls === 1) {
           return {
@@ -965,7 +974,7 @@ describe("crysk status — the review's verdict time", () => {
     expect(code).toBe(0);
     expect(statusPolls).toBe(3);
     expect(commitListings).toBe(1);
-    expect(JSON.parse(written[0] ?? "").next_action).toBe("fix");
+    expect(JSON.parse(written[0] ?? "").next_action).toBe("override-or-fix");
   });
 
   test("a walk that read nothing is read again on the next poll", async () => {
@@ -989,7 +998,7 @@ describe("crysk status — the review's verdict time", () => {
     });
     const spawnFn = ((argv: string[], opts?: unknown) => {
       const joined = argv.join(" ");
-      if (joined.includes(`commits/${HEAD}/status`)) {
+      if (joined.includes(`commits/${HEAD}/status?`)) {
         statusPolls += 1;
         // Poll 1 settles nothing, so no walk runs on it; polls 2 and 3 see the carried red.
         if (statusPolls === 1) {
@@ -1043,7 +1052,7 @@ describe("crysk status — the review's verdict time", () => {
     });
     expect(code).toBe(0);
     expect(commitListings).toBe(2);
-    expect(JSON.parse(written[0] ?? "").next_action).toBe("fix");
+    expect(JSON.parse(written[0] ?? "").next_action).toBe("override-or-fix");
   });
 });
 
@@ -1067,7 +1076,7 @@ describe("runStatusCommand: the reply authors' permissions", () => {
               stdout: ndjson([
                 {
                   id: 41,
-                  user: "pr-hero",
+                  user: "github-actions[bot]",
                   body: findingBody,
                   path: "src/a.ts",
                   line: 10,
@@ -1152,7 +1161,7 @@ describe("runStatusCommand: the reply authors' permissions", () => {
     const spawnFn = ((argv: string[], opts?: unknown) => {
       const joined = argv.join(" ");
       if (joined.includes("collaborators/dev/permission")) permissionAsks += 1;
-      if (joined.includes(`commits/${HEAD}/status`)) {
+      if (joined.includes(`commits/${HEAD}/status?`)) {
         statusPolls += 1;
         const row = statusPolls === 1 ? pending : gateRow;
         return makeFakeGh([
@@ -1183,5 +1192,414 @@ describe("runStatusCommand: the reply authors' permissions", () => {
     expect(code).toBe(0);
     expect(statusPolls).toBe(2);
     expect(permissionAsks).toBe(1);
+  });
+});
+
+// The skill loads the playbook of the engine that reviewed the PR. Status runs
+// every round of the loop, so it is what notices a new engine version: it
+// records the version for `skills load` and names the reload command.
+describe("runStatusCommand — the engine version", () => {
+  const stampedScript = (user: string): ScriptEntry[] =>
+    happyScript.map((entry) =>
+      entry.match.includes("issues/12/comments")
+        ? {
+            ...entry,
+            response: {
+              stdout: ndjson([
+                {
+                  id: 100,
+                  user,
+                  body: `${summaryBody}\n${renderCiAdmissionBlock(HEAD, { blocking: 1, advisory: 0 }, 1, "0.10.0")}`,
+                },
+              ]),
+            },
+          }
+        : entry,
+    );
+
+  async function run(user: string, seed?: { version: string; at: string }) {
+    const home = await mkdtemp(path.join(tmpdir(), "crysk-status-engine-"));
+    try {
+      if (seed !== undefined) {
+        recordEngineVersion(home, OPERATOR_ROOT, seed.version, seed.at);
+      }
+      const { spawnFn } = makeFakeGh(stampedScript(user));
+      const recorded: string[] = [];
+      const written: string[] = [];
+      const code = await runStatusCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 12,
+        json: true,
+        spawnFn,
+        nowMs: NOW,
+        cliVersion: "0.9.5",
+        recordEngine: (version, at) => {
+          recorded.push(`${version} ${at}`);
+          recordEngineVersion(home, OPERATOR_ROOT, version, at);
+        },
+        recordedEngine: () => readEngineVersion(home, OPERATOR_ROOT),
+        out: (text) => written.push(text),
+      });
+      return { code, recorded, json: JSON.parse(written[0] ?? "{}") };
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }
+
+  // WHY the CLI's own version: its loader checks the recorded version against GitHub's tags, and a
+  // version read off a comment never reaches a command the agent runs.
+  test("records the version and names this CLI's loader", async () => {
+    const { code, recorded, json } = await run("github-actions[bot]");
+    expect(code).toBe(0);
+    expect(recorded).toEqual([`0.10.0 ${gateRow.created_at}`]);
+    expect(json.report.engine_version).toBe("0.10.0");
+    expect(json.skills_reload).toBe(
+      "npx -y crysk@0.9.5 skills load crysk-loop",
+    );
+  });
+
+  test("records nothing when no bot wrote the summary", async () => {
+    const { recorded, json } = await run("someone");
+    expect(recorded).toEqual([]);
+    expect(json.skills_reload).toBeNull();
+  });
+
+  // Reloading could not change anything: the loader keeps serving the newer version it has recorded.
+  test("an older pull request names no reload when the recorded version is this CLI's", async () => {
+    const { json } = await run("github-actions[bot]", {
+      version: "0.9.5",
+      at: "2030-01-01T00:00:00Z",
+    });
+    expect(json.report.engine_version).toBe("0.10.0");
+    expect(json.skills_reload).toBeNull();
+  });
+
+  test("names no reload when nothing could be recorded", async () => {
+    const { spawnFn } = makeFakeGh(stampedScript("github-actions[bot]"));
+    const written: string[] = [];
+    await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      cliVersion: "0.9.5",
+      recordEngine: () => {},
+      recordedEngine: () => undefined,
+      out: (text) => written.push(text),
+    });
+    expect(JSON.parse(written[0] ?? "{}").skills_reload).toBeNull();
+  });
+});
+
+// S9: the combined status endpoint keeps one row per context, so the head's first status comes
+// from the history endpoint.
+// The streak is made of replies the gate drops as stale, whose authors the gate never asks about.
+describe("runStatusCommand: inconclusive_heads", () => {
+  const OLD_HEAD = "d".repeat(40);
+  const streakOf = async (
+    user: string,
+    permission: ScriptEntry["response"],
+  ) => {
+    const { spawnFn } = makeFakeGh([
+      { match: [`collaborators/${user}/permission`], response: permission },
+      prView,
+      {
+        match: [`commits/${HEAD}/status`],
+        response: { stdout: ndjson([gateRow]) },
+      },
+      {
+        match: ["issues/12/comments"],
+        response: {
+          stdout: ndjson([
+            { id: 100, user: "github-actions[bot]", body: summaryBody },
+          ]),
+        },
+      },
+      {
+        match: ["pulls/12/comments"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 41,
+              user: "github-actions[bot]",
+              body: findingBody,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+            {
+              id: 42,
+              user,
+              body: `${triageMarker({ tag: "dismissed", headSha: OLD_HEAD, actor: "agent", verdict: "inconclusive" })}\n\nunsure`,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: 41,
+              created_at: new Date(NOW - 60 * 60_000).toISOString(),
+            },
+          ]),
+        },
+      },
+    ]);
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    return JSON.parse(written[0] ?? "").findings[0].inconclusive_heads;
+  };
+
+  test("an earlier review's reply counts when its author has write access", async () => {
+    expect(await streakOf("maintainer", { stdout: "write\n" })).toBe(1);
+  });
+
+  test("it does not count from a login without write access", async () => {
+    expect(await streakOf("visitor", { stdout: "read\n" })).toBe(0);
+  });
+
+  test("a permission that does not read leaves it out and fails nothing", async () => {
+    expect(await streakOf("ghost", { stderr: "HTTP 500", exitCode: 1 })).toBe(
+      0,
+    );
+  });
+});
+
+describe("runStatusCommand: forced_runs_on_head", () => {
+  const FIRST_AT = new Date(NOW - 30 * 60_000).toISOString();
+  const script = (history: ScriptEntry["response"]): ScriptEntry[] => [
+    prView,
+    { match: [`commits/${HEAD}/statuses`], response: history },
+    {
+      match: [`commits/${HEAD}/status?`],
+      response: { stdout: ndjson([gateRow]) },
+    },
+    {
+      match: ["issues/12/comments"],
+      response: {
+        stdout: ndjson([
+          {
+            id: 7,
+            user: "developer",
+            body: "/crysk review",
+            created_at: new Date(NOW - 20 * 60_000).toISOString(),
+          },
+        ]),
+      },
+    },
+  ];
+
+  test("counts from the head's first status, not from the latest one", async () => {
+    const { spawnFn } = makeFakeGh(
+      script({
+        stdout: ndjson([
+          gateRow,
+          { ...gateRow, state: "pending", created_at: FIRST_AT },
+        ]),
+      }),
+    );
+    const written: string[] = [];
+    await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      out: (text) => written.push(text),
+    });
+    expect(JSON.parse(written[0] ?? "").forced_runs_on_head).toBe(1);
+  });
+
+  // The count is one input to a limit the skill enforces, and a whole status read must not fail for it.
+  test("a history read that fails still reports, counting from the statuses it has", async () => {
+    const { spawnFn } = makeFakeGh(script({ stderr: "HTTP 502", exitCode: 1 }));
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    const json = JSON.parse(written[0] ?? "");
+    expect(json.next_action).toBeString();
+    // The one command predates the head's latest status by more than the grace.
+    expect(json.forced_runs_on_head).toBe(0);
+  });
+});
+
+describe("runStatusCommand: whose markers it reads", () => {
+  const runJson = async (
+    script: ScriptEntry[],
+    operatorRoot = OPERATOR_ROOT,
+  ) => {
+    const { spawnFn, calls } = makeFakeGh(script);
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      out: (text) => written.push(text),
+    });
+    return { code, status: JSON.parse(written[0] ?? ""), calls };
+  };
+
+  // A forged newer summary names another head. Read for the permission cutoff, it made the reply
+  // look stale, so its author went unasked and the read that followed could not count it.
+  test("a person's summary moves neither the reviewed head nor the reply cutoff", async () => {
+    const FORGED_HEAD = "e".repeat(40);
+    const { code, status, calls } = await runJson([
+      prView,
+      {
+        match: [`commits/${HEAD}/status`],
+        response: { stdout: ndjson([gateRow]) },
+      },
+      {
+        match: ["issues/12/comments"],
+        response: {
+          stdout: ndjson([
+            { id: 100, user: "github-actions[bot]", body: summaryBody },
+            {
+              id: 101,
+              user: "mallory",
+              body: `<!-- pr-hero-report head=${FORGED_HEAD} -->`,
+            },
+          ]),
+        },
+      },
+      {
+        match: ["pulls/12/comments"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 41,
+              user: "github-actions[bot]",
+              body: findingBody,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+            {
+              id: 42,
+              user: "developer",
+              body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nfixed`,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: 41,
+            },
+          ]),
+        },
+      },
+    ]);
+    expect(code).toBe(0);
+    expect(status.report.head).toBe(HEAD);
+    expect(status.findings[0].triage.tag).toBe("applied");
+    expect(status.next_action).toBe("fix");
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("collaborators/mallory")),
+    ).toBe(false);
+  });
+
+  // ci_trusted_actors is read from the default branch's objects: the checkout may be the pull
+  // request itself, and its author must not be able to name themselves.
+  describe("ci_trusted_actors", () => {
+    const git = (cwd: string, ...args: string[]) => {
+      const done = Bun.spawnSync(
+        [
+          "git",
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ],
+        { cwd, stderr: "pipe" },
+      );
+      if (done.exitCode !== 0) throw new Error(done.stderr.toString());
+    };
+    const withRepo = async (run: (repo: string) => Promise<void>) => {
+      const repo = await mkdtemp(path.join(tmpdir(), "crysk-status-trust-"));
+      try {
+        await mkdir(path.join(repo, ".crysk"));
+        const config = path.join(repo, ".crysk", "config.json");
+        git(repo, "init", "-q", "-b", "main");
+        await Bun.write(
+          config,
+          JSON.stringify({ ci_trusted_actors: ["review-account"] }),
+        );
+        git(repo, "add", ".");
+        git(repo, "commit", "-qm", "config");
+        git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+        git(
+          repo,
+          "symbolic-ref",
+          "refs/remotes/origin/HEAD",
+          "refs/remotes/origin/main",
+        );
+        git(repo, "checkout", "-qb", "pull-request");
+        await Bun.write(
+          config,
+          JSON.stringify({ ci_trusted_actors: ["mallory"] }),
+        );
+        git(repo, "commit", "-qam", "trust me");
+        await run(repo);
+      } finally {
+        await rm(repo, { recursive: true, force: true });
+      }
+    };
+    const findingBy = (user: string): ScriptEntry[] => [
+      prView,
+      {
+        match: [`commits/${HEAD}/status`],
+        response: { stdout: ndjson([gateRow]) },
+      },
+      {
+        match: ["pulls/12/comments"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 41,
+              user,
+              body: findingBody,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+    ];
+
+    test("a login the default branch trusts is read", async () => {
+      await withRepo(async (repo) => {
+        const { status } = await runJson(findingBy("review-account"), repo);
+        expect(
+          status.findings.map((f: { comment_id: number }) => f.comment_id),
+        ).toEqual([41]);
+      });
+    });
+
+    test("a login only the checked-out branch trusts is not", async () => {
+      await withRepo(async (repo) => {
+        const { status } = await runJson(findingBy("mallory"), repo);
+        expect(status.findings).toEqual([]);
+      });
+    });
   });
 });

@@ -72,7 +72,8 @@ export interface SyncSkillsOptions {
   readFile?: (path: string) => string | undefined;
   writeFile?: (path: string, content: string) => Promise<void> | void;
   exists?: (path: string) => boolean;
-  // The legacy cleanup's deletes, so a faked filesystem fakes them too.
+  // The deletes of the legacy and companion cleanups, so a faked filesystem
+  // fakes them too.
   unlink?: (path: string) => void;
   rmdir?: (path: string) => void;
 }
@@ -99,12 +100,24 @@ export interface LegacySkillOutcome {
   reason?: string;
 }
 
+export interface CompanionFileOutcome {
+  skill: string;
+  // Relative to the skill dir, as digest.json records it.
+  file: string;
+  // removed: an unedited copy from an install that wrote every skill file.
+  // kept: edited, or it could not be read or removed; the user is told.
+  status: "removed" | "kept";
+  reason?: string;
+}
+
 export interface SyncSkillsResult {
   synced: string[];
   // One outcome per bundled skill, in sync order, for this agent environment.
   skills: SkillSyncOutcome[];
   // Present only when an old-name dir was found.
   legacy?: LegacySkillOutcome[];
+  // Present only when a recorded companion file was found beside a stub.
+  companions?: CompanionFileOutcome[];
   upToDate?: boolean;
   driftDetected?: boolean;
   errors: string[];
@@ -257,12 +270,19 @@ type SkillRole = keyof typeof SKILL_NAMES;
 interface BundledSkill {
   role: SkillRole;
   name: string;
+  // What is installed: the stub alone.
   files: Record<string, string>;
 }
 
-// The skills this build ships, in sync order, named once for sync and inspect.
-// The triage skill is always shipped; the others only when their asset list is
-// filled, as an engine build without them must not install an empty dir.
+const INSTALLED_SKILL_FILE = "SKILL.md";
+
+// The skills this build installs, in sync order, named once for sync and inspect.
+// The triage skill is always shipped; the others only when their asset list has
+// a stub, as an engine build without them must not install an empty dir.
+//
+// WHY only the stub: it runs `crysk skills load`, which serves the playbook and
+// every other file from the package matching the repository's CI. A copy beside
+// the stub would never be read and would freeze at the version that wrote it.
 function bundledSkills(assets: EngineAssets): BundledSkill[] {
   const byRole: Record<SkillRole, Record<string, string> | undefined> = {
     triage: assets.triageSkillFiles,
@@ -274,10 +294,63 @@ function bundledSkills(assets: EngineAssets): BundledSkill[] {
   for (const role of Object.keys(SKILL_NAMES) as SkillRole[]) {
     const files = byRole[role];
     if (!files) continue;
-    if (role !== "triage" && Object.keys(files).length === 0) continue;
-    skills.push({ role, name: SKILL_NAMES[role], files });
+    const stub = files[INSTALLED_SKILL_FILE];
+    if (role !== "triage" && stub === undefined) continue;
+    skills.push({
+      role,
+      name: SKILL_NAMES[role],
+      files: stub === undefined ? {} : { [INSTALLED_SKILL_FILE]: stub },
+    });
   }
   return skills;
+}
+
+interface SkillDigest {
+  files?: Record<string, string>;
+  engine_version?: string;
+}
+
+function readSkillDigest(
+  digestFile: string,
+  exists: (path: string) => boolean,
+  readFile: (path: string) => string | undefined,
+): SkillDigest | undefined {
+  if (!exists(digestFile)) return undefined;
+  try {
+    const raw = readFile(digestFile);
+    return raw ? JSON.parse(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// What the digest records beyond the installed files: copies an earlier version
+// wrote. An entry that leaves the skill dir is nothing sync ever wrote.
+function recordedCompanions(
+  digest: SkillDigest | undefined,
+  skill: BundledSkill,
+  targetDir: string,
+): Array<[string, string]> {
+  const files = digest?.files;
+  if (typeof files !== "object" || files === null) return [];
+  return Object.entries(files).filter(([logicalName]) => {
+    if (
+      Object.hasOwn(skill.files, logicalName) ||
+      logicalName === "digest.json"
+    ) {
+      return false;
+    }
+    const relative = path.relative(
+      targetDir,
+      path.join(targetDir, logicalName),
+    );
+    return (
+      relative !== "" &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    );
+  });
 }
 
 interface SkillDirIo {
@@ -301,6 +374,59 @@ export interface RemoveSkillDirResult {
   // False when anything is left in the dir: an edited file, or a copy with no
   // recorded digest. Nothing here ever deletes a dir recursively.
   dirRemoved: boolean;
+}
+
+type RecordedFileRemoval =
+  | "absent"
+  | "removed"
+  | "edited"
+  | "unreadable"
+  | "failed";
+
+// Deletes one recorded file only if it still equals its recorded hash. The dirs
+// between it and targetDir go into `emptied`, for pruneEmptiedDirs.
+function removeRecordedFile(
+  targetDir: string,
+  logicalName: string,
+  expectedHash: string,
+  io: SkillDirIo,
+  emptied: Set<string>,
+  errors: string[],
+): RecordedFileRemoval {
+  const filePath = path.join(targetDir, logicalName);
+  if (!io.exists(filePath)) return "absent";
+
+  const content = io.readFile(filePath);
+  if (content === undefined) return "unreadable";
+  if (sha256(content) !== expectedHash) return "edited";
+
+  try {
+    (io.unlink ?? unlinkSync)(filePath);
+  } catch (err) {
+    errors.push(`Failed to remove ${filePath}: ${(err as Error).message}`);
+    return "failed";
+  }
+  for (
+    let dir = path.dirname(filePath);
+    dir !== targetDir && dir.startsWith(targetDir);
+    dir = path.dirname(dir)
+  ) {
+    emptied.add(dir);
+  }
+  return "removed";
+}
+
+// Deepest first. A non-empty dir throws and stays: that is the point of not
+// recursing, something the digest did not cover is in there.
+function pruneEmptiedDirs(emptied: Set<string>, io: SkillDirIo): void {
+  const rmdir = io.rmdir ?? rmdirSync;
+  for (const dir of [...emptied].sort((a, b) => b.length - a.length)) {
+    try {
+      rmdir(dir);
+    } catch {
+      // Not empty.
+    }
+  }
 }
 
 // Removes the files a skill dir's digest.json recorded, but only those still
@@ -353,35 +479,21 @@ export function removeSkillDir(
   }
   if (digest?.files) {
     for (const [logicalName, expectedHash] of Object.entries(digest.files)) {
-      const filePath = path.join(targetDir, logicalName);
-      if (!io.exists(filePath)) continue;
-
-      const content = io.readFile(filePath);
-      if (content === undefined) {
-        failed.push(logicalName);
-        continue;
-      }
-
-      if (sha256(content) === expectedHash) {
-        try {
-          unlink(filePath);
-          removed.push(logicalName);
-          for (
-            let dir = path.dirname(filePath);
-            dir !== targetDir && dir.startsWith(targetDir);
-            dir = path.dirname(dir)
-          ) {
-            subdirs.add(dir);
-          }
-        } catch (err) {
-          failed.push(logicalName);
-          errors.push(
-            `Failed to remove ${filePath}: ${(err as Error).message}`,
-          );
-        }
-      } else {
+      const outcome = removeRecordedFile(
+        targetDir,
+        logicalName,
+        expectedHash,
+        io,
+        subdirs,
+        errors,
+      );
+      if (outcome === "removed") {
+        removed.push(logicalName);
+      } else if (outcome === "edited") {
         skippedModified.push(logicalName);
         skillSkippedModified = true;
+      } else if (outcome !== "absent") {
+        failed.push(logicalName);
       }
     }
   }
@@ -397,16 +509,8 @@ export function removeSkillDir(
     }
   }
 
-  // Emptied subdirs (assets/, references/), deepest first, then the skill dir.
-  // A non-empty one throws and stays: that is the point of not recursing.
-  const dirs = [...subdirs].sort((a, b) => b.length - a.length);
-  for (const dir of dirs) {
-    try {
-      rmdir(dir);
-    } catch {
-      // Not empty: something the digest did not cover is in there.
-    }
-  }
+  // Emptied subdirs (assets/, references/), then the skill dir.
+  pruneEmptiedDirs(subdirs, io);
   let dirRemoved = false;
   try {
     rmdir(targetDir);
@@ -416,6 +520,53 @@ export function removeSkillDir(
   }
 
   return { removed, skippedModified, failed, errors, dirRemoved };
+}
+
+// Retires the companion copies an earlier install left beside a stub. Each goes
+// only while it equals its recorded hash, with or without force: force replaces
+// what crysk installs, and the upgrade passes it every time, so it must not cost
+// the user a file they edited. A survivor keeps its recorded hash, never the hash
+// of the user's bytes, so restoring the file lets a later sync remove it.
+function retireCompanions(
+  skill: BundledSkill,
+  targetDir: string,
+  digest: SkillDigest | undefined,
+  io: SkillDirIo,
+  errors: string[],
+): {
+  outcomes: CompanionFileOutcome[];
+  stillRecorded: Record<string, string>;
+} {
+  const outcomes: CompanionFileOutcome[] = [];
+  const stillRecorded: Record<string, string> = {};
+  const emptied = new Set<string>();
+  for (const [file, hash] of recordedCompanions(digest, skill, targetDir)) {
+    const removal = removeRecordedFile(
+      targetDir,
+      file,
+      hash,
+      io,
+      emptied,
+      errors,
+    );
+    if (removal === "absent") continue;
+    if (removal === "removed") {
+      outcomes.push({ skill: skill.name, file, status: "removed" });
+      continue;
+    }
+    stillRecorded[file] = hash;
+    outcomes.push({
+      skill: skill.name,
+      file,
+      status: "kept",
+      reason:
+        removal === "edited"
+          ? "edited since it was installed"
+          : "could not be read or removed (digest kept for a retry)",
+    });
+  }
+  pruneEmptiedDirs(emptied, io);
+  return { outcomes, stillRecorded };
 }
 
 // Every dir name a skill may sit under on disk: current names, then old ones.
@@ -457,6 +608,11 @@ function legacyKeptReason(res: RemoveSkillDirResult): string {
 // current; that is how a pre-digest install becomes protected. A kept file never
 // gets a digest recorded over it: that would make the user's bytes look like the
 // product of a sync, and the next sync would overwrite them.
+//
+// Only the stub is in this table (see bundledSkills). Once it stands, the other
+// files the digest recorded are retired by retireCompanions; an edited one is
+// reported and blocks nothing, because the stub never reads it. While the stub is
+// drift-kept they stay: the user's stub may still point at them.
 export async function syncSkills(
   env: AgentEnvDetection,
   assets: EngineAssets,
@@ -491,6 +647,7 @@ export async function syncSkills(
   const allSynced: string[] = [];
   const allErrors: string[] = [];
   const outcomes: SkillSyncOutcome[] = [];
+  const companions: CompanionFileOutcome[] = [];
   let driftDetected = false;
 
   for (const skill of skillsToSync) {
@@ -498,17 +655,7 @@ export async function syncSkills(
     const digestFile = path.join(targetDir, "digest.json");
 
     // 1. Read existing digest
-    let existingDigest:
-      | { files?: Record<string, string>; engine_version?: string }
-      | undefined;
-    if (exists(digestFile)) {
-      try {
-        const raw = readFile(digestFile);
-        if (raw) existingDigest = JSON.parse(raw);
-      } catch {
-        // Ignored
-      }
-    }
+    const existingDigest = readSkillDigest(digestFile, exists, readFile);
 
     // 2. Read upstream assets and check hashes
     const upstreamContents: Record<string, string> = {};
@@ -584,21 +731,7 @@ export async function syncSkills(
       continue;
     }
 
-    // 4. Nothing to write: record the digest of a copy that already matches
-    if (toWrite.length === 0) {
-      if (!existingDigest) {
-        const digest = {
-          files: upstreamHashes,
-          synced_at: new Date().toISOString(),
-          engine_version: assets.version,
-        };
-        await writeFile(digestFile, `${JSON.stringify(digest, null, 2)}\n`);
-      }
-      outcomes.push({ skill: skill.name, status: "current" });
-      continue;
-    }
-
-    // 5. Write the files that need it, then the digest
+    // 4. Write the files that need it
     for (const logicalName of toWrite) {
       await writeFile(
         path.join(targetDir, logicalName),
@@ -607,15 +740,51 @@ export async function syncSkills(
       allSynced.push(logicalName);
     }
 
-    const newDigest = {
-      files: upstreamHashes,
-      synced_at: new Date().toISOString(),
-      engine_version: assets.version,
-    };
-    await writeFile(digestFile, `${JSON.stringify(newDigest, null, 2)}\n`);
+    // 5. Retire the companion copies. WHY on every path and before the digest:
+    // the stub rarely changes, so an upgrade usually has nothing to write, and
+    // an interrupted run must still find them recorded.
+    const recordedBefore = recordedCompanions(
+      existingDigest,
+      skill,
+      targetDir,
+    ).length;
+    const retired = retireCompanions(
+      skill,
+      targetDir,
+      existingDigest,
+      {
+        exists,
+        readFile,
+        ...(options.unlink ? { unlink: options.unlink } : {}),
+        ...(options.rmdir ? { rmdir: options.rmdir } : {}),
+      },
+      allErrors,
+    );
+    companions.push(...retired.outcomes);
+    const stillRecorded = Object.keys(retired.stillRecorded).length;
+
+    // 6. The digest: new or changed files, a copy that already matches but was
+    // never recorded, or a companion entry that is gone.
+    if (
+      toWrite.length > 0 ||
+      !existingDigest ||
+      stillRecorded < recordedBefore
+    ) {
+      const digest = {
+        files: { ...upstreamHashes, ...retired.stillRecorded },
+        synced_at: new Date().toISOString(),
+        engine_version: assets.version,
+      };
+      await writeFile(digestFile, `${JSON.stringify(digest, null, 2)}\n`);
+    }
     outcomes.push({
       skill: skill.name,
-      status: existed.size === 0 ? "installed" : "updated",
+      status:
+        toWrite.length === 0
+          ? "current"
+          : existed.size === 0
+            ? "installed"
+            : "updated",
     });
   }
 
@@ -655,6 +824,7 @@ export async function syncSkills(
     synced: allSynced,
     skills: outcomes,
     ...(legacy.length > 0 ? { legacy } : {}),
+    ...(companions.length > 0 ? { companions } : {}),
     ...(upToDate ? { upToDate: true } : {}),
     ...(driftDetected ? { driftDetected: true } : {}),
     errors: allErrors,
@@ -666,7 +836,9 @@ export async function syncSkills(
 // the untouched recorded one is drift: the same rule syncSkills applies.
 //
 // `legacy` names each pre-rename dir still on disk (sync keeps one the user
-// edited), so a leftover is visible; it never changes `synced`.
+// edited), so a leftover is visible; it never changes `synced`. `companions` does
+// the same for each recorded companion copy still beside a stub, as
+// `<skill>/<file>`.
 export function inspectSkillsSync(
   env: AgentEnvDetection,
   assets: EngineAssets,
@@ -674,14 +846,36 @@ export function inspectSkillsSync(
     exists?: (p: string) => boolean;
     readFile?: (p: string) => string | undefined;
   } = {},
-): { synced: boolean; drift: boolean; legacy: string[] } {
+): { synced: boolean; drift: boolean; legacy: string[]; companions: string[] } {
   const skillsDir = env.skillsDir;
-  if (!skillsDir) return { synced: false, drift: false, legacy: [] };
+  if (!skillsDir) {
+    return { synced: false, drift: false, legacy: [], companions: [] };
+  }
   const exists = options.exists ?? existsSync;
+  const readFile =
+    options.readFile ??
+    ((p: string) => {
+      try {
+        return readFileSync(p, "utf-8");
+      } catch {
+        return undefined;
+      }
+    });
   const legacy = Object.values(LEGACY_SKILL_NAMES).filter((name) =>
     exists(path.join(skillsDir, name)),
   );
-  return { ...inspectBundledSkills(env, assets, options), legacy };
+  const companions = bundledSkills(assets).flatMap((skill) => {
+    const targetDir = path.join(skillsDir, skill.name);
+    const digest = readSkillDigest(
+      path.join(targetDir, "digest.json"),
+      exists,
+      readFile,
+    );
+    return recordedCompanions(digest, skill, targetDir)
+      .filter(([file]) => exists(path.join(targetDir, file)))
+      .map(([file]) => `${skill.name}/${file}`);
+  });
+  return { ...inspectBundledSkills(env, assets, options), legacy, companions };
 }
 
 function inspectBundledSkills(

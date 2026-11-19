@@ -10,8 +10,18 @@
 // (parseOutcomeCode). Nothing here re-parses a
 // format another module owns, so a drift in one of them moves this command with it.
 
+import {
+  MANUAL_REQUIRED_COMMENT_MARKER,
+  SKIP_BUDGET_COMMENT_MARKER,
+  SKIP_COVERAGE_COMMENT_MARKER,
+  SKIP_SIZE_COMMENT_MARKER,
+} from "#ci/gates";
 import { OUTCOME_MARKER_PREFIX, parseOutcomeCode } from "#ci/outcome";
 import { isOverrideStatus, overrideActorOf } from "#ci/override";
+import {
+  isPlainEngineVersion,
+  parseCiAdmissionBlock,
+} from "#ci/review-admission";
 import {
   OVERRIDE_COMMAND,
   RECHECK_COMMAND,
@@ -27,6 +37,8 @@ import {
   isManualReviewHold,
   latestStatusInContext,
   type ParsedFindingMarker,
+  PR_COMMENT_MARKER_PREFIX,
+  PR_FINDING_MARKER_PREFIX,
   parseFindingMarker,
 } from "#pr/preflight";
 import {
@@ -41,6 +53,7 @@ import { parseFindingCommentBadge } from "#review/report";
 import {
   type AdjudicatorTrust,
   CI_ADJUDICATOR_TRUST,
+  isBotLogin,
   parseAdjudicationMarker,
   trustedAdjudicator,
 } from "#triage/adjudication";
@@ -63,10 +76,42 @@ import {
   canonicalStatusText,
   commandHint,
   isCommand,
+  isStatusContext,
   matchMarkerPrefix,
 } from "../brand";
 
 export const PR_STATUS_SCHEMA = "pr-hero.status/v1" as const;
+
+// Why next_action is what it is, one code per decision, so a skill branches on data and never on the
+// text of a gate description. Closed: a new decision adds its code here. `reason` stays the sentence
+// for a person.
+export const PR_STATUS_REASON_CODES = [
+  "manual_review_hold",
+  "review_in_flight",
+  "pending_status_stale",
+  "no_gate_status",
+  "review_did_not_finish",
+  "override_active",
+  "partial_review_on_green",
+  "green_replies_owed",
+  "green_fixes_unverified",
+  "nothing_to_review",
+  "review_passed",
+  "review_needs_trigger",
+  "blocking_replies_owed",
+  "carried_red_findings_open",
+  "carried_red_all_answered",
+  "carried_partial_all_answered",
+  "applied_fix_to_push",
+  "dismissal_ruling_pending",
+  "dismissals_upheld",
+  "review_skipped",
+  "partial_review_repeated",
+  "partial_review",
+  "blocking_answered_still_open",
+  "red_without_live_finding",
+] as const;
+export type PrStatusReasonCode = (typeof PR_STATUS_REASON_CODES)[number];
 
 export type PrGateState = "success" | "failure" | "error" | "pending" | "none";
 export type PrNextAction =
@@ -92,6 +137,9 @@ export interface PrStatusReport {
   complete: boolean | null;
   reviews: number | null;
   outcome_code: string | null;
+  // The engine version that wrote the summary, read from its admission block.
+  // Null when no bot posted the summary or the engine predates the stamp.
+  engine_version: string | null;
 }
 
 export interface PrStatusTriage {
@@ -126,6 +174,11 @@ export interface PrStatusFinding {
   triage: PrStatusTriage | null;
   // The CI adjudicator's ruling on the newest triage reply, counted only when github-actions[bot] posted it on the head being read (src/triage/adjudication.ts). Null when there is none.
   ci_verdict: "upheld" | "rejected" | "inconclusive" | null;
+  // Whether this finding is one the `triage` decision is waiting on: next_action is `triage` exactly
+  // when some finding has it.
+  needs_reply: boolean;
+  // How many heads in a row, newest first, have a newest reply whose verdict is `inconclusive`.
+  inconclusive_heads: number;
 }
 
 export interface PrStatusJson {
@@ -138,6 +191,19 @@ export interface PrStatusJson {
   unresolved_blocking: number;
   next_action: PrNextAction;
   reason: string;
+  reason_code: PrStatusReasonCode;
+  // The `/crysk review` and `/crysk recheck` commands that apply to this head: from its first gate
+  // status on, plus any posted within the startup grace before that status, which is how long a
+  // command normally takes to start the run that writes it. Nothing links a status to its comment, so
+  // the window can miss both ways: a command left on the previous head just before a push counts, and
+  // a command whose run queued for longer than the grace does not.
+  forced_runs_on_head: number;
+  // The command that reloads the crysk-loop playbook, when `skills load` would now
+  // serve this repository another version than the CLI running status. It names
+  // that CLI's own version, whose loader checks the recorded one against GitHub's
+  // tags. Null when they match or nothing is recorded. The command shell sets it,
+  // after recording the engine version (commands/status.ts).
+  skills_reload: string | null;
 }
 
 // A GitHub comment as the shell reads it. Review comments also carry the thread link a
@@ -184,6 +250,11 @@ export interface PrStatusInput extends PrStatusRead {
   // Whether each author of a triage reply has write access (triage/reply.ts countedTriageReplies):
   // status counts a reply exactly as the gate does. Every such author must be in the map.
   writers: ReadonlyMap<string, boolean>;
+  // Logins besides bots whose findings and summaries are read: the repository's ci_trusted_actors.
+  trustedActors?: ReadonlySet<string>;
+  // When the head's first gate status was written, from the status history. `statuses` holds only the
+  // latest row per context. Null: the head has none yet. Absent: the oldest of `statuses` stands in.
+  firstStatusAt?: string | null;
 }
 
 // The window a pending status is trusted for, named from the constant that defines it, so
@@ -199,7 +270,37 @@ interface AnalyzedFinding {
   replied: boolean;
 }
 
-export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
+// WHY only a bot or a trusted login: anyone who can comment can type a finding or summary marker, and
+// what status reads from them sends an agent to triage or to a paid review. A bot's login cannot be
+// taken by a person. The cost is accepted: a review posted under a person's account is not read unless
+// the repository names that account. The gate applies its own list (answered-findings.ts trustedPoster)
+// before it calls liveBlockingFindings, so this runs on status's path only.
+export function trustedMarkerComments<
+  T extends { body: string; user?: string },
+>(comments: readonly T[], trustedActors?: ReadonlySet<string>): T[] {
+  return comments.filter((comment) => {
+    const engineMarker =
+      matchMarkerPrefix(comment.body, PR_FINDING_MARKER_PREFIX) !== undefined ||
+      matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined;
+    if (!engineMarker || isBotLogin(comment.user)) return true;
+    return (
+      comment.user !== undefined && trustedActors?.has(comment.user) === true
+    );
+  });
+}
+
+export function buildPrStatus(unfiltered: PrStatusInput): PrStatusJson {
+  const raw: PrStatusInput = {
+    ...unfiltered,
+    issueComments: trustedMarkerComments(
+      unfiltered.issueComments,
+      unfiltered.trustedActors,
+    ),
+    reviewComments: trustedMarkerComments(
+      unfiltered.reviewComments,
+      unfiltered.trustedActors,
+    ),
+  };
   const input = withPlainReplies(raw);
   const gate = readGate(input);
   const summary = readSummary(input.issueComments);
@@ -211,16 +312,21 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
     verdictMs(input),
     summary.author,
     input,
+    input.writers,
   );
   const liveBlocking = analyzed.filter(
     (a) => a.finding.blocking && a.finding.live_on_head,
   );
+  for (const owed of findingsOwedReply(gate, analyzed, input.head, summary)) {
+    owed.finding.needs_reply = true;
+  }
   const decision = decideNext(
     gate,
     analyzed,
     input.head,
     summary,
     counted.uncounted,
+    hasLimitSkipNotice(input.issueComments, input.trustedActors),
   );
   return {
     schema: PR_STATUS_SCHEMA,
@@ -232,6 +338,7 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
       complete: summary.complete,
       reviews: summary.reviews,
       outcome_code: outcomeCodeOf(input.issueComments),
+      engine_version: summary.engine,
     },
     findings: analyzed.map((a) => a.finding),
     // A dismissal the CI adjudicator upheld on this head leaves the gate's count (review #348
@@ -242,7 +349,79 @@ export function buildPrStatus(raw: PrStatusInput): PrStatusJson {
     ),
     next_action: decision.next_action,
     reason: decision.reason,
+    reason_code: decision.reason_code,
+    forced_runs_on_head: forcedRunsOnHead(input),
+    skills_reload: null,
   };
+}
+
+// Whether the engine left a notice that it skipped a review on purpose: a size or cost limit, a
+// maintainer's stop, or a manual-review rule. WHY the notice: in advisory mode such a skip writes no status (admission.ts publishCiSkip), so a head it skipped looks like one
+// no review reached. The notice names no head and is reposted on each skipped push, so an older one can
+// outlive the skip it reports; the cost of that is a question to the user, never a paid run.
+function hasLimitSkipNotice(
+  comments: readonly PrStatusComment[],
+  trustedActors: ReadonlySet<string> | undefined,
+): boolean {
+  return comments.some(
+    (comment) =>
+      (isBotLogin(comment.user) ||
+        (comment.user !== undefined &&
+          trustedActors?.has(comment.user) === true)) &&
+      [
+        SKIP_SIZE_COMMENT_MARKER,
+        SKIP_BUDGET_COMMENT_MARKER,
+        SKIP_COVERAGE_COMMENT_MARKER,
+        MANUAL_REQUIRED_COMMENT_MARKER,
+      ].some((marker) => matchMarkerPrefix(comment.body, marker) !== undefined),
+  );
+}
+
+// The head's oldest gate status (either context name), or null when it has none.
+export function oldestGateStatusAt(
+  statuses: readonly CommitStatusFact[],
+): string | null {
+  let oldest: { at: string; ms: number } | null = null;
+  for (const status of statuses) {
+    if (!isStatusContext(status.context, COMMIT_STATUS_CONTEXT)) continue;
+    const ms = Date.parse(status.created_at);
+    if (Number.isNaN(ms)) continue;
+    if (oldest === null || ms < oldest.ms) {
+      oldest = { at: status.created_at, ms };
+    }
+  }
+  return oldest?.at ?? null;
+}
+
+function forcedRunsOnHead(input: PrStatusInput): number {
+  const firstAt =
+    input.firstStatusAt === undefined
+      ? oldestGateStatusAt(input.statuses)
+      : input.firstStatusAt;
+  // With no status yet, the window ends now: only a command that can still start a run applies.
+  const anchorMs = firstAt === null ? input.nowMs : Date.parse(firstAt);
+  const fromMs = anchorMs - STATUS_WAIT_STARTUP_GRACE_MS;
+  return input.issueComments.filter((comment) => {
+    if (!TRIGGER_COMMANDS.some((c) => isCommand(comment.body, c))) return false;
+    if (comment.created_at === undefined) return false;
+    return Date.parse(comment.created_at) >= fromMs;
+  }).length;
+}
+
+// WHY the CLI's version and not the recorded one: the recorded version comes from a comment, and only
+// the loader checks it against GitHub's tags before anything runs it.
+export function skillsReloadCommand(
+  recorded: string | undefined,
+  cliVersion: string | undefined,
+): string | null {
+  if (
+    !isPlainEngineVersion(recorded) ||
+    !isPlainEngineVersion(cliVersion) ||
+    recorded === cliVersion
+  ) {
+    return null;
+  }
+  return `npx -y crysk@${cliVersion} skills load crysk-loop`;
 }
 
 // The comments as the gate reads them (triage/reply.ts countedTriageReplies). The command that
@@ -291,11 +470,12 @@ export function verdictAtMs(
   return Number.isNaN(at) ? null : at;
 }
 
-// The head the review summary was written for: what a reply must name to answer the review.
+// The head the trusted review summary was written for: what a reply must name to answer the review.
 export function reviewedHeadOf(
   issueComments: PrStatusComment[],
+  trustedActors?: ReadonlySet<string>,
 ): string | null {
-  return readSummary(issueComments).head;
+  return readSummary(trustedMarkerComments(issueComments, trustedActors)).head;
 }
 
 // The caller's verdict time in ms, or null when it is unknown or does not parse.
@@ -379,6 +559,7 @@ function readSummary(comments: PrStatusComment[]): {
   reviews: number | null;
   rows: StateFinding[];
   author: string | undefined;
+  engine: string | null;
 } {
   const id = findMarkedCommentId(comments);
   const summaryComment = comments.find((c) => c.id === id);
@@ -390,6 +571,7 @@ function readSummary(comments: PrStatusComment[]): {
       reviews: null,
       rows: [],
       author: undefined,
+      engine: null,
     };
   }
   const marker = parsePrCommentMarker(body);
@@ -400,6 +582,9 @@ function readSummary(comments: PrStatusComment[]): {
     reviews: state?.reviews ?? null,
     rows: state?.findings ?? [],
     author: summaryComment?.user,
+    engine: isBotLogin(summaryComment?.user)
+      ? (parseCiAdmissionBlock(body)?.engine ?? null)
+      : null,
   };
 }
 
@@ -425,6 +610,7 @@ function readFindings(
   verdictAt: number | null,
   summaryAuthor: string | undefined,
   raw: PrStatusRead,
+  writers?: ReadonlyMap<string, boolean>,
 ): AnalyzedFinding[] {
   const sources: {
     id: number;
@@ -518,6 +704,8 @@ function readFindings(
           source.channel === "inline"
             ? ciVerdictOf(source.id, newest?.id ?? null, input)
             : null,
+        needs_reply: false,
+        inconclusive_heads: inconclusiveHeads(repliesTo(source, raw), writers),
       },
       // The newest reply the gate counts decides, as at the gate (triage/reply.ts).
       answersReview:
@@ -549,6 +737,7 @@ function readFindings(
         row,
         newest?.marker ?? null,
         rowCiVerdictOf(newest?.id ?? null, summaryAuthor, input),
+        inconclusiveHeads(rowReplies(row.id, raw), writers),
       ),
       // A row has no posted head, so only the newest counted reply, stamped with the reviewed head, answers it.
       answersReview:
@@ -571,6 +760,7 @@ function unthreadedFinding(
   row: StateFinding,
   triage: ParsedTriageMarker | null,
   ciVerdict: "upheld" | "rejected" | "inconclusive" | null,
+  inconclusiveHeadCount: number,
 ): PrStatusFinding {
   const first = row.locs[0];
   const span = first === undefined ? undefined : parseProofRefLocs(first)[0];
@@ -598,6 +788,8 @@ function unthreadedFinding(
           },
     // Its CI ruling is the top-level comment that names that reply.
     ci_verdict: ciVerdict,
+    needs_reply: false,
+    inconclusive_heads: inconclusiveHeadCount,
   };
 }
 
@@ -676,6 +868,31 @@ interface TriageReplyRow {
   id: number;
   marker: ParsedTriageMarker;
   createdAt?: string;
+  user?: string;
+}
+
+// The streak of heads, newest first, whose newest reply carries the verdict `inconclusive`.
+// WHY from every reply and not the counted ones: the streak is made of older heads, and those replies
+// are exactly what the gate drops as stale. Each still needs an author known to have write access
+// (status.ts asks about the authors of these replies too), so nobody else can extend or break a streak.
+function inconclusiveHeads(
+  replies: readonly TriageReplyRow[],
+  writers: ReadonlyMap<string, boolean> | undefined,
+): number {
+  const newestByHead = new Map<string, TriageReplyRow>();
+  for (const reply of replies) {
+    if (writers !== undefined) {
+      if (reply.user === undefined || writers.get(reply.user) !== true)
+        continue;
+    }
+    const seen = newestByHead.get(reply.marker.headSha);
+    if (seen === undefined || reply.id > seen.id) {
+      newestByHead.set(reply.marker.headSha, reply);
+    }
+  }
+  const newestFirst = [...newestByHead.values()].sort((a, b) => b.id - a.id);
+  const end = newestFirst.findIndex((r) => r.marker.verdict !== "inconclusive");
+  return end === -1 ? newestFirst.length : end;
 }
 
 // Every triage reply that answers one posted finding. An inline finding's replies sit in its
@@ -695,7 +912,12 @@ function repliesTo(
       // A reply that names a row answers a finding with no comment, never the thread it was typed in
       // (as rereview/prepare.ts reads it).
       if (marker !== null && marker.row === undefined)
-        out.push({ id: reply.id, marker, createdAt: reply.created_at });
+        out.push({
+          id: reply.id,
+          marker,
+          createdAt: reply.created_at,
+          user: reply.user,
+        });
     }
     return out;
   }
@@ -705,7 +927,12 @@ function repliesTo(
     // A reply that names a row never answers a legacy top-level finding comment, even when its body links one.
     if (marker === null || marker.row !== undefined || !link.test(comment.body))
       continue;
-    out.push({ id: comment.id, marker, createdAt: comment.created_at });
+    out.push({
+      id: comment.id,
+      marker,
+      createdAt: comment.created_at,
+      user: comment.user,
+    });
   }
   return out;
 }
@@ -717,7 +944,12 @@ function rowReplies(rowId: string, input: PrStatusRead): TriageReplyRow[] {
   for (const comment of input.issueComments) {
     const marker = parseTriageMarker(comment.body);
     if (marker === null || marker.row !== rowId) continue;
-    out.push({ id: comment.id, marker, createdAt: comment.created_at });
+    out.push({
+      id: comment.id,
+      marker,
+      createdAt: comment.created_at,
+      user: comment.user,
+    });
   }
   return out;
 }
@@ -765,6 +997,10 @@ function gateBlockingCount(gate: PrStatusGate): number | null {
   return counted?.[1] === undefined ? null : Number(counted[1]);
 }
 
+// A partial red a skip carried from an earlier commit (admission.ts carriedPartialDescription).
+const CARRIED_PARTIAL_GATE =
+  /^crysk: review partial \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\) carried from /;
+
 // The gate descriptions that name no review of this head: the automatic budget is used up, or the
 // policy is manual. A gate stopped writing them on 2026-10-30 (budget-exhausted-carry S2: both carry the
 // last verdict now), so only a head statused before that still carries one. Their text is the gate's own,
@@ -790,16 +1026,58 @@ function upheldDismissal(a: AnalyzedFinding): boolean {
   );
 }
 
+// The findings the `triage` decision waits on: decideNext and each finding's needs_reply read this one
+// list, so the two cannot disagree. Empty whenever an earlier decision outranks triage.
+function findingsOwedReply(
+  gate: PrStatusGate,
+  analyzed: AnalyzedFinding[],
+  head: string,
+  summary: { head: string | null; complete: boolean | null },
+): AnalyzedFinding[] {
+  if (gate.state === "success") {
+    if (gate.override.active) return [];
+    if (summary.head === head && summary.complete === false) return [];
+    // The triage skill answers every finding, advisory included, so a green gate is not the
+    // end while a finding posted on this head has no reply at that head. A finding posted on an
+    // older head is not this head's to answer.
+    return analyzed.filter((a) => a.finding.head === head && !a.replied);
+  }
+  if (gate.state !== "failure") return [];
+  if (REVIEW_TRIGGER_GATE.test(canonicalStatusText(gate.description ?? ""))) {
+    return [];
+  }
+  // WHY a row with no comment counts only under a gate that states a blocking count: only that
+  // gate is the verdict of a review the summary's rows belong to. A skipped or partial gate
+  // reviewed nothing, and its rows may be an older head's, so such a row falls through to the
+  // branches of decideNext.
+  const rowsAreThisReviews = gateBlockingCount(gate) !== null;
+  return analyzed.filter(
+    (a) =>
+      a.finding.blocking &&
+      a.finding.live_on_head &&
+      !a.answersReview &&
+      (a.finding.comment_id !== null || rowsAreThisReviews),
+  );
+}
+
+interface PrStatusDecision {
+  next_action: PrNextAction;
+  reason: string;
+  reason_code: PrStatusReasonCode;
+}
+
 // The next action, first match wins. The branches are in the order the skill must act on
 // them, and each carries its own reason sentence so the human reads the same decision the
-// skill made.
+// skill made, and its own code so a skill never has to read that sentence.
 function decideNext(
   gate: PrStatusGate,
   analyzed: AnalyzedFinding[],
   head: string,
   summary: { head: string | null; complete: boolean | null },
   uncounted: readonly string[],
-): { next_action: PrNextAction; reason: string } {
+  limitSkipNotice: boolean,
+): PrStatusDecision {
+  const owedReply = findingsOwedReply(gate, analyzed, head, summary);
   const liveBlocking = analyzed.filter(
     (a) => a.finding.blocking && a.finding.live_on_head,
   );
@@ -811,12 +1089,14 @@ function decideNext(
       isManualReviewHold({ state: gate.state, description: gate.description })
     ) {
       return {
+        reason_code: "manual_review_hold",
         next_action: "override-or-fix",
         reason: `The gate holds this head for a manual review: the automatic review budget is used up, or the review policy is manual (ci_review_policy is manual_only), so no review read it and none will on its own. Comment ${commandHint(REVIEW_COMMAND, "")} to verify it, or ${commandHint(OVERRIDE_COMMAND, "")} to merge it unverified.`,
       };
     }
     if (gate.pending_in_flight) {
       return {
+        reason_code: "review_in_flight",
         next_action: "wait",
         reason: `A crysk review is in flight on this head (pending since ${gate.created_at}); wait for it to finish.`,
       };
@@ -824,12 +1104,23 @@ function decideNext(
     // A pending past the in-flight window is not held by any run. The watcher's own rule
     // lets the next tick start a review then, so the skill starts one too.
     return {
+      reason_code: "pending_status_stale",
       next_action: "review",
       reason: `The pending crysk status on this head is older than the ${IN_FLIGHT_WINDOW_MINUTES}-minute in-flight window and no run holds it; start a review.`,
     };
   }
   if (gate.state === "none") {
+    // S3: a forced review walks past a size or cost limit, so a head that may have been skipped for one
+    // is the user's call. A review of this head settles that it was not.
+    if (limitSkipNotice && summary.head !== head) {
+      return {
+        reason_code: "review_skipped",
+        next_action: "override-or-fix",
+        reason: `No crysk gate status is on this head, and a crysk notice on this pull request says a size or cost limit skipped a review (it may come from an earlier push). Comment ${commandHint(REVIEW_COMMAND, "")} to review past the limit only if that is wanted.`,
+      };
+    }
     return {
+      reason_code: "no_gate_status",
       next_action: "review",
       reason:
         "No crysk gate status is on this head, so no review has run here yet; start one.",
@@ -837,6 +1128,7 @@ function decideNext(
   }
   if (gate.state === "error") {
     return {
+      reason_code: "review_did_not_finish",
       next_action: "review",
       reason: `The last crysk review on this head did not finish (${gate.description ?? "no description"}); start a review.`,
     };
@@ -855,6 +1147,7 @@ function decideNext(
     // An override is a human's unlock of the head, so it stays done whatever the findings say.
     if (gate.override.active) {
       return {
+        reason_code: "override_active",
         next_action: "done",
         reason: `The gate is green through an override by @${gate.override.by ?? "an unknown login"}; nothing is owed on this head.${summaryNote}`,
       };
@@ -864,16 +1157,15 @@ function decideNext(
     // A green gate over it is therefore review. The same marker on an older head is history.
     if (summary.head === head && summary.complete === false) {
       return {
+        reason_code: "partial_review_on_green",
         next_action: "review",
         reason: `The last review of this head was partial (some reviewers failed); run ${commandHint(REVIEW_COMMAND, "")}.`,
       };
     }
-    // The triage skill answers every finding, advisory included, so a green gate is not the
-    // end while a finding posted on this head has no reply at that head. A finding posted on an
-    // older head is not this head's to answer.
-    const owed = analyzed.filter((a) => a.finding.head === head && !a.replied);
+    const owed = owedReply;
     if (owed.length > 0) {
       return {
+        reason_code: "green_replies_owed",
         next_action: "triage",
         reason: `The gate is green, but ${owed.length} finding(s) on this head have no reply yet; triage them.`,
       };
@@ -884,6 +1176,7 @@ function decideNext(
       UNVERIFIED_FIXES_GATE.test(canonicalStatusText(gate.description ?? ""))
     ) {
       return {
+        reason_code: "green_fixes_unverified",
         next_action: "done",
         reason: `The gate is green on answered findings no review verified (${gate.description}); the PR is ready to merge, or comment ${commandHint(REVIEW_COMMAND, "")} for another review.${summaryNote}`,
       };
@@ -893,11 +1186,13 @@ function decideNext(
       NOTHING_TO_REVIEW_GATE.test(canonicalStatusText(gate.description ?? ""))
     ) {
       return {
+        reason_code: "nothing_to_review",
         next_action: "done",
         reason: `Every changed file on this head is excluded from review, so there was nothing to review; nothing is owed.${summaryNote}`,
       };
     }
     return {
+      reason_code: "review_passed",
       next_action: "done",
       reason: `The review on this head passed the gate, and every finding on this head has a reply.${summaryNote}`,
     };
@@ -909,61 +1204,23 @@ function decideNext(
   // (from an older head) say (review #348 R006).
   if (REVIEW_TRIGGER_GATE.test(canonicalStatusText(gate.description ?? ""))) {
     return {
+      reason_code: "review_needs_trigger",
       next_action: "review",
       reason: `The automatic review budget for this PR is used up, or the review policy is manual (ci_review_policy is manual_only); comment ${commandHint(REVIEW_COMMAND, "")} to review this head.`,
     };
   }
-  // WHY a row with no comment counts only under a gate that states a blocking count: only that
-  // gate is the verdict of a review the summary's rows belong to. A skipped or partial gate
-  // reviewed nothing, and its rows may be an older head's, so such a row falls through to the
-  // branches below.
+  // The same rule findingsOwedReply states for a row: only a gate with a count is that review's verdict.
   const rowsAreThisReviews = gateBlockingCount(gate) !== null;
-  const untriaged = liveBlocking.filter(
-    (a) =>
-      !a.answersReview && (a.finding.comment_id !== null || rowsAreThisReviews),
-  );
+  const untriaged = owedReply;
   if (untriaged.length > 0) {
     const uncountedNote =
       uncounted.length === 0
         ? ""
         : ` Replies from ${uncounted.join(", ")} do not count: the gate counts a triage reply only from a login with write access.`;
     return {
+      reason_code: "blocking_replies_owed",
       next_action: "triage",
       reason: `${untriaged.length} live blocking finding(s) on this head have no triage reply that answers this review; triage them first.${uncountedNote}`,
-    };
-  }
-  const applied = liveBlocking.filter(
-    (a) => a.finding.triage?.tag === "applied",
-  );
-  if (applied.length > 0) {
-    // budget-exhausted-carry S3: a carried blocking red means a review rule skipped this head. The next push
-    // may be skipped too, and then the gate reads the replies instead of a review, but only every blocking
-    // finding answered unlocks it (answered-findings.ts), so the reason promises that only when it holds.
-    // A carried partial red is never unlocked by replies, so it keeps the plain reason.
-    if (
-      CARRIED_BLOCKING_GATE.test(canonicalStatusText(gate.description ?? ""))
-    ) {
-      // The gate's own rules (admission.ts admissionSkipDecision, answered-findings.ts): a finding is
-      // answered only by its newest reply at the head it was posted on or at the reviewed head, and the gate must see at least as
-      // many blocking findings as the red counts. This is the gate's own rule (triage/reply.ts findingAnswered), over the replies the gate counts.
-      const open = liveBlocking.filter(
-        (a) => !findingAnswered(a.finding, summary.head),
-      ).length;
-      const counted = gateBlockingCount(gate);
-      const unseen =
-        counted === null ? 0 : Math.max(0, counted - liveBlocking.length);
-      return {
-        next_action: "fix",
-        reason:
-          open === 0 && unseen === 0
-            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and can turn green, marked unverified, or, under a used-up budget or manual_only, hold the head for a manual review; otherwise the review verifies it."
-            : `A live blocking finding is tagged applied, but ${open + unseen} blocking finding(s) are still open (deferred, misclassified, a dismissal not upheld, a reply at another head, or one this read cannot see), so replies alone will not unlock the carried red; push the fix, and answer or fix the rest.`,
-      };
-    }
-    return {
-      next_action: "fix",
-      reason:
-        "A live blocking finding is tagged applied; push the fix, and the next review verifies it.",
     };
   }
   // A dismissal leaves the count only on a CI ruling of "upheld" (src/triage/adjudication.ts). A
@@ -982,12 +1239,66 @@ function decideNext(
       (a.finding.ci_verdict === null ||
         a.finding.ci_verdict === "inconclusive"),
   );
-  if (pendingRulings.length > 0) {
+  const rechecks: PrStatusDecision = {
+    reason_code: "dismissal_ruling_pending",
+    next_action: "recheck",
+    reason: `${pendingRulings.length} live blocking finding(s) are answered dismissed with no CI ruling on this head (or an inconclusive one); comment ${commandHint(RECHECK_COMMAND, "")} so the CI adjudicator rules on them.`,
+  };
+  const applied = liveBlocking.filter(
+    (a) => a.finding.triage?.tag === "applied",
+  );
+  if (applied.length > 0) {
+    const canonicalGate = canonicalStatusText(gate.description ?? "");
+    // S10: `fix` tells the agent to push. On a head no review read, the fixes these replies name went
+    // out in the push the verdict was carried onto, so nothing on the pull request is left to push.
+    // Status cannot see a local tree, so each reason still covers a fix that is not pushed yet. A
+    // missing summary says nothing about the head, so only the gate's own text counts then.
+    const carriedHead =
+      (summary.head !== null && summary.head !== head) ||
+      CARRIED_BLOCKING_GATE.test(canonicalGate) ||
+      CARRIED_PARTIAL_GATE.test(canonicalGate);
+    if (!carriedHead) {
+      return {
+        reason_code: "applied_fix_to_push",
+        next_action: "fix",
+        reason:
+          "A live blocking finding is tagged applied; push the fix, and the next review verifies it.",
+      };
+    }
+    // The gate's own rules (admission.ts admissionSkipDecision, answered-findings.ts): a finding is
+    // answered only by its newest reply at the head it was posted on or at the reviewed head (triage/reply.ts
+    // findingAnswered, over the replies the gate counts), and the gate must see at least as many blocking
+    // findings as the red counts.
+    const open = liveBlocking.filter(
+      (a) => !findingAnswered(a.finding, summary.head),
+    ).length;
+    const counted = gateBlockingCount(gate);
+    const unseen =
+      counted === null ? 0 : Math.max(0, counted - liveBlocking.length);
+    if (open === 0 && unseen === 0) {
+      if (PARTIAL_REVIEW_GATE.test(canonicalGate)) {
+        return {
+          reason_code: "carried_partial_all_answered",
+          next_action: "override-or-fix",
+          reason: `Every live blocking finding is answered, and the red is a partial review carried onto this head, so the replies leave nothing to push. If a fix is still unpushed, push it. Otherwise comment ${commandHint(REVIEW_COMMAND, "")} to retry the review, or ask a maintainer to override the gate.`,
+        };
+      }
+      return {
+        reason_code: "carried_red_all_answered",
+        next_action: "override-or-fix",
+        reason: `Every live blocking finding is answered and no review read this head, so the replies leave nothing to push. If a fix is still unpushed, push it: the gate reads the replies on that push and can turn green, marked unverified. Otherwise comment ${commandHint(REVIEW_COMMAND, "")} to verify this head, or ask a maintainer to override the gate.`,
+      };
+    }
+    if (pendingRulings.length > 0) return rechecks;
+    // budget-exhausted-carry S3: only every blocking finding answered unlocks a carried red
+    // (answered-findings.ts), so with one still open replies alone will not.
     return {
-      next_action: "recheck",
-      reason: `${pendingRulings.length} live blocking finding(s) are answered dismissed with no CI ruling on this head (or an inconclusive one); comment ${commandHint(RECHECK_COMMAND, "")} so the CI adjudicator rules on them.`,
+      reason_code: "carried_red_findings_open",
+      next_action: "override-or-fix",
+      reason: `No review read this head, and ${open + unseen} blocking finding(s) are still open (deferred, misclassified, a dismissal not upheld, a reply at another head, or one this read cannot see). If a fix is still unpushed, push it. Otherwise comment ${commandHint(REVIEW_COMMAND, "")} to verify this head, or ask a maintainer to override the gate.`,
     };
   }
+  if (pendingRulings.length > 0) return rechecks;
   // WHY the gate's own count is checked too (review #348 F002): the gate can count a blocking
   // finding this read cannot see (one rendered only in the summary). A review that already
   // consumed the rulings leaves that one counted, and answering review again would loop.
@@ -999,6 +1310,7 @@ function decideNext(
     (gateCount === null || gateCount <= dismissed.length)
   ) {
     return {
+      reason_code: "dismissals_upheld",
       next_action: "review",
       reason: `The CI adjudicator upheld every dismissal on this head; run ${commandHint(REVIEW_COMMAND, "")}, and that review no longer counts them.`,
     };
@@ -1009,6 +1321,7 @@ function decideNext(
     )
   ) {
     return {
+      reason_code: "review_skipped",
       next_action: "override-or-fix",
       reason: `The review on this head was skipped (${gate.description}); run ${commandHint(REVIEW_COMMAND, "")} to review it anyway, or override the gate.`,
     };
@@ -1019,23 +1332,27 @@ function decideNext(
     PARTIAL_REVIEW_AGAIN_GATE.test(canonicalStatusText(gate.description ?? ""))
   ) {
     return {
+      reason_code: "partial_review_repeated",
       next_action: "override-or-fix",
       reason: `The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run ${commandHint(OVERRIDE_COMMAND, "")}.`,
     };
   }
   if (PARTIAL_REVIEW_GATE.test(canonicalStatusText(gate.description ?? ""))) {
     return {
+      reason_code: "partial_review",
       next_action: "review",
       reason: `The last review of this head was partial (some reviewers failed); run ${commandHint(REVIEW_COMMAND, "")}, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.`,
     };
   }
   if (liveBlocking.length > 0) {
     return {
+      reason_code: "blocking_answered_still_open",
       next_action: "override-or-fix",
       reason: `The gate is red with ${liveBlocking.length} live blocking finding(s), all triaged and none applied or pending a CI ruling (a rejected dismissal, or a deferred or misclassified tag, never leaves the count): fix and push, or override the gate.`,
     };
   }
   return {
+    reason_code: "red_without_live_finding",
     next_action: "override-or-fix",
     reason: `The gate is red and names no live blocking finding on this head (${gate.description ?? "no description"}); read the gate description.`,
   };
@@ -1095,5 +1412,10 @@ export function renderPrStatusLines(status: PrStatusJson): string[] {
     `gate: ${gate}`,
     `findings: ${status.findings.length} posted, ${status.unresolved_blocking} unresolved blocking`,
     `next: ${status.next_action} — ${status.reason}`,
+    ...(status.skills_reload === null
+      ? []
+      : [
+          `skills: this repository's reviews run another Crysk version; reload the playbook with ${status.skills_reload}`,
+        ]),
   ];
 }

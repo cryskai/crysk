@@ -275,6 +275,7 @@ export async function planUninstallation(
     const dataDirs = [
       path.join(layout.dir, "active_runs"),
       layout.reposDir,
+      layout.skillsCacheDir,
       path.join(layout.dir, "bin"),
       layout.dir,
       // The home this run is NOT using, if it is still on disk (both exist

@@ -2190,6 +2190,26 @@ describe("allExcludedMessage", () => {
 // can drop anything the operator names — the help text must say so, or a
 // user who defines their own rules never learns the flag interacts with
 // them at all.
+describe("HELP_TEXT — what each command does to your files", () => {
+  test("--from is required for post only; triage reply reads the PR without it", () => {
+    const line = HELP_TEXT.slice(HELP_TEXT.indexOf("  --from <dir>"));
+    const entry = line.slice(0, line.indexOf("  --finding <id>"));
+    expect(entry).toContain("Required for post");
+    expect(entry).toContain("optional for triage reply");
+    expect(entry).not.toContain("(required)");
+  });
+
+  test("crysk config lists read-only, and set, unset and edit are named as writes", () => {
+    const start = HELP_TEXT.indexOf("  crysk config [options]");
+    const entry = HELP_TEXT.slice(start, HELP_TEXT.indexOf("Options:", start));
+    expect(entry).not.toContain("it never writes either file");
+    expect(entry).toContain("crysk config set <key> <value>");
+    expect(entry).toContain("crysk config unset <key>");
+    expect(entry).toContain("crysk config edit");
+    expect(entry).toContain("Writes that file");
+  });
+});
+
 describe("HELP_TEXT — --max-changed-lines names .cryskignore", () => {
   test("mentions .cryskignore beside the generated-file examples", () => {
     expect(HELP_TEXT).toContain(".cryskignore");
@@ -2731,18 +2751,56 @@ describe("skills install (non-interactive skill sync)", () => {
   });
 
   test("skills without a subcommand, or with another one, is a usage error", () => {
-    const text = "crysk skills needs a subcommand: install";
+    const text = "crysk skills needs a subcommand: install | load";
     expect(() => parseArgs(["skills"])).toThrow(CliUsageError);
     expect(() => parseArgs(["skills"])).toThrow(text);
     expect(() => parseArgs(["skills", "remove"])).toThrow(CliUsageError);
     expect(() => parseArgs(["skills", "remove"])).toThrow(text);
   });
 
-  test("help lists skills install next to setup", () => {
+  test("skills load parses skill name and optional companion file", () => {
+    const playbook = parseArgs(["skills", "load", "crysk-loop"]);
+    expect(playbook.command).toBe("skills");
+    expect(playbook.options.skills).toBe("load");
+    expect(playbook.options.skillName).toBe("crysk-loop");
+    expect(playbook.options.skillFile).toBeUndefined();
+
+    const companion = parseArgs([
+      "skills",
+      "load",
+      "crysk-ci-setup",
+      "assets/workflow.yml",
+    ]);
+    expect(companion.command).toBe("skills");
+    expect(companion.options.skills).toBe("load");
+    expect(companion.options.skillName).toBe("crysk-ci-setup");
+    expect(companion.options.skillFile).toBe("assets/workflow.yml");
+  });
+
+  test("skills load validates missing skill name, --force, and extra args", () => {
+    expect(() => parseArgs(["skills", "load"])).toThrow(
+      "crysk skills load requires a skill name",
+    );
+    expect(() =>
+      parseArgs(["skills", "load", "crysk-loop", "--force"]),
+    ).toThrow("--force is only valid with crysk skills install");
+    expect(() =>
+      parseArgs([
+        "skills",
+        "load",
+        "crysk-ci-setup",
+        "assets/workflow.yml",
+        "extra",
+      ]),
+    ).toThrow("unexpected argument: extra");
+  });
+
+  test("help lists skills install and skills load next to setup", () => {
     expect(HELP_TEXT).toContain("crysk skills install");
     expect(HELP_TEXT).toContain(
       "Install the crysk, crysk-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
     );
+    expect(HELP_TEXT).toContain("crysk skills load <skill> [<file>]");
   });
 
   test("skills is in the command list the unknown-command error names", () => {

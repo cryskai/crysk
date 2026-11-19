@@ -160,10 +160,12 @@ export interface CliOptions {
   // watcher: it runs `pr-hero gc` (no reviews, no watch.json, no window/cap).
   // Unset means the collector itself.
   gc?: "install" | "uninstall" | "status";
-  // `skills install` (src/commands/skills.ts): the non-interactive install of
-  // pr-hero's agent skills into every detected coding agent. Its only
-  // subcommand; anything else after `skills` is a usage error.
-  skills?: "install";
+  // `skills install` / `skills load` (src/commands/skills.ts): install writes
+  // the bundled skills into detected coding agents; load prints a bundled
+  // skill's playbook or companion file to stdout.
+  skills?: "install" | "load";
+  skillName?: string;
+  skillFile?: string;
   // watch install and gc install: launchd StartInterval, in minutes.
   interval?: number;
   // watch add only: record on_push: true for the repo, so every new push
@@ -340,6 +342,10 @@ Usage:
                              login
   crysk skills install [--force]
                              Install the crysk, crysk-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
+  crysk skills load <skill> [<file>]
+                             Print a skill's playbook (or a companion file such as adjudicator.md, references/*, assets/*) to stdout,
+                             from the crysk version the repository's CI runs: the one crysk status last read from a review, else the
+                             workflow's uses: cryskai/crysk@v... tag, else the latest. Falls back to the bundled copy, with a warning
   crysk ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
                              command
   crysk doctor [options]   Check system tools and environment readiness
@@ -439,8 +445,19 @@ Usage:
                              default (neither file spoke). Names both file
                              paths whether or not they exist. Resolves through
                              the same merge a review does, so it cannot drift
-                             from what actually runs. Read-only — it never
-                             writes either file. $0
+                             from what actually runs. Listing is read-only
+                             and $0; writing is only through the three forms
+                             below
+  crysk config set <key> <value> [--person|--team|--watch]
+                             Write one scalar value into the chosen layer:
+                             your own file (~/.crysk/config.json, the default),
+                             the repo file (--team) or the watcher file
+                             (--watch). Writes that file
+  crysk config unset <key> [--person|--team|--watch]
+                             Remove one value from the chosen layer. Writes
+                             that file
+  crysk config edit        Open the interactive editor over those layers.
+                             Writes the files you save
 
 Options:
   --repo <dir>        Repository to review (default: current directory)
@@ -461,7 +478,8 @@ Options:
   --head <ref>        Head branch or sha (default: ${DEFAULT_HEAD_REF})
   --agents <dir>      Prompt-set directory. Default, in order: the config's
                       agents_dir (relative paths resolve against the config
-                      file), then PRHERO_AGENTS_DIR
+                      file), then CRYSK_AGENTS_DIR (PRHERO_AGENTS_DIR is
+                      still read)
   --out <dir>         Run directory; must live OUTSIDE the reviewed repo
                       (default: ~/.crysk/repos/<origin>/runs/<sha>-<n>).
                       For reverts and corpus: the file to write instead of
@@ -493,8 +511,10 @@ Options:
   --json              status only: print the status as one JSON object on
                       stdout (schema pr-hero.status/v1)
   --from <dir>        post/triage only: the run dir to read findings.json and
-                      anchor.patch or diff.patch from (required). triage reply maps
-                      --finding F00N onto the posted marker via the same
+                      anchor.patch or diff.patch from. Required for post;
+                      optional for triage reply, which without it reads the
+                      finding off the PR by its R### id. With it, triage reply
+                      maps --finding F00N onto the posted marker via the same
                       post-line remapping post uses
   --finding <id>      triage reply only: the finding id in that run's
                       findings.json (F001, …). The driver maps it to the
@@ -960,18 +980,24 @@ export function parseArgs(argv: string[]): ParsedCli {
       options.gc = arg;
       continue;
     }
-    if (
-      command === "skills" &&
-      options.skills === undefined &&
-      arg === "install"
-    ) {
-      options.skills = "install";
-      continue;
-    }
-    // `skills` has exactly one subcommand, `install`; any other word in that
-    // slot is a usage error, not a generic unexpected argument.
     if (command === "skills" && options.skills === undefined) {
-      throw new CliUsageError("crysk skills needs a subcommand: install");
+      if (arg === "install" || arg === "load") {
+        options.skills = arg;
+        continue;
+      }
+      throw new CliUsageError(
+        "crysk skills needs a subcommand: install | load",
+      );
+    }
+    if (command === "skills" && options.skills === "load") {
+      if (options.skillName === undefined) {
+        options.skillName = arg;
+        continue;
+      }
+      if (options.skillFile === undefined) {
+        options.skillFile = arg;
+        continue;
+      }
     }
     if (
       command === "triage" &&
@@ -1031,7 +1057,19 @@ export function parseArgs(argv: string[]): ParsedCli {
     throw new CliUsageError('no command given (did you mean "crysk review"?)');
   }
   if (command === "skills" && options.skills === undefined) {
-    throw new CliUsageError("crysk skills needs a subcommand: install");
+    throw new CliUsageError("crysk skills needs a subcommand: install | load");
+  }
+  if (command === "skills" && options.skills === "load") {
+    if (!options.skillName) {
+      throw new CliUsageError(
+        "crysk skills load requires a skill name: crysk, crysk-loop, crysk-pr, crysk-ci-setup",
+      );
+    }
+    if (options.force) {
+      throw new CliUsageError(
+        "--force is only valid with crysk skills install",
+      );
+    }
   }
   // --pr derives the whole range from the PR record — head from GitHub, base
   // from the merge commit's parent or the base branch — so a hand-picked

@@ -12,3 +12,11 @@ dist/
 
 # ODD feature docs: local working state, mirrored to Engram, never source
 odd/
+
+# Local agent harness. The skills that ship live under skills/. These
+# instruction files and IDE mirrors stay on a maintainer's disk and do not
+# belong in the public tree: they name private paths and the lab layout.
+.agents/
+.claude/
+/AGENTS.md
+/CLAUDE.md

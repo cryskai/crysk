@@ -37,6 +37,7 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.bin["pr-hero"]).toBeDefined();
     expect(pkg.files).toBeDefined();
     expect(pkg.files).toContain("prompts");
+    expect(pkg.files).toContain("skill-content");
     expect(pkg.files).toContain("skills/crysk-loop");
     expect(pkg.files).toContain("skills/crysk-ci-setup");
     expect(pkg.files).toContain("skills/crysk-pr");
@@ -2184,7 +2185,7 @@ describe("Packaging & distribution configuration", () => {
       existsSync(
         path.join(
           rootDir,
-          "skills",
+          "skill-content",
           "crysk-ci-setup",
           "assets",
           "workflow-force.yml",
@@ -2193,10 +2194,10 @@ describe("Packaging & distribution configuration", () => {
     ).toBe(false);
   });
 
-  test("skills/crysk-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {
+  test("skill-content/crysk-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {
     const assetPath = path.join(
       rootDir,
-      "skills",
+      "skill-content",
       "crysk-ci-setup",
       "assets",
       "workflow.yml",
@@ -2213,45 +2214,51 @@ describe("Packaging & distribution configuration", () => {
       "crysk-ci-setup",
       "SKILL.md",
     );
+    const playbookPath = path.join(
+      rootDir,
+      "skill-content",
+      "crysk-ci-setup",
+      "playbook.md",
+    );
     const refPath = path.join(
       rootDir,
-      "skills",
+      "skill-content",
       "crysk-ci-setup",
       "references",
       "opencode-ci.md",
     );
     expect(existsSync(skillPath)).toBe(true);
+    expect(existsSync(playbookPath)).toBe(true);
     expect(existsSync(refPath)).toBe(true);
     const skill = readFileSync(skillPath, "utf-8");
-    expect(skill).toContain("references/opencode-ci.md");
-    expect(skill).toContain("CRYSK_MODELS");
-    expect(skill).toContain("CRYSK_OPENCODE_PROVIDERS");
-    expect(skill).toContain("crysk-secrets");
+    expect(skill).toContain("skills load crysk-ci-setup");
+    const playbook = readFileSync(playbookPath, "utf-8");
+    expect(playbook).toContain("references/opencode-ci.md");
+    expect(playbook).toContain("CRYSK_MODELS");
+    expect(playbook).toContain("CRYSK_OPENCODE_PROVIDERS");
+    expect(playbook).toContain("crysk-secrets");
     const ref = readFileSync(refPath, "utf-8");
     expect(ref).toContain("CRYSK_OPENCODE_PROVIDERS");
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");
   });
 
-  test(".agents/skills/crysk-ci-setup/assets/workflow.yml matches the skills workflow asset", () => {
-    const skillsPath = path.join(
-      rootDir,
-      "skills",
-      "crysk-ci-setup",
-      "assets",
-      "workflow.yml",
-    );
-    const agentsPath = path.join(
-      rootDir,
-      ".agents",
-      "skills",
-      "crysk-ci-setup",
-      "assets",
-      "workflow.yml",
-    );
-    expect(existsSync(agentsPath)).toBe(true);
-    expect(readFileSync(agentsPath, "utf-8")).toBe(
-      readFileSync(skillsPath, "utf-8"),
-    );
+  test("agent harness files stay out of the public tree", () => {
+    const listed = Bun.spawnSync({
+      cmd: [
+        "git",
+        "ls-files",
+        "--",
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".agents",
+        ".claude",
+      ],
+      cwd: rootDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout.toString()).toBe("");
   });
 
   // A consumer repo has no copy of this action's source, so it must resolve
@@ -2371,7 +2378,10 @@ describe("/crysk recheck wiring", () => {
     `startsWith(github.event.comment.body, '${command}')`;
   // This repository's own review moved to the Crysk platform, so the workflow
   // `crysk ci init` generates for it is read from the generator, not a file.
-  const copies = ["generated:own", "skills/crysk-ci-setup/assets/workflow.yml"];
+  const copies = [
+    "generated:own",
+    "skill-content/crysk-ci-setup/assets/workflow.yml",
+  ];
   const read = (file: string) =>
     file === "generated:own"
       ? generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS)

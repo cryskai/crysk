@@ -56,6 +56,14 @@ import {
 import { GATE_RECORD_FILE } from "../pr/gate-record";
 import type { FindingsDocument } from "../review/findings";
 import { validateFindingsDocument } from "../review/findings";
+import {
+  accountRefusalOf,
+  actionSecretName,
+  CLI_RECORD_FILE,
+  parseCliRecord,
+  RESOLVE_THREADS_FILE,
+  resolveThreadIds,
+} from "./outcome";
 import { PLATFORM_API_URL, type PlatformDataMode } from "./platform";
 
 // The platform caps `agents` at 64 entries.
@@ -126,6 +134,18 @@ export interface RunReportBody {
   // What the run measured per model request: the platform prices the run from it, so the body
   // carries no dollar figure anywhere.
   usage_facts: ReportUsageFacts;
+  // #573: every hunter stopped on the same refusal of the account. Names of secrets only,
+  // never a value. The platform holds this repository's reviews on it.
+  account_refusal?: ReportAccountRefusal;
+  // #562: review comment ids whose verified-gone reply posted and whose thread resolve the
+  // workflow token was refused. The platform resolves those threads with the App's
+  // installation. Positive integers, at most 100, no duplicates; absent when there are none.
+  resolve_threads?: number[];
+}
+
+export interface ReportAccountRefusal {
+  cause: "auth_invalid" | "quota_exhausted";
+  secrets: string[];
 }
 
 export type ReportCredential = "api" | "subscription" | "free";
@@ -160,6 +180,8 @@ export interface BuildRunReportInput {
   // The trigger's resolved head, the fallback when no findings were written.
   triggerHeadSha: string;
   run: RunDirFacts;
+  accountRefusal?: ReportAccountRefusal;
+  resolveThreads?: readonly number[];
 }
 
 // null when the run has no usable head: the platform requires a 40-hex sha, so
@@ -181,6 +203,18 @@ export function buildRunReport(
     (sha): sha is string => typeof sha === "string" && SHA.test(sha),
   );
   if (headSha === undefined) return null;
+  // The fields the outcome directory adds, on both report shapes.
+  const outcomeFields: Pick<
+    RunReportBody,
+    "account_refusal" | "resolve_threads"
+  > =
+    input.accountRefusal === undefined
+      ? {}
+      : { account_refusal: input.accountRefusal };
+  const resolveThreads = resolveThreadIds(input.resolveThreads ?? []);
+  if (resolveThreads.length > 0) {
+    outcomeFields.resolve_threads = resolveThreads;
+  }
 
   if (doc === undefined) {
     return {
@@ -192,6 +226,7 @@ export function buildRunReport(
       agents: [],
       // A run that wrote no findings can still have spent tokens before it died.
       usage_facts: buildUsageFacts(input.run.pipeline, new Map()),
+      ...outcomeFields,
     };
   }
 
@@ -212,6 +247,7 @@ export function buildRunReport(
   );
 
   return {
+    ...outcomeFields,
     outcome: input.outcome === "" ? "error" : input.outcome,
     pr_number: input.prNumber,
     head_sha: headSha,
@@ -738,6 +774,45 @@ export function readRunDir(
   return facts;
 }
 
+// The refusal the CLI recorded for this run. A missing or unreadable record is no refusal:
+// the report still goes out, and the platform simply holds nothing.
+export function readAccountRefusal(
+  outcomeDir: string,
+  readText: (file: string) => string = (file) => readFileSync(file, "utf8"),
+): ReportAccountRefusal | undefined {
+  if (outcomeDir === "") return undefined;
+  let text: string;
+  try {
+    text = readText(path.join(outcomeDir, CLI_RECORD_FILE));
+  } catch {
+    return undefined;
+  }
+  const record = parseCliRecord(text);
+  if (record?.outcome !== "hunters-failed") return undefined;
+  const refusal = accountRefusalOf(record.hunter_failures ?? []);
+  if (refusal === undefined) return undefined;
+  return {
+    cause: refusal.cause,
+    secrets: [...new Set(refusal.credentials.map(actionSecretName))],
+  };
+}
+
+// #562: the review comment ids whose thread resolve the workflow token was refused. A
+// missing, unreadable or malformed record is none: the report still goes out without them.
+export function readResolveThreads(
+  outcomeDir: string,
+  readText: (file: string) => string = (file) => readFileSync(file, "utf8"),
+): number[] {
+  if (outcomeDir === "") return [];
+  try {
+    return resolveThreadIds(
+      JSON.parse(readText(path.join(outcomeDir, RESOLVE_THREADS_FILE))),
+    );
+  } catch {
+    return [];
+  }
+}
+
 export type SendReportResult =
   | { ok: true; recorded: boolean; runId?: string }
   // `message` names the HTTP status and the API's own `message`. It never
@@ -969,6 +1044,14 @@ export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
       prNumber,
       triggerHeadSha: deps.env.TRIGGER_HEAD_SHA ?? "",
       run,
+      accountRefusal: readAccountRefusal(
+        deps.env.CRYSK_OUTCOME_DIR ?? "",
+        deps.readText,
+      ),
+      resolveThreads: readResolveThreads(
+        deps.env.CRYSK_OUTCOME_DIR ?? "",
+        deps.readText,
+      ),
     });
     if (body === null) {
       warn("the run resolved no head sha.");

@@ -60,15 +60,16 @@ export const LEGACY_SECRET_NAMES = [
 export type LegacySecretName = (typeof LEGACY_SECRET_NAMES)[number];
 
 // The CRYSK_* secret to set in place of each old name (U5), for the messages that
-// name it. OPENCODE_AUTH_JSON held the whole store; its replacement is one secret
-// per provider, and an `_OAUTH` record is read only for openai (U3).
+// name it. OPENCODE_AUTH_JSON held the whole store; its replacement is one API key
+// per provider. The `_OAUTH` record is never advised: only the Crysk platform can
+// keep that login valid, so a ChatGPT plan goes through the GitHub App.
 export const LEGACY_SECRET_REPLACEMENT: Readonly<
   Record<LegacySecretName, string>
 > = {
   CLAUDE_CODE_OAUTH_TOKEN: "CRYSK_CLAUDE_OAUTH_TOKEN",
   ANTHROPIC_API_KEY: "CRYSK_CLAUDE_API_KEY",
   OPENCODE_AUTH_JSON:
-    "one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription)",
+    "one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (a ChatGPT plan needs the Crysk GitHub App)",
 };
 
 export interface CryskSecretsParse {

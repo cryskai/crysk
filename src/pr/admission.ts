@@ -14,7 +14,11 @@ import {
   shouldWriteCiOutputs,
   shouldWriteStepSummary,
 } from "#ci/gates";
-import type { CliRecord } from "#ci/outcome";
+import {
+  type AccountRefusal,
+  accountRefusalOf,
+  type CliRecord,
+} from "#ci/outcome";
 import { isOverrideStatus, newestStatusInContext } from "#ci/override";
 import {
   appendCiOutputs,
@@ -48,6 +52,10 @@ import {
 import { publishFinalCommitStatus } from "#pr/status";
 import { log } from "#ui/primitives";
 import { canonicalStatusText, STATUS_CONTEXT } from "../brand";
+import type {
+  FailureCredential,
+  TransportFailureCause,
+} from "../execution/contracts";
 import { CredentialRefusalError } from "../security/claude-credential";
 
 // ROADMAP Pillar 3 (GitHub Actions CI). The mechanical glue behind a gate
@@ -203,6 +211,42 @@ export async function settleCiGateSkip(
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<void> {
   await settleCiAdmissionLedger(state, "gate-skipped", reason, options);
+}
+
+// #572: why a run's hunters all stopped on the account, not on the review. A person has to
+// act on the credential or wait for the limit.
+const ACCOUNT_REFUSAL_REASON: Record<AccountRefusal["cause"], string> = {
+  auth_invalid: "every hunter stopped: the provider rejected the credential",
+  quota_exhausted: "every hunter stopped: the provider's usage limit is spent",
+};
+
+// A run where every hunter failed. On a proven account refusal (accountRefusalOf) the pull
+// request got no review and did nothing to cause that, so the row leaves the attempt budget. A
+// hunter may have used tokens before the refusal, which the budget accepts: it bounds automatic
+// reviews, and this was not one. Any other mix stays `failed` and counts.
+export async function settleCiHuntersFailed(
+  state: CiAdmissionLedgerState | null,
+  failures: readonly {
+    readonly cause?: TransportFailureCause;
+    readonly credential?: FailureCredential;
+  }[],
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<void> {
+  const refusal = accountRefusalOf(failures);
+  if (refusal !== undefined) {
+    await settleCiGateSkip(
+      state,
+      ACCOUNT_REFUSAL_REASON[refusal.cause],
+      options,
+    );
+    return;
+  }
+  await settleCiAdmissionLedger(
+    state,
+    "failed",
+    "every hunter failed",
+    options,
+  );
 }
 
 // R003 (#494): a credential refusal at admission (CredentialRefusalError: no Claude

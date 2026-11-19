@@ -231,7 +231,7 @@ function credentialWithLines(options: CiWorkflowTemplateOptions): string {
           # both Claude secrets set, credentials.claude picks one (the subscription first).
           #   CRYSK_CLAUDE_OAUTH_TOKEN — from \`claude setup-token\`: a long-lived
           #     (~1 year) token that draws on your Claude subscription. The
-          #     session token \`/login\` leaves in the keychain expires in hours.
+          #     session token a \`/login\` stores locally expires in hours.
           #   CRYSK_CLAUDE_API_KEY     — pay-as-you-go key (billed per token).`;
   if (options.cryskSecrets !== undefined) {
     return `${block}
@@ -239,13 +239,15 @@ function credentialWithLines(options: CiWorkflowTemplateOptions): string {
 ${lines}`;
   }
   return `${block}
-          #   CRYSK_OPENCODE_OPENAI_OAUTH — an OpenAI (ChatGPT) subscription for
-          #     OpenCode: the openai record of OpenCode's auth.json, base64 on one line.
           #   CRYSK_OPENCODE_<PROVIDER>_API_KEY — an OpenCode provider's API key,
-          #     <PROVIDER> being its id uppercased with - and . as _. The ${MAX_OPENCODE_PROVIDER_SLOTS}
-          #     lines after the fixed ones forward the providers listed in
-          #     vars.${OPENCODE_PROVIDERS_VARIABLE} (a JSON array, e.g. ["DEEPSEEK"]);
-          #     an unused line renders as CRYSK_OPENCODE__API_KEY= and is skipped.
+          #     <PROVIDER> being its id uppercased with - and . as _. For
+          #     OpenAI: CRYSK_OPENCODE_OPENAI_API_KEY. A ChatGPT plan needs the
+          #     Crysk GitHub App: this Action cannot keep a ChatGPT login valid.
+          #   CRYSK_OPENCODE_OPENAI_OAUTH — set by the Crysk platform on the
+          #     repositories it manages. Leave it unset here.
+          # The ${MAX_OPENCODE_PROVIDER_SLOTS} lines after the fixed ones forward the providers listed in
+          # vars.${OPENCODE_PROVIDERS_VARIABLE} (a JSON array, e.g. ["DEEPSEEK"]); an unused
+          # line renders as CRYSK_OPENCODE__API_KEY= and is skipped.
           # \`crysk ci init\` prints the commands that set these secrets and variables.
           crysk-secrets: |
 ${lines}

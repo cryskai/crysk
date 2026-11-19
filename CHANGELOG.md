@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-19
+
+### Added
+
+- **The Crysk platform holds reviews when a provider refuses the account.** When every hunter of a platform-dispatched run stops on the same rejected credential or spent usage limit, the run report names the cause and the secret (`account_refusal`, names only, never a value). The platform then holds that repository's automatic reviews instead of dispatching runs that can only fail, renews a rejected subscription login once, tells the owners on the dashboard and with a `crysk/hold` commit status, and reviews what it held once the credential works again. `/crysk review` always runs (#573).
+- **Installed skills follow the Crysk version your CI runs.** `crysk skills install` and `npx skills add` now
+  install only a short `SKILL.md` stub per skill. The stub runs `crysk skills load <skill>`, which prints the playbook of the Crysk the
+  repository's CI runs: the version that wrote the last review, else the version named by the `uses: cryskai/crysk@v…`
+  line of a workflow on the default branch (read from git objects, never from the checkout), else the latest GitHub
+  release. A moving tag and "latest" are resolved from GitHub, and an exact version must exist as a GitHub tag. When a
+  version cannot be resolved or loaded, the command prints its bundled copy with a warning on stderr. The `npx` that
+  fetches another version runs from an empty directory with no `node_modules/.bin` on its `PATH`, so a branch's `node_modules` cannot supply what is cached; an
+  `npx` command an agent runs inside a checkout can still resolve that checkout's `node_modules`. Run
+  `crysk skills install` one last time to get the stubs: it also removes the companion files an earlier install
+  copied, keeping and reporting any you edited. After that, a release needs no reinstall.
+- **`crysk status --json` names the engine version.** `report.engine_version` is the Crysk version that wrote
+  the summary (read only from a summary a bot posted). `skills_reload` is the running CLI's own
+  `skills load crysk-loop` command when the version recorded for the repository differs from that CLI (`null`
+  otherwise), so the loader's GitHub tag check applies to the recorded version. The summary's admission block now
+  carries the version in its JSON; its header line is unchanged.
+- **`crysk status --json` gives agents data to branch on.** `reason_code` names why `next_action` is what it is, one
+  closed value per decision. `forced_runs_on_head` counts the `/crysk review` and `/crysk recheck` commands that apply
+  to this head (if the status history cannot be read, it counts from the latest status). Each finding gains `needs_reply` and `inconclusive_heads`. All are additive to `pr-hero.status/v1`,
+  and the `next_action` values are unchanged.
+
+### Changed
+
+- **GitHub CLI is required.** `crysk doctor` now fails when `gh` is missing or not authenticated, instead of only warning. Every command that touches a pull request, including `status` and `triage reply`, runs through it.
+- **The user docs are on crysk.dev.** [crysk.dev/docs](https://crysk.dev/docs/) is the maintained home of the
+  quickstart, the review guides, the Action reference, the config reference and the error codes, and
+  [crysk.dev/llms.txt](https://crysk.dev/llms.txt) indexes them for agents. The README is now short: what Crysk
+  is, how to install it, a first review, notes for AI agents, exit codes and development, with links to the
+  site. `docs/github-actions.md` and `docs/configuration.md` stay for existing links and say so at the top, and
+  `docs/README.md` maps the folder.
+- **A ChatGPT plan is not supported in the open-source Action.** OpenAI replaces its refresh token on every
+  renewal, a review never holds the new one and nothing renews a repository secret, so a stored login stops
+  working. OpenAI in the Action means `CRYSK_OPENCODE_OPENAI_API_KEY`; a ChatGPT plan needs the Crysk GitHub App.
+  The workflow template, `crysk ci init`, the CI skill and the error fixes for a missing, rejected or expiring
+  OpenAI login now say so and no longer tell a standalone user to store the login record. The Action still
+  accepts `CRYSK_OPENCODE_OPENAI_OAUTH`, which the Crysk platform uses: nothing about how a run reads it changed.
+- **Error annotations link to the error-code page on crysk.dev**
+  (`https://crysk.dev/docs/reference/error-codes/#crysk-cred-missing` and the like). Comments already posted
+  keep working: `docs/github-actions.md` still has every code section and anchor.
+- **The agent skills are rewritten around the status fields and for pull requests reviewed by CI or the platform.**
+  The review loop routes on `next_action` and `reason_code` in one table, with on-demand companion files, and no
+  longer greps the workflow, which was wrong on platform repositories. An agent now posts `/crysk stop` only on a
+  green gate, asks before forcing a review past a size or cost limit, reads `status --wait` before calling a pull
+  request ready, never merges or force-pushes, and has a rule for a local adjudicator that returns `rejected` or
+  `inconclusive`. `crysk-pr` applies only in repositories that use Crysk and checks before running `npx`. The CI skill
+  splits day-to-day handling into `references/ci-operations.md` and stops using `crysk doctor` to verify CI. The
+  unused `assets/admission-config.example.json` is gone.
+- **`next_action: fix` now means there is something to push.** On a head no review read (a carried red, or a summary
+  of an earlier head), status never returns `fix`: an unruled dismissal returns `recheck`, and anything else returns
+  `override-or-fix` with its own reason code.
+- **A size or cost skip in advisory mode no longer reads as "no review yet".** Advisory mode writes no status for it, so
+  status now reports `review_skipped` from the skip notice, and the agent asks before forcing a review.
+- **The review loop can save a review.** With a green gate, after a review whose new findings were only 1 or 2 advisory
+  ones, all fixed, an agent posts `/crysk stop` before a push that holds only those fixes.
+
+### Fixed
+
+- **`crysk status` and pull request reviews work with an older GitHub CLI.** GitHub CLI 2.60 does not know the `baseRefOid` field and refused the whole request. Crysk now reads the base commit from the REST API when `gh` refuses that field (#561).
+- **A platform re-review now resolves the threads it verified gone.** When the workflow token is refused the resolve
+  (`Resource not accessible by integration`), a platform-dispatched run reports those review comments to the Crysk
+  platform as `resolve_threads`, and the platform resolves the threads with the Crysk App's installation. The
+  runner's token keeps its permissions. Without the platform, the thread still stays open for a person to close (#562).
+- **An account outage no longer uses up a pull request's automatic reviews.** A run where every hunter stopped on the same rejected credential or spent usage limit no longer counts toward `ci_max_attempts` (#572).
+- **A spent ChatGPT subscription is reported as a usage limit.** On the OpenCode route, a refused turn with status 429 that names a usage limit now ends as `CRYSK-PROVIDER-LIMITED`, naming the secret, without a retry. It used to be retried and published as `CRYSK-HUNTERS-FAILED`. An ordinary 429 keeps its retry (#571).
+- **Text that did not match the code.** `crysk config` is read-only only when it lists: `set`, `unset` and `edit`
+  write a config file, and the help now says so. `--from` is required for `post` and optional for
+  `triage reply`. A local `--dry-run` that the size gate would skip no longer prints `(exit 1)`: it returns `0`,
+  as before. `crysk ci init` and the CI guide no longer say the legacy `pr-hero` commit status is still posted:
+  it is read, not written, so a branch protection rule on it must move to `crysk`. The README's `--full` line
+  and its `v2.0` note are gone with the sections that held them; `--full` widens a re-review to the full pull
+  request range. The size defaults read: locally 4000 lines and 150 files, in CI, when the
+  workflow and the repo config set none, no limit on a Claude subscription and 4000 lines and 50 files on a
+  pay-per-token route. `agents_dir` is listed in both config
+  layers with the repo winning, and the materiality gate text matches the code (a safety guard keeps security,
+  credential and data-loss findings away from the judge, which runs on its profile's judge model).
+- **`crysk status` no longer reads findings or summaries a person typed.** Finding and summary markers count only from
+  bots and from the logins in `ci_trusted_actors`, so a marker-shaped comment cannot send an agent to triage or to a paid
+  review. A review posted under a person's account is not read unless the repository lists that account.
+- **`crysk triage reply` refuses two replies it used to accept.** A different `--tag` on a finding already answered at
+  this head, which was silently dropped with exit 0, and `--tag dismissed --verdict rejected`. Both exit non-zero and post
+  nothing. Repeating the same tag still retries resolving the thread.
+- **The notice for a leftover `OPENCODE_AUTH_JSON` secret no longer recommends `CRYSK_OPENCODE_OPENAI_OAUTH`,** and the
+  workflow template's comments say what that forwarded line is for: the Crysk platform sets it, and a standalone repository leaves it unset.
+- **SECURITY.md** no longer lists a `1.0` version that does not exist, and the package has a description.
+
 ## [0.9.0] - 2026-11-18
 
 ### Changed
@@ -1259,7 +1348,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/cryskai/crysk/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cryskai/crysk/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.1
 [0.8.0]: https://github.com/cryskai/crysk/compare/v0.7.0...cc6cdec9

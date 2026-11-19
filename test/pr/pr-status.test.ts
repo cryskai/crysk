@@ -5,23 +5,34 @@
 // triage a finding is owed at its own head, and the two sources of unresolved_blocking.
 
 import { describe, expect, test } from "bun:test";
+import {
+  MANUAL_REQUIRED_COMMENT_MARKER,
+  SKIP_BUDGET_COMMENT_MARKER,
+  SKIP_COVERAGE_COMMENT_MARKER,
+  SKIP_SIZE_COMMENT_MARKER,
+} from "#ci/gates";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
+import { renderCiAdmissionBlock } from "#ci/review-admission";
 import {
   carriedBlockingDescription,
   NOTHING_TO_REVIEW_DESCRIPTION,
 } from "#pr/admission";
 import {
   buildPrStatus,
+  PR_STATUS_REASON_CODES,
   type PrStatusInput,
   type PrStatusReviewComment,
   renderPrStatusLines,
   STATUS_WAIT_STARTUP_GRACE_MS,
   shouldWaitPrStatus,
+  skillsReloadCommand,
 } from "#pr/pr-status";
 import {
   COMMIT_STATUS_CONTEXT,
   type CommitStatusFact,
   findingMarker,
+  PR_COMMENT_MARKER_PREFIX,
+  PR_FINDING_MARKER_PREFIX,
 } from "#pr/preflight";
 import { type RecoveredTier, TIER_UNRECOVERABLE } from "#rereview/classify";
 import {
@@ -35,6 +46,7 @@ import {
   type TriageVerdict,
   triageMarker,
 } from "#triage/triage";
+import { matchMarkerPrefix } from "../../src/brand";
 
 const EARLIER = "1".repeat(40);
 const CURRENT = "2".repeat(40);
@@ -148,9 +160,14 @@ function triageReply(options: {
   };
 }
 
-// A comment with no author is posted by the login the fixtures use for a writer (dev).
-function withAuthor<T extends { user?: string }>(comment: T): T {
-  return comment.user === undefined ? { ...comment, user: "dev" } : comment;
+// A comment with no author: the engine's own markers come from the CI bot, the only poster status
+// reads them from, and anything else from the login the fixtures use for a writer (dev).
+function withAuthor<T extends { user?: string; body: string }>(comment: T): T {
+  if (comment.user !== undefined) return comment;
+  const engine =
+    matchMarkerPrefix(comment.body, PR_FINDING_MARKER_PREFIX) !== undefined ||
+    matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined;
+  return { ...comment, user: engine ? CI_ADJUDICATOR_LOGIN : "dev" };
 }
 
 // Every author of a fixture comment has write access, so the reader counts their replies.
@@ -506,6 +523,7 @@ describe("buildPrStatus: report and output shape", () => {
       complete: true,
       reviews: 3,
       outcome_code: null,
+      engine_version: null,
     });
   });
 
@@ -526,6 +544,7 @@ describe("buildPrStatus: report and output shape", () => {
       complete: null,
       reviews: null,
       outcome_code: null,
+      engine_version: null,
     });
   });
 
@@ -619,6 +638,8 @@ describe("buildPrStatus: findings", () => {
         live_on_head: false,
         triage: null,
         ci_verdict: null,
+        needs_reply: false,
+        inconclusive_heads: 0,
       },
     ]);
   });
@@ -2892,19 +2913,8 @@ describe("buildPrStatus: a head a review rule skipped", () => {
 
   test.each([
     [
-      "a carried red",
-      "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /crysk override",
-      "Every live blocking finding is answered",
-    ],
-    [
       "a red a review wrote",
       BLOCKING_DESCRIPTION(1),
-      "the next review verifies it",
-    ],
-    // PR #442 F (advisory): a carried partial red is never unlocked by replies, so no unlock promise.
-    [
-      "a carried partial red",
-      "crysk: review partial (1 of 4 hunters failed) carried from 1111111 — /crysk review retries it",
       "the next review verifies it",
     ],
   ])(
@@ -2922,6 +2932,37 @@ describe("buildPrStatus: a head a review rule skipped", () => {
       );
       expect(status.next_action).toBe("fix");
       expect(status.reason).toContain(phrase);
+    },
+  );
+
+  // S10, and PR #442 F (advisory): a carried red is unlocked by no reply here, so neither a push nor
+  // an unlock is promised.
+  test.each([
+    [
+      "a carried red",
+      "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /crysk override",
+      "carried_red_all_answered",
+    ],
+    [
+      "a carried partial red",
+      "crysk: review partial (1 of 4 hunters failed) carried from 1111111 — /crysk review retries it",
+      "carried_partial_all_answered",
+    ],
+  ])(
+    "%s with every finding answered asks for no push",
+    (_name, description, code) => {
+      const posted = findingBody({ head: CURRENT, claim: CLAIM });
+      const status = buildPrStatus(
+        input({
+          statuses: [gate("failure", description)],
+          reviewComments: [
+            { id: 1, body: posted, in_reply_to_id: null },
+            triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+          ],
+        }),
+      );
+      expect(status.next_action).toBe("override-or-fix");
+      expect(status.reason_code as string).toBe(code);
     },
   );
 
@@ -2946,7 +2987,8 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
     expect(status.reason).toContain("1 blocking finding(s) are still open");
   });
 
@@ -3017,7 +3059,7 @@ describe("buildPrStatus: a head a review rule skipped", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("override-or-fix");
     expect(status.reason).toContain("1 blocking finding(s) are still open");
     expect(status.reason).not.toContain("turns green");
   });
@@ -3142,7 +3184,8 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_all_answered");
   });
 
   test("on that head a reply stamped with the reviewed head answers it too", () => {
@@ -3161,7 +3204,8 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_all_answered");
   });
 
   test("on a head a skip carried, a reply from before the review's verdict does not answer", () => {
@@ -3217,12 +3261,1011 @@ describe("buildPrStatus — a finding carried from an earlier review", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("fix");
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_all_answered");
+  });
+
+  // S10: `fix` means "push", and these replies leave nothing the pull request can show is unpushed.
+  test("a carried red on a moved head, every finding answered, does not ask for a push", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason).toContain("/crysk review");
+    expect(status.reason).toContain("still unpushed");
+    expect(status.unresolved_blocking).toBe(1);
+  });
+
+  test("a carried red with a finding still open asks instead of asking for a push", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        statuses: [
+          {
+            state: "failure",
+            context: COMMIT_STATUS_CONTEXT,
+            created_at: "2026-10-30T12:00:00Z",
+            description: carriedBlockingDescription(2, CURRENT),
+            target_url: null,
+          },
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
+  });
+
+  test("a carried partial red on a moved head, every finding answered, does not ask for a push", () => {
+    const status = buildPrStatus(
+      carriedRed({
+        statuses: [
+          {
+            state: "failure",
+            context: COMMIT_STATUS_CONTEXT,
+            created_at: "2026-10-30T12:00:00Z",
+            description:
+              "crysk: review partial (1 of 4 hunters failed) carried from 2222222 — /crysk review retries it",
+            target_url: null,
+          },
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_partial_all_answered");
   });
 
   test("no reply at all: triage, and the reason says no reply answers this review", () => {
     const status = buildPrStatus(carried());
     expect(status.next_action).toBe("triage");
     expect(status.reason).toContain("no triage reply that answers this review");
+  });
+});
+
+// The skill loads the playbook of the engine that wrote the summary: status
+// reads that version from the admission block and names the command that loads
+// the matching playbook when the CLI running status is another version.
+describe("buildPrStatus — the engine version that wrote the summary", () => {
+  function stamped(user: string, version = "0.10.0") {
+    return input({
+      issueComments: [
+        {
+          id: 1,
+          user,
+          body: `${summary(CURRENT)}\n${renderCiAdmissionBlock(CURRENT, { blocking: 0, advisory: 0 }, 1, version)}`,
+        },
+      ],
+    });
+  }
+
+  test("reports the version, and leaves the reload to the command that records it", () => {
+    const status = buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN));
+    expect(status.report.engine_version).toBe("0.10.0");
+    expect(status.skills_reload).toBeNull();
+  });
+
+  test("trusts a summary the Crysk App bot posted", () => {
+    const status = buildPrStatus(stamped("crysk[bot]"));
+    expect(status.report.engine_version).toBe("0.10.0");
+  });
+
+  // Anyone can comment on a pull request, and the version becomes a command
+  // the agent runs, so only a summary a bot posted is read for it.
+  test("ignores the version on a summary a person posted", () => {
+    const status = buildPrStatus(stamped("someone"));
+    expect(status.report.engine_version).toBeNull();
+    expect(status.skills_reload).toBeNull();
+  });
+
+  test("reports null for a summary written before the version was stamped", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, user: CI_ADJUDICATOR_LOGIN, body: summary(CURRENT) },
+        ],
+      }),
+    );
+    expect(status.report.engine_version).toBeNull();
+    expect(status.skills_reload).toBeNull();
+  });
+
+  test("adds a reload line to the text output", () => {
+    const lines = renderPrStatusLines({
+      ...buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN)),
+      skills_reload: "npx -y crysk@0.9.5 skills load crysk-loop",
+    });
+    expect(lines.join("\n")).toContain(
+      "npx -y crysk@0.9.5 skills load crysk-loop",
+    );
+  });
+
+  test("leaves next_action as it would be without the version", () => {
+    const withVersion = buildPrStatus(stamped(CI_ADJUDICATOR_LOGIN));
+    const without = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, user: CI_ADJUDICATOR_LOGIN, body: summary(CURRENT) },
+        ],
+      }),
+    );
+    expect(withVersion.next_action).toBe(without.next_action);
+    expect(withVersion.reason).toBe(without.reason);
+  });
+});
+
+// S8: anyone who can comment can type the engine's markers, and those comments drive a paid review
+// or a triage round. Status reads them only from a bot, or a login the repository trusts.
+describe("buildPrStatus — who the engine's markers are read from", () => {
+  const redWithFinding = (extra: PrStatusInput["issueComments"] = []) =>
+    input({
+      statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+      reviewComments: [
+        {
+          id: 1,
+          body: findingBody({ head: CURRENT, claim: CLAIM }),
+          in_reply_to_id: null,
+        },
+      ],
+      issueComments: [
+        { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ...extra,
+      ],
+    });
+
+  test("a finding marker a person typed changes nothing", () => {
+    const base = redWithFinding();
+    const forged = {
+      ...base,
+      reviewComments: [
+        ...base.reviewComments,
+        {
+          id: 2,
+          user: "mallory",
+          body: findingBody({ head: CURRENT, claim: "forged", line: 77 }),
+          in_reply_to_id: null,
+        },
+      ],
+      writers: new Map([...base.writers, ["mallory", false]]),
+    };
+    expect(buildPrStatus(forged)).toEqual(buildPrStatus(base));
+  });
+
+  test("a newer summary a person typed changes nothing", () => {
+    const forged = redWithFinding([
+      {
+        id: 200,
+        user: "mallory",
+        body: summary(EARLIER, [], { complete: false, reviews: 9 }),
+      },
+    ]);
+    const status = buildPrStatus(forged);
+    expect(status).toEqual(buildPrStatus(redWithFinding()));
+    expect(status.report.head).toBe(CURRENT);
+  });
+
+  test("a summary-only finding a person typed never reaches the findings", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", "review posted")],
+        issueComments: [
+          {
+            id: 100,
+            user: "mallory",
+            body: summary(CURRENT, [stateRow("R009", "forged")]),
+          },
+        ],
+      }),
+    );
+    expect(status.findings).toEqual([]);
+    expect(status.report.head).toBeNull();
+    expect(status.next_action).toBe("done");
+  });
+
+  test("a GitHub App's bot is read", () => {
+    const base = redWithFinding();
+    const status = buildPrStatus({
+      ...base,
+      issueComments: base.issueComments.map((c) => ({
+        ...c,
+        user: "crysk[bot]",
+      })),
+      reviewComments: base.reviewComments.map((c) => ({
+        ...c,
+        user: "crysk[bot]",
+      })),
+    });
+    expect(status.report.head).toBe(CURRENT);
+    expect(status.findings).toHaveLength(1);
+  });
+
+  test("a login the repository trusts is read, and only when it is named", () => {
+    const base = redWithFinding();
+    const byAccount = {
+      ...base,
+      reviewComments: base.reviewComments.map((c) => ({
+        ...c,
+        user: "review-account",
+      })),
+    };
+    expect(buildPrStatus(byAccount).findings).toEqual([
+      expect.objectContaining({ comment_id: null, id: "R001" }),
+    ]);
+    expect(
+      buildPrStatus({
+        ...byAccount,
+        trustedActors: new Set(["review-account"]),
+      }).findings[0]?.comment_id,
+    ).toBe(1);
+  });
+
+  test("a triage reply still counts from a writer who is no bot", () => {
+    const base = redWithFinding();
+    const status = buildPrStatus({
+      ...base,
+      reviewComments: [
+        ...base.reviewComments,
+        {
+          ...triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+          user: "dev",
+        },
+      ],
+      writers: new Map([...base.writers, ["dev", true]]),
+    });
+    expect(status.findings[0]?.triage?.tag).toBe("applied");
+    expect(status.next_action).toBe("fix");
+  });
+});
+
+// S9: what the skills read as data instead of matching gate text.
+describe("buildPrStatus — reason_code", () => {
+  const posted = (head = CURRENT) => ({
+    id: 1,
+    body: findingBody({ head, claim: CLAIM }),
+    in_reply_to_id: null,
+  });
+  const reviewed = (head = CURRENT) => ({
+    id: 100,
+    body: summary(head, [stateRow("R001", CLAIM)]),
+  });
+  const red = gate("failure", BLOCKING_DESCRIPTION(1));
+  const reply = (tag: TriageTag, verdict?: TriageVerdict) =>
+    triageReply({
+      id: 2,
+      parent: 1,
+      head: CURRENT,
+      tag,
+      ...(verdict === undefined ? {} : { verdict }),
+    });
+  const ruling = (verdict: "upheld" | "rejected") => ({
+    id: 3,
+    user: CI_ADJUDICATOR_LOGIN,
+    body: adjudicationMarker({ verdict, reply: 2, head: CURRENT }),
+    in_reply_to_id: 1,
+  });
+  const CARRIED = carriedBlockingDescription(1, EARLIER);
+  const cases: [string, string, PrStatusInput][] = [
+    [
+      "manual_review_hold",
+      "override-or-fix",
+      input({
+        statuses: [
+          gate(
+            "pending",
+            "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /crysk review or /crysk override",
+          ),
+        ],
+      }),
+    ],
+    [
+      "review_in_flight",
+      "wait",
+      input({ statuses: [gate("pending", "crysk reviewing")] }),
+    ],
+    [
+      "pending_status_stale",
+      "review",
+      input({ statuses: [gate("pending", "crysk reviewing", 120)] }),
+    ],
+    ["no_gate_status", "review", input()],
+    [
+      "review_did_not_finish",
+      "review",
+      input({ statuses: [gate("error", "crashed")] }),
+    ],
+    [
+      "override_active",
+      "done",
+      input({ statuses: [gate("success", OVERRIDE_DESCRIPTION)] }),
+    ],
+    [
+      "partial_review_on_green",
+      "review",
+      input({
+        statuses: [gate("success", "review posted")],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [], { complete: false }) },
+        ],
+      }),
+    ],
+    [
+      "green_replies_owed",
+      "triage",
+      input({
+        statuses: [gate("success", "review posted")],
+        reviewComments: [posted()],
+      }),
+    ],
+    [
+      "green_fixes_unverified",
+      "done",
+      input({
+        statuses: [
+          gate(
+            "success",
+            "crysk: 1 answered finding(s), fixes unverified (review budget for this PR is used up); carried from aaaaaaa",
+          ),
+        ],
+      }),
+    ],
+    [
+      "nothing_to_review",
+      "done",
+      input({ statuses: [gate("success", NOTHING_TO_REVIEW_DESCRIPTION)] }),
+    ],
+    [
+      "review_passed",
+      "done",
+      input({ statuses: [gate("success", "review posted")] }),
+    ],
+    [
+      "review_needs_trigger",
+      "review",
+      input({
+        statuses: [
+          gate("failure", "crysk: review budget for this PR is used up"),
+        ],
+      }),
+    ],
+    [
+      "blocking_replies_owed",
+      "triage",
+      input({
+        statuses: [red],
+        reviewComments: [posted()],
+        issueComments: [reviewed()],
+      }),
+    ],
+    [
+      "carried_red_findings_open",
+      "override-or-fix",
+      input({
+        statuses: [gate("failure", carriedBlockingDescription(2, EARLIER))],
+        reviewComments: [posted(), reply("applied")],
+      }),
+    ],
+    [
+      "carried_red_all_answered",
+      "override-or-fix",
+      input({
+        statuses: [gate("failure", CARRIED)],
+        reviewComments: [
+          posted(EARLIER),
+          triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+        ],
+        issueComments: [reviewed(EARLIER)],
+      }),
+    ],
+    [
+      "carried_partial_all_answered",
+      "override-or-fix",
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "crysk: review partial (1 of 4 hunters failed) carried from 1111111 — /crysk review retries it",
+          ),
+        ],
+        reviewComments: [
+          posted(EARLIER),
+          triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+        ],
+        issueComments: [reviewed(EARLIER)],
+      }),
+    ],
+    [
+      "applied_fix_to_push",
+      "fix",
+      input({
+        statuses: [red],
+        reviewComments: [posted(), reply("applied")],
+        issueComments: [reviewed()],
+      }),
+    ],
+    [
+      "dismissal_ruling_pending",
+      "recheck",
+      input({
+        statuses: [red],
+        reviewComments: [posted(), reply("dismissed", "upheld")],
+        issueComments: [reviewed()],
+      }),
+    ],
+    [
+      "dismissals_upheld",
+      "review",
+      input({
+        statuses: [red],
+        reviewComments: [
+          posted(),
+          reply("dismissed", "upheld"),
+          ruling("upheld"),
+        ],
+        issueComments: [reviewed()],
+      }),
+    ],
+    [
+      "review_skipped",
+      "override-or-fix",
+      input({ statuses: [gate("failure", SKIP_DESCRIPTION)] }),
+    ],
+    [
+      "partial_review_repeated",
+      "override-or-fix",
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "crysk: review partial again (1 of 4 hunters failed)",
+          ),
+        ],
+      }),
+    ],
+    [
+      "partial_review",
+      "review",
+      input({
+        statuses: [
+          gate("failure", "crysk: review partial (1 of 4 hunters failed)"),
+        ],
+      }),
+    ],
+    [
+      "blocking_answered_still_open",
+      "override-or-fix",
+      input({
+        statuses: [red],
+        reviewComments: [posted(), reply("deferred", "upheld")],
+        issueComments: [reviewed()],
+      }),
+    ],
+    [
+      "red_without_live_finding",
+      "override-or-fix",
+      input({ statuses: [gate("failure", "crysk: something else")] }),
+    ],
+  ];
+
+  test.each(cases)("%s goes with %s", (code, action, fixture) => {
+    const status = buildPrStatus(fixture);
+    expect(status.reason_code as string).toBe(code);
+    expect(status.next_action as string).toBe(action);
+    expect(status.findings.some((finding) => finding.needs_reply)).toBe(
+      action === "triage",
+    );
+  });
+
+  test("the fixtures reach every code, and every code is listed once", () => {
+    expect(cases.map(([code]) => code).sort()).toEqual(
+      [...PR_STATUS_REASON_CODES].sort(),
+    );
+  });
+});
+
+describe("buildPrStatus — needs_reply", () => {
+  const redInput = (replies: PrStatusReviewComment[] = []) =>
+    input({
+      statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+      reviewComments: [
+        {
+          id: 1,
+          body: findingBody({ head: EARLIER, claim: CLAIM }),
+          in_reply_to_id: null,
+        },
+        ...replies,
+      ],
+      issueComments: [
+        { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+      ],
+      verdictAt: at(10),
+    });
+
+  test("a live blocking finding with no reply to this review needs one", () => {
+    const status = buildPrStatus(redInput());
+    expect(status.findings[0]?.needs_reply).toBe(true);
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("a reply from an earlier review does not settle it", () => {
+    const status = buildPrStatus(
+      redInput([
+        {
+          ...triageReply({ id: 2, parent: 1, head: EARLIER, tag: "applied" }),
+          created_at: at(20),
+        },
+      ]),
+    );
+    expect(status.findings[0]?.needs_reply).toBe(true);
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("a reply to this review settles it", () => {
+    const status = buildPrStatus(
+      redInput([
+        triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+      ]),
+    );
+    expect(status.findings[0]?.needs_reply).toBe(false);
+    expect(status.next_action).toBe("fix");
+  });
+
+  test("under a green gate an unanswered finding on this head needs one, advisory included", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", "review posted")],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings[0]?.needs_reply).toBe(true);
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("while a review runs nothing needs a reply", () => {
+    const status = buildPrStatus({
+      ...redInput(),
+      statuses: [gate("pending", "crysk reviewing")],
+    });
+    expect(status.findings[0]?.needs_reply).toBe(false);
+    expect(status.next_action).toBe("wait");
+  });
+});
+
+describe("buildPrStatus — inconclusive_heads", () => {
+  const HEADS = ["a", "b", "c"].map((c) => c.repeat(40));
+  const finding = {
+    id: 1,
+    body: findingBody({ head: EARLIER, claim: CLAIM }),
+    in_reply_to_id: null,
+  };
+  const inconclusive = (id: number, head: string) =>
+    triageReply({
+      id,
+      parent: 1,
+      head,
+      tag: "dismissed",
+      verdict: "inconclusive",
+    });
+  const read = (replies: PrStatusReviewComment[]) =>
+    buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [finding, ...replies],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+        verdictAt: at(1),
+      }),
+    ).findings[0]?.inconclusive_heads;
+
+  test("no reply is zero", () => {
+    expect(read([])).toBe(0);
+  });
+
+  test("counts consecutive heads, older replies included, one per head", () => {
+    expect(
+      read([
+        inconclusive(2, HEADS[0] as string),
+        inconclusive(3, HEADS[1] as string),
+        inconclusive(4, HEADS[1] as string),
+        inconclusive(5, CURRENT),
+      ]),
+    ).toBe(3);
+  });
+
+  test("a head whose newest reply is another verdict ends the streak", () => {
+    expect(
+      read([
+        inconclusive(2, HEADS[0] as string),
+        triageReply({
+          id: 3,
+          parent: 1,
+          head: HEADS[1] as string,
+          tag: "dismissed",
+          verdict: "upheld",
+        }),
+        inconclusive(4, CURRENT),
+      ]),
+    ).toBe(1);
+  });
+
+  test("a reply from a login not known to have write access is not part of it", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          finding,
+          inconclusive(2, HEADS[0] as string),
+          { ...inconclusive(3, HEADS[1] as string), user: "visitor" },
+          { ...inconclusive(5, HEADS[2] as string), user: "unasked" },
+          inconclusive(6, CURRENT),
+        ],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+        writers: new Map([
+          ["dev", true],
+          [CI_ADJUDICATOR_LOGIN, true],
+          ["visitor", false],
+        ]),
+      }),
+    );
+    expect(status.findings[0]?.inconclusive_heads).toBe(2);
+  });
+
+  test("a summary row counts its own replies", () => {
+    const rowReply = (id: number, head: string) => ({
+      id,
+      body: `${triageMarker({ tag: "dismissed", headSha: head, actor: "agent", verdict: "inconclusive", row: "R001" })}\n\nwhy`,
+    });
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+          rowReply(101, HEADS[0] as string),
+          rowReply(102, CURRENT),
+        ],
+        verdictAt: at(1),
+      }),
+    );
+    expect(status.findings[0]?.comment_id).toBeNull();
+    expect(status.findings[0]?.inconclusive_heads).toBe(2);
+  });
+});
+
+describe("buildPrStatus — forced_runs_on_head", () => {
+  const command = (id: number, body: string, minutesAgo: number) => ({
+    id,
+    body,
+    created_at: at(minutesAgo),
+  });
+  const count = (
+    comments: PrStatusInput["issueComments"],
+    firstStatusAt?: string | null,
+  ) =>
+    buildPrStatus(
+      input({
+        statuses: [gate("failure", "crysk: something else", 5)],
+        issueComments: comments,
+        ...(firstStatusAt === undefined ? {} : { firstStatusAt }),
+      }),
+    ).forced_runs_on_head;
+
+  test("counts every forcing command at or after the head's first status", () => {
+    expect(
+      count(
+        [
+          command(1, "/crysk review", 30),
+          command(2, "/crysk recheck\n\nsigned by an agent", 20),
+          command(3, "/crysk review --full", 10),
+        ],
+        at(30),
+      ),
+    ).toBe(3);
+  });
+
+  test("counts the command that started the head's first status", () => {
+    expect(count([command(1, "/crysk review", 31)], at(30))).toBe(1);
+  });
+
+  test("leaves out a command from before this head", () => {
+    expect(count([command(1, "/crysk review", 60)], at(30))).toBe(0);
+  });
+
+  test("leaves out text that only looks like a command", () => {
+    expect(
+      count(
+        [
+          command(1, "/crysk review please", 10),
+          command(2, "see /crysk recheck", 10),
+          command(3, "/crysk override", 10),
+        ],
+        at(30),
+      ),
+    ).toBe(0);
+  });
+
+  test("with no status yet, counts only a command that can still start one", () => {
+    expect(
+      count(
+        [command(1, "/crysk review", 1), command(2, "/crysk review", 60)],
+        null,
+      ),
+    ).toBe(1);
+  });
+
+  test("with no history given, the gate's own status is the first one", () => {
+    expect(
+      count([command(1, "/crysk review", 4), command(2, "/crysk review", 30)]),
+    ).toBe(1);
+  });
+});
+
+// S3: an advisory repository's size or cost skip writes no status, so the notice is the only trace of it,
+// and a forced review would walk past the limit.
+describe("buildPrStatus: a deliberate skip with no gate status", () => {
+  const SIZE_NOTICE = `${SKIP_SIZE_COMMENT_MARKER}\n## Crysk review skipped`;
+  const BUDGET_NOTICE = `${SKIP_BUDGET_COMMENT_MARKER}\n## Crysk review skipped`;
+
+  test.each([
+    ["size", SIZE_NOTICE],
+    ["cost", BUDGET_NOTICE],
+    [
+      "stopped or covered",
+      `${SKIP_COVERAGE_COMMENT_MARKER}\n## Crysk review skipped`,
+    ],
+    ["manual review", `${MANUAL_REQUIRED_COMMENT_MARKER}\n## Crysk`],
+  ])("a bot's %s notice asks instead of forcing a review", (_kind, body) => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [{ id: 5, user: "github-actions[bot]", body }],
+      }),
+    );
+    expect(status.gate.state).toBe("none");
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("review_skipped");
+    expect(status.reason).toContain("/crysk review");
+    expect(status.reason).not.toContain("red");
+  });
+
+  test("a notice from a login the repository trusts counts too", () => {
+    const status = buildPrStatus(
+      input({
+        trustedActors: new Set(["release-operator"]),
+        issueComments: [{ id: 5, user: "release-operator", body: SIZE_NOTICE }],
+      }),
+    );
+    expect(status.reason_code).toBe("review_skipped");
+  });
+
+  test("a notice a person typed changes nothing", () => {
+    const status = buildPrStatus(
+      input({ issueComments: [{ id: 5, user: "dev", body: SIZE_NOTICE }] }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason_code).toBe("no_gate_status");
+  });
+
+  test("an old notice does not hold a head a review already read", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 5, user: "github-actions[bot]", body: SIZE_NOTICE },
+          { id: 6, body: summary(CURRENT) },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason_code).toBe("no_gate_status");
+  });
+
+  test("a pull request with no notice still gets its first review", () => {
+    const status = buildPrStatus(input());
+    expect(status.next_action).toBe("review");
+    expect(status.reason_code).toBe("no_gate_status");
+  });
+});
+
+// S10: on a head no review read, the fixes the replies name were already pushed.
+describe("buildPrStatus: a carried head never says fix", () => {
+  const finding = (id: number, line: number) => ({
+    id,
+    body: findingBody({ head: EARLIER, claim: `${CLAIM} ${line}`, line }),
+    in_reply_to_id: null,
+    line,
+    path: "src/a.ts",
+  });
+  const carried = (
+    description: string,
+    replies: PrStatusReviewComment[],
+    findings = [finding(1, 10), finding(3, 20)],
+  ) =>
+    buildPrStatus(
+      input({
+        verdictAt: at(60),
+        statuses: [gate("failure", description)],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(
+              EARLIER,
+              findings.map((f, index) =>
+                stateRow(
+                  `R00${index + 1}`,
+                  `${CLAIM} ${f.line}`,
+                  "blocking",
+                  `src/a.ts:${f.line}`,
+                ),
+              ),
+            ),
+          },
+        ],
+        reviewComments: [...findings, ...replies],
+      }),
+    );
+  const applied = triageReply({
+    id: 2,
+    parent: 1,
+    head: EARLIER,
+    tag: "applied",
+  });
+
+  test("an unruled dismissal beside an applied fix goes to recheck", () => {
+    const status = carried(carriedBlockingDescription(2, EARLIER), [
+      applied,
+      triageReply({
+        id: 4,
+        parent: 3,
+        head: EARLIER,
+        tag: "dismissed",
+        verdict: "upheld",
+      }),
+    ]);
+    expect(status.next_action).toBe("recheck");
+    expect(status.reason_code).toBe("dismissal_ruling_pending");
+    expect(status.report.head).toBe(EARLIER);
+  });
+
+  test("a deferred finding beside an applied fix asks", () => {
+    const status = carried(carriedBlockingDescription(2, EARLIER), [
+      applied,
+      triageReply({
+        id: 4,
+        parent: 3,
+        head: EARLIER,
+        tag: "deferred",
+        verdict: "upheld",
+      }),
+    ]);
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
+    expect(status.unresolved_blocking).toBe(2);
+  });
+
+  test("a gate counting more than this read can see asks", () => {
+    const status = carried(carriedBlockingDescription(3, EARLIER), [
+      applied,
+      triageReply({ id: 4, parent: 3, head: EARLIER, tag: "applied" }),
+    ]);
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
+    expect(status.unresolved_blocking).toBe(3);
+  });
+
+  test("a carried partial red with a finding open asks", () => {
+    const status = carried(
+      "crysk: review partial (1 of 5 hunters failed, set abcdef) carried from 1111111",
+      [
+        applied,
+        triageReply({
+          id: 4,
+          parent: 3,
+          head: EARLIER,
+          tag: "deferred",
+          verdict: "upheld",
+        }),
+      ],
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_findings_open");
+  });
+
+  test("a red whose text names no carry, on a head the summary did not review, asks too", () => {
+    const status = carried(
+      BLOCKING_DESCRIPTION(1),
+      [applied],
+      [finding(1, 10)],
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason_code).toBe("carried_red_all_answered");
+  });
+
+  test("a head the summary reviewed still says fix", () => {
+    const status = buildPrStatus(
+      input({
+        verdictAt: at(60),
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        issueComments: [{ id: 100, body: summary(CURRENT) }],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason_code).toBe("applied_fix_to_push");
+  });
+
+  test("no summary at all is not a carried head", () => {
+    const status = buildPrStatus(
+      input({
+        verdictAt: at(60),
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.report.head).toBeNull();
+    expect(status.next_action).toBe("fix");
+  });
+});
+
+describe("skillsReloadCommand", () => {
+  test("names the running CLI, whose loader checks the recorded version", () => {
+    expect(skillsReloadCommand("0.10.0", "0.9.5")).toBe(
+      "npx -y crysk@0.9.5 skills load crysk-loop",
+    );
+  });
+
+  test.each([
+    ["the loader would serve this CLI's own files", "0.9.5", "0.9.5"],
+    ["nothing is recorded", undefined, "0.9.5"],
+    ["the CLI version is unknown", "0.10.0", undefined],
+    ["the recorded value is not a plain version", "1.2.3 && curl", "0.9.5"],
+    ["the CLI version is not a plain version", "0.10.0", "0.9.5-dev"],
+  ])("names nothing when %s", (_case, recorded, cli) => {
+    expect(skillsReloadCommand(recorded, cli)).toBeNull();
   });
 });

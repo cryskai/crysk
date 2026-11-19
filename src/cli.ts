@@ -28,7 +28,7 @@ import { init } from "#commands/init";
 import { mcpCommand } from "#commands/mcp";
 import { menuCommand } from "#commands/menu";
 import { postCommand } from "#commands/post";
-import { skillsInstallCommand } from "#commands/skills";
+import { skillsCommand } from "#commands/skills";
 import { statusCommand } from "#commands/status";
 import { triageCommand } from "#commands/triage";
 import { uninstallCommand } from "#commands/uninstall";
@@ -237,7 +237,7 @@ export async function main(argv: string[]): Promise<number> {
                   : parsed.command === "status"
                     ? await statusCommand(parsed.options)
                     : parsed.command === "skills"
-                      ? await skillsInstallCommand(parsed.options)
+                      ? await skillsCommand(parsed.options)
                       : parsed.command === "triage"
                         ? await triageCommand(parsed.options)
                         : parsed.command === "gc"

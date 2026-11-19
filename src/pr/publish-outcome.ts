@@ -33,6 +33,7 @@ import { engineIdentity } from "#git/identity";
 import {
   type CiAdmissionLedgerState,
   settleCiAdmissionLedger,
+  settleCiHuntersFailed,
 } from "#pr/admission";
 import { publishCiReviewIfEligible } from "#pr/ci-publish";
 import type { PrDiscoveryResult } from "#pr/discovery";
@@ -329,10 +330,9 @@ export async function publishRunOutcome(
     ciMode: input.ciMode,
   });
   if (result.sessionFailed) {
-    await settleCiAdmissionLedger(
+    await settleCiHuntersFailed(
       input.ciAdmissionLedger,
-      "failed",
-      "every hunter failed",
+      result.hunterFailures ?? [],
     );
     return 1;
   }

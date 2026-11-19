@@ -23,6 +23,7 @@ import { CI_REVIEW_COMMENT, CI_REVIEW_FULL_COMMENT } from "#ci/force-comment";
 import {
   PENDING_AT_FILE,
   parseTriggerRecord,
+  RESOLVE_THREADS_FILE,
   RUN_DIR_FILE,
   type TriggerRecord,
 } from "#ci/outcome";
@@ -1801,7 +1802,10 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       writeFileSync(path.join(dir, PENDING_AT_FILE), "2026-10-17T10:00:00Z\n");
       // An older run's run directory would hand the trace step another run's files.
       writeFileSync(path.join(dir, RUN_DIR_FILE), "/old/runs/pr-1-x-1\n");
+      // #562: an older run's refused resolves would be reported for this run.
+      writeFileSync(path.join(dir, RESOLVE_THREADS_FILE), "[1]");
       runShell({ ...baseEnv(), CRYSK_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, RESOLVE_THREADS_FILE))).toBe(false);
       expect(existsSync(path.join(dir, RUN_DIR_FILE))).toBe(false);
       expect(existsSync(path.join(dir, PENDING_AT_FILE))).toBe(false);
       expect(existsSync(path.join(dir, "cli-started"))).toBe(false);
@@ -2851,7 +2855,7 @@ describe("the trigger reads credential presence from the crysk-secrets input", (
       "::warning title=crysk::ANTHROPIC_API_KEY in the crysk-secrets input is an old secret name, and Crysk does not read it: set CRYSK_CLAUDE_API_KEY instead.",
     );
     expect(run.stdout).toContain(
-      "::warning title=crysk::OPENCODE_AUTH_JSON in the crysk-secrets input is an old secret name, and Crysk does not read it: set one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) instead.",
+      "::warning title=crysk::OPENCODE_AUTH_JSON in the crysk-secrets input is an old secret name, and Crysk does not read it: set one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (a ChatGPT plan needs the Crysk GitHub App) instead.",
     );
     expect(run.stdout).not.toContain("SENTINEL");
   });
