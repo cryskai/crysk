@@ -1,0 +1,65 @@
+## Activation Contract
+
+Load when the user wants to **operate or configure Crysk on their machine or repo**:
+- Change which model or backend a step runs on (per role, with fallbacks: OpenCode, DeepSeek, a pinned Claude version).
+- Tune effort, caps, the size gate, `.cryskignore`, `REVIEW.md` / `gotchas.md`, or any `config.json` key.
+- Run a review (local branch or `--pr <n>`) or read its artifacts. The engine prints no dollar figure; cost and cost limits live in the Crysk platform dashboard.
+- Set up the watcher (`crysk watch`) or worktree GC (`crysk gc`).
+- Diagnose a broken install or a refused run (`crysk doctor`, `crysk config`).
+
+Route away: GitHub Actions, `CRYSK_*` secrets, `CRYSK_MODELS`, `/crysk review` comments → load `crysk-ci-setup`. Replying to posted `crysk-finding` comments → load `crysk-loop`.
+
+## Source of Truth
+
+This skill holds the mental model and the traps, not the reference. Before acting, read the live state, and for detail follow the linked section — do not answer from memory:
+- `crysk config` — every key, its effective value, and **which layer decided it**. Listing is read-only and $0; `crysk config set`, `unset` and `edit` write a config file.
+- `crysk --help` — the installed version's real commands and flags.
+- The user docs at [crysk.dev/docs](https://crysk.dev/docs/) (not shipped in the npm package). Every page is also plain Markdown at the same URL with `.md`, and [crysk.dev/llms.txt](https://crysk.dev/llms.txt) indexes them. The engine's longer notes on models and credentials stay in [docs/configuration.md](https://github.com/cryskai/crysk/blob/main/docs/configuration.md).
+
+If Crysk is not on `PATH`, run every command as `npx -y crysk@0.9.0 <command>` (Node is enough). An install from before the rename (the package used to be `pr-hero`) still answers to `pr-hero`; either command is the same program.
+
+## Mental Model
+
+- **Two config files, owned by different people.** `~/.crysk/config.json` is the person's (never committed; `~/.prhero/config.json` on an install from before the rename — never create `~/.crysk` by hand while `~/.prhero` is in use, the CLI would switch homes); `<repo>/.crysk/config.json` is the team's (committed). `~/.crysk/watch.json` holds the watcher.
+- **The one rule:** the repo file beats the global one, **except on capped keys** (`max_*`, and the on/off switches `summary.enabled`, `materiality_gate`, `post`): there the team can only ask for *less*, so a committed file never enlarges a person's bill.
+- **Some keys live in exactly one layer** and the parser refuses the other by name: `models` and `credentials` are person-only; `default_base` and `suspicion_priors` are repo-only. `--config <file>` replaces the repo layer only.
+- **Flags always win**, and may exceed a cap (`--base`, `--agents`, `--model`, `--summary`/`--no-summary`, `--force`).
+- **Models are assigned per role.** `models` maps a role (`default`, `hunter.<key>` per hunter, `refuter`, which also covers the re-review verifier and the CI adjudicator, `consolidate`, `summary`, `judge`) to a list of one to three models tried in order; a role not listed uses `default`. With no `models`, each step runs its prompt's model: hunters and consolidation `claude:sonnet-latest`, the refuter `claude:opus-latest`, the summarizer `claude:haiku-latest`. A model name carries its backend: `claude:<sonnet|opus|haiku|fable>-latest` (newest version), `claude:claude-…` (pinned), `opencode:<provider>/<model>`. The old `routing` key is gone and refused with the `models` form to write; `summary.model` is gone too (`"haiku"`, which `crysk init` used to write, still reads with a warning). The scout stage was removed: `--scout`, `--no-scout`, `--scout-model`, the `scout` key and `models.scout` are still accepted and ignored, each with a warning, and `crysk config set scout` is refused. The parity hunter was removed too: the `parity_trigger_paths` key, the `models.hunter.parity` role and a leftover `deep-review-parity.md` in a custom `agents_dir` are accepted and ignored with a warning (`is ignored: the parity hunter was removed`), and `crysk config set parity_trigger_paths` is refused.
+- **Crysk never stores a credential.** It reads the Claude CLI's login, `CRYSK_CLAUDE_*` (or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`) variables, or OpenCode's `auth.json`, and projects an ephemeral copy into each step. A run uses one Claude credential, the first set in `credentials.claude` (default `["subscription", "api_key"]`).
+
+## Hard Rules
+
+- **Never print, `cat`, commit, or log credentials** — Keychain records, API keys, or `auth.json` contents. Inspect `auth.json` provider **keys and `type` only**.
+- **Read before writing, verify after:** run `crysk config` before a change and again after it; finish with `crysk doctor`, and `crysk review --dry-run` when the change touches models or credentials.
+- **Prefer the CLI to hand edits:** scalar keys go through `crysk config set|unset <key> <val> [--person|--team|--watch]` (or `crysk config --edit`). `models` and `credentials` are objects, so they are written by hand into `~/.crysk/config.json` — keep the file valid JSON and preserve every other key.
+- **Never spend without consent:** a real `crysk review`, `crysk watch install` (starts automatic spending) or `--force` past the size gate runs only after the user confirms. `--dry-run` variants are free.
+- **Never invent a model id.** The bundled catalog only knows the Claude aliases; an OpenCode model must be spelled exactly as `opencode models <provider>` lists it, and a typo fails at the provider, not at Crysk.
+- **You cannot authenticate `claude` for the user.** If `doctor` reports it missing or unauthenticated, say so and stop.
+
+## Recipes
+
+**Models per role** — [Other model providers](https://crysk.dev/docs/github-actions/other-providers/) (roles, fallbacks, effort), [config reference](https://crysk.dev/docs/reference/config/)
+1. Ask: which roles to move (`default` for all, or `hunter.<key>`, `refuter`, `summary`, …), which model for each and which fallbacks, and whether metered spend is acceptable.
+2. Write `models` in `~/.crysk/config.json` (or `~/.prhero/config.json` if that is the home in use), e.g. `{"models": {"default": ["opencode:deepseek/deepseek-v4-flash", "claude:sonnet-latest"], "refuter": ["claude:opus-latest"]}}`. Write `claude:sonnet-latest`, never a bare `claude:sonnet` (refused); a full `claude-*` id pins a version.
+3. Traps: at most 3 models per role and none twice; a role not listed uses `default`, except the materiality judge, which runs only on its profile's judge models (`claude:sonnet-latest` or `claude:opus-latest`; the `openai` profile adds `opencode:openai/gpt-6.1-terra`) and never inherits `default`; the next model is tried only on a provider failure (rate limit, quota, network, timeout, model unavailable; a refused login skips the models on the same credential), never on a bad answer; each fallback can bill and take the step's full time again. Several OpenCode providers may be mixed in one review. A local `auth.json` `openai` record must be `type: "oauth"` (the subscription); an `openai` API key there is refused.
+4. Verify: `crysk config`, `crysk doctor`, then a **local** `crysk review --dry-run` (PR-mode dry-run returns before route admission, so it can look clean on a plan that will be refused).
+
+**Effort** — [Other model providers](https://crysk.dev/docs/github-actions/other-providers/): per model, as a `models` entry `{"model": "claude:opus-latest", "effort": "max"}`; otherwise the `effort:` frontmatter of a prompt in a custom `agents_dir`, then the role default (hunters `xhigh`, refuter `high`). Claude levels are `low|medium|high|xhigh|max` (`ultracode` is refused). On OpenCode the effort is the model's variant, as OpenCode names it; the review refuses, before spending, a variant `opencode models <provider> --verbose` does not list. The `#variant` suffix is gone. `models.judge` and `--model` take no effort.
+
+**Credentials / billing** — [Use your Claude plan](https://crysk.dev/docs/github-actions/claude-plan/), [config reference](https://crysk.dev/docs/reference/config/): one Claude credential per run, the first set in `credentials.claude` (default `["subscription", "api_key"]`; on macOS a Claude login always counts as the subscription). To bill an API key with a login present, write `{"credentials": {"claude": ["api_key", "subscription"]}}`. The Claude child sees only the chosen one. For OpenCode on this machine, only an `openai` entry of `type: "oauth"` is a subscription; every other provider is a metered API token unless its catalog prices the model at $0.
+
+**Caps, size gate, exclusions** — [config.json keys](https://crysk.dev/docs/reference/config/), [size and spend limits](https://crysk.dev/docs/github-actions/size-and-spend/), [exclude files](https://crysk.dev/docs/reviews/exclude-files/): `max_changed_lines`/`max_changed_files` skip oversized diffs (a cost gate, not a quality one; locally 4000 lines and 150 files; in CI, when the workflow and the repo config set none, no limit on a Claude subscription and 4000 lines and 50 files on a pay-per-token route); `max_concurrent_steps` keeps the fan-out under a provider's rate limit; `max_verification_steps` (default `8`, `0` pauses) caps how many prior open findings a re-review spawns verifier steps for. `post_min_severity` (`suggestion` | `warning` | `blocking`, unset posts everything; `setup --ci` writes `warning`) is the lowest finding a PR review posts: hidden findings get no comment and the summary counts them, the gate is unchanged (a blocking finding always posts), and re-review admission scores only what was posted. Only the repo-root `.cryskignore` is read, and matching is case-sensitive.
+
+**REVIEW.md / gotchas.md** — [Write review instructions](https://crysk.dev/docs/reviews/review-instructions/): optional; a root `REVIEW.md` wins over `.crysk/gotchas.md`. A file that exists must be real: read the code and write the actual traps, then delete the `human-attention-required` marker line, or `review` and `doctor` refuse it. With neither file the review runs on the default guidance.
+
+**Running a review** — [Use Crysk locally](https://crysk.dev/docs/local/quickstart/), [CLI reference](https://crysk.dev/docs/local/cli/): `.crysk/` must be committed or gitignored (clean-tree gate). Expect roughly ten minutes per typical PR. The plan and the result print no dollar figure and there is no budget flag (`--budget-usd` and `--billing` are retired: accepted, no effect, one warning): the Crysk platform prices a platform run from the usage the engine reports and owns the per-review and per-month cost limits (dashboard, Review > Limits). A standalone run has no dollar limit, so "confirming spend" is about which credential the run bills (`doctor` / `--dry-run` say so). Artifacts land in `~/.crysk/repos/<origin>/runs/<run>/`. To check or wait on a PR's CI review state deterministically ($0, via `gh`), run `crysk status --pr <n> [--wait] [--json]`.
+
+**Watcher / GC** — [CLI reference, watch](https://crysk.dev/docs/local/cli/): `watch add [--post]`, preview with `watch --once --dry-run`, and only then `watch install`. `daily_cap` and `window` live in `~/.crysk/watch.json`. GC is separate: `crysk gc install`.
+
+## Output Contract
+
+Report back to the user:
+1. What changed: the file and layer, and the keys touched (never credential values).
+2. The `crysk config` lines proving the new effective value and its layer.
+3. `doctor` / `--dry-run` result, and whether the next real run is subscription, metered, or free.
+4. Anything left for the human: authenticating `claude`, committing `.crysk/`, confirming spend.

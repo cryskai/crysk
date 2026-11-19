@@ -1483,7 +1483,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   "pr": 12,
   "head": "<40-hex headRefOid>",
   "gate": { "state": "failure", "description": "crysk: 1 blocking finding(s) — fix and push, or /crysk override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
-  "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null },
+  "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null, "engine_version": "0.10.0" },
   "findings": [
     { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
       "severity": "CRITICAL", "tier": "blocking", "blocking": true, "live_on_head": true,
@@ -1492,7 +1492,8 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   ],
   "unresolved_blocking": 1,
   "next_action": "triage",
-  "reason": "1 live blocking finding(s) on this head have no triage reply that answers this review; triage them first."
+  "reason": "1 live blocking finding(s) on this head have no triage reply that answers this review; triage them first.",
+  "skills_reload": null
 }
 ```
 
@@ -1516,6 +1517,13 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   live blocking findings in `findings`.
 - `report.outcome_code` is the `CRYSK-*` code of the newest outcome comment, when that comment has one. A comment
   posted before the codes were renamed names a `PRH-*` code, reported as the `CRYSK-*` code it became.
+- `report.engine_version` is the Crysk version that wrote the summary, from the summary's admission block. It is
+  read only from a summary a bot posted (`github-actions[bot]` or a GitHub App), and is `null` for a summary from an
+  engine older than the field, or one a person posted.
+- `skills_reload` is the command that loads the crysk-loop playbook of that version
+  (`npx -y crysk@<engine_version> skills load crysk-loop`) when the CLI running status is another version, and `null`
+  otherwise. The installed skill runs it so the agent's instructions match the engine that reviewed the pull request.
+  Status also records the version in `~/.crysk/skills/engines.json`, which `crysk skills load` reads.
 
 `next_action` is decided in this order, and the first match wins:
 

@@ -340,6 +340,18 @@ export interface ParsedCiAdmissionBlock {
   blocking: number;
   advisory: number;
   reviews: number;
+  // The engine version that wrote the block. Absent on blocks written before
+  // it was stamped, and on any value that is not a plain x.y.z.
+  engine?: string;
+}
+
+// WHY only a plain x.y.z: `crysk status` turns this value into the command an
+// agent runs to load its skill (`npx -y crysk@<version> skills load ...`), and
+// the summary is a PR comment. Anything else is neither written nor read.
+const ENGINE_VERSION_RE = /^\d+\.\d+\.\d+$/;
+
+export function isPlainEngineVersion(value: unknown): value is string {
+  return typeof value === "string" && ENGINE_VERSION_RE.test(value);
 }
 
 export function tierCountsFromFindings(findings: readonly { tier: Tier }[]): {
@@ -374,11 +386,16 @@ export function renderCiAdmissionBlock(
   headSha: string,
   counts: { blocking: number; advisory: number },
   reviews: number,
+  engineVersion?: string,
 ): string {
+  // WHY the version goes in the payload and not on the header line: released
+  // readers match the header with an anchored regex, so an extra attribute
+  // there would hide the block from them. They ignore unknown payload keys.
   const payload = JSON.stringify({
     blocking: counts.blocking,
     advisory: counts.advisory,
     reviews,
+    ...(isPlainEngineVersion(engineVersion) ? { engine: engineVersion } : {}),
   });
   return (
     `${PR_CI_ADMISSION_PREFIX}v=1 head=${headSha} -->\n` +
@@ -424,7 +441,13 @@ export function parseCiAdmissionBlock(
     ) {
       return null;
     }
-    return { headSha: header[1], blocking, advisory, reviews };
+    return {
+      headSha: header[1],
+      blocking,
+      advisory,
+      reviews,
+      ...(isPlainEngineVersion(row.engine) ? { engine: row.engine } : {}),
+    };
   } catch {
     return null;
   }

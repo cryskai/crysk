@@ -59,7 +59,9 @@ describe("resolveEngineAssets", () => {
     }
 
     // Triage skill files all exist on disk
-    expect(Object.keys(assets.triageSkillFiles).length).toBe(2);
+    expect(Object.keys(assets.triageSkillFiles).sort()).toEqual(
+      ["SKILL.md", "adjudicator.md", "playbook.md"].sort(),
+    );
     for (const [logicalName, filePath] of Object.entries(
       assets.triageSkillFiles,
     )) {
@@ -68,11 +70,11 @@ describe("resolveEngineAssets", () => {
     }
 
     // CI setup skill files all exist on disk. The OpenCode operator
-    // procedure and admission refs must ship with SKILL.md so wizard
-    // sync does not tell agents to read files that were never copied.
+    // procedure and admission refs must ship with SKILL.md/playbook.md.
     expect(Object.keys(assets.ciSetupSkillFiles).sort()).toEqual(
       [
         "SKILL.md",
+        "playbook.md",
         "assets/admission-config.example.json",
         "assets/workflow.yml",
         "references/ci-admission.md",
@@ -86,14 +88,18 @@ describe("resolveEngineAssets", () => {
       expect(existsSync(filePath)).toBe(true);
     }
 
-    // General pr-hero skill: a single SKILL.md, present on disk.
-    expect(Object.keys(assets.generalSkillFiles)).toEqual(["SKILL.md"]);
+    // General pr-hero skill: SKILL.md stub + playbook.md, present on disk.
+    expect(Object.keys(assets.generalSkillFiles).sort()).toEqual(
+      ["SKILL.md", "playbook.md"].sort(),
+    );
     for (const filePath of Object.values(assets.generalSkillFiles)) {
       expect(existsSync(filePath)).toBe(true);
     }
 
-    // PR creation skill: a single SKILL.md, present on disk.
-    expect(Object.keys(assets.prSkillFiles)).toEqual(["SKILL.md"]);
+    // PR creation skill: SKILL.md stub + playbook.md, present on disk.
+    expect(Object.keys(assets.prSkillFiles).sort()).toEqual(
+      ["SKILL.md", "playbook.md"].sort(),
+    );
     for (const filePath of Object.values(assets.prSkillFiles)) {
       expect(existsSync(filePath)).toBe(true);
     }

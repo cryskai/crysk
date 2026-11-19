@@ -1629,6 +1629,7 @@ describe("prheroHomePaths", () => {
       prheroDbPath: "/Users/x/.crysk/prhero.db",
       storeSocketPath: "/Users/x/.crysk/store.sock",
       upgradeCheckPath: "/Users/x/.crysk/upgrade-check.json",
+      skillsCacheDir: "/Users/x/.crysk/skills",
       bucketKeyPath: "/Users/x/.crysk/bucket-key",
       plistPath: `/Users/x/Library/LaunchAgents/${WATCH_LAUNCHD_LABEL}.plist`,
     });

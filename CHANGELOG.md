@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Installed skills follow the Crysk version your CI runs.** Each installed `SKILL.md` is now a short stub that
+  runs `crysk skills load <skill>`, which prints the playbook of the Crysk the repository's CI runs: the version
+  that wrote the last review, else the version the workflow's `uses: cryskai/crysk@v…` names (`@v0` gets the release
+  that tag points to, an exact pin gets that version), else the latest GitHub release. A release no longer needs anyone to
+  reinstall their skills, and a team that pins its workflow keeps instructions that match its engine. Reinstall
+  once (`crysk skills install`) to get the stubs.
+- **`crysk status --json` names the engine version.** `report.engine_version` is the Crysk version that wrote
+  the summary (read only from a summary a bot posted), and `skills_reload` is the command that loads the matching
+  playbook when the CLI running status is another version (`null` otherwise). The summary's admission block now
+  carries the version in its JSON; its header line is unchanged.
+
 ### Changed
 
 - **The user docs are on crysk.dev.** [crysk.dev/docs](https://crysk.dev/docs/) is the maintained home of the

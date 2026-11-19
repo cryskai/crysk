@@ -23,11 +23,15 @@ import refuterPrompt from "../prompts/default/review-refuter.md" with {
 import materialityPrompt from "../prompts/materiality.md" with { type: "file" };
 import summarizerPrompt from "../prompts/summarizer.md" with { type: "file" };
 import verifierPrompt from "../prompts/verifier.md" with { type: "file" };
+import generalPlaybook from "../skills/crysk/playbook.md" with { type: "file" };
 import generalSkill from "../skills/crysk/SKILL.md" with { type: "file" };
 import ciSetupAdmissionExample from "../skills/crysk-ci-setup/assets/admission-config.example.json" with {
   type: "file",
 };
 import ciSetupWorkflow from "../skills/crysk-ci-setup/assets/workflow.yml" with {
+  type: "file",
+};
+import ciSetupPlaybook from "../skills/crysk-ci-setup/playbook.md" with {
   type: "file",
 };
 import ciSetupAdmissionRef from "../skills/crysk-ci-setup/references/ci-admission.md" with {
@@ -42,7 +46,11 @@ import ciSetupSkill from "../skills/crysk-ci-setup/SKILL.md" with {
 import triageAdjudicator from "../skills/crysk-loop/adjudicator.md" with {
   type: "file",
 };
+import triagePlaybook from "../skills/crysk-loop/playbook.md" with {
+  type: "file",
+};
 import triageSkill from "../skills/crysk-loop/SKILL.md" with { type: "file" };
+import prPlaybook from "../skills/crysk-pr/playbook.md" with { type: "file" };
 import prSkill from "../skills/crysk-pr/SKILL.md" with { type: "file" };
 
 export const BUNDLED_AGENT_FILES: Record<string, string> = {
@@ -71,11 +79,13 @@ export const VERIFIER_PROMPT_PATH = verifierPrompt;
 
 export const TRIAGE_SKILL_FILES: Record<string, string> = {
   "SKILL.md": triageSkill,
+  "playbook.md": triagePlaybook,
   "adjudicator.md": triageAdjudicator,
 };
 
 export const CI_SETUP_SKILL_FILES: Record<string, string> = {
   "SKILL.md": ciSetupSkill,
+  "playbook.md": ciSetupPlaybook,
   "assets/admission-config.example.json":
     ciSetupAdmissionExample as unknown as string,
   "assets/workflow.yml": ciSetupWorkflow,
@@ -85,8 +95,10 @@ export const CI_SETUP_SKILL_FILES: Record<string, string> = {
 
 export const PR_SKILL_FILES: Record<string, string> = {
   "SKILL.md": prSkill,
+  "playbook.md": prPlaybook,
 };
 
 export const GENERAL_SKILL_FILES: Record<string, string> = {
   "SKILL.md": generalSkill,
+  "playbook.md": generalPlaybook,
 };
