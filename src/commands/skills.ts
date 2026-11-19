@@ -1,7 +1,7 @@
 // `crysk skills install` / `crysk skills load`.
 //
-// install writes the bundled loader stubs into every detected coding agent
-// that has a skills directory. A stub never changes: it runs
+// install writes the bundled loader stub (SKILL.md, nothing else) into every
+// detected coding agent that has a skills directory. A stub runs
 // `npx -y crysk@<v> skills load <skill>` and follows what that prints.
 //
 // load prints a skill's playbook (or a companion file) from the crysk the
@@ -9,24 +9,27 @@
 // reviews its pull requests. Which crysk, in order:
 //   1. the engine version `crysk status` recorded for this repository, read
 //      from the review the engine posted (skills-cache.ts);
-//   2. the workflow's `uses: cryskai/crysk@v…`, as the same npm spec
-//      (`@v0.8.1` → `0.8.1`, `@v0` → `0`): a pin gets its exact version and a
-//      moving tag stays in step with the CI;
+//   2. the `uses: cryskai/crysk@v…` of a workflow on the repository's default
+//      branch, as the same npm spec (`@v0.8.1` → `0.8.1`, `@v0` → `0`): a pin
+//      gets its exact version and a moving tag stays in step with the CI;
 //   3. otherwise the latest GitHub release.
-// A moving tag or "latest" is resolved to an exact version from GitHub. WHY
-// GitHub and not npm: the tag is what the CI runs, and a release published only
-// to npm (a stolen publish token) then reaches no agent. WHY not hand the range
-// to npx: npx keeps running the copy it cached for a range.
+// WHY the default branch, read from git objects: a pull request's author controls
+// the checked-out branch and the worktree, and what is picked here gets executed.
+// A moving tag or "latest" is resolved to an exact version from GitHub, and an
+// exact version from 1 or 2 must exist as the tag `v<x.y.z>` there. WHY GitHub and
+// not npm: the tag is what the CI runs, so a version published only to npm (a
+// stolen publish token) is not run here. This checks that the tag exists, not
+// that the npm package was built from it. WHY not hand a range to npx: npx keeps
+// running the copy it cached for a range.
 // When the exact version is this package's own the bundled file is printed.
 // Otherwise the file comes from the per-version cache, or from
-// `npx -y crysk@<version> skills load …`; if that fails the bundled file is
-// printed with a warning on stderr.
+// `npx -y crysk@<version> skills load …`; if the tag check or that run fails the
+// bundled file is printed with a warning on stderr.
 
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import { isPlainEngineVersion } from "#ci/review-admission";
-import { resolveRepoRoot } from "#git/git";
+import { remoteHeadRef, resolveRepoRoot } from "#git/git";
 import { detectAgentEnvironments, syncSkills } from "../agent-env";
 import { type EngineAssets, resolveEngineAssets } from "../assets";
 import { SKILL_NAMES } from "../brand";
@@ -44,8 +47,8 @@ import { PRHERO_GITHUB_REPO } from "../updater";
 // agent waits once, and only when a new version first shows up.
 export const SKILLS_DELEGATE_TIMEOUT_MS = 60_000;
 // `git ls-remote` on the crysk repository took about 1.9 s and the latest-release
-// redirect about 0.3 s when measured (2026-11-19). Neither runs once a version
-// is recorded or the workflow pins one.
+// redirect about 0.3 s when measured (2026-11-19). An exact version needs the
+// lookup only on a cache miss, so a repository pays it once per version.
 export const SKILLS_VERSION_LOOKUP_TIMEOUT_MS = 15_000;
 
 // Set on the delegated child so it prints its own bundled file instead of
@@ -53,7 +56,7 @@ export const SKILLS_VERSION_LOOKUP_TIMEOUT_MS = 15_000;
 const DELEGATED_ENV = "CRYSK_SKILLS_DELEGATED";
 
 // WHY only spaces and tabs: `\s` also matches newlines, and two adjacent `\s*`
-// took seconds on a few thousand blank lines in a branch's workflow file.
+// took seconds on a few thousand blank lines in a workflow file.
 const WORKFLOW_USES =
   /^[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?(?:cryskai\/crysk|juanmaagd\/pr-hero)@v(\d+(?:\.\d+){0,2})(?=["'\s#]|$)/m;
 
@@ -77,32 +80,6 @@ export function resolveSkillsSpec(input: {
     return input.recorded;
   }
   return workflowCryskSpec(input.workflows) ?? "latest";
-}
-
-// Far above any real workflow. WHY a limit and the regular-file check: the
-// files come from the checked-out branch, which a pull request's author
-// controls, and a symlink to a device or a fifo would hang this read.
-const MAX_WORKFLOW_BYTES = 256 * 1024;
-
-function readWorkflows(repoRoot: string): string[] {
-  const dir = path.join(repoRoot, ".github", "workflows");
-  try {
-    return readdirSync(dir)
-      .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
-      .sort()
-      .flatMap((name) => {
-        try {
-          const file = path.join(dir, name);
-          const stat = lstatSync(file);
-          if (!stat.isFile() || stat.size > MAX_WORKFLOW_BYTES) return [];
-          return [readFileSync(file, "utf-8")];
-        } catch {
-          return [];
-        }
-      });
-  } catch {
-    return [];
-  }
 }
 
 async function runBounded(
@@ -152,6 +129,51 @@ async function runBounded(
   } catch {
     return undefined;
   }
+}
+
+// Far above any real workflow; a larger blob is not read at all.
+const MAX_WORKFLOW_BYTES = 256 * 1024;
+
+// `git ls-tree -l -z`: mode, type, id, padded size, then a tab and the path. Only
+// regular files match: a symlink (120000) has its own mode, a dir has no size.
+const WORKFLOW_TREE_ENTRY =
+  /^100(?:644|755) blob ([0-9a-f]+) +(\d+)\t(.+\.ya?ml)$/s;
+
+// The workflows on the default branch, from git objects only. No default branch
+// known to this clone means none, never a fallback to the worktree.
+//
+// WHY the full ref: `origin/main` alone would resolve to a local branch or tag of
+// that name first, and a fetched pull request can bring one.
+export async function readDefaultBranchWorkflows(
+  repoRoot: string,
+  deps: { spawnFn?: typeof Bun.spawn; timeoutMs?: number } = {},
+): Promise<string[]> {
+  const branch = await remoteHeadRef(repoRoot).catch(() => undefined);
+  if (branch === undefined) return [];
+  const runGit = (args: string[]) =>
+    runBounded(["git", "-C", repoRoot, ...args], {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      timeoutMs: deps.timeoutMs ?? SKILLS_VERSION_LOOKUP_TIMEOUT_MS,
+      spawnFn: deps.spawnFn ?? Bun.spawn,
+    });
+  const listing = await runGit([
+    "ls-tree",
+    "-l",
+    "-z",
+    `refs/remotes/origin/${branch}`,
+    "--",
+    ".github/workflows/",
+  ]);
+  const workflows: string[] = [];
+  for (const entry of listing?.split("\0") ?? []) {
+    const match = WORKFLOW_TREE_ENTRY.exec(entry);
+    if (match?.[1] === undefined || Number(match[2]) > MAX_WORKFLOW_BYTES) {
+      continue;
+    }
+    const text = await runGit(["cat-file", "blob", match[1]]);
+    if (text !== undefined) workflows.push(text);
+  }
+  return workflows;
 }
 
 function newerVersion(a: string, b: string): string {
@@ -210,6 +232,7 @@ async function latestGithubRelease(
 
 // The exact version a moving tag points to, or the release GitHub marks as
 // latest. Undefined when GitHub cannot say (offline, no such tag, a timeout).
+// Given an exact version it returns that version only if its tag exists.
 export async function resolveCryskVersion(
   spec: string,
   deps: {
@@ -272,6 +295,8 @@ export interface SkillsInstallDeps {
   exists?: (path: string) => boolean;
   readFile?: (path: string) => string | undefined;
   writeFile?: (path: string, content: string) => Promise<void> | void;
+  unlink?: (path: string) => void;
+  rmdir?: (path: string) => void;
   which?: (binary: string) => string | null | Promise<string | null>;
   log?: (line: string) => void;
 }
@@ -282,7 +307,8 @@ export interface SkillsLoadDeps {
   env?: Record<string, string | undefined>;
   // The repository the agent works in; undefined outside one.
   repoRoot?: () => Promise<string | undefined>;
-  // The exact version a moving tag points to, or the latest release.
+  // The exact version a moving tag points to, the latest release, or an exact
+  // version back when its GitHub tag exists.
   resolveVersion?: (spec: string) => Promise<string | undefined>;
   delegate?: (
     version: string,
@@ -357,24 +383,34 @@ export async function skillsLoadCommand(
     deps.repoRoot ??
     (() => resolveRepoRoot(options.repo).catch(() => undefined))
   )();
+  const recorded =
+    repoRoot === undefined ? undefined : readEngineVersion(home, repoRoot);
   const spec = resolveSkillsSpec({
-    recorded:
-      repoRoot === undefined ? undefined : readEngineVersion(home, repoRoot),
-    workflows: repoRoot === undefined ? [] : readWorkflows(repoRoot),
+    recorded,
+    // A recorded version decides alone, so no workflow is read for it.
+    workflows:
+      repoRoot === undefined || isPlainEngineVersion(recorded)
+        ? []
+        : await readDefaultBranchWorkflows(repoRoot),
   });
-  const version = isPlainEngineVersion(spec)
-    ? spec
-    : await (deps.resolveVersion ?? resolveCryskVersion)(spec);
+  const resolveVersion = deps.resolveVersion ?? resolveCryskVersion;
+  const isExactSpec = isPlainEngineVersion(spec);
+  const version = isExactSpec ? spec : await resolveVersion(spec);
   if (version === assets.version) return printBundled();
 
   if (version !== undefined) {
     const cached = readCachedSkillFile(home, version, skillName, targetFile);
     if (cached !== undefined) return print(cached);
-    const delegate = deps.delegate ?? delegateSkillsLoad;
-    const delegated = await delegate(version, skillName, options.skillFile);
-    if (delegated !== undefined) {
-      writeCachedSkillFile(home, version, skillName, targetFile, delegated);
-      return print(delegated);
+    // A version resolved above already came from GitHub.
+    const isOnGithub =
+      !isExactSpec || (await resolveVersion(version)) === version;
+    if (isOnGithub) {
+      const delegate = deps.delegate ?? delegateSkillsLoad;
+      const delegated = await delegate(version, skillName, options.skillFile);
+      if (delegated !== undefined) {
+        writeCachedSkillFile(home, version, skillName, targetFile, delegated);
+        return print(delegated);
+      }
     }
   }
   writeStderr(
@@ -405,6 +441,8 @@ export async function skillsInstallCommand(
       exists: deps.exists,
       readFile: deps.readFile,
       writeFile: deps.writeFile,
+      unlink: deps.unlink,
+      rmdir: deps.rmdir,
       force: options.force === true,
     });
     // An old-name copy the sync removed, or kept because of the user's edits.
@@ -413,6 +451,15 @@ export async function skillsInstallCommand(
         old.status === "removed"
           ? `removed the old ${old.skill} skill from ${env.displayName}`
           : `kept the old ${old.skill} skill in ${env.displayName} (${old.reason}); delete it by hand when you no longer need it`,
+      );
+    }
+    // A copy of a companion file from an install that wrote all of them.
+    for (const companion of res.companions ?? []) {
+      const name = `${companion.skill}/${companion.file}`;
+      log(
+        companion.status === "removed"
+          ? `removed the installed copy of ${name} from ${env.displayName}; crysk skills load serves it now`
+          : `kept ${name} in ${env.displayName} (${companion.reason}); nothing reads it now, delete it by hand when you no longer need it`,
       );
     }
     if (res.driftDetected && !options.force) {
