@@ -1022,6 +1022,53 @@ describe("OpenCodeSdkTransport provider account/usage limit (#157)", () => {
   });
 });
 
+// #571: a ChatGPT subscription past its usage limit arrives as a refused turn, not as an
+// account_rate_limit retry status. Its 429 must not read as a limit that clears by itself.
+describe("OpenCodeSdkTransport refused turn over a usage limit (#571)", () => {
+  async function refusal(statusCode: number, message: string) {
+    const handle = makeClient({
+      stream: streamOf([
+        {
+          kind: "provider_refusal",
+          name: "APIError",
+          statusCode,
+          retryable: true,
+          message,
+        },
+      ]),
+    });
+    const rig = makeRig({ client: handle.client });
+    const outcome = await rig.transport.execute(makeRequest(), {
+      signal: rig.controller.signal,
+      events: rig.sink,
+    });
+    return rig.transport.classifyFailure(outcome);
+  }
+  const FIRST_ATTEMPT = { transientAttemptsUsed: 0, formatRetriesUsed: 0 };
+
+  test("a 429 that names the usage limit is quota_exhausted and is not retried", async () => {
+    const cause = await refusal(429, "The usage limit has been reached");
+    expect(cause).toBe("quota_exhausted");
+    expect(decideRetryDisposition("quota_exhausted", FIRST_ATTEMPT)).toEqual({
+      action: "terminal",
+    });
+  });
+
+  test("an ordinary 429 stays rate_limit and keeps its retry (previous behavior)", async () => {
+    const cause = await refusal(429, "Too many requests, retry after 20s");
+    expect(cause).toBe("rate_limit");
+    expect(decideRetryDisposition("rate_limit", FIRST_ATTEMPT).action).not.toBe(
+      "terminal",
+    );
+  });
+
+  test("only a 429 reads the words: a 503 that says usage limit stays transient", async () => {
+    expect(await refusal(503, "usage limit service is down")).toBe(
+      "network_transient",
+    );
+  });
+});
+
 // #213: the provider refused the turn (APIError 403, isRetryable false) on
 // the event stream. The old mapper dropped that event, the turn completed
 // with empty finalText, and resolveFailureCause filed format_violation

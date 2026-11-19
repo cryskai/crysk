@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A spent ChatGPT subscription is reported as a usage limit.** On the OpenCode route, a refused turn with status 429 that names a usage limit now ends as `CRYSK-PROVIDER-LIMITED`, naming the secret, without a retry. It used to be retried and published as `CRYSK-HUNTERS-FAILED`. An ordinary 429 keeps its retry (#571).
 - **Text that did not match the code.** `crysk config` is read-only only when it lists: `set`, `unset` and `edit`
   write a config file, and the help now says so. `--from` is required for `post` and optional for
   `triage reply`. A local `--dry-run` that the size gate would skip no longer prints `(exit 1)`: it returns `0`,
