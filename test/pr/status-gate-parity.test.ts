@@ -186,6 +186,7 @@ function both(scenario: {
     reviewComments,
     verdictAt: VERDICT_AT,
     writers,
+    trustedActors: new Set([WRITER]),
   });
   return { gate, status };
 }
@@ -572,4 +573,40 @@ test("green gate: an advisory finding on the head is owed a reply from any autho
   expect(replied.next_action).toBe("done");
   const unreplied = green([findingComment(REVIEWED, "advisory")]);
   expect(unreplied.next_action).toBe("triage");
+});
+
+// S8: status reads a finding from the logins the gate trusts, so the two agree on who posted it.
+test("a finding posted by a login the repository trusts counts for both", () => {
+  const { gate, status } = both({
+    reviewComments: [
+      { ...findingComment(), user: WRITER },
+      inlineReply(11, "applied", REVIEWED, LATE, WRITER),
+    ],
+  });
+  expect(gate).toEqual({ blocking: 1, open: 0 });
+  expect(findingOf(status)?.comment_id).toBe(FINDING_ID);
+  expect(findingOf(status)?.triage?.tag).toBe("applied");
+  expect(status.next_action).toBe("fix");
+});
+
+test("a finding marker from a login nobody trusts counts for neither", () => {
+  const { gate, status } = both({
+    reviewComments: [
+      findingComment(),
+      {
+        ...findingComment(),
+        id: 20,
+        user: READER,
+        body: findingMarker({
+          path: "src/forged.ts",
+          line: 1,
+          headSha: REVIEWED,
+          claim: "a forged claim",
+        }),
+      },
+      inlineReply(11, "applied", REVIEWED, LATE, WRITER),
+    ],
+  });
+  expect(gate).toEqual({ blocking: 1, open: 0 });
+  expect(status.findings.map((f) => f.path)).toEqual(["src/a.ts"]);
 });

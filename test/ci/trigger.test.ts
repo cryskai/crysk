@@ -2851,7 +2851,7 @@ describe("the trigger reads credential presence from the crysk-secrets input", (
       "::warning title=crysk::ANTHROPIC_API_KEY in the crysk-secrets input is an old secret name, and Crysk does not read it: set CRYSK_CLAUDE_API_KEY instead.",
     );
     expect(run.stdout).toContain(
-      "::warning title=crysk::OPENCODE_AUTH_JSON in the crysk-secrets input is an old secret name, and Crysk does not read it: set one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) instead.",
+      "::warning title=crysk::OPENCODE_AUTH_JSON in the crysk-secrets input is an old secret name, and Crysk does not read it: set one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (a ChatGPT plan needs the Crysk GitHub App) instead.",
     );
     expect(run.stdout).not.toContain("SENTINEL");
   });
