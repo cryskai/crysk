@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   unlinkSync,
@@ -275,6 +276,30 @@ describe("reconcile (upgrade) removes the old-name dirs", () => {
     );
     expect(present("crysk-loop")).toBe(true);
   });
+
+  // Every existing install reaches the stub-only layout through this path.
+  test("a full install from an earlier version keeps only the stub and edited files", async () => {
+    const dir = installLegacy("crysk-loop", [
+      "SKILL.md",
+      "playbook.md",
+      "adjudicator.md",
+    ]);
+    writeFileSync(path.join(dir, "adjudicator.md"), "my notes\n");
+
+    const result = await reconcile();
+
+    expect(result.errors).toEqual([]);
+    expect(existsSync(path.join(dir, "playbook.md"))).toBe(false);
+    expect(readFileSync(path.join(dir, "adjudicator.md"), "utf-8")).toBe(
+      "my notes\n",
+    );
+    expect(readFileSync(path.join(dir, "SKILL.md"), "utf-8")).toBe(
+      readFileSync(
+        resolveEngineAssets().triageSkillFiles["SKILL.md"] ?? "",
+        "utf-8",
+      ),
+    );
+  });
 });
 
 describe("removeSkills", () => {
@@ -372,5 +397,231 @@ describe("inspectSkillsSync reports a leftover legacy dir", () => {
     expect(inspectSkillsSync(env, resolveEngineAssets()).legacy).toEqual([
       "pr-hero-pr",
     ]);
+  });
+});
+
+// `crysk skills load` serves every other file from the package, so a copy beside
+// the stub would only freeze. An earlier version installed them all, and each
+// such copy leaves the same way as an old-name dir: by its recorded digest.
+describe("sync installs SKILL.md alone", () => {
+  const assets = resolveEngineAssets();
+  const stub = (name: string) => {
+    const files: Record<string, Record<string, string>> = {
+      "crysk-loop": assets.triageSkillFiles,
+      "crysk-ci-setup": assets.ciSetupSkillFiles,
+      "crysk-pr": assets.prSkillFiles,
+      crysk: assets.generalSkillFiles,
+    };
+    return readFileSync(files[name]?.["SKILL.md"] ?? "", "utf-8");
+  };
+  const digestOf = (name: string): { files: Record<string, string> } =>
+    JSON.parse(
+      readFileSync(path.join(skillsDir, name, "digest.json"), "utf-8"),
+    );
+  const onDisk = (name: string, file: string) =>
+    existsSync(path.join(skillsDir, name, file));
+
+  // The previous install, with its stub already equal to the bundled one: the
+  // usual upgrade, where sync has no skill file to write.
+  function installWithCurrentStub(name: string, companions: string[]) {
+    const dir = installLegacy(name, ["SKILL.md", ...companions]);
+    writeFileSync(path.join(dir, "SKILL.md"), stub(name));
+    const digest = digestOf(name);
+    digest.files["SKILL.md"] = sha(stub(name));
+    writeFileSync(path.join(dir, "digest.json"), JSON.stringify(digest));
+    return dir;
+  }
+
+  test("a fresh install writes the stub and its digest, nothing else", async () => {
+    const result = await syncSkills(env, assets);
+
+    expect(result.errors).toEqual([]);
+    expect(result.synced).toEqual(NEW_NAMES.map(() => "SKILL.md"));
+    expect(result.companions).toBeUndefined();
+    for (const name of NEW_NAMES) {
+      expect(readdirSync(path.join(skillsDir, name)).sort()).toEqual([
+        "SKILL.md",
+        "digest.json",
+      ]);
+      expect(Object.keys(digestOf(name).files)).toEqual(["SKILL.md"]);
+    }
+    const status = inspectSkillsSync(env, assets);
+    expect(status).toEqual({
+      synced: true,
+      drift: false,
+      legacy: [],
+      companions: [],
+    });
+    // What load serves is untouched by what install writes.
+    expect(Object.keys(assets.triageSkillFiles)).toContain("playbook.md");
+    expect(Object.keys(assets.ciSetupSkillFiles)).toContain(
+      "references/ci-admission.md",
+    );
+  });
+
+  test("unedited companions go when the stub is updated, emptied dirs too", async () => {
+    const dir = installLegacy("crysk-ci-setup", [
+      "SKILL.md",
+      "playbook.md",
+      "assets/workflow.yml",
+      "references/ci-admission.md",
+    ]);
+
+    const result = await syncSkills(env, assets);
+
+    expect(result.errors).toEqual([]);
+    expect(readdirSync(dir).sort()).toEqual(["SKILL.md", "digest.json"]);
+    expect(readFileSync(path.join(dir, "SKILL.md"), "utf-8")).toBe(
+      stub("crysk-ci-setup"),
+    );
+    expect(Object.keys(digestOf("crysk-ci-setup").files)).toEqual(["SKILL.md"]);
+    expect(result.companions).toEqual([
+      { skill: "crysk-ci-setup", file: "playbook.md", status: "removed" },
+      {
+        skill: "crysk-ci-setup",
+        file: "assets/workflow.yml",
+        status: "removed",
+      },
+      {
+        skill: "crysk-ci-setup",
+        file: "references/ci-admission.md",
+        status: "removed",
+      },
+    ]);
+  });
+
+  test("unedited companions go when the stub is already current", async () => {
+    installWithCurrentStub("crysk-loop", ["playbook.md", "adjudicator.md"]);
+
+    const result = await syncSkills(env, assets);
+
+    expect(onDisk("crysk-loop", "playbook.md")).toBe(false);
+    expect(onDisk("crysk-loop", "adjudicator.md")).toBe(false);
+    expect(Object.keys(digestOf("crysk-loop").files)).toEqual(["SKILL.md"]);
+    expect(result.skills.find((s) => s.skill === "crysk-loop")?.status).toBe(
+      "current",
+    );
+
+    const again = await syncSkills(env, assets);
+    expect(again.upToDate).toBe(true);
+    expect(again.companions).toBeUndefined();
+    expect(inspectSkillsSync(env, assets).companions).toEqual([]);
+  });
+
+  // force is what every upgrade passes: it replaces stubs, never the user's notes.
+  for (const force of [false, true]) {
+    test(`an edited companion is kept and reported (force: ${force})`, async () => {
+      const dir = installLegacy("crysk-loop", ["SKILL.md", "playbook.md"]);
+      const recorded = digestOf("crysk-loop").files["playbook.md"];
+      writeFileSync(path.join(dir, "playbook.md"), "my notes\n");
+
+      const result = await syncSkills(env, assets, { force });
+
+      expect(readFileSync(path.join(dir, "playbook.md"), "utf-8")).toBe(
+        "my notes\n",
+      );
+      // The stub does not read the file, so it never holds the stub back.
+      expect(readFileSync(path.join(dir, "SKILL.md"), "utf-8")).toBe(
+        stub("crysk-loop"),
+      );
+      expect(result.driftDetected).toBeUndefined();
+      expect(result.errors).toEqual([]);
+      expect(result.companions).toEqual([
+        {
+          skill: "crysk-loop",
+          file: "playbook.md",
+          status: "kept",
+          reason: "edited since it was installed",
+        },
+      ]);
+      // Never recorded over the user's bytes, so restoring the file lets it go.
+      expect(digestOf("crysk-loop").files["playbook.md"]).toBe(recorded);
+      const status = inspectSkillsSync(env, assets);
+      expect(status.synced).toBe(true);
+      expect(status.companions).toEqual(["crysk-loop/playbook.md"]);
+
+      const again = await syncSkills(env, assets, { force });
+      expect(again.companions?.map((c) => c.status)).toEqual(["kept"]);
+      expect(again.synced).toEqual([]);
+    });
+  }
+
+  test("a kept stub keeps its companions: it may still point at them", async () => {
+    const dir = installLegacy("crysk-loop", ["SKILL.md", "playbook.md"]);
+    writeFileSync(path.join(dir, "SKILL.md"), "my stub\n");
+    const before = readFileSync(path.join(dir, "digest.json"), "utf-8");
+
+    const result = await syncSkills(env, assets);
+
+    expect(result.driftDetected).toBe(true);
+    expect(onDisk("crysk-loop", "playbook.md")).toBe(true);
+    expect(readFileSync(path.join(dir, "digest.json"), "utf-8")).toBe(before);
+    expect(result.companions).toBeUndefined();
+  });
+
+  test("a file the digest never recorded is left alone and unreported", async () => {
+    await syncSkills(env, assets);
+    writeFileSync(path.join(skillsDir, "crysk-loop", "notes.md"), "mine\n");
+
+    const result = await syncSkills(env, assets);
+
+    expect(onDisk("crysk-loop", "notes.md")).toBe(true);
+    expect(result.companions).toBeUndefined();
+    expect(result.upToDate).toBe(true);
+    expect(inspectSkillsSync(env, assets).companions).toEqual([]);
+  });
+
+  test("a digest entry outside the skill dir is never followed", async () => {
+    const outside = path.join(skillsDir, "outside.md");
+    writeFileSync(outside, "outside\n");
+    const dir = installWithCurrentStub("crysk-loop", []);
+    const digest = digestOf("crysk-loop");
+    digest.files["../outside.md"] = sha("outside\n");
+    writeFileSync(path.join(dir, "digest.json"), JSON.stringify(digest));
+
+    const result = await syncSkills(env, assets);
+
+    expect(existsSync(outside)).toBe(true);
+    expect(result.companions).toBeUndefined();
+    expect(inspectSkillsSync(env, assets).companions).toEqual([]);
+  });
+
+  test("a companion that could not be removed keeps its digest for a retry", async () => {
+    installWithCurrentStub("crysk-loop", ["playbook.md"]);
+
+    const failed = await syncSkills(env, assets, {
+      unlink: () => {
+        throw new Error("EPERM");
+      },
+    });
+
+    expect(onDisk("crysk-loop", "playbook.md")).toBe(true);
+    expect(failed.errors).toHaveLength(1);
+    expect(failed.errors[0]).toContain("EPERM");
+    expect(failed.companions).toEqual([
+      {
+        skill: "crysk-loop",
+        file: "playbook.md",
+        status: "kept",
+        reason: "could not be read or removed (digest kept for a retry)",
+      },
+    ]);
+    expect(Object.keys(digestOf("crysk-loop").files)).toContain("playbook.md");
+
+    const retried = await syncSkills(env, assets);
+    expect(retried.errors).toEqual([]);
+    expect(onDisk("crysk-loop", "playbook.md")).toBe(false);
+  });
+
+  test("removeSkills still reports a companion sync kept", async () => {
+    const dir = installLegacy("crysk-loop", ["SKILL.md", "playbook.md"]);
+    writeFileSync(path.join(dir, "playbook.md"), "my notes\n");
+    await syncSkills(env, assets);
+
+    const removed = await removeSkills(env);
+
+    expect(removed.skippedModified).toEqual(["playbook.md"]);
+    expect(onDisk("crysk-loop", "SKILL.md")).toBe(false);
+    expect(onDisk("crysk-loop", "playbook.md")).toBe(true);
   });
 });

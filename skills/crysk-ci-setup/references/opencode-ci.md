@@ -1,6 +1,6 @@
 # OpenCode in CI — operator procedure
 
-Read this when the operator wants OpenCode, DeepSeek, mixed Claude+OpenCode, fallback models, or different models per step in GitHub Actions. User docs: [Other model providers](https://crysk.dev/docs/github-actions/other-providers/), [Use OpenAI models](https://crysk.dev/docs/github-actions/openai/), [Action reference](https://crysk.dev/docs/github-actions/action-reference/). Longer engine notes: `docs/github-actions.md` (sections **OpenCode in CI** and **`CRYSK_*` secrets**) and `docs/configuration.md` (section **Models**).
+Read this when the operator wants OpenCode, DeepSeek, mixed Claude+OpenCode, fallback models, or different models per step in GitHub Actions. User docs: [Other model providers](https://crysk.dev/docs/github-actions/other-providers/), [Use OpenAI models](https://crysk.dev/docs/github-actions/openai/), [Action reference](https://crysk.dev/docs/github-actions/action-reference/).
 
 Do **not** print, `cat`, or log credential values. Inspect **keys and `type` only**.
 
@@ -46,24 +46,17 @@ gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY
 
 Every step runs on DeepSeek. Without a Claude secret on the default profile, keep `materiality_gate` off: the judge runs only on its profile's judge models, which are Claude's there (the `openai` profile runs it on `opencode:openai/gpt-6.1-terra`).
 
-### OpenCode hunters, Claude refuter and summarizer, Claude fallback
+### Mixed
 
 ```bash
+# OpenCode first with a Claude fallback, Claude for the refuter and summary
 gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash", "claude:sonnet-latest"], "refuter": ["claude:opus-latest"], "summary": ["claude:haiku-latest"]}'
-```
-
-Keep `CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY`) beside the DeepSeek secret. The OpenCode auth file makes the run count as metered, so the platform's dollar limits (dashboard, Review > Limits) can skip it.
-
-### Two OpenCode providers
-
-```bash
+# Two OpenCode providers, each model on its own provider's secret
 gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-pro", "opencode:openai/gpt-5"]}'
 gh variable set CRYSK_OPENCODE_PROVIDERS --body '["DEEPSEEK", "OPENAI"]'
-gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY
-gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
 ```
 
-Each model runs on its own provider's secret, through its own OpenCode server. OpenAI runs on its API key, so list `"OPENAI"` too (`["DEEPSEEK", "OPENAI"]`) and set `CRYSK_OPENCODE_OPENAI_API_KEY`.
+Keep a Claude secret beside the provider's when any role names `claude:`. An OpenCode key makes the run metered, so the platform's dollar limits can skip it.
 
 ## OpenAI
 
@@ -75,12 +68,9 @@ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'
 gh variable set CRYSK_PROFILE --body openai   # optional: the ready-made OpenAI models
 ```
 
-| Secret | CI |
-|---|---|
-| `CRYSK_OPENCODE_OPENAI_API_KEY` | Metered API key. Runs. |
-| `_OAUTH` for any provider | **Do not set it.** Only the Crysk platform manages that login. The Action reads `_OAUTH` for `openai` only; for any other provider use its `_API_KEY`. |
+Do not set an `_OAUTH` secret for any provider: only the Crysk platform manages that login.
 
-A ChatGPT plan is not supported in the open-source Action. OpenAI replaces its refresh token every time it renews a login, a review never holds the new one, and nothing renews the repository secret, so a stored login stops working. A ChatGPT plan needs the Crysk GitHub App: https://crysk.dev/docs/github-actions/openai/. If a human asks for a ChatGPT plan, say that and offer the API key; do not walk them through `opencode auth login` or `auth.json`.
+A ChatGPT plan is not supported in the open-source Action. A stored login stops working, because OpenAI replaces its refresh token on every renewal. A ChatGPT plan needs the Crysk GitHub App: https://crysk.dev/docs/github-actions/openai/. If a human asks for a ChatGPT plan, say that and offer the API key; do not walk them through `opencode auth login` or `auth.json`.
 
 ## Workflow
 
@@ -95,14 +85,11 @@ Load it with `npx -y crysk@0.9.0 skills load crysk-ci-setup assets/workflow.yml`
 
 The Action installs OpenCode CLI **1.18.30** in its **own** step when the setup step built an OpenCode auth file **or** the models in effect name `opencode:`. Never `latest`. Claude-only skips that install.
 
-## Fail-closed edges
+## What fails, and how
 
-- Fork pushes still skip (no secrets); a maintainer's `/crysk review` comment reviews a fork.
-- OpenCode-only (only `CRYSK_OPENCODE_*` secrets) counts as a credential and reviews, as long as no step runs a `claude:` model.
 - No credential at all fails the run red, with the `gh secret set` commands in the step summary.
-- An OpenCode model whose provider has no secret starts, then **fails** for the missing record (unless the provider serves that model free).
-- A `CRYSK_MODELS` or `CRYSK_CREDENTIALS` value the parser refuses fails the run (`CRYSK-CONFIG-INVALID`), naming the input, never its content.
+- An OpenCode model whose provider has no secret fails for the missing record, unless the provider serves it free.
+- A `CRYSK_MODELS` or `CRYSK_CREDENTIALS` value the parser refuses fails the run (`CRYSK-CONFIG-INVALID`).
+- Fork pushes skip. A `/crysk review` from someone with write access reviews a fork.
 
-## After setting DATA
-
-Open a **same-repo** PR (fork pushes skip). In the review job's log, the setup step prints one notice per OpenCode provider naming the secret it used. A run that bills an API key is the one the platform's dollar limits can skip; what it cost is in the platform dashboard.
+Then open a same-repository pull request. The review job's setup step prints one notice per OpenCode provider naming the secret it used.

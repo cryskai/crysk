@@ -106,13 +106,16 @@ export function recordEngineVersion(
     engines[repoRoot] = { version, at };
     writeAtomically(enginesPath(home), `${JSON.stringify(engines, null, 2)}\n`);
   } catch {
-    // Best-effort: the next load serves the bundled playbook and the next
-    // status names the reload again.
+    // Best-effort: nothing is recorded, so status names no reload, and the next
+    // status records it again.
   }
 }
 
 // `skill` and `file` must already be names the bundled skill ships: the load
 // command validates them against the package's manifest before calling these.
+// WHY blank is a miss, on both sides: no skill file is blank, so such a file is a
+// failed run or a torn copy, and serving it would leave the agent with no
+// instructions for as long as the entry lasts, which is forever for a version.
 export function readCachedSkillFile(
   home: string,
   version: string,
@@ -121,7 +124,11 @@ export function readCachedSkillFile(
 ): string | undefined {
   if (!isPlainEngineVersion(version)) return undefined;
   try {
-    return readFileSync(playbookPath(home, version, skill, file), "utf8");
+    const content = readFileSync(
+      playbookPath(home, version, skill, file),
+      "utf8",
+    );
+    return content.trim() === "" ? undefined : content;
   } catch {
     return undefined;
   }
@@ -134,7 +141,7 @@ export function writeCachedSkillFile(
   file: string,
   content: string,
 ): void {
-  if (!isPlainEngineVersion(version)) return;
+  if (!isPlainEngineVersion(version) || content.trim() === "") return;
   try {
     writeAtomically(playbookPath(home, version, skill, file), content);
   } catch {

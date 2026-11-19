@@ -20,6 +20,7 @@ import type {
   TransportOutcome,
   TransportRequest,
 } from "../execution/contracts";
+import { SUBSCRIPTION_OR_SPEND_CAP } from "../execution/failure-policy";
 import {
   ACTIVE_CHILD_PROCS,
   type SpawnedProcess,
@@ -1078,8 +1079,6 @@ const UNNAMED_TAG_MAX = 60;
 // (a subscription), a tier "spend cap". Bare "limit reached" and "resets" are NOT witnesses:
 // an ordinary per-minute rate-limit message can say either and must keep its backoff retry.
 const CREDIT_OR_SPEND_LIMIT = /credit balance|spend limit|usage limit/i;
-const SUBSCRIPTION_OR_SPEND_CAP =
-  /hit your .*limit|usage limit|spend cap|spend limit/i;
 // A usage-limit message that arrives with no status is the same terminal limit.
 const USAGE_LIMIT_NO_STATUS =
   /hit your .*limit|usage limit|credit balance|spend cap|spend limit/i;

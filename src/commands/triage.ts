@@ -13,6 +13,7 @@ import {
   postReviewCommentReply,
   resolveReviewThreadForComment,
 } from "#pr/pr";
+import { type PrStatusFinding, trustedMarkerComments } from "#pr/pr-status";
 import { findMarkedCommentId, resolveCurrentPrNumber } from "#pr/preflight";
 import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
@@ -120,6 +121,17 @@ type ReplyTarget =
       line: number;
     };
 
+// The tag this finding is already answered with at `headSha`, or null. Only the newest reply the gate
+// counts makes a second one a repeat: status's `triage` is that reply, read with the same verdict time
+// and the same author rule as the gate.
+function answeredTagAt(
+  finding: Pick<PrStatusFinding, "triage"> | undefined,
+  headSha: string,
+): TriageTag | null {
+  const triage = finding?.triage ?? null;
+  return triage !== null && triage.head === headSha ? triage.tag : null;
+}
+
 // triage-without-skill S2: the finding a reply answers, read off the PR alone. The summary's state block
 // names the id, the summary carries the head the review ran on, and the join is the one
 // `crysk status --pr` makes (pr/pr-status.ts), so an agent with no run directory replies by id.
@@ -132,7 +144,7 @@ async function postedFindingFromPr(
 ): Promise<{
   target: ReplyTarget;
   headSha: string;
-  already: boolean;
+  answeredTag: TriageTag | null;
 }> {
   // The read `crysk status` makes, so the reply is decided on the replies the gate counts.
   const read = await readPrStatus({
@@ -142,6 +154,7 @@ async function postedFindingFromPr(
     spawnFn,
     sleepFn,
     memo: { writers: new Map() },
+    countForcedRuns: false,
   });
   const status = read.status;
   const issueComments = read.issueComments;
@@ -163,9 +176,6 @@ async function postedFindingFromPr(
         `${findingId} on PR #${prNumber} has no review head to answer under`,
       );
     }
-    // Only the newest reply the gate counts makes a second one a repeat: status's `triage` for this
-    // finding is that reply, read with the same verdict time and the same author rule as the gate.
-    const already = finding.triage !== null && finding.triage.head === headSha;
     return {
       target: {
         kind: "thread",
@@ -175,10 +185,13 @@ async function postedFindingFromPr(
         },
       },
       headSha,
-      already,
+      answeredTag: answeredTagAt(finding, headSha),
     };
   }
-  const summaryId = findMarkedCommentId(issueComments);
+  // The summary status read: a summary-shaped comment from anyone else is not linked to.
+  const summaryId = findMarkedCommentId(
+    trustedMarkerComments(issueComments, read.trustedActors),
+  );
   if (
     summaryId === null ||
     status.report.head === null ||
@@ -189,8 +202,6 @@ async function postedFindingFromPr(
     );
   }
   const headSha = status.report.head;
-  // A summary-row reply is answered by the newest counted reply that names the row, at this head.
-  const already = finding.triage !== null && finding.triage.head === headSha;
   return {
     target: {
       kind: "row",
@@ -200,7 +211,8 @@ async function postedFindingFromPr(
       line: finding.line,
     },
     headSha,
-    already,
+    // A summary-row reply is answered by the newest counted reply that names the row, at this head.
+    answeredTag: answeredTagAt(finding, headSha),
   };
 }
 
@@ -237,6 +249,7 @@ async function carriedRowsHint(input: {
       spawnFn: input.spawnFn,
       sleepFn: input.sleepFn,
       memo: { writers: new Map() },
+      countForcedRuns: false,
     });
     const rows = status.findings
       .filter((row) => row.id !== null && row.path === input.findingPath)
@@ -261,7 +274,7 @@ async function postedFindingFromRunDir(input: {
   target: ReplyTarget;
   headSha: string;
   reasoning: string;
-  already: boolean;
+  answeredTag: TriageTag | null;
 }> {
   const { operatorRoot, prNumber, runDir, spawnFn } = input;
   const findingsPath = path.join(runDir, "findings.json");
@@ -347,6 +360,8 @@ async function postedFindingFromRunDir(input: {
     spawnFn,
     sleepFn: input.sleepFn,
     memo: { writers: new Map() },
+    countForcedRuns: false,
+    trustPosterOf: { id: match.posted.id, channel: match.posted.channel },
   });
   // WHY the channel too: a review comment's id and an issue comment's id are different id spaces,
   // so the bare number could name another finding's comment.
@@ -355,8 +370,6 @@ async function postedFindingFromRunDir(input: {
     (row) =>
       row.comment_id === match.posted.id && row.channel === postedChannel,
   );
-  const already =
-    postedRow?.triage != null && postedRow.triage.head === doc.head_sha;
   return {
     target: {
       kind: "thread",
@@ -364,7 +377,7 @@ async function postedFindingFromRunDir(input: {
     },
     headSha: doc.head_sha,
     reasoning,
-    already,
+    answeredTag: answeredTagAt(postedRow, doc.head_sha),
   };
 }
 
@@ -384,6 +397,14 @@ export async function runTriageReplyCommand(input: {
   sleepFn?: (ms: number) => Promise<void>;
 }): Promise<number> {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
+  // WHY refused: `rejected` says the dismissal does not hold, yet the reply would still read as an
+  // answer, resolve the thread and invite a recheck.
+  if (input.tag === "dismissed" && input.verdict === "rejected") {
+    throw new CliUsageError(
+      "--tag dismissed --verdict rejected is refused and nothing was posted: the adjudicator " +
+        "rejected the dismissal, so the finding stands. Fix it, or answer it with another tag",
+    );
+  }
   const runDir =
     input.from === undefined ? undefined : path.resolve(input.from);
   const found =
@@ -409,7 +430,15 @@ export async function runTriageReplyCommand(input: {
             sleepFn: input.sleepFn ?? Bun.sleep,
           })),
         };
-  const { target: replyTarget, headSha, reasoning, already } = found;
+  const { target: replyTarget, headSha, reasoning, answeredTag } = found;
+  // WHY refused rather than skipped: the skip below is the retry path of the same answer, and a changed
+  // answer dropped there exits 0 while GitHub keeps the old one. A dry run reports the same refusal.
+  if (answeredTag !== null && answeredTag !== input.tag) {
+    throw new CliError(
+      `${input.findingId} is already answered ${answeredTag} at head ${headSha.slice(0, 7)}, so --tag ${input.tag} was refused and nothing was posted. A finding keeps one answer per review: it can be answered again after the next review`,
+    );
+  }
+  const already = answeredTag !== null;
   const fields: TriageMarkerFields = {
     tag: input.tag,
     headSha,

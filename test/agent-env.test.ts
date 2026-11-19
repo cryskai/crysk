@@ -58,7 +58,7 @@ describe("Agent environment detector and sync", () => {
   });
 
   describe("skills digest & sync", () => {
-    test("syncSkills writes files and digest.json on first sync", async () => {
+    test("syncSkills writes the stub and digest.json on first sync", async () => {
       const written: Record<string, string> = {};
       const env: AgentEnvDetection = {
         id: "claude",
@@ -81,13 +81,13 @@ describe("Agent environment detector and sync", () => {
         exists: (p) => Boolean(written[p]),
       });
 
-      expect(result.synced).toEqual(["SKILL.md", "adjudicator.md"]);
+      expect(result.synced).toEqual(["SKILL.md"]);
       expect(written["/home/user/.claude/skills/crysk-loop/SKILL.md"]).toBe(
         "content of SKILL.md",
       );
       expect(
         written["/home/user/.claude/skills/crysk-loop/adjudicator.md"],
-      ).toBe("content of adjudicator.md");
+      ).toBeUndefined();
       expect(
         written["/home/user/.claude/skills/crysk-loop/digest.json"],
       ).toBeDefined();
@@ -167,7 +167,7 @@ describe("Agent environment detector and sync", () => {
         exists: (p) => Boolean(written[p]),
       });
 
-      expect(resultForce.synced).toEqual(["SKILL.md", "adjudicator.md"]);
+      expect(resultForce.synced).toEqual(["SKILL.md"]);
       expect(written["/home/user/.claude/skills/crysk-loop/SKILL.md"]).toBe(
         "new upstream content",
       );
@@ -211,12 +211,7 @@ describe("Agent environment detector and sync", () => {
         exists: (p) => Boolean(written[p]),
       });
 
-      expect(result.synced).toEqual([
-        "SKILL.md",
-        "adjudicator.md",
-        "SKILL.md",
-        "assets/workflow.yml",
-      ]);
+      expect(result.synced).toEqual(["SKILL.md", "SKILL.md"]);
       expect(written["/home/user/.claude/skills/crysk-loop/SKILL.md"]).toBe(
         "triage skill content",
       );
@@ -225,7 +220,7 @@ describe("Agent environment detector and sync", () => {
       );
       expect(
         written["/home/user/.claude/skills/crysk-ci-setup/assets/workflow.yml"],
-      ).toBe("ci-setup workflow template content");
+      ).toBeUndefined();
     });
   });
 
@@ -496,6 +491,10 @@ describe("Agent environment detector and sync", () => {
             writes.push(p);
           },
           exists: (p: string) => p in files || p in bundled,
+          unlink: (p: string) => {
+            delete files[p];
+          },
+          rmdir: () => {},
         },
       };
     }
@@ -553,7 +552,7 @@ describe("Agent environment detector and sync", () => {
       });
 
       expect(disk.files[`${skillDir}/SKILL.md`]).toBe("bundled SKILL.md");
-      expect(result.synced).toEqual(["SKILL.md", "adjudicator.md"]);
+      expect(result.synced).toEqual(["SKILL.md"]);
       expect(result.driftDetected).toBeFalsy();
       expect(result.skills).toEqual([
         { skill: "crysk-loop", status: "updated" },

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -129,5 +130,34 @@ describe("skill files per version", () => {
     expect(
       readCachedSkillFile(home, "../escape", "crysk", "playbook.md"),
     ).toBeUndefined();
+  });
+});
+
+describe("an empty playbook is never a cached one", () => {
+  test.each([
+    ["an empty", ""],
+    ["a blank", " \n\t\n"],
+  ])("%s cache file counts as a miss", (_kind, content) => {
+    const file = path.join(
+      home,
+      ".crysk",
+      "skills",
+      "playbooks",
+      "0.42.0",
+      "crysk-loop",
+      "playbook.md",
+    );
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content);
+    expect(
+      readCachedSkillFile(home, "0.42.0", "crysk-loop", "playbook.md"),
+    ).toBeUndefined();
+  });
+
+  test("blank content is not written", () => {
+    writeCachedSkillFile(home, "0.42.0", "crysk-loop", "playbook.md", "  \n");
+    expect(
+      existsSync(path.join(home, ".crysk", "skills", "playbooks", "0.42.0")),
+    ).toBe(false);
   });
 });
