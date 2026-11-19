@@ -1,4 +1,4 @@
-# pr-hero gotchas
+# Review instructions
 
 Repo-specific facts a reviewer cannot infer from the diff. Injected verbatim
 into every hunter's system prompt, so each line has to earn its tokens.

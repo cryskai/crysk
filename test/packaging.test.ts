@@ -2242,6 +2242,25 @@ describe("Packaging & distribution configuration", () => {
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");
   });
 
+  test("agent harness files stay out of the public tree", () => {
+    const listed = Bun.spawnSync({
+      cmd: [
+        "git",
+        "ls-files",
+        "--",
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".agents",
+        ".claude",
+      ],
+      cwd: rootDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout.toString()).toBe("");
+  });
+
   // A consumer repo has no copy of this action's source, so it must resolve
   // the published tag. This repo DOES have the source — and resolving a tag
   // that does not exist yet would paint every PR here permanently red, which
