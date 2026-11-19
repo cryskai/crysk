@@ -276,8 +276,23 @@ describe("skillsLoadCommand", () => {
       ],
       [
         "crysk-ci-setup",
-        "assets/admission-config.example.json",
-        assets.ciSetupSkillFiles["assets/admission-config.example.json"] ?? "",
+        "references/ci-operations.md",
+        assets.ciSetupSkillFiles["references/ci-operations.md"] ?? "",
+      ],
+      [
+        "crysk-loop",
+        "dismissal.md",
+        assets.triageSkillFiles["dismissal.md"] ?? "",
+      ],
+      [
+        "crysk-loop",
+        "fix-the-class.md",
+        assets.triageSkillFiles["fix-the-class.md"] ?? "",
+      ],
+      [
+        "crysk-loop",
+        "gate-rules.md",
+        assets.triageSkillFiles["gate-rules.md"] ?? "",
       ],
       [
         "crysk-ci-setup",

@@ -9,16 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Installed skills follow the Crysk version your CI runs.** Each installed `SKILL.md` is now a short stub that
-  runs `crysk skills load <skill>`, which prints the playbook of the Crysk the repository's CI runs: the version
-  that wrote the last review, else the version the workflow's `uses: cryskai/crysk@v…` names (`@v0` gets the release
-  that tag points to, an exact pin gets that version), else the latest GitHub release. A release no longer needs anyone to
-  reinstall their skills, and a team that pins its workflow keeps instructions that match its engine. Reinstall
-  once (`crysk skills install`) to get the stubs.
+- **Installed skills follow the Crysk version your CI runs.** `crysk skills install` now writes only a short
+  `SKILL.md` stub per skill. The stub runs `crysk skills load <skill>`, which prints the playbook of the Crysk the
+  repository's CI runs: the version that wrote the last review, else the version named by the `uses: cryskai/crysk@v…`
+  line of a workflow on the default branch (read from git objects, never from the checkout), else the latest GitHub
+  release. A moving tag and "latest" are resolved from GitHub, and an exact version must exist as a GitHub tag. When a
+  version cannot be resolved or loaded, the command prints its bundled copy with a warning on stderr. Run
+  `crysk skills install` one last time to get the stubs: it also removes the companion files an earlier install
+  copied, keeping and reporting any you edited. After that, a release needs no reinstall.
 - **`crysk status --json` names the engine version.** `report.engine_version` is the Crysk version that wrote
   the summary (read only from a summary a bot posted), and `skills_reload` is the command that loads the matching
   playbook when the CLI running status is another version (`null` otherwise). The summary's admission block now
   carries the version in its JSON; its header line is unchanged.
+- **`crysk status --json` gives agents data to branch on.** `reason_code` names why `next_action` is what it is, one
+  closed value per decision. `forced_runs_on_head` counts the `/crysk review` and `/crysk recheck` commands that apply
+  to this head. Each finding gains `needs_reply` and `inconclusive_heads`. All are additive to `pr-hero.status/v1`,
+  and the `next_action` values are unchanged.
 
 ### Changed
 
@@ -37,7 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Error annotations link to the error-code page on crysk.dev**
   (`https://crysk.dev/docs/reference/error-codes/#crysk-cred-missing` and the like). Comments already posted
   keep working: `docs/github-actions.md` still has every code section and anchor.
-- **Reinstall the skills** (`crysk skills install`) to get the new OpenAI wording and the links to the site.
+- **The agent skills are rewritten around the status fields and for pull requests reviewed by CI or the platform.**
+  The review loop routes on `next_action` and `reason_code` in one table, with on-demand companion files, and no
+  longer greps the workflow, which was wrong on platform repositories. An agent now posts `/crysk stop` only on a
+  green gate, asks before forcing a review past a size or cost limit, reads `status --wait` before calling a pull
+  request ready, never merges or force-pushes, and has a rule for a local adjudicator that returns `rejected` or
+  `inconclusive`. `crysk-pr` applies only in repositories that use Crysk and checks before running `npx`. The CI skill
+  splits day-to-day handling into `references/ci-operations.md` and stops using `crysk doctor` to verify CI. The
+  unused `assets/admission-config.example.json` is gone.
+- **`next_action: fix` now means there is something to push.** A carried red whose blocking findings are all answered returns `override-or-fix`
+  with its own reason code.
 
 ### Fixed
 
@@ -52,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pay-per-token route. `agents_dir` is listed in both config
   layers with the repo winning, and the materiality gate text matches the code (a safety guard keeps security,
   credential and data-loss findings away from the judge, which runs on its profile's judge model).
+- **`crysk status` no longer reads findings or summaries a person typed.** Finding and summary markers count only from
+  bots and from the logins in `ci_trusted_actors`, so a marker-shaped comment cannot send an agent to triage or to a paid
+  review. A review posted under a person's account is not read unless the repository lists that account.
+- **`crysk triage reply` refuses two replies it used to accept.** A different `--tag` on a finding already answered at
+  this head, which was silently dropped with exit 0, and `--tag dismissed --verdict rejected`. Both exit non-zero and post
+  nothing. Repeating the same tag still retries resolving the thread.
+- **The notice for a leftover `OPENCODE_AUTH_JSON` secret no longer recommends `CRYSK_OPENCODE_OPENAI_OAUTH`,** and the
+  workflow template's comments say what that forwarded line is for: the Crysk platform sets it, and a standalone repository leaves it unset.
 - **SECURITY.md** no longer lists a `1.0` version that does not exist, and the package has a description.
 
 ## [0.9.0] - 2026-11-18
