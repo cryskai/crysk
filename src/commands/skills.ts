@@ -22,7 +22,7 @@
 // `npx -y crysk@<version> skills load …`; if that fails the bundled file is
 // printed with a warning on stderr.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isPlainEngineVersion } from "#ci/review-admission";
@@ -52,8 +52,10 @@ export const SKILLS_VERSION_LOOKUP_TIMEOUT_MS = 15_000;
 // resolving a version again.
 const DELEGATED_ENV = "CRYSK_SKILLS_DELEGATED";
 
+// WHY only spaces and tabs: `\s` also matches newlines, and two adjacent `\s*`
+// took seconds on a few thousand blank lines in a branch's workflow file.
 const WORKFLOW_USES =
-  /^\s*-?\s*uses:\s*["']?(?:cryskai\/crysk|juanmaagd\/pr-hero)@v(\d+(?:\.\d+){0,2})(?=["'\s#]|$)/m;
+  /^[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?(?:cryskai\/crysk|juanmaagd\/pr-hero)@v(\d+(?:\.\d+){0,2})(?=["'\s#]|$)/m;
 
 // The npm spec a workflow's `uses:` line runs, or undefined when no file names
 // the crysk action by a version tag (a SHA pin names no version).
@@ -77,6 +79,11 @@ export function resolveSkillsSpec(input: {
   return workflowCryskSpec(input.workflows) ?? "latest";
 }
 
+// Far above any real workflow. WHY a limit and the regular-file check: the
+// files come from the checked-out branch, which a pull request's author
+// controls, and a symlink to a device or a fifo would hang this read.
+const MAX_WORKFLOW_BYTES = 256 * 1024;
+
 function readWorkflows(repoRoot: string): string[] {
   const dir = path.join(repoRoot, ".github", "workflows");
   try {
@@ -85,7 +92,10 @@ function readWorkflows(repoRoot: string): string[] {
       .sort()
       .flatMap((name) => {
         try {
-          return [readFileSync(path.join(dir, name), "utf-8")];
+          const file = path.join(dir, name);
+          const stat = lstatSync(file);
+          if (!stat.isFile() || stat.size > MAX_WORKFLOW_BYTES) return [];
+          return [readFileSync(file, "utf-8")];
         } catch {
           return [];
         }

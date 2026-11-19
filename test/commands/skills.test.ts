@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -307,6 +308,12 @@ describe("resolveSkillsSpec", () => {
     ).toBe("1");
   });
 
+  test("a long run of blank lines is read in linear time", () => {
+    const started = Date.now();
+    expect(workflowCryskSpec([`${"\n".repeat(200_000)}x`])).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   test("the legacy action name counts too", () => {
     expect(
       workflowCryskSpec(["    - uses: juanmaagd/pr-hero@v0.7.0 # pinned\n"]),
@@ -438,6 +445,22 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
     const newer = await load({ resolved: "0.43.0", delegated: "# 0.43.0\n" });
     expect(newer.calls).toEqual([["0.43.0", "crysk-loop", undefined]]);
     expect(newer.out).toBe("# 0.43.0\n");
+  });
+
+  // Workflow files come from the checked-out branch, which a pull request's
+  // author controls, and this runs before the agent does anything else.
+  test("skips a workflow that is a symlink or oversized", async () => {
+    const dir = path.join(repo, ".github", "workflows");
+    mkdirSync(dir, { recursive: true });
+    const outside = path.join(home, "outside.yml");
+    writeFileSync(outside, "- uses: cryskai/crysk@v0.8.1\n");
+    symlinkSync(outside, path.join(dir, "link.yml"));
+    writeFileSync(
+      path.join(dir, "big.yml"),
+      `- uses: cryskai/crysk@v0.7.0\n${"#".repeat(300_000)}\n`,
+    );
+    const result = await load({ resolved: "0.50.0", delegated: "# latest\n" });
+    expect(result.lookups).toEqual(["latest"]);
   });
 
   test("follows an exact workflow pin with no version lookup", async () => {

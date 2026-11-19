@@ -56,7 +56,8 @@ export async function statusCommand(options: CliOptions): Promise<number> {
     json: options.json === true,
     wait: options.wait === true,
     cliVersion: resolveEngineAssets().version,
-    recordEngine: (version) => recordEngineVersion(home, operatorRoot, version),
+    recordEngine: (version, at) =>
+      recordEngineVersion(home, operatorRoot, version, at),
   });
 }
 
@@ -181,10 +182,11 @@ export async function runStatusCommand(input: {
   out?: (text: string) => void;
   // The running CLI's version, for the skills reload hint. Absent: none is named.
   cliVersion?: string;
-  // Records the engine version the summary names, so `skills load` serves that
-  // version's playbook with no network call (skills-cache.ts). Absent: nothing
-  // is recorded.
-  recordEngine?: (version: string) => void;
+  // Records the engine version the summary names and when the gate was set, so
+  // `skills load` serves that version's playbook with no network call and an
+  // older pull request does not undo a newer one (skills-cache.ts). Absent:
+  // nothing is recorded.
+  recordEngine?: (version: string, at: string | null) => void;
 }): Promise<number> {
   const { operatorRoot, pr, spawnFn } = input;
   // Every gh call here is bounded, so a call that never answers is a timeout CliError and the
@@ -278,7 +280,7 @@ export async function runStatusCommand(input: {
     sleptMs += pollIntervalMs;
   }
   if (status.report.engine_version !== null) {
-    input.recordEngine?.(status.report.engine_version);
+    input.recordEngine?.(status.report.engine_version, status.gate.created_at);
   }
   if (input.json) {
     const write = input.out ?? ((text: string) => process.stdout.write(text));

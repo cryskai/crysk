@@ -1220,7 +1220,7 @@ describe("runStatusCommand — the engine version", () => {
       spawnFn,
       nowMs: NOW,
       cliVersion: "0.9.5",
-      recordEngine: (version) => recorded.push(version),
+      recordEngine: (version, at) => recorded.push(`${version} ${at}`),
       out: (text) => written.push(text),
     });
     return { code, recorded, json: JSON.parse(written[0] ?? "{}") };
@@ -1229,7 +1229,7 @@ describe("runStatusCommand — the engine version", () => {
   test("records the version and prints the reload command", async () => {
     const { code, recorded, json } = await run("github-actions[bot]");
     expect(code).toBe(0);
-    expect(recorded).toEqual(["0.10.0"]);
+    expect(recorded).toEqual([`0.10.0 ${gateRow.created_at}`]);
     expect(json.report.engine_version).toBe("0.10.0");
     expect(json.skills_reload).toBe(
       "npx -y crysk@0.10.0 skills load crysk-loop",

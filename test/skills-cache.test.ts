@@ -37,10 +37,25 @@ describe("engine version per repository", () => {
     expect(readEngineVersion(home, "/repos/c")).toBeUndefined();
   });
 
-  test("a new version replaces the old one", () => {
-    recordEngineVersion(home, "/repos/a", "0.10.0");
-    recordEngineVersion(home, "/repos/a", "0.11.0");
+  test("a newer review replaces the version, even with a lower one", () => {
+    recordEngineVersion(home, "/repos/a", "0.11.0", "2026-11-01T00:00:00Z");
+    recordEngineVersion(home, "/repos/a", "0.10.0", "2026-11-02T00:00:00Z");
+    expect(readEngineVersion(home, "/repos/a")).toBe("0.10.0");
+  });
+
+  // Status can be run on an old pull request: its review says nothing about
+  // the engine the repository runs today.
+  test("an older review does not replace the version", () => {
+    recordEngineVersion(home, "/repos/a", "0.11.0", "2026-11-02T00:00:00Z");
+    recordEngineVersion(home, "/repos/a", "0.10.0", "2026-11-01T00:00:00Z");
     expect(readEngineVersion(home, "/repos/a")).toBe("0.11.0");
+  });
+
+  test("a review of unknown age fills an empty entry and replaces nothing", () => {
+    recordEngineVersion(home, "/repos/a", "0.10.0", null);
+    expect(readEngineVersion(home, "/repos/a")).toBe("0.10.0");
+    recordEngineVersion(home, "/repos/a", "0.9.0", null);
+    expect(readEngineVersion(home, "/repos/a")).toBe("0.10.0");
   });
 
   test("ignores a version that is not a plain x.y.z, on write and on read", () => {
@@ -55,9 +70,9 @@ describe("engine version per repository", () => {
     mkdirSync(path.dirname(enginesFile()), { recursive: true });
     writeFileSync(enginesFile(), "{not json");
     expect(readEngineVersion(home, "/repos/a")).toBeUndefined();
-    recordEngineVersion(home, "/repos/a", "0.10.0");
+    recordEngineVersion(home, "/repos/a", "0.10.0", "2026-11-01T00:00:00Z");
     expect(JSON.parse(readFileSync(enginesFile(), "utf8"))).toEqual({
-      "/repos/a": "0.10.0",
+      "/repos/a": { version: "0.10.0", at: "2026-11-01T00:00:00Z" },
     });
   });
 
