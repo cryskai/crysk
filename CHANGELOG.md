@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Installed skills follow the Crysk version your CI runs.** `crysk skills install` now writes only a short
-  `SKILL.md` stub per skill. The stub runs `crysk skills load <skill>`, which prints the playbook of the Crysk the
+- **Installed skills follow the Crysk version your CI runs.** `crysk skills install` and `npx skills add` now
+  install only a short `SKILL.md` stub per skill. The stub runs `crysk skills load <skill>`, which prints the playbook of the Crysk the
   repository's CI runs: the version that wrote the last review, else the version named by the `uses: cryskai/crysk@v…`
   line of a workflow on the default branch (read from git objects, never from the checkout), else the latest GitHub
   release. A moving tag and "latest" are resolved from GitHub, and an exact version must exist as a GitHub tag. When a

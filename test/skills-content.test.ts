@@ -49,7 +49,10 @@ function shippedMarkdown(): { file: string; text: string }[] {
       }
     }
   };
-  for (const skill of SHIPPED_SKILLS) walk(join(ROOT, "skills", skill));
+  for (const skill of SHIPPED_SKILLS) {
+    walk(join(ROOT, "skills", skill));
+    walk(join(ROOT, "skill-content", skill));
+  }
   return out;
 }
 
@@ -265,7 +268,7 @@ describe("shipped skill text matches the code", () => {
   test("the walk reaches every skill's playbook", () => {
     for (const skill of SHIPPED_SKILLS) {
       expect(files.map((f) => f.file)).toContain(
-        join("skills", skill, "playbook.md"),
+        join("skill-content", skill, "playbook.md"),
       );
     }
   });
@@ -283,7 +286,8 @@ describe("shipped skill text matches the code", () => {
   test("every file in a skill's manifest exists under that skill", () => {
     for (const [skill, manifest] of Object.entries(MANIFESTS)) {
       for (const file of Object.keys(manifest)) {
-        expect(statSync(join(ROOT, "skills", skill, file)).isFile()).toBe(true);
+        const dir = file === "SKILL.md" ? "skills" : "skill-content";
+        expect(statSync(join(ROOT, dir, skill, file)).isFile()).toBe(true);
       }
     }
   });
@@ -307,7 +311,7 @@ describe("shipped skill text matches the code", () => {
       [...PR_STATUS_REASON_CODES].sort(),
     );
     const playbook = readFileSync(
-      join(ROOT, "skills/crysk-loop/playbook.md"),
+      join(ROOT, "skill-content/crysk-loop/playbook.md"),
       "utf8",
     );
     expect(routingProblems(playbook, decisions)).toEqual([]);
@@ -436,11 +440,11 @@ describe("the checks fail on a defect", () => {
 
 describe("what the skills tell an agent to load or run", () => {
   const ciOperations = readFileSync(
-    join(ROOT, "skills/crysk-ci-setup/references/ci-operations.md"),
+    join(ROOT, "skill-content/crysk-ci-setup/references/ci-operations.md"),
     "utf8",
   );
   const playbook = readFileSync(
-    join(ROOT, "skills/crysk-loop/playbook.md"),
+    join(ROOT, "skill-content/crysk-loop/playbook.md"),
     "utf8",
   );
 

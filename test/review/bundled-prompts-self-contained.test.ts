@@ -31,7 +31,7 @@ const ADJUDICATOR_PROMPT = path.join(
   import.meta.dir,
   "..",
   "..",
-  "skills",
+  "skill-content",
   "crysk-loop",
   "adjudicator.md",
 );
