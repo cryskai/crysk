@@ -2461,6 +2461,8 @@ function admissionCheckRunConclusion(
       return "skipped";
     // #326: a size or budget gate skip. It was `skipped` (grey) before the
     // status split, so it stays grey; `neutral` would change how the PR reads.
+    // #572: an account refusal lands here too. This check reports the attempt,
+    // which was not spent; the job and the `crysk` status still report the failure.
     case "gate-skipped":
       return "skipped";
     default:

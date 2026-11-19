@@ -48,6 +48,10 @@ import {
 import { publishFinalCommitStatus } from "#pr/status";
 import { log } from "#ui/primitives";
 import { canonicalStatusText, STATUS_CONTEXT } from "../brand";
+import type {
+  FailureCredential,
+  TransportFailureCause,
+} from "../execution/contracts";
 import { CredentialRefusalError } from "../security/claude-credential";
 
 // ROADMAP Pillar 3 (GitHub Actions CI). The mechanical glue behind a gate
@@ -203,6 +207,50 @@ export async function settleCiGateSkip(
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<void> {
   await settleCiAdmissionLedger(state, "gate-skipped", reason, options);
+}
+
+// #572: why a run's hunters all stopped on the account, not on the review. A person has to
+// act on the credential or wait for the limit.
+const ACCOUNT_REFUSAL_REASON: Partial<Record<TransportFailureCause, string>> = {
+  auth_invalid: "every hunter stopped: the provider rejected the credential",
+  quota_exhausted: "every hunter stopped: the provider's usage limit is spent",
+};
+
+// A run where every hunter failed. When all of them stopped on the same account refusal, the
+// pull request got no review and did nothing to cause that, so the row leaves the attempt
+// budget. A hunter may have used tokens before the refusal, which the budget accepts: it bounds
+// automatic reviews, and this was not one. Any other mix stays `failed` and counts.
+//
+// WHY the credential is required: the Claude transport can also read `auth_invalid` from the
+// model's own final text, which the pull request's content can steer. A transport names the
+// credential only for a refusal the provider really returned, so a cause without one is not
+// proof and must not leave the budget.
+export async function settleCiHuntersFailed(
+  state: CiAdmissionLedgerState | null,
+  failures: readonly {
+    readonly cause?: TransportFailureCause;
+    readonly credential?: FailureCredential;
+  }[],
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<void> {
+  const causes = new Set(failures.map((failure) => failure.cause));
+  const [cause] = causes;
+  const reason =
+    causes.size === 1 &&
+    cause !== undefined &&
+    failures.every((failure) => failure.credential !== undefined)
+      ? ACCOUNT_REFUSAL_REASON[cause]
+      : undefined;
+  if (reason !== undefined) {
+    await settleCiGateSkip(state, reason, options);
+    return;
+  }
+  await settleCiAdmissionLedger(
+    state,
+    "failed",
+    "every hunter failed",
+    options,
+  );
 }
 
 // R003 (#494): a credential refusal at admission (CredentialRefusalError: no Claude
