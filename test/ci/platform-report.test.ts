@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { CLI_RECORD_FILE, parseCliRecord } from "../../src/ci/outcome";
 import {
   buildFindingsUpload,
   buildRunReport,
@@ -1489,6 +1490,98 @@ describe("runReportStep", () => {
       expect(r.calls).toHaveLength(0);
       expect(r.out.join("")).toContain("::warning");
     }
+  });
+});
+
+// #573: the platform holds reviews on what this field says, so it carries only a proven refusal.
+describe("runReportStep: account_refusal", () => {
+  const huntersFailed = (hunter_failures: unknown[]) => ({
+    v: 1,
+    outcome: "hunters-failed",
+    head_sha: TRIGGER_HEAD,
+    hunter_failures,
+  });
+  const OAUTH = "CRYSK_OPENCODE_OPENAI_OAUTH";
+
+  async function sentFor(record: unknown) {
+    const { fn, calls } = fakeFetch(() =>
+      json(200, { run_id: "r1", recorded: true }),
+    );
+    const code = await runReportStep({
+      fetch: fn,
+      env: {
+        CRYSK_RUN_TOKEN: RUN_TOKEN,
+        CRYSK_OUTCOME: "hunters-failed",
+        CRYSK_OUTCOME_DIR: fixtureDir({ [CLI_RECORD_FILE]: record }),
+        TRIGGER_PR: "7",
+        TRIGGER_HEAD_SHA: TRIGGER_HEAD,
+      },
+      baseUrl: BASE,
+      stdout: () => {},
+    });
+    expect(code).toBe(0);
+    return JSON.parse(String(calls[0]?.init.body));
+  }
+
+  test("every hunter refused names the cause and the secret once", async () => {
+    const record = huntersFailed([
+      { cause: "auth_invalid", credential: OAUTH },
+      { cause: "auth_invalid", credential: OAUTH },
+    ]);
+    expect(parseCliRecord(JSON.stringify(record))).toBeDefined();
+    expect((await sentFor(record)).account_refusal).toEqual({
+      cause: "auth_invalid",
+      secrets: [OAUTH],
+    });
+  });
+
+  test("a Claude credential is named as the secret the repository sets", async () => {
+    const sent = await sentFor(
+      huntersFailed([
+        { cause: "quota_exhausted", credential: "CLAUDE_CODE_OAUTH_TOKEN" },
+      ]),
+    );
+    expect(sent.account_refusal).toEqual({
+      cause: "quota_exhausted",
+      secrets: ["CRYSK_CLAUDE_OAUTH_TOKEN"],
+    });
+  });
+
+  for (const [label, failures] of [
+    ["no credential", [{ cause: "auth_invalid" }]],
+    ["another cause", [{ cause: "rate_limit", credential: OAUTH }]],
+    [
+      "mixed causes",
+      [
+        { cause: "auth_invalid", credential: OAUTH },
+        { cause: "quota_exhausted", credential: OAUTH },
+      ],
+    ],
+  ] as const) {
+    test(`${label} sends no field`, async () => {
+      const sent = await sentFor(huntersFailed([...failures]));
+      expect(sent).not.toHaveProperty("account_refusal");
+    });
+  }
+
+  test("a run with no outcome record still reports (previous behavior)", async () => {
+    const { fn, calls } = fakeFetch(() =>
+      json(200, { run_id: "r1", recorded: true }),
+    );
+    await runReportStep({
+      fetch: fn,
+      env: {
+        CRYSK_RUN_TOKEN: RUN_TOKEN,
+        CRYSK_OUTCOME: "reviewed",
+        TRIGGER_PR: "7",
+        TRIGGER_HEAD_SHA: TRIGGER_HEAD,
+      },
+      baseUrl: BASE,
+      stdout: () => {},
+    });
+    const sent = JSON.parse(String(calls[0]?.init.body));
+    expect(sent.outcome).toBe("reviewed");
+    expect(sent).not.toHaveProperty("account_refusal");
   });
 });
 
