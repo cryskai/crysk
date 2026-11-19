@@ -13,6 +13,7 @@ import type {
   TransportOutcome,
   TransportRequest,
 } from "../execution/contracts";
+import { SUBSCRIPTION_OR_SPEND_CAP } from "../execution/failure-policy";
 import type {
   NormalizedTokens,
   NormalizedUsage,
@@ -543,14 +544,25 @@ function providerRefusalRetries(witness: string): boolean | undefined {
 // the provider's own text, so the match is anchored right after the flag and
 // stops at the group's close paren: a message that says "status=404" cannot
 // reach this slot. "unknown" (no status was reported) returns undefined.
+const PROVIDER_REFUSAL_SLOT =
+  /^ retryable=(?:yes|no) \([^()]* status=(\d+|unknown)\): /;
+
 function providerRefusalStatus(witness: string): string | undefined {
   const at = witness.indexOf(MARKER_PROVIDER_REFUSAL);
   if (at < 0) return undefined;
   const rest = witness.slice(at + MARKER_PROVIDER_REFUSAL.length);
-  const slot = rest.match(
-    /^ retryable=(?:yes|no) \([^()]* status=(\d+|unknown)\): /,
-  );
+  const slot = rest.match(PROVIDER_REFUSAL_SLOT);
   return slot?.[1] === "unknown" ? undefined : slot?.[1];
+}
+
+// The provider's own words: what follows the status slot, on that line. Later witness
+// lines are the transport's notes, not the provider's message.
+function providerRefusalMessage(witness: string): string | undefined {
+  const at = witness.indexOf(MARKER_PROVIDER_REFUSAL);
+  if (at < 0) return undefined;
+  const rest = witness.slice(at + MARKER_PROVIDER_REFUSAL.length);
+  const slot = rest.match(PROVIDER_REFUSAL_SLOT);
+  return slot === null ? undefined : rest.slice(slot[0].length).split("\n")[0];
 }
 
 // #157 (pr-157-8df2fca3-6): a hunter's tool call for a path OUTSIDE the
@@ -2091,6 +2103,16 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     // already terminal (decideRetryDisposition's default arm) — exactly
     // right, since a fresh attempt cannot outrun quota that is already spent.
     if (witness.includes(MARKER_PROVIDER_LIMIT)) {
+      return "quota_exhausted";
+    }
+    // #571: the same limit can arrive as a refused turn with status 429 and
+    // isRetryable true. Checked before the generic `\b429\b` below, which would
+    // retry a limit no retry can outrun. The status slot picks the branch and only
+    // then are the provider's words read, as in the Claude transport.
+    if (
+      providerRefusalStatus(witness) === "429" &&
+      SUBSCRIPTION_OR_SPEND_CAP.test(providerRefusalMessage(witness) ?? "")
+    ) {
       return "quota_exhausted";
     }
     // #157: same ordering rule as the marker above — checked before any
