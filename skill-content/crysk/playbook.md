@@ -11,7 +11,7 @@ Read the live state before acting, and do not answer from memory:
 - [crysk.dev/docs](https://crysk.dev/docs/): every page is also Markdown at the same URL with `.md`, indexed by
   [llms.txt](https://crysk.dev/llms.txt).
 
-If Crysk is not on `PATH`, run commands as `npx -y crysk@0.9.0 <command>`.
+If Crysk is not on `PATH`, run commands as `npx -y crysk@0.10.0 <command>`.
 
 ## Mental model
 

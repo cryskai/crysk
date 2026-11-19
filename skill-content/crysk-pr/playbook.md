@@ -44,7 +44,7 @@ request, use `gh pr view --json number,url`. Keep the number `<n>`.
 Do not stop after creating the pull request. Wait for the review in the same turn:
 
 ```bash
-npx -y crysk@0.9.0 status --pr <n> --wait --json
+npx -y crysk@0.10.0 status --pr <n> --wait --json
 ```
 
 It waits for the run to start and finish, then returns the settled state.
@@ -52,7 +52,7 @@ It waits for the run to start and finish, then returns the settled state.
 - **Anything but `next_action=done`:** load the loop and follow it:
 
   ```bash
-  npx -y crysk@0.9.0 skills load crysk-loop
+  npx -y crysk@0.10.0 skills load crysk-loop
   ```
 
 - **`next_action=done`:** the loop has little left, but load it too when `findings` has a row with `comment_id: null` or
