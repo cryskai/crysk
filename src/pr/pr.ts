@@ -203,10 +203,51 @@ export async function ghPrView(
     options?.spawnFn,
     options?.timeoutMs,
   );
+  if (!result.ok && OLD_GH_NO_BASE_REF_OID.test(result.stderr)) {
+    return ghPrViewWithoutBaseRefOid(operatorRoot, pr, options);
+  }
   if (!result.ok) {
     throw new CliError(`gh pr view ${pr} failed: ${result.stderr.trim()}`);
   }
   return result.stdout;
+}
+
+// #561: GitHub CLI 2.60 does not know `baseRefOid` and refuses the whole field list. The same
+// sha comes from the REST pull request, which every gh can read, so an older gh still works.
+const OLD_GH_NO_BASE_REF_OID = /Unknown JSON field: "baseRefOid"/;
+
+async function ghPrViewWithoutBaseRefOid(
+  operatorRoot: string,
+  pr: number,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
+): Promise<string> {
+  const fields = PR_VIEW_JSON_FIELDS.split(",")
+    .filter((field) => field !== "baseRefOid")
+    .join(",");
+  const view = await gh(
+    operatorRoot,
+    ["pr", "view", String(pr), "--json", fields],
+    undefined,
+    options?.spawnFn,
+    options?.timeoutMs,
+  );
+  if (!view.ok) {
+    throw new CliError(`gh pr view ${pr} failed: ${view.stderr.trim()}`);
+  }
+  const base = await gh(
+    operatorRoot,
+    ["api", `repos/{owner}/{repo}/pulls/${pr}`, "--jq", ".base.sha"],
+    undefined,
+    options?.spawnFn,
+    options?.timeoutMs,
+  );
+  const baseSha = base.stdout.trim();
+  if (!base.ok || !/^[0-9a-f]{40}$/.test(baseSha)) {
+    throw new CliError(
+      `gh pr view ${pr}: this gh cannot read baseRefOid, and the base sha could not be read from the API either: ${base.stderr.trim() || baseSha}`,
+    );
+  }
+  return JSON.stringify({ ...JSON.parse(view.stdout), baseRefOid: baseSha });
 }
 
 // The NO-ARGUMENT `gh pr view`: gh resolves the PR belonging to the

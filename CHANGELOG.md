@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`crysk status` and pull request reviews work with an older GitHub CLI.** GitHub CLI 2.60 does not know the `baseRefOid` field and refused the whole request. Crysk now reads the base commit from the REST API when `gh` refuses that field (#561).
 - **A platform re-review now resolves the threads it verified gone.** When the workflow token is refused the resolve
   (`Resource not accessible by integration`), a platform-dispatched run reports those review comments to the Crysk
   platform as `resolve_threads`, and the platform resolves the threads with the Crysk App's installation. The
