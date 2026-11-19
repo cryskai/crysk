@@ -23,43 +23,43 @@ import refuterPrompt from "../prompts/default/review-refuter.md" with {
 import materialityPrompt from "../prompts/materiality.md" with { type: "file" };
 import summarizerPrompt from "../prompts/summarizer.md" with { type: "file" };
 import verifierPrompt from "../prompts/verifier.md" with { type: "file" };
-import generalPlaybook from "../skills/crysk/playbook.md" with { type: "file" };
+import generalPlaybook from "../skill-content/crysk/playbook.md" with { type: "file" };
 import generalSkill from "../skills/crysk/SKILL.md" with { type: "file" };
-import ciSetupWorkflow from "../skills/crysk-ci-setup/assets/workflow.yml" with {
+import ciSetupWorkflow from "../skill-content/crysk-ci-setup/assets/workflow.yml" with {
   type: "file",
 };
-import ciSetupPlaybook from "../skills/crysk-ci-setup/playbook.md" with {
+import ciSetupPlaybook from "../skill-content/crysk-ci-setup/playbook.md" with {
   type: "file",
 };
-import ciSetupAdmissionRef from "../skills/crysk-ci-setup/references/ci-admission.md" with {
+import ciSetupAdmissionRef from "../skill-content/crysk-ci-setup/references/ci-admission.md" with {
   type: "file",
 };
-import ciSetupOperationsRef from "../skills/crysk-ci-setup/references/ci-operations.md" with {
+import ciSetupOperationsRef from "../skill-content/crysk-ci-setup/references/ci-operations.md" with {
   type: "file",
 };
-import ciSetupOpenCodeRef from "../skills/crysk-ci-setup/references/opencode-ci.md" with {
+import ciSetupOpenCodeRef from "../skill-content/crysk-ci-setup/references/opencode-ci.md" with {
   type: "file",
 };
 import ciSetupSkill from "../skills/crysk-ci-setup/SKILL.md" with {
   type: "file",
 };
-import triageAdjudicator from "../skills/crysk-loop/adjudicator.md" with {
+import triageAdjudicator from "../skill-content/crysk-loop/adjudicator.md" with {
   type: "file",
 };
-import triageDismissal from "../skills/crysk-loop/dismissal.md" with {
+import triageDismissal from "../skill-content/crysk-loop/dismissal.md" with {
   type: "file",
 };
-import triageFixTheClass from "../skills/crysk-loop/fix-the-class.md" with {
+import triageFixTheClass from "../skill-content/crysk-loop/fix-the-class.md" with {
   type: "file",
 };
-import triageGateRules from "../skills/crysk-loop/gate-rules.md" with {
+import triageGateRules from "../skill-content/crysk-loop/gate-rules.md" with {
   type: "file",
 };
-import triagePlaybook from "../skills/crysk-loop/playbook.md" with {
+import triagePlaybook from "../skill-content/crysk-loop/playbook.md" with {
   type: "file",
 };
 import triageSkill from "../skills/crysk-loop/SKILL.md" with { type: "file" };
-import prPlaybook from "../skills/crysk-pr/playbook.md" with { type: "file" };
+import prPlaybook from "../skill-content/crysk-pr/playbook.md" with { type: "file" };
 import prSkill from "../skills/crysk-pr/SKILL.md" with { type: "file" };
 
 export const BUNDLED_AGENT_FILES: Record<string, string> = {

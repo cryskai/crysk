@@ -49,6 +49,7 @@
     "config",
     "dist",
     "prompts",
+    "skill-content",
     "skills/crysk-loop",
     "skills/crysk-ci-setup",
     "skills/crysk-pr",
