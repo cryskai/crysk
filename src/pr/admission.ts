@@ -14,7 +14,11 @@ import {
   shouldWriteCiOutputs,
   shouldWriteStepSummary,
 } from "#ci/gates";
-import type { CliRecord } from "#ci/outcome";
+import {
+  type AccountRefusal,
+  accountRefusalOf,
+  type CliRecord,
+} from "#ci/outcome";
 import { isOverrideStatus, newestStatusInContext } from "#ci/override";
 import {
   appendCiOutputs,
@@ -211,20 +215,15 @@ export async function settleCiGateSkip(
 
 // #572: why a run's hunters all stopped on the account, not on the review. A person has to
 // act on the credential or wait for the limit.
-const ACCOUNT_REFUSAL_REASON: Partial<Record<TransportFailureCause, string>> = {
+const ACCOUNT_REFUSAL_REASON: Record<AccountRefusal["cause"], string> = {
   auth_invalid: "every hunter stopped: the provider rejected the credential",
   quota_exhausted: "every hunter stopped: the provider's usage limit is spent",
 };
 
-// A run where every hunter failed. When all of them stopped on the same account refusal, the
-// pull request got no review and did nothing to cause that, so the row leaves the attempt
-// budget. A hunter may have used tokens before the refusal, which the budget accepts: it bounds
-// automatic reviews, and this was not one. Any other mix stays `failed` and counts.
-//
-// WHY the credential is required: the Claude transport can also read `auth_invalid` from the
-// model's own final text, which the pull request's content can steer. A transport names the
-// credential only for a refusal the provider really returned, so a cause without one is not
-// proof and must not leave the budget.
+// A run where every hunter failed. On a proven account refusal (accountRefusalOf) the pull
+// request got no review and did nothing to cause that, so the row leaves the attempt budget. A
+// hunter may have used tokens before the refusal, which the budget accepts: it bounds automatic
+// reviews, and this was not one. Any other mix stays `failed` and counts.
 export async function settleCiHuntersFailed(
   state: CiAdmissionLedgerState | null,
   failures: readonly {
@@ -233,16 +232,13 @@ export async function settleCiHuntersFailed(
   }[],
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<void> {
-  const causes = new Set(failures.map((failure) => failure.cause));
-  const [cause] = causes;
-  const reason =
-    causes.size === 1 &&
-    cause !== undefined &&
-    failures.every((failure) => failure.credential !== undefined)
-      ? ACCOUNT_REFUSAL_REASON[cause]
-      : undefined;
-  if (reason !== undefined) {
-    await settleCiGateSkip(state, reason, options);
+  const refusal = accountRefusalOf(failures);
+  if (refusal !== undefined) {
+    await settleCiGateSkip(
+      state,
+      ACCOUNT_REFUSAL_REASON[refusal.cause],
+      options,
+    );
     return;
   }
   await settleCiAdmissionLedger(

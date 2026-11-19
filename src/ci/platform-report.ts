@@ -56,6 +56,12 @@ import {
 import { GATE_RECORD_FILE } from "../pr/gate-record";
 import type { FindingsDocument } from "../review/findings";
 import { validateFindingsDocument } from "../review/findings";
+import {
+  accountRefusalOf,
+  actionSecretName,
+  CLI_RECORD_FILE,
+  parseCliRecord,
+} from "./outcome";
 import { PLATFORM_API_URL, type PlatformDataMode } from "./platform";
 
 // The platform caps `agents` at 64 entries.
@@ -126,6 +132,14 @@ export interface RunReportBody {
   // What the run measured per model request: the platform prices the run from it, so the body
   // carries no dollar figure anywhere.
   usage_facts: ReportUsageFacts;
+  // #573: every hunter stopped on the same refusal of the account. Names of secrets only,
+  // never a value. The platform holds this repository's reviews on it.
+  account_refusal?: ReportAccountRefusal;
+}
+
+export interface ReportAccountRefusal {
+  cause: "auth_invalid" | "quota_exhausted";
+  secrets: string[];
 }
 
 export type ReportCredential = "api" | "subscription" | "free";
@@ -160,6 +174,7 @@ export interface BuildRunReportInput {
   // The trigger's resolved head, the fallback when no findings were written.
   triggerHeadSha: string;
   run: RunDirFacts;
+  accountRefusal?: ReportAccountRefusal;
 }
 
 // null when the run has no usable head: the platform requires a 40-hex sha, so
@@ -181,6 +196,10 @@ export function buildRunReport(
     (sha): sha is string => typeof sha === "string" && SHA.test(sha),
   );
   if (headSha === undefined) return null;
+  const refusalField =
+    input.accountRefusal === undefined
+      ? {}
+      : { account_refusal: input.accountRefusal };
 
   if (doc === undefined) {
     return {
@@ -192,6 +211,7 @@ export function buildRunReport(
       agents: [],
       // A run that wrote no findings can still have spent tokens before it died.
       usage_facts: buildUsageFacts(input.run.pipeline, new Map()),
+      ...refusalField,
     };
   }
 
@@ -212,6 +232,7 @@ export function buildRunReport(
   );
 
   return {
+    ...refusalField,
     outcome: input.outcome === "" ? "error" : input.outcome,
     pr_number: input.prNumber,
     head_sha: headSha,
@@ -738,6 +759,29 @@ export function readRunDir(
   return facts;
 }
 
+// The refusal the CLI recorded for this run. A missing or unreadable record is no refusal:
+// the report still goes out, and the platform simply holds nothing.
+export function readAccountRefusal(
+  outcomeDir: string,
+  readText: (file: string) => string = (file) => readFileSync(file, "utf8"),
+): ReportAccountRefusal | undefined {
+  if (outcomeDir === "") return undefined;
+  let text: string;
+  try {
+    text = readText(path.join(outcomeDir, CLI_RECORD_FILE));
+  } catch {
+    return undefined;
+  }
+  const record = parseCliRecord(text);
+  if (record?.outcome !== "hunters-failed") return undefined;
+  const refusal = accountRefusalOf(record.hunter_failures ?? []);
+  if (refusal === undefined) return undefined;
+  return {
+    cause: refusal.cause,
+    secrets: [...new Set(refusal.credentials.map(actionSecretName))],
+  };
+}
+
 export type SendReportResult =
   | { ok: true; recorded: boolean; runId?: string }
   // `message` names the HTTP status and the API's own `message`. It never
@@ -969,6 +1013,10 @@ export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
       prNumber,
       triggerHeadSha: deps.env.TRIGGER_HEAD_SHA ?? "",
       run,
+      accountRefusal: readAccountRefusal(
+        deps.env.CRYSK_OUTCOME_DIR ?? "",
+        deps.readText,
+      ),
     });
     if (body === null) {
       warn("the run resolved no head sha.");

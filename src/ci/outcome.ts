@@ -2121,6 +2121,39 @@ function secretNameOf(
   return CRYSK_SECRET_OF_CREDENTIAL[credential] ?? credential;
 }
 
+// Every hunter stopped on the same refusal of the account behind it, and each names the
+// credential refused. WHY the credential is required: the Claude transport can also read
+// `auth_invalid` from the model's own final text, which a pull request can steer. A transport
+// names the credential only for a refusal the provider really returned, so a cause without
+// one proves nothing. The attempt budget and the platform's holds both act on this answer.
+export interface AccountRefusal {
+  readonly cause: "auth_invalid" | "quota_exhausted";
+  readonly credentials: readonly FailureCredential[];
+}
+
+export function accountRefusalOf(
+  failures: readonly {
+    readonly cause?: TransportFailureCause;
+    readonly credential?: FailureCredential;
+  }[],
+): AccountRefusal | undefined {
+  const cause = failures[0]?.cause;
+  if (cause !== "auth_invalid" && cause !== "quota_exhausted") return undefined;
+  const credentials = new Set<FailureCredential>();
+  for (const failure of failures) {
+    if (failure.cause !== cause || failure.credential === undefined) {
+      return undefined;
+    }
+    credentials.add(failure.credential);
+  }
+  return { cause, credentials: [...credentials] };
+}
+
+// The name of the repository secret a credential came from, in the action.
+export function actionSecretName(credential: FailureCredential): string {
+  return secretNameOf(credential, "action");
+}
+
 // For a code the caller requests directly. `variant` picks the sub-class, which
 // fixes the owner, the wording and the fix; renderError supplies it for classes.
 export function renderCode(
