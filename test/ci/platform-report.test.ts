@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { CLI_RECORD_FILE, parseCliRecord } from "../../src/ci/outcome";
+import {
+  CLI_RECORD_FILE,
+  parseCliRecord,
+  RESOLVE_THREADS_FILE,
+} from "../../src/ci/outcome";
 import {
   buildFindingsUpload,
   buildRunReport,
@@ -1582,6 +1586,98 @@ describe("runReportStep: account_refusal", () => {
     const sent = JSON.parse(String(calls[0]?.init.body));
     expect(sent.outcome).toBe("reviewed");
     expect(sent).not.toHaveProperty("account_refusal");
+  });
+});
+
+// #562: the threads the workflow token could not resolve, for the platform to resolve with
+// the App's installation. The contract: positive integers, at most 100, no duplicates,
+// absent when there are none.
+describe("runReportStep: resolve_threads", () => {
+  function outcomeDir(text: string): string {
+    const dir = mkdtempSync(path.join(tmpdir(), "platform-report-resolve-"));
+    writeFileSync(path.join(dir, RESOLVE_THREADS_FILE), text);
+    return dir;
+  }
+
+  async function sentWith(env: Record<string, string>) {
+    const { fn, calls } = fakeFetch((call) =>
+      call.url.endsWith("/runs/report")
+        ? json(200, { run_id: "r1", recorded: true })
+        : json(200, { stored: 0, recorded: true, mode: "metadata_only" }),
+    );
+    const code = await runReportStep({
+      fetch: fn,
+      env: {
+        CRYSK_RUN_TOKEN: RUN_TOKEN,
+        CRYSK_OUTCOME: "reviewed",
+        TRIGGER_PR: "7",
+        TRIGGER_HEAD_SHA: TRIGGER_HEAD,
+        ...env,
+      },
+      baseUrl: BASE,
+      stdout: () => {},
+    });
+    expect(code).toBe(0);
+    const report = calls.find((c) => c.url.endsWith("/runs/report"));
+    return JSON.parse(String(report?.init.body));
+  }
+
+  test("a run with findings reports the refused resolves", async () => {
+    const sent = await sentWith({
+      CRYSK_RUN_DIR: fixtureDir({ "findings.json": FINDINGS }),
+      CRYSK_OUTCOME_DIR: outcomeDir("[501,503]\n"),
+    });
+    expect(sent.head_sha).toBe(HEAD);
+    expect(sent.resolve_threads).toEqual([501, 503]);
+  });
+
+  test("a run that wrote no findings reports them too", async () => {
+    const sent = await sentWith({
+      CRYSK_OUTCOME_DIR: outcomeDir("[501]\n"),
+    });
+    expect(sent.head_sha).toBe(TRIGGER_HEAD);
+    expect(sent.resolve_threads).toEqual([501]);
+  });
+
+  test("duplicates and ids the contract refuses are dropped, and at most 100 are sent", async () => {
+    const ids = [
+      0,
+      -1,
+      2.5,
+      "7",
+      7,
+      7,
+      ...Array.from({ length: 150 }, (_, i) => i + 10),
+    ];
+    const sent = await sentWith({
+      CRYSK_OUTCOME_DIR: outcomeDir(JSON.stringify(ids)),
+    });
+    expect(sent.resolve_threads).toHaveLength(100);
+    expect(sent.resolve_threads[0]).toBe(7);
+    expect(new Set(sent.resolve_threads).size).toBe(100);
+  });
+
+  for (const [label, text] of [
+    ["an empty list", "[]\n"],
+    ["a malformed record", "[501,"],
+    ["a record that is not a list", '{"ids":[501]}'],
+    ["a list with no valid id", '[0,"501",-2]'],
+  ] as const) {
+    test(`${label} sends no field`, async () => {
+      const sent = await sentWith({ CRYSK_OUTCOME_DIR: outcomeDir(text) });
+      expect(sent.outcome).toBe("reviewed");
+      expect(sent).not.toHaveProperty("resolve_threads");
+    });
+  }
+
+  test("a run with no record still reports (previous behavior)", async () => {
+    const empty = mkdtempSync(path.join(tmpdir(), "platform-report-resolve-"));
+    const envs: Record<string, string>[] = [{}, { CRYSK_OUTCOME_DIR: empty }];
+    for (const env of envs) {
+      const sent = await sentWith(env);
+      expect(sent.outcome).toBe("reviewed");
+      expect(sent).not.toHaveProperty("resolve_threads");
+    }
   });
 });
 

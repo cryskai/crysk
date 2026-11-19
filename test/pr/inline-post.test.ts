@@ -17,7 +17,11 @@
 // fixture shape changes for unrelated reasons (test/cli.test.ts's own
 // header made the same call before this move).
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { RESOLVE_THREADS_FILE } from "#ci/outcome";
 import { parseCiAdmissionBlock, stateReviewCount } from "#ci/review-admission";
 import type { PrHeroFindingRef } from "#compare/compare";
 import {
@@ -2217,6 +2221,210 @@ describe("postInlineFindings — the collapse loop cannot hang (F005)", () => {
     expect(logged).toContain("resolve failed for R001");
     expect(logged).toContain("resolve failed for R002");
     expect(logged).not.toContain("the workflow token cannot resolve");
+  });
+});
+
+// #562: a resolve the workflow token was refused is recorded for the platform, which
+// resolves the thread with the App's installation. Only the refused ids are recorded, and
+// only for findings whose verified-gone reply posted.
+describe("postInlineFindings — refused thread resolves are recorded (#562)", () => {
+  const REFUSED = "gh: Resource not accessible by integration (HTTP 403)";
+  const priors = [501, 502, 503].map((id, i) => {
+    const claim = `prior finding ${i + 1}, checked and gone at this head`;
+    return {
+      id,
+      priorId: `R00${i + 1}`,
+      claim,
+      line: 10 + i,
+      marker: findingMarker({
+        path: "src/a.ts",
+        line: 10 + i,
+        headSha: OLD_HEAD,
+        claim,
+      }),
+    };
+  });
+
+  let root: string;
+  let outcomeDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "crysk-resolve-threads-"));
+    outcomeDir = path.join(root, "outcome");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function threadList(resolved: readonly number[] = []): ScriptEntry {
+    return {
+      match: ["reviewThreads"],
+      response: {
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: priors.map((p) => ({
+                    id: `T${p.id}`,
+                    isResolved: resolved.includes(p.id),
+                    comments: { nodes: [{ fullDatabaseId: p.id }] },
+                  })),
+                },
+              },
+            },
+          },
+        }),
+      },
+    };
+  }
+
+  async function collapseThree(threadScript: ScriptEntry[]): Promise<{
+    logged: string;
+    recorded: unknown;
+  }> {
+    const script: ScriptEntry[] = [
+      headRefOidScript(HEAD),
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson(
+            priors.map((p) => ({
+              id: p.id,
+              user: "pr-hero",
+              body: `${p.marker}\n${p.claim}`,
+              path: "src/a.ts",
+              line: p.line,
+              original_line: p.line,
+              in_reply_to_id: null,
+            })),
+          ),
+        },
+      },
+      ...threadScript,
+      {
+        match: ["repo", "view", "--json", "owner,name"],
+        response: {
+          stdout: JSON.stringify({
+            owner: { login: "juanmaagd" },
+            name: "pr-hero",
+          }),
+        },
+      },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ];
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { spawnFn } = makeFakeGh(script);
+      await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+        rereview: {
+          case: "C",
+          last_reviewed_head: OLD_HEAD,
+          last_head_source: "summary_marker",
+          discovery_range: `${OLD_HEAD}..${HEAD}`,
+          discovery_restricted: true,
+          discovery_skipped_empty_delta: false,
+          prior_findings: 3,
+          settled_deterministically: 0,
+          verified: 3,
+          verification_capped: 0,
+          verification_triggers: {
+            applied: 0,
+            touched: 3,
+            overlap: 0,
+            verify_all: 0,
+          },
+          live: [],
+          resolved_verified: 3,
+          resolved_ids: priors.map((p) => p.priorId),
+          returned: 0,
+          re_tiered: 0,
+        },
+        rereviewPriors: priors.map((p) => ({
+          id: p.priorId,
+          claim: p.claim,
+          locs: [`src/a.ts:${p.line}`],
+        })),
+        ghTimeoutMs: 1000,
+        env: { CRYSK_OUTCOME_DIR: outcomeDir },
+      });
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    const file = path.join(outcomeDir, RESOLVE_THREADS_FILE);
+    return {
+      logged: chunks.join(""),
+      recorded: existsSync(file)
+        ? JSON.parse(readFileSync(file, "utf8"))
+        : undefined,
+    };
+  }
+
+  test("every refused resolve is recorded, and the run-level notice is unchanged", async () => {
+    const { logged, recorded } = await collapseThree([
+      { match: ["reviewThreads"], response: { stderr: REFUSED, exitCode: 1 } },
+    ]);
+    expect(recorded).toEqual([501, 502, 503]);
+    const notice =
+      "resolve skipped: the workflow token cannot resolve review threads " +
+      "(Resource not accessible by integration); the verified-gone replies are posted";
+    expect(logged.split(notice)).toHaveLength(2);
+  });
+
+  test("a finding whose verified-gone reply did not post is not recorded", async () => {
+    const { recorded } = await collapseThree([
+      {
+        match: ["in_reply_to=502"],
+        response: { stderr: "gh: Server Error (HTTP 500)", exitCode: 1 },
+      },
+      { match: ["reviewThreads"], response: { stderr: REFUSED, exitCode: 1 } },
+    ]);
+    expect(recorded).toEqual([501, 503]);
+  });
+
+  test("only the refused mutation is recorded: resolved and already-resolved threads are not", async () => {
+    const { recorded } = await collapseThree([
+      {
+        match: ["resolveReviewThread", "id=T501"],
+        response: { stderr: REFUSED, exitCode: 1 },
+      },
+      threadList([503]),
+    ]);
+    expect(recorded).toEqual([501]);
+  });
+
+  test("nothing is recorded when every thread resolved", async () => {
+    const { recorded } = await collapseThree([threadList()]);
+    expect(recorded).toBeUndefined();
+  });
+
+  test("any other resolve failure is not recorded", async () => {
+    const { recorded } = await collapseThree([
+      {
+        match: ["reviewThreads"],
+        response: {
+          stderr: "gh: Could not resolve to a PullRequest (HTTP 404)",
+          exitCode: 1,
+        },
+      },
+    ]);
+    expect(recorded).toBeUndefined();
   });
 });
 

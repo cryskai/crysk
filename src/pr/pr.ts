@@ -30,6 +30,7 @@ import {
   parseAdmissionRecord,
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
+import { recordResolveThreads } from "#ci/cli-record";
 import { CI_FORCE_WORKFLOW_FILE } from "#ci/force-comment";
 import {
   canonicalAdmissionFindings,
@@ -2998,6 +2999,9 @@ export async function postInlineFindings(input: {
   force?: boolean;
   // The `post_min_severity` config key (pr/post-floor.ts). Absent posts all.
   postMinSeverity?: PostMinSeverity;
+  // Where the refused thread resolves are recorded (CRYSK_OUTCOME_DIR, #562). A seam, like
+  // `spawnFn`: production callers omit it and the writer reads the process environment.
+  env?: Readonly<Record<string, string | undefined>>;
 }): Promise<InlinePostOutcome> {
   const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
@@ -3464,6 +3468,11 @@ export async function postInlineFindings(input: {
     // WHY one notice per run: a token that cannot resolve threads cannot do it
     // for any prior, so one line says so instead of one failure per prior.
     let threadResolveNoticeLogged = false;
+    // #562: the threads the token was refused, for the platform to resolve with the App's
+    // installation. Only a refusal after a posted reply lands here: the loop `continue`s past
+    // the resolve when the reply did not post, and a resolved, already-resolved or not-found
+    // thread needs nothing more.
+    const refusedResolves = new Set<number>();
     for (const target of targets) {
       if (target.channel !== "review") continue;
       // The reply is bounded AND caught, and a failure `continue`s past the
@@ -3513,6 +3522,7 @@ export async function postInlineFindings(input: {
         // WHY a notice, not a failure: the reply is posted and the gate does not
         // depend on the resolve, so the run continues as designed.
         if (message.includes(WORKFLOW_TOKEN_CANNOT_RESOLVE)) {
+          refusedResolves.add(target.commentId);
           if (!threadResolveNoticeLogged) {
             threadResolveNoticeLogged = true;
             log(
@@ -3528,6 +3538,7 @@ export async function postInlineFindings(input: {
         );
       }
     }
+    recordResolveThreads([...refusedResolves], input.env);
   }
 
   // Closes a RE-review with a visible comment. Everything above only PATCHed

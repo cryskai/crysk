@@ -772,6 +772,9 @@ const PENDING_AT = "pending-at";
 // The CLI's run directory (src/ci/outcome.ts RUN_DIR_FILE, pinned equal by a test).
 // A stale one would hand the trace step an older run's files.
 const RUN_DIR = "run-dir";
+// The thread resolves the CLI could not make (src/ci/outcome.ts RESOLVE_THREADS_FILE, pinned
+// equal by a test). A stale one would report an older run's threads to the platform.
+const RESOLVE_THREADS = "resolve-threads.json";
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
   // The markers the publisher reads stay strict: a stale one would mislead it.
@@ -783,6 +786,7 @@ function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
     CLI_RECORD,
     PENDING_AT,
     RUN_DIR,
+    RESOLVE_THREADS,
   ]) {
     fs.remove(path.join(dir, name));
   }
