@@ -5,8 +5,10 @@ license: Apache-2.0
 metadata:
   author: juanmaagd
   tags: "crysk, code-review, ci, github-actions"
-  version: "4.0"
+  version: "4.0.0"
 ---
+
+# Crysk CI setup
 
 ## Step 0 — Load the playbook
 

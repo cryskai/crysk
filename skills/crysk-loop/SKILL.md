@@ -5,8 +5,10 @@ license: Apache-2.0
 metadata:
   author: juanmaagd
   tags: "crysk, code-review, pull-requests, triage"
-  version: "1.8"
+  version: "1.8.0"
 ---
+
+# Crysk review loop
 
 ## Step 0 — Load the playbook
 

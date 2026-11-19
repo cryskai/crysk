@@ -5,8 +5,10 @@ license: Apache-2.0
 metadata:
   author: juanmaagd
   tags: "crysk, code-review, pull-requests, github"
-  version: "1.0"
+  version: "1.0.0"
 ---
+
+# Crysk pull requests
 
 ## Before Step 0 — Does this repository use Crysk?
 

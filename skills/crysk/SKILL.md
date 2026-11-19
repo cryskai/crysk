@@ -5,8 +5,10 @@ license: Apache-2.0
 metadata:
   author: juanmaagd
   tags: "crysk, code-review, configuration, cli"
-  version: "1.0"
+  version: "1.0.0"
 ---
+
+# Crysk
 
 ## Step 0 — Load the playbook
 
