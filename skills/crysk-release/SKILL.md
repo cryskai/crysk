@@ -79,8 +79,8 @@ sed -i '' "s/VERSION=\"$PREV\"/VERSION=\"$V\"/" install.sh
 # never updated, so its pinned version only bootstraps `skills load`, which then prints
 # the playbook of the crysk the repository's CI runs. Never unpublish a released
 # version: every stub that names it would stop loading.
-grep -rl "crysk@$PREV" skills/crysk skills/crysk-loop skills/crysk-pr skills/crysk-ci-setup | xargs sed -i '' "s/crysk@$PREV/crysk@$V/g"
-grep -rn "crysk@$PREV" skills/   # must print nothing
+grep -rl "crysk@$PREV" skills/crysk skills/crysk-loop skills/crysk-pr skills/crysk-ci-setup skill-content | xargs sed -i '' "s/crysk@$PREV/crysk@$V/g"
+grep -rn "crysk@$PREV" skills/ skill-content/   # must print nothing
 bun test test/skills-pin.test.ts  # every npx crysk call in a shipped skill names $V
 grep -n "$PREV" package.json src/index.ts src/assets.ts src/updater.ts install.sh   # must print nothing
 grep -n "$V" package.json src/index.ts src/assets.ts src/updater.ts install.sh      # must print 5 lines

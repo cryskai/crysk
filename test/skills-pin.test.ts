@@ -39,7 +39,10 @@ describe("shipped skills pin the crysk version they call through npx", () => {
         else if (name.endsWith(".md")) files.push(full);
       }
     };
-    for (const skill of SHIPPED_SKILLS) walk(join(root, "skills", skill));
+    for (const skill of SHIPPED_SKILLS) {
+      walk(join(root, "skills", skill));
+      walk(join(root, "skill-content", skill));
+    }
     const offenders: string[] = [];
     for (const file of files) {
       for (const match of readFileSync(file, "utf8").matchAll(NPX_CRYSK_RE)) {

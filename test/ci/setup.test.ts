@@ -302,7 +302,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const asset = Bun.YAML.parse(
       await Bun.file(
         new URL(
-          "../../skills/crysk-ci-setup/assets/workflow.yml",
+          "../../skill-content/crysk-ci-setup/assets/workflow.yml",
           import.meta.url,
         ),
       ).text(),

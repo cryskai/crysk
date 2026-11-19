@@ -37,6 +37,7 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.bin["pr-hero"]).toBeDefined();
     expect(pkg.files).toBeDefined();
     expect(pkg.files).toContain("prompts");
+    expect(pkg.files).toContain("skill-content");
     expect(pkg.files).toContain("skills/crysk-loop");
     expect(pkg.files).toContain("skills/crysk-ci-setup");
     expect(pkg.files).toContain("skills/crysk-pr");
@@ -2184,7 +2185,7 @@ describe("Packaging & distribution configuration", () => {
       existsSync(
         path.join(
           rootDir,
-          "skills",
+          "skill-content",
           "crysk-ci-setup",
           "assets",
           "workflow-force.yml",
@@ -2193,10 +2194,10 @@ describe("Packaging & distribution configuration", () => {
     ).toBe(false);
   });
 
-  test("skills/crysk-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {
+  test("skill-content/crysk-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {
     const assetPath = path.join(
       rootDir,
-      "skills",
+      "skill-content",
       "crysk-ci-setup",
       "assets",
       "workflow.yml",
@@ -2215,13 +2216,13 @@ describe("Packaging & distribution configuration", () => {
     );
     const playbookPath = path.join(
       rootDir,
-      "skills",
+      "skill-content",
       "crysk-ci-setup",
       "playbook.md",
     );
     const refPath = path.join(
       rootDir,
-      "skills",
+      "skill-content",
       "crysk-ci-setup",
       "references",
       "opencode-ci.md",
@@ -2377,7 +2378,10 @@ describe("/crysk recheck wiring", () => {
     `startsWith(github.event.comment.body, '${command}')`;
   // This repository's own review moved to the Crysk platform, so the workflow
   // `crysk ci init` generates for it is read from the generator, not a file.
-  const copies = ["generated:own", "skills/crysk-ci-setup/assets/workflow.yml"];
+  const copies = [
+    "generated:own",
+    "skill-content/crysk-ci-setup/assets/workflow.yml",
+  ];
   const read = (file: string) =>
     file === "generated:own"
       ? generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS)
