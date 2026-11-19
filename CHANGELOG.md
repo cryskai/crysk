@@ -64,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A platform re-review now resolves the threads it verified gone.** When the workflow token is refused the resolve
+  (`Resource not accessible by integration`), a platform-dispatched run reports those review comments to the Crysk
+  platform as `resolve_threads`, and the platform resolves the threads with the Crysk App's installation. The
+  runner's token keeps its permissions. Without the platform, the thread still stays open for a person to close (#562).
 - **An account outage no longer uses up a pull request's automatic reviews.** A run where every hunter stopped on the same rejected credential or spent usage limit no longer counts toward `ci_max_attempts` (#572).
 - **A spent ChatGPT subscription is reported as a usage limit.** On the OpenCode route, a refused turn with status 429 that names a usage limit now ends as `CRYSK-PROVIDER-LIMITED`, naming the secret, without a retry. It used to be retried and published as `CRYSK-HUNTERS-FAILED`. An ordinary 429 keeps its retry (#571).
 - **Text that did not match the code.** `crysk config` is read-only only when it lists: `set`, `unset` and `edit`

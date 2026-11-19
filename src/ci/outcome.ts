@@ -223,6 +223,30 @@ export const PENDING_AT_FILE = "pending-at";
 // (src/ci/platform-trace.ts) still needs the files of exactly those runs.
 export const RUN_DIR_FILE = "run-dir";
 
+// #562: the review comment ids whose verified-gone reply posted and whose thread resolve
+// the workflow token was refused (`Resource not accessible by integration`). Written by
+// recordResolveThreads (src/ci/cli-record.ts) as a JSON array; the platform report
+// (src/ci/platform-report.ts) sends them as `resolve_threads`, and the platform resolves
+// those threads with the App's installation. Absent when no resolve was refused.
+export const RESOLVE_THREADS_FILE = "resolve-threads.json";
+// The platform's own bound on `resolve_threads`.
+export const MAX_RESOLVE_THREADS = 100;
+
+// The ids the contract accepts, from any value: positive safe integers only, each once, in
+// first-seen order, at most MAX_RESOLVE_THREADS. Anything else is dropped, never the list:
+// a body the platform refuses would cost the whole run report.
+export function resolveThreadIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set<number>();
+  for (const id of value) {
+    if (ids.size >= MAX_RESOLVE_THREADS) break;
+    if (typeof id === "number" && Number.isSafeInteger(id) && id > 0) {
+      ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
 // The URL of this run's attempt, or undefined outside GitHub Actions. The CLI's pending names
 // it as its target_url, and the cancel settle compares a pending with it (SB3 follow-up), so
 // the CLI and the publisher share this one builder: they cannot disagree on the URL. An attempt

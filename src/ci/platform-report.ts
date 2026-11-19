@@ -61,6 +61,8 @@ import {
   actionSecretName,
   CLI_RECORD_FILE,
   parseCliRecord,
+  RESOLVE_THREADS_FILE,
+  resolveThreadIds,
 } from "./outcome";
 import { PLATFORM_API_URL, type PlatformDataMode } from "./platform";
 
@@ -135,6 +137,10 @@ export interface RunReportBody {
   // #573: every hunter stopped on the same refusal of the account. Names of secrets only,
   // never a value. The platform holds this repository's reviews on it.
   account_refusal?: ReportAccountRefusal;
+  // #562: review comment ids whose verified-gone reply posted and whose thread resolve the
+  // workflow token was refused. The platform resolves those threads with the App's
+  // installation. Positive integers, at most 100, no duplicates; absent when there are none.
+  resolve_threads?: number[];
 }
 
 export interface ReportAccountRefusal {
@@ -175,6 +181,7 @@ export interface BuildRunReportInput {
   triggerHeadSha: string;
   run: RunDirFacts;
   accountRefusal?: ReportAccountRefusal;
+  resolveThreads?: readonly number[];
 }
 
 // null when the run has no usable head: the platform requires a 40-hex sha, so
@@ -196,10 +203,18 @@ export function buildRunReport(
     (sha): sha is string => typeof sha === "string" && SHA.test(sha),
   );
   if (headSha === undefined) return null;
-  const refusalField =
+  // The fields the outcome directory adds, on both report shapes.
+  const outcomeFields: Pick<
+    RunReportBody,
+    "account_refusal" | "resolve_threads"
+  > =
     input.accountRefusal === undefined
       ? {}
       : { account_refusal: input.accountRefusal };
+  const resolveThreads = resolveThreadIds(input.resolveThreads ?? []);
+  if (resolveThreads.length > 0) {
+    outcomeFields.resolve_threads = resolveThreads;
+  }
 
   if (doc === undefined) {
     return {
@@ -211,7 +226,7 @@ export function buildRunReport(
       agents: [],
       // A run that wrote no findings can still have spent tokens before it died.
       usage_facts: buildUsageFacts(input.run.pipeline, new Map()),
-      ...refusalField,
+      ...outcomeFields,
     };
   }
 
@@ -232,7 +247,7 @@ export function buildRunReport(
   );
 
   return {
-    ...refusalField,
+    ...outcomeFields,
     outcome: input.outcome === "" ? "error" : input.outcome,
     pr_number: input.prNumber,
     head_sha: headSha,
@@ -782,6 +797,22 @@ export function readAccountRefusal(
   };
 }
 
+// #562: the review comment ids whose thread resolve the workflow token was refused. A
+// missing, unreadable or malformed record is none: the report still goes out without them.
+export function readResolveThreads(
+  outcomeDir: string,
+  readText: (file: string) => string = (file) => readFileSync(file, "utf8"),
+): number[] {
+  if (outcomeDir === "") return [];
+  try {
+    return resolveThreadIds(
+      JSON.parse(readText(path.join(outcomeDir, RESOLVE_THREADS_FILE))),
+    );
+  } catch {
+    return [];
+  }
+}
+
 export type SendReportResult =
   | { ok: true; recorded: boolean; runId?: string }
   // `message` names the HTTP status and the API's own `message`. It never
@@ -1014,6 +1045,10 @@ export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
       triggerHeadSha: deps.env.TRIGGER_HEAD_SHA ?? "",
       run,
       accountRefusal: readAccountRefusal(
+        deps.env.CRYSK_OUTCOME_DIR ?? "",
+        deps.readText,
+      ),
+      resolveThreads: readResolveThreads(
         deps.env.CRYSK_OUTCOME_DIR ?? "",
         deps.readText,
       ),

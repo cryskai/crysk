@@ -523,6 +523,9 @@ The workflow's `permissions:` block needs six scopes, each for a specific reason
 The workflow token may also be unable to resolve review threads, even with `issues: write`. GitHub returns
 `Resource not accessible by integration` for that mutation, and the log says so once per run. The
 verified-gone reply is still posted, and the gate is unaffected: the thread stays open for a person to close.
+In [platform mode](#platform-mode) the run reports those threads to the Crysk platform, which resolves them with
+the Crysk App's installation, so the runner's token keeps its permissions. Without the platform, the limitation
+stands.
 
 ## Platform mode
 

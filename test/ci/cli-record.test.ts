@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   recordPendingCreatedAt,
+  recordResolveThreads,
   recordReviewDelivered,
   recordReviewing,
   recordRunDir,
@@ -28,8 +29,10 @@ import {
 import {
   CLI_RECORD_FILE,
   type CliRecord,
+  MAX_RESOLVE_THREADS,
   PENDING_AT_FILE,
   parseCliRecord,
+  RESOLVE_THREADS_FILE,
   RUN_DIR_FILE,
 } from "#ci/outcome";
 
@@ -575,5 +578,56 @@ describe("recordUnsettledStatus", () => {
     );
     expect(chunks).toEqual([]);
     expect(existsSync(dir)).toBe(false);
+  });
+});
+
+// #562: the comment ids whose thread resolve the workflow token was refused. The platform
+// report step reads them back and the platform resolves those threads for the App.
+describe("recordResolveThreads", () => {
+  let root: string;
+  let dir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-resolve-threads-"));
+    dir = path.join(root, "outcome");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const written = (): unknown =>
+    JSON.parse(readFileSync(path.join(dir, RESOLVE_THREADS_FILE), "utf8"));
+
+  test("writes the refused comment ids in action mode", () => {
+    recordResolveThreads([501, 503], { CRYSK_OUTCOME_DIR: dir });
+    expect(written()).toEqual([501, 503]);
+  });
+
+  test("an empty list writes nothing", () => {
+    recordResolveThreads([], { CRYSK_OUTCOME_DIR: dir });
+    expect(existsSync(path.join(dir, RESOLVE_THREADS_FILE))).toBe(false);
+  });
+
+  test("writes nothing outside action mode", () => {
+    recordResolveThreads([501], {});
+    expect(existsSync(path.join(dir, RESOLVE_THREADS_FILE))).toBe(false);
+  });
+
+  test("drops duplicates and ids the contract refuses, and keeps the first 100", () => {
+    const ids = [
+      0,
+      -3,
+      1.5,
+      7,
+      7,
+      ...Array.from({ length: 150 }, (_, i) => i + 10),
+    ];
+    recordResolveThreads(ids, { CRYSK_OUTCOME_DIR: dir });
+    const kept = written() as number[];
+    expect(kept).toHaveLength(MAX_RESOLVE_THREADS);
+    expect(kept[0]).toBe(7);
+    expect(new Set(kept).size).toBe(kept.length);
+    expect(kept.every((id) => Number.isSafeInteger(id) && id > 0)).toBe(true);
   });
 });
