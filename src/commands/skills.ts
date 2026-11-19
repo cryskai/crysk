@@ -12,10 +12,11 @@
 //   2. the workflow's `uses: cryskai/crysk@v…`, as the same npm spec
 //      (`@v0.8.1` → `0.8.1`, `@v0` → `0`): a pin gets its exact version and a
 //      moving tag stays in step with the CI;
-//   3. otherwise the latest published crysk.
-// A range or tag is resolved to an exact version with `npm view`. WHY not hand
-// it to npx: npx keeps running the copy it cached for a range, so `crysk@0`
-// would stay on the first 0.x this machine downloaded.
+//   3. otherwise the latest GitHub release.
+// A moving tag or "latest" is resolved to an exact version from GitHub. WHY
+// GitHub and not npm: the tag is what the CI runs, and a release published only
+// to npm (a stolen publish token) then reaches no agent. WHY not hand the range
+// to npx: npx keeps running the copy it cached for a range.
 // When the exact version is this package's own the bundled file is printed.
 // Otherwise the file comes from the per-version cache, or from
 // `npx -y crysk@<version> skills load …`; if that fails the bundled file is
@@ -36,12 +37,15 @@ import {
   readEngineVersion,
   writeCachedSkillFile,
 } from "../skills-cache";
+import { PRHERO_GITHUB_REPO } from "../updater";
 
 // A cold `npx` of a crysk version not yet on the machine took about 8 s when
 // measured (2026-11-19), so the bound leaves room for a slow network: the
 // agent waits once, and only when a new version first shows up.
 export const SKILLS_DELEGATE_TIMEOUT_MS = 60_000;
-// `npm view` answered in under half a second when measured (2026-11-19).
+// `git ls-remote` on the crysk repository took about 1.9 s and the latest-release
+// redirect about 0.3 s when measured (2026-11-19). Neither runs once a version
+// is recorded or the workflow pins one.
 export const SKILLS_VERSION_LOOKUP_TIMEOUT_MS = 15_000;
 
 // Set on the delegated child so it prints its own bundled file instead of
@@ -140,46 +144,91 @@ async function runBounded(
   }
 }
 
-// The newest plain x.y.z in what `npm view <spec> version --json` prints: one
-// string when a single version matches, an array otherwise.
-export function newestPlainVersion(json: string): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return undefined;
+function newerVersion(a: string, b: string): string {
+  const left = a.split(".").map(Number);
+  const right = b.split(".").map(Number);
+  const index = left.findIndex((part, i) => part !== right[i]);
+  return index !== -1 && (left[index] ?? 0) > (right[index] ?? 0) ? a : b;
+}
+
+// The newest release tag on the commit a moving tag points to, read from
+// `git ls-remote --tags`. An annotated tag lists its commit on the `^{}` line.
+function releaseOnMovingTag(
+  lsRemote: string,
+  spec: string,
+): string | undefined {
+  const commits = new Map<string, string>();
+  const peeled = new Set<string>();
+  for (const line of lsRemote.split("\n")) {
+    const [sha, ref] = line.trim().split(/\s+/);
+    if (sha === undefined || !ref?.startsWith("refs/tags/v")) continue;
+    const isPeeled = ref.endsWith("^{}");
+    const tag = ref.slice("refs/tags/v".length, isPeeled ? -3 : undefined);
+    if (isPeeled) peeled.add(tag);
+    if (isPeeled || !peeled.has(tag)) commits.set(tag, sha);
   }
-  const parts = (version: string) => version.split(".").map(Number);
+  const commit = commits.get(spec);
   let newest: string | undefined;
-  for (const version of Array.isArray(parsed) ? parsed : [parsed]) {
-    if (!isPlainEngineVersion(version)) continue;
-    if (newest === undefined) {
-      newest = version;
-      continue;
-    }
-    const a = parts(version);
-    const b = parts(newest);
-    const index = a.findIndex((part, i) => part !== b[i]);
-    if (index !== -1 && (a[index] ?? 0) > (b[index] ?? 0)) newest = version;
+  for (const [tag, sha] of commits) {
+    if (sha !== commit || !isPlainEngineVersion(tag)) continue;
+    newest = newest === undefined ? tag : newerVersion(tag, newest);
   }
   return newest;
 }
 
-// The exact version a range or tag names today, or undefined when npm cannot
-// say (offline, no such version, a timeout).
+async function latestGithubRelease(
+  fetchFn: typeof fetch,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  try {
+    const response = await fetchFn(
+      `https://github.com/${PRHERO_GITHUB_REPO}/releases/latest`,
+      {
+        method: "HEAD",
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    );
+    const version = /\/releases\/tag\/v([^/?#]+)$/.exec(
+      response.headers.get("location") ?? "",
+    )?.[1];
+    return isPlainEngineVersion(version) ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The exact version a moving tag points to, or the release GitHub marks as
+// latest. Undefined when GitHub cannot say (offline, no such tag, a timeout).
 export async function resolveCryskVersion(
   spec: string,
-  deps: { spawnFn?: typeof Bun.spawn; timeoutMs?: number } = {},
+  deps: {
+    spawnFn?: typeof Bun.spawn;
+    fetchFn?: typeof fetch;
+    timeoutMs?: number;
+  } = {},
 ): Promise<string | undefined> {
+  const timeoutMs = deps.timeoutMs ?? SKILLS_VERSION_LOOKUP_TIMEOUT_MS;
+  if (spec === "latest") {
+    return latestGithubRelease(deps.fetchFn ?? fetch, timeoutMs);
+  }
   const stdout = await runBounded(
-    ["npm", "view", `crysk@${spec}`, "version", "--json", "--prefer-online"],
+    [
+      "git",
+      "ls-remote",
+      "--tags",
+      `https://github.com/${PRHERO_GITHUB_REPO}`,
+      `refs/tags/v${spec}`,
+      `refs/tags/v${spec}^{}`,
+      `refs/tags/v${spec}.*`,
+    ],
     {
-      env: process.env,
-      timeoutMs: deps.timeoutMs ?? SKILLS_VERSION_LOOKUP_TIMEOUT_MS,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      timeoutMs,
       spawnFn: deps.spawnFn ?? Bun.spawn,
     },
   );
-  return stdout === undefined ? undefined : newestPlainVersion(stdout);
+  return stdout === undefined ? undefined : releaseOnMovingTag(stdout, spec);
 }
 
 // What the crysk at this exact version prints for this skill file, or undefined
@@ -223,7 +272,7 @@ export interface SkillsLoadDeps {
   env?: Record<string, string | undefined>;
   // The repository the agent works in; undefined outside one.
   repoRoot?: () => Promise<string | undefined>;
-  // The exact version a range or tag names today.
+  // The exact version a moving tag points to, or the latest release.
   resolveVersion?: (spec: string) => Promise<string | undefined>;
   delegate?: (
     version: string,

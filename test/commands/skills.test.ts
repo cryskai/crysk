@@ -16,7 +16,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   delegateSkillsLoad,
-  newestPlainVersion,
   resolveCryskVersion,
   resolveSkillsSpec,
   skillsInstallCommand,
@@ -518,22 +517,6 @@ describe("skillsLoadCommand — which crysk prints the playbook", () => {
 });
 
 // The real npx seam: argv, the child's env, and the bound.
-describe("newestPlainVersion", () => {
-  test("compares numerically and ignores anything but x.y.z", () => {
-    expect(
-      newestPlainVersion('["0.9.0","0.10.0","0.11.0-rc.1","latest"]'),
-    ).toBe("0.10.0");
-    expect(newestPlainVersion('"0.9.0"')).toBe("0.9.0");
-  });
-
-  test("gives nothing for an empty or unreadable answer", () => {
-    expect(newestPlainVersion("")).toBeUndefined();
-    expect(newestPlainVersion("not json")).toBeUndefined();
-    expect(newestPlainVersion("[]")).toBeUndefined();
-    expect(newestPlainVersion('{"error":{"code":"E404"}}')).toBeUndefined();
-  });
-});
-
 describe("delegateSkillsLoad", () => {
   function fakeSpawn(stdout: string, exitCode: number, hang = false) {
     const seen: { argv: string[]; env: Record<string, string | undefined> }[] =
@@ -591,23 +574,67 @@ describe("delegateSkillsLoad", () => {
     expect(seen[0]?.env.CRYSK_SKILLS_DELEGATED).toBe("1");
   });
 
-  test("asks npm for the versions the spec matches and takes the newest", async () => {
-    const { spawnFn, seen } = fakeSpawn('["0.9.0","0.10.0"]', 0);
-    expect(await resolveCryskVersion("0", { spawnFn })).toBe("0.10.0");
+  const COMMIT = "a".repeat(40);
+  const OTHER = "b".repeat(40);
+  const tagLines = (rows: Array<[string, string]>) =>
+    rows.map(([sha, ref]) => `${sha}\t${ref}`).join("\n");
+
+  // The version a moving tag points to is what the CI runs. npm cannot say
+  // that, and asking it would let a release published only to npm reach agents.
+  test("resolves a moving tag to the release on the same commit", async () => {
+    const { spawnFn, seen } = fakeSpawn(
+      tagLines([
+        ["1".repeat(40), "refs/tags/v0"],
+        [COMMIT, "refs/tags/v0^{}"],
+        ["2".repeat(40), "refs/tags/v0.9.0"],
+        [COMMIT, "refs/tags/v0.9.0^{}"],
+        ["3".repeat(40), "refs/tags/v0.10.0"],
+        [OTHER, "refs/tags/v0.10.0^{}"],
+      ]),
+      0,
+    );
+    expect(await resolveCryskVersion("0", { spawnFn })).toBe("0.9.0");
     expect(seen[0]?.argv).toEqual([
-      "npm",
-      "view",
-      "crysk@0",
-      "version",
-      "--json",
-      "--prefer-online",
+      "git",
+      "ls-remote",
+      "--tags",
+      "https://github.com/cryskai/crysk",
+      "refs/tags/v0",
+      "refs/tags/v0^{}",
+      "refs/tags/v0.*",
     ]);
+    expect(seen[0]?.env.GIT_TERMINAL_PROMPT).toBe("0");
   });
 
-  test("a failed or stalled version lookup gives nothing", async () => {
+  test("reads lightweight tags and takes the newest release on the commit", async () => {
+    const { spawnFn } = fakeSpawn(
+      tagLines([
+        [COMMIT, "refs/tags/v1"],
+        [COMMIT, "refs/tags/v1.9.0"],
+        [COMMIT, "refs/tags/v1.10.0"],
+        [COMMIT, "refs/tags/v1.11.0-rc.1"],
+      ]),
+      0,
+    );
+    expect(await resolveCryskVersion("1", { spawnFn })).toBe("1.10.0");
+  });
+
+  test("a tag with no release on its commit, a failure or a stall gives nothing", async () => {
+    const noRelease = tagLines([
+      [COMMIT, "refs/tags/v0"],
+      [OTHER, "refs/tags/v0.9.0"],
+    ]);
+    const noTag = tagLines([[COMMIT, "refs/tags/v0.9.0"]]);
+    for (const stdout of [noRelease, noTag]) {
+      expect(
+        await resolveCryskVersion("0", {
+          spawnFn: fakeSpawn(stdout, 0).spawnFn,
+        }),
+      ).toBeUndefined();
+    }
     expect(
-      await resolveCryskVersion("99", {
-        spawnFn: fakeSpawn('{"error":{"code":"E404"}}', 1).spawnFn,
+      await resolveCryskVersion("0", {
+        spawnFn: fakeSpawn(noRelease, 128).spawnFn,
       }),
     ).toBeUndefined();
     expect(
@@ -616,6 +643,51 @@ describe("delegateSkillsLoad", () => {
         timeoutMs: 20,
       }),
     ).toBeUndefined();
+  });
+
+  test("the latest is the release GitHub marks as latest", async () => {
+    const urls: string[] = [];
+    const redirects: unknown[] = [];
+    const { spawnFn, seen } = fakeSpawn("", 0);
+    const version = await resolveCryskVersion("latest", {
+      spawnFn,
+      fetchFn: (async (url: string, init?: RequestInit) => {
+        urls.push(url);
+        redirects.push(init?.redirect);
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: "https://github.com/cryskai/crysk/releases/tag/v0.9.0",
+          },
+        });
+      }) as unknown as typeof fetch,
+    });
+    expect(version).toBe("0.9.0");
+    expect(urls).toEqual(["https://github.com/cryskai/crysk/releases/latest"]);
+    expect(redirects).toEqual(["manual"]);
+    expect(seen).toEqual([]);
+  });
+
+  test("no usable latest release gives nothing", async () => {
+    const answer = (response: Response) =>
+      (async () => response) as unknown as typeof fetch;
+    for (const fetchFn of [
+      answer(new Response(null, { status: 404 })),
+      answer(
+        new Response(null, {
+          status: 302,
+          headers: {
+            location:
+              "https://github.com/cryskai/crysk/releases/tag/v1.0.0-rc.1",
+          },
+        }),
+      ),
+      (async () => {
+        throw new Error("offline");
+      }) as unknown as typeof fetch,
+    ]) {
+      expect(await resolveCryskVersion("latest", { fetchFn })).toBeUndefined();
+    }
   });
 
   test("a failing child, an empty stdout or a timeout gives nothing", async () => {
