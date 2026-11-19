@@ -47,8 +47,13 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  type AdmissionRecord,
+  countTerminalAttempts,
+} from "#ci/admission-ledger";
 import { writeFatalCliRecord } from "#ci/cli-record";
 import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
+import { countableWorkflowHeads } from "#ci/review-admission";
 import type { InlinePostOutcome } from "#pr/inline";
 import {
   type PublishRunOutcomeInput,
@@ -353,6 +358,89 @@ describe("publishRunOutcome", () => {
     );
     expect(value()).toBeNull();
     expect(exitCode).toBe(1);
+  });
+
+  // #572: an account outage must not use up a pull request's automatic reviews.
+  describe("attempt budget of a run where every hunter failed", () => {
+    async function settle(failures: readonly { cause?: string }[]) {
+      const record: AdmissionRecord = {
+        schemaVersion: 1,
+        prNumber: 42,
+        headSha: HEAD_SHA,
+        policyHash: "deadbeefcafefeed",
+        reservationId: "reservation-572",
+        attemptNumber: 1,
+        status: "provider-started",
+        decisionReason: "review started",
+        priorScore: null,
+        blockingCount: null,
+        advisoryCount: null,
+        workflowRunId: null,
+        createdAt: "2026-11-19T12:00:00.000Z",
+        settledAt: null,
+      };
+      const ledger = {
+        record,
+        checkRunId: 11,
+        headSha: HEAD_SHA,
+        operatorRoot,
+      };
+      const exitCode = await publishRunOutcome(
+        baseInput({
+          result: {
+            ...baseResult({ sessionFailed: true }),
+            hunterFailures: failures.map((failure, index) => ({
+              name: `hunter-${index}`,
+              ...failure,
+            })),
+          } as PipelineResult,
+          ciAdmissionLedger: ledger,
+        }),
+      );
+      const settled = ledger.record;
+      return {
+        exitCode,
+        settled,
+        ledgerCount: countTerminalAttempts([settled]),
+        headCount: countableWorkflowHeads(
+          new Set([HEAD_SHA]),
+          new Map([[HEAD_SHA, [settled]]]),
+        ).size,
+      };
+    }
+
+    for (const [cause, words] of [
+      ["auth_invalid", "rejected the credential"],
+      ["quota_exhausted", "usage limit"],
+    ] as const) {
+      test(`every hunter refused for ${cause} spends no attempt`, async () => {
+        const run = await settle([{ cause }, { cause }]);
+        expect(run.settled.status).toBe("gate-skipped");
+        expect(run.settled.decisionReason).toContain(words);
+        expect(run.ledgerCount).toBe(0);
+        expect(run.headCount).toBe(0);
+        expect(run.exitCode).toBe(1);
+      });
+    }
+
+    for (const [label, failures] of [
+      ["a cause the account did not decide", [{ cause: "rate_limit" }]],
+      [
+        "hunters that disagree",
+        [{ cause: "auth_invalid" }, { cause: "quota_exhausted" }],
+      ],
+      ["a hunter with no cause", [{ cause: "auth_invalid" }, {}]],
+      ["no recorded failure", []],
+    ] as const) {
+      test(`${label} still counts (previous behavior)`, async () => {
+        const run = await settle(failures);
+        expect(run.settled.status).toBe("failed");
+        expect(run.settled.decisionReason).toBe("every hunter failed");
+        expect(run.ledgerCount).toBe(1);
+        expect(run.headCount).toBe(1);
+        expect(run.exitCode).toBe(1);
+      });
+    }
   });
 
   // The exit-code table (src/review/exit-code.ts). An incomplete review used to

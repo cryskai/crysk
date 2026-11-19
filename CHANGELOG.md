@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An account outage no longer uses up a pull request's automatic reviews.** A run where every hunter stopped on the same rejected credential or spent usage limit no longer counts toward `ci_max_attempts` (#572).
 - **Text that did not match the code.** `crysk config` is read-only only when it lists: `set`, `unset` and `edit`
   write a config file, and the help now says so. `--from` is required for `post` and optional for
   `triage reply`. A local `--dry-run` that the size gate would skip no longer prints `(exit 1)`: it returns `0`,

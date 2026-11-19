@@ -88,8 +88,9 @@ const TERMINAL_BUDGET_STATUSES: ReadonlySet<AdmissionAttemptStatus> = new Set([
 ]);
 
 // #326, workflow-run leg: a head leaves the attempt count only when EVERY
-// ledger row on it is in this allowlist, because each listed status is written
-// BEFORE any provider spend, so it proves the run spent nothing:
+// ledger row on it is in this allowlist. Each listed status proves the run
+// produced no review the budget should pay for. All but one are written BEFORE
+// any provider spend; the exception is the account refusal below:
 // - `"gate-skipped"`: settleCiGateSkip (pr/admission.ts:152) runs from the size
 //   gate (pr/review-pr.ts:312) and the budget gate (pr/plan.ts:153, reached from
 //   pr/review-pr.ts:401). Both come before the `"provider-started"` settle at
@@ -101,6 +102,9 @@ const TERMINAL_BUDGET_STATUSES: ReadonlySet<AdmissionAttemptStatus> = new Set([
 //   called from pr/plan.ts on a credential refusal (no listed Claude credential, or
 //   an OpenCode route with no auth record): after the budget gate and before any
 //   binding or provider call.
+// - `"gate-skipped"` also comes from settleCiHuntersFailed (pr/admission.ts, #572)
+//   when every hunter stopped on the same rejected credential or spent limit. A
+//   hunter may have used tokens first, but the run reviewed nothing.
 // - `"yielded"`: written only by yieldToInFlightReview (pr/ci-admission-gate.ts:380),
 //   whose sole caller is pr/review-pr.ts:359, again before the `"provider-started"`
 //   settle at pr/review-pr.ts:516.
