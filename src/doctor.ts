@@ -403,18 +403,18 @@ export async function runDoctor(
     });
   }
 
-  // GitHub CLI (optional, PR mode)
+  // GitHub CLI (required: status, triage replies and every pull request command run through it)
   if (!tools.gh.installed) {
     checks.push({
       name: "gh",
-      severity: "degraded",
-      message: "GitHub CLI is not installed (needed for PR review mode)",
+      severity: "blocking",
+      message: "GitHub CLI is not installed (Crysk requires it)",
       hint: tools.gh.hint,
     });
   } else if (!tools.gh.authOk) {
     checks.push({
       name: "gh",
-      severity: "degraded",
+      severity: "blocking",
       message: `GitHub CLI is installed (${tools.gh.version ?? "unknown"}) but not authenticated with GitHub`,
       hint: tools.gh.hint,
     });
