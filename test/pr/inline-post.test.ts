@@ -3425,3 +3425,97 @@ describe("postInlineFindings — a finding outside the diff lines but in a diff 
     expect(body).toContain('"channel":"outside"');
   });
 });
+
+describe("postInlineFindings — a failed file-level POST is re-read before it is demoted", () => {
+  const WEB = "https://github.com/acme/app";
+  const F = finding({
+    id: "F001",
+    path: "src/a.ts",
+    line: 50,
+    claim: "a line the diff does not show",
+  });
+  const summaryPatch = (calls: RecordedCall[]) =>
+    calls.findLast(
+      (c) =>
+        c.argv.join(" ").includes("PATCH") &&
+        c.stdin?.startsWith("<!-- crysk-report "),
+    )?.stdin ?? "";
+  const run = (landed: unknown[]) =>
+    makeFakeGh([
+      {
+        match: ["subject_type=file"],
+        response: { exitCode: 1, stderr: "HTTP 504: gateway timeout" },
+      },
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        // The plan's read sees nothing; the re-read after the failed POST sees
+        // whatever landed.
+        responses: [{ stdout: "" }, { stdout: ndjson(landed) }],
+      },
+    ]);
+
+  test("the comment landed despite the error: no summary entry, the table links to it", async () => {
+    const marker = findingMarker({
+      path: F.path,
+      line: F.line,
+      headSha: HEAD,
+      claim: F.claim,
+    });
+    const { spawnFn, calls } = run([
+      {
+        id: 777,
+        user: "pr-hero",
+        body: `${marker}\nclaim`,
+        path: "src/a.ts",
+        line: null,
+        original_line: null,
+        in_reply_to_id: null,
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [F] }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(outcome.outsideDiffCount).toBe(0);
+    const body = summaryPatch(calls);
+    expect(body).not.toContain("### Comments Outside Diff");
+    expect(body).toContain(`${WEB}/pull/42#discussion_r777`);
+  });
+
+  test("the comment did not land: the summary lists it and the log says why", async () => {
+    const { spawnFn, calls } = run([]);
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    let outcome: Awaited<ReturnType<typeof postInlineFindings>>;
+    try {
+      outcome = await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [F] }),
+        diffPatch: diffAddingLines("src/a.ts", 5),
+        webUrl: WEB,
+        spawnFn,
+      });
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    expect(outcome.outsideDiffCount).toBe(1);
+    expect(summaryPatch(calls)).toContain("### Comments Outside Diff (1)");
+    expect(chunks.join("")).toContain(
+      "file-level comment for src/a.ts:50 did not post (HTTP 504: gateway timeout) — listed in the summary instead",
+    );
+  });
+});
