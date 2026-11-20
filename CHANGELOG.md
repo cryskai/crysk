@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Skip, stop and override notices open with what happened.** Each notice now has a one-line title (for example "⏸ Review skipped: this pull request is too large" or "⚑ Gate overridden by @login"), and the command to ask for a review is a highlighted tip. The "automatic reviews are done" notice folds its rules and gate explanation into a collapsible section.
 - **Error comments open with what happened, not with a code.** A run that could not review now posts `## ⏸ Review didn't run` (or the case's own sentence, such as `## ⏸ Not reviewed` for a cancelled run), and the `CRYSK-*` code and the docs link move to a footer line. `crysk status` reads the code from both the new footer and the `### CRYSK-*` heading of comments posted before.
 
 ## [0.10.0] - 2026-11-19

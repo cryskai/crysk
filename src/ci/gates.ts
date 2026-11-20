@@ -242,9 +242,9 @@ function buildSizeSkipComment(
 ): string {
   const lines = [
     SKIP_SIZE_COMMENT_MARKER,
-    "## Crysk review skipped",
+    "## ⏸ Review skipped: this pull request is too large",
     "",
-    `⚠️ This diff changes ${data.changedLines} line(s) across ` +
+    `This diff changes ${data.changedLines} line(s) across ` +
       `${data.changedFiles} file(s), exceeding the configured size gate ` +
       `(${sizeLimitsText(data.maxChangedLines, data.maxChangedFiles)}).`,
     "",
@@ -257,7 +257,8 @@ function buildSizeSkipComment(
         "PR or raise `max-changed-lines` / `max-changed-files` to change the " +
         "limit for later pushes.",
     "",
-    ciForceReviewHintLine(data.prNumber, platformConnected),
+    "> [!TIP]",
+    `> ${ciForceReviewHintLine(data.prNumber, platformConnected)}`,
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -266,11 +267,11 @@ function buildSizeSkipComment(
 // dashboard settings (Review > Limits), not workflow inputs.
 const LIMIT_SKIP_REASON: Record<PlatformLimitHit, string> = {
   "month-used-up":
-    "⚠️ This organization's monthly review limit is used up for this calendar month.",
+    "This organization's monthly review limit is used up for this calendar month.",
   "review-limit":
-    "⚠️ The estimated cost of this review is over the per-review limit.",
+    "The estimated cost of this review is over the per-review limit.",
   "month-left":
-    "⚠️ The estimated cost of this review is more than what is left of this organization's monthly limit.",
+    "The estimated cost of this review is more than what is left of this organization's monthly limit.",
 };
 
 // A mixed setup is compared on the part of the estimate that runs on an API
@@ -282,7 +283,7 @@ const API_SHARE_LINE =
 function buildBudgetSkipComment(data: SkipBudgetSummary): string {
   const lines = [
     SKIP_BUDGET_COMMENT_MARKER,
-    "## Crysk review skipped",
+    "## ⏸ Review skipped: spend limit reached",
     "",
     LIMIT_SKIP_REASON[data.limit],
     ...(data.apiShare === true ? ["", API_SHARE_LINE] : []),
@@ -290,7 +291,8 @@ function buildBudgetSkipComment(data: SkipBudgetSummary): string {
     "Crysk did not run to stay within the limits set in the Crysk dashboard " +
       "(Review > Limits). Raise the limit there to review later pushes.",
     "",
-    ciForceReviewHintLine(data.prNumber, true),
+    "> [!TIP]",
+    `> ${ciForceReviewHintLine(data.prNumber, true)}`,
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -652,7 +654,9 @@ function buildCoverageSkipComment(
   const stopped = reason === "stopped";
   const lines = [
     SKIP_COVERAGE_COMMENT_MARKER,
-    "## Crysk review skipped",
+    stopped
+      ? "## ⏸ Automatic reviews stopped"
+      : "## ⏸ Review skipped for this push",
     "",
     stopped
       ? "⏸️ A maintainer stopped automatic reviews on this pull request."
@@ -668,7 +672,8 @@ function buildCoverageSkipComment(
     "The existing review comment still describes the last head Crysk " +
       "reviewed.",
     "",
-    ciForceReviewHintLine(data.prNumber, platformConnected),
+    "> [!TIP]",
+    `> ${ciForceReviewHintLine(data.prNumber, platformConnected)}`,
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -695,11 +700,18 @@ function buildManualRequiredComment(
   ];
   const lines = [
     MANUAL_REQUIRED_COMMENT_MARKER,
-    "## Crysk: automatic reviews are done for this pull request",
+    "## ⏹ Automatic reviews are done for this pull request",
     "",
     "⏹️ No more automatic reviews will run on this pull request.",
     "",
     `**${data.detail}**`,
+    "",
+    "> [!TIP]",
+    `> Want more review rounds? ${ciForceReviewHintLine(data.prNumber, platformConnected)}`,
+    ">",
+    `> To merge a head no review verified, comment ${commandHint(OVERRIDE_COMMAND)}.`,
+    "",
+    "<details><summary>Why, and what the gate does with later pushes</summary>",
     "",
     "How it got here, by this repository's rules:",
     "",
@@ -716,7 +728,7 @@ function buildManualRequiredComment(
     "",
     "The existing review comment still describes the last head Crysk reviewed.",
     "",
-    `Want more review rounds? ${ciForceReviewHintLine(data.prNumber, platformConnected)}`,
+    "</details>",
   ];
   return `${lines.join("\n")}\n`;
 }

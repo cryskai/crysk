@@ -4036,17 +4036,20 @@ describe("buildPrStatus — forced_runs_on_head", () => {
 // S3: an advisory repository's size or cost skip writes no status, so the notice is the only trace of it,
 // and a forced review would walk past the limit.
 describe("buildPrStatus: a deliberate skip with no gate status", () => {
-  const SIZE_NOTICE = `${SKIP_SIZE_COMMENT_MARKER}\n## Crysk review skipped`;
-  const BUDGET_NOTICE = `${SKIP_BUDGET_COMMENT_MARKER}\n## Crysk review skipped`;
+  const SIZE_NOTICE = `${SKIP_SIZE_COMMENT_MARKER}\n## ⏸ Review skipped: this pull request is too large`;
+  const BUDGET_NOTICE = `${SKIP_BUDGET_COMMENT_MARKER}\n## ⏸ Review skipped: spend limit reached`;
 
   test.each([
     ["size", SIZE_NOTICE],
     ["cost", BUDGET_NOTICE],
     [
       "stopped or covered",
-      `${SKIP_COVERAGE_COMMENT_MARKER}\n## Crysk review skipped`,
+      `${SKIP_COVERAGE_COMMENT_MARKER}\n## ⏸ Review skipped for this push`,
     ],
-    ["manual review", `${MANUAL_REQUIRED_COMMENT_MARKER}\n## Crysk`],
+    [
+      "manual review",
+      `${MANUAL_REQUIRED_COMMENT_MARKER}\n## ⏹ Automatic reviews are done for this pull request`,
+    ],
   ])("a bot's %s notice asks instead of forcing a review", (_kind, body) => {
     const status = buildPrStatus(
       input({
