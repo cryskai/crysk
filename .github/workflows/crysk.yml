@@ -1,0 +1,117 @@
+# Managed by the Crysk GitHub App. Crysk dispatches this workflow for each review; you do not
+# need to edit it. Configure reviews from the Crysk dashboard, or with a crysk config file in
+# this repository, which wins when present.
+name: Crysk Review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: Pull request to review
+        required: false
+        default: ""
+      force:
+        description: Bypass the skip gates
+        required: false
+        default: "false"
+      full:
+        description: Re-discover the whole range
+        required: false
+        default: "false"
+      dispatch-id:
+        description: Correlates this run with the Crysk dispatch that started it
+        required: false
+        default: ""
+      cancel:
+        description: Cancel this pull request's review in progress (only for a new push)
+        required: false
+        default: "false"
+      opencode-providers:
+        description: OpenCode providers this review uses, as secret tokens (JSON array sent by Crysk)
+        required: false
+        default: "[]"
+      operation:
+        description: What this run does, review or refresh-credential (sent by Crysk)
+        required: false
+        default: review
+      refresh-provider:
+        description: The OpenCode provider whose subscription login a refresh renews
+        required: false
+        default: ""
+      opencode-oauth-providers:
+        description: OpenCode subscription logins this run may read, as secret tokens (JSON array sent by Crysk)
+        required: false
+        default: "[]"
+
+run-name: "${{ (inputs.operation != 'review' && inputs.operation != '') && format('Crysk credential refresh ({0})', inputs.refresh-provider) || format('Crysk review of #{0}', inputs.pr-number) }}"
+
+# Same scopes as the standalone workflow, plus id-token so the run can prove to Crysk which
+# repository it belongs to without a Crysk key in your secrets.
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write
+  checks: write
+  id-token: write
+
+# A new push makes the review in progress obsolete, so Crysk sends cancel=true only then. Any other
+# dispatch (a comment command, a reopened PR) queues behind the running review instead of killing a
+# paid run. GitHub keeps one pending run per group; a newer one replaces it. Credential refreshes
+# share one group per repository and never cancel the one in progress, which may have renewed the
+# login already.
+concurrency:
+  group: "${{ (inputs.operation != 'review' && inputs.operation != '') && 'crysk-credential-refresh' || format('crysk-review-{0}', inputs.pr-number) }}"
+  cancel-in-progress: ${{ (inputs.operation == 'review' || inputs.operation == '') && inputs.cancel == 'true' }}
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # A refresh takes minutes; Crysk waits longer than this before it treats one as lost.
+    timeout-minutes: ${{ (inputs.operation != 'review' && inputs.operation != '') && 20 || 360 }}
+    steps:
+      # The engine reads the pull request's diff and history from git, so it needs the PR head
+      # with full history (a shallow clone silently loses context). A refresh needs no checkout.
+      - if: (inputs.operation == 'review' || inputs.operation == '')
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ inputs.pr-number }}/head
+          fetch-depth: 0
+      - if: (inputs.operation == 'review' || inputs.operation == '')
+        uses: cryskai/crysk@v0
+        with:
+          github-token: ${{ github.token }}
+          pr-number: ${{ inputs.pr-number }}
+          force: ${{ inputs.force }}
+          full: ${{ inputs.full }}
+          # Your credentials stay in your repository's secrets, set from the Crysk dashboard. Each
+          # one is named here, the OpenCode ones by the providers Crysk sends; a secret you have not
+          # set arrives empty and is ignored.
+          crysk-secrets: |
+            CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}
+            CRYSK_CLAUDE_API_KEY=${{ secrets.CRYSK_CLAUDE_API_KEY }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-providers)[0] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(inputs.opencode-providers)[0])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-providers)[1] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(inputs.opencode-providers)[1])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-providers)[2] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(inputs.opencode-providers)[2])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-providers)[3] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(inputs.opencode-providers)[3])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-providers)[4] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(inputs.opencode-providers)[4])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[0] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[0])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[1] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[1])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[2] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[2])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[3] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[3])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[4] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[4])] }}
+      # Renews a subscription login before it expires, on your runner: Crysk receives only the new
+      # login sealed with your repository's public key, and writes it back as the same secret.
+      - if: (inputs.operation != 'review' && inputs.operation != '')
+        uses: cryskai/crysk@v0
+        with:
+          github-token: ${{ github.token }}
+          operation: ${{ inputs.operation }}
+          refresh-provider: ${{ inputs.refresh-provider }}
+          crysk-secrets: |
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[0] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[0])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[1] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[1])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[2] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[2])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[3] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[3])] }}
+            CRYSK_OPENCODE_${{ fromJSON(inputs.opencode-oauth-providers)[4] }}_OAUTH=${{ secrets[format('CRYSK_OPENCODE_{0}_OAUTH', fromJSON(inputs.opencode-oauth-providers)[4])] }}

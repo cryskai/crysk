@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Error comments open with what happened, not with a code.** A run that could not review now posts `## ⏸ Review didn't run` (or the case's own sentence, such as `## ⏸ Not reviewed` for a cancelled run), and the `CRYSK-*` code and the docs link move to a footer line. `crysk status` reads the code from both the new footer and the `### CRYSK-*` heading of comments posted before.
+
 ## [0.10.0] - 2026-11-19
 
 ### Added
