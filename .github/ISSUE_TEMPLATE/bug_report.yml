@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a defect in pr-hero behavior, resource usage, or output.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behavior, with code references when known.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal steps that reproduce the defect.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Blocks reviews
+        - Wrong or missing output
+        - Resource leak (disk, CPU, cost)
+        - Security boundary
+        - Minor
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pr-hero version
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, measurements, or sizes. Remove local paths, usernames, and secrets.
+    validations:
+      required: false
+  - type: textarea
+    id: proposed-fix
+    attributes:
+      label: Proposed fix
+    validations:
+      required: false
