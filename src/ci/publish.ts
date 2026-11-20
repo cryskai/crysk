@@ -1226,6 +1226,8 @@ function overrideCommentBody(
     return [
       marker,
       "",
+      `## ⚑ Gate overridden by @${plan.actor}`,
+      "",
       `Crysk's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. ` +
         `The \`${STATUS_CONTEXT}\` status on that head is now success, with no review of this head.` +
         ` A new push or a later ${commandHint(REVIEW_COMMAND)} on this head replaces it.`,
@@ -1237,6 +1239,8 @@ function overrideCommentBody(
       : ` on head \`${plan.headSha}\``;
   return [
     marker,
+    "",
+    "## ⚠️ Override not applied",
     "",
     `@${plan.actor} asked to override Crysk's gate at ${when}, but no commit status could be set${where}, so the gate is unchanged. Comment ${commandHint(OVERRIDE_COMMAND)} again to retry.`,
   ].join("\n");
