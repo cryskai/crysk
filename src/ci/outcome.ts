@@ -2394,6 +2394,16 @@ function fixesOf(
     : picked.fixes;
 }
 
+// The comment's title is a sentence a person reads; the code moves to the footer, where parseOutcomeCode also reads it.
+function outcomeTitle(entry: CatalogEntry): string {
+  const headline = entry.headline;
+  if (headline === undefined) return "Review didn't run";
+  const colon = headline.indexOf(": ");
+  return colon === -1
+    ? "Review didn't run"
+    : capitalized(headline.slice(colon + 2));
+}
+
 function summaryLines(
   code: ErrorCode,
   entry: CatalogEntry,
@@ -2406,7 +2416,7 @@ function summaryLines(
   const prose = (text: string): string => fill(text, params, "summary");
   const command = (text: string): string => fill(text, params, "command");
   return [
-    `### ${entry.headline ?? code}`,
+    `## ⏸ ${outcomeTitle(entry)}`,
     "",
     `${lead} ${capitalized(prose(what))}`,
     "",
@@ -2415,7 +2425,7 @@ function summaryLines(
     "Fix:",
     "",
     ...fixBlocks(fixesOf(picked, params), prose, command),
-    `Docs: ${link}`,
+    `<sub>${code} · [Docs](${link})</sub>`,
   ];
 }
 
@@ -2459,15 +2469,19 @@ function escapeCommandData(text: string): string {
 // keeps a lookalike marker from matching.
 export const OUTCOME_MARKER_PREFIX = `${MARKER_OPEN}outcome `;
 
-// The CRYSK-* code an outcome comment names, or null. renderError's summary opens with
-// `### <headline>`, and a headline is the bare code or the code then a colon and a sentence
-// (`CRYSK-CANCELLED: not reviewed`), so the code is the token at the start of that heading. The
-// token must be a catalogued code: a heading that merely looks like one reads as no code.
+// The CRYSK-* code an outcome comment names, or null. Two shapes are read. The current
+// renderError summary ends with a footer `<sub>CRYSK-<CODE> · [Docs](<link>)</sub>`, and its
+// title is a sentence, so the footer is where the code lives. Comments posted before that
+// change open with a `### <headline>` heading that starts with the code (`### CRYSK-CANCELLED:
+// not reviewed`), and the heading is still read. The token must be a catalogued code: a line
+// that merely looks like one reads as no code.
 // WHY PRH-* too: the codes were PRH-* before the rename, and comments already posted keep
 // them. An old code reads as the CRYSK-* code it became; a code removed since reads as none.
 export function parseOutcomeCode(body: string): ErrorCode | null {
   if (matchMarkerPrefix(body, OUTCOME_MARKER_PREFIX) === undefined) return null;
-  const heading = /^### (?:CRYSK|PRH)-([A-Z0-9-]+)(?=[:\s]|$)/m.exec(body);
+  const heading =
+    /^### (?:CRYSK|PRH)-([A-Z0-9-]+)(?=[:\s]|$)/m.exec(body) ??
+    /^<sub>(?:CRYSK|PRH)-([A-Z0-9-]+) · /m.exec(body);
   if (heading === null) return null;
   const code = `CRYSK-${heading[1]}`;
   return (ERROR_CODES as readonly string[]).includes(code)
