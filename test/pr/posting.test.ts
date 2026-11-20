@@ -439,16 +439,14 @@ describe("postFindingsIfEnabled — the CI gate mode reaches the PR comment (S4)
   test("a gate run's summary comment backs the required status, and never disclaims a merge gate", async () => {
     const summary = await postedSummary("gate");
     expect(summary).toContain(
-      "Assistant report backing the crysk commit status, the required check in gate mode: every line above is a claim to verify.",
+      "AI review backing the required crysk check: verify each claim",
     );
     expect(summary).not.toContain("not a merge gate");
   });
 
-  test("an advisory run's summary comment keeps today's disclaimer", async () => {
+  test("an advisory run's summary comment keeps the advisory disclaimer", async () => {
     const summary = await postedSummary("advisory");
-    expect(summary).toContain(
-      "Assistant report, not a merge gate: every line above is a claim to verify.",
-    );
+    expect(summary).toContain("AI review, not a merge gate: verify each claim");
   });
 });
 

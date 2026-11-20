@@ -530,7 +530,7 @@ describe("renderPrComment", () => {
     expect(body).toContain("src/app.ts:42");
   });
 
-  test("with every finding below the floor, the clean bill narrows to the floor", () => {
+  test("with every finding below the floor, the title narrows to the floor and never claims no issues", () => {
     const body = renderPrComment(
       doc(),
       undefined,
@@ -543,15 +543,74 @@ describe("renderPrComment", () => {
       { count: 1, floor: "blocking" },
     );
     expect(body).not.toContain("found nothing to report");
-    expect(body).toContain("No findings at or above `blocking` severity.");
+    expect(body).toContain("## ✅ No findings at or above `blocking` severity");
+    expect(body).not.toContain("No issues found");
     expect(body).toContain(
       "1 advisory finding not posted (`post_min_severity: blocking`).",
     );
   });
 
+  test("a carried prior of unknown severity never lets the checklist say no critical findings", () => {
+    const body = renderPrComment(
+      doc(),
+      undefined,
+      {
+        resolved: 0,
+        new: 0,
+        persist: 1,
+        rereview: {
+          verifiedGone: 0,
+          unconfirmed: 0,
+          carried: 1,
+          deferred: 0,
+          new: 0,
+          suppressed: 0,
+          returned: 0,
+          reTiered: 0,
+          live: [
+            {
+              id: "R001",
+              sev: SEVERITY_UNRECOVERABLE,
+              status: "carried",
+              locs: ["src/app.ts:10"],
+              claim: "a prior",
+            },
+          ],
+        },
+      },
+      [],
+      undefined,
+    );
+    expect(body).not.toContain("No critical findings open");
+    expect(body).toContain(
+      "- ⚠️ 1 of unknown severity open, read it before merging",
+    );
+  });
+
+  test("a complete run with a failed agent names it in the checklist, never every agent finished", () => {
+    const body = renderPrComment(
+      doc({
+        telemetry: {
+          ...TELEMETRY,
+          per_agent: {
+            reliability: { tokens_total: 60, duration_ms: 1000 },
+            summary: { status: "failed", tokens_total: 0, duration_ms: 10 },
+          } as Telemetry["per_agent"],
+        },
+      }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+    );
+    expect(body).not.toContain("Every agent finished");
+    expect(body).toContain("- ⚠️ Did not finish: `summary`");
+  });
+
   test("without a floor the summary is unchanged", () => {
     const body = renderPrComment(doc(), undefined, undefined, [], undefined);
-    expect(body).toContain("found nothing to report");
+    expect(body).toContain("## ✅ No issues found");
+    expect(body).not.toContain("found nothing to report");
     expect(body).not.toContain("not posted");
   });
 
@@ -570,7 +629,7 @@ describe("renderPrComment", () => {
   // Counted by SEVERITY, not tier (Juanma's PR #2 feedback item 3): F003 is
   // WARNING/advisory and counts in "warning", while F001/F002 are BLOCKER
   // (default) and count in "critical" regardless of what tier they landed.
-  test("the summary line carries the severity counts and the reviewed range", () => {
+  test("the title carries the severity counts and the subtitle the reviewed range", () => {
     const findings = [
       finding({ id: "F001", path: "src/a.ts", line: 10 }),
       finding({ id: "F002", path: "src/b.ts", line: 20 }),
@@ -589,10 +648,8 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).toContain("## Crysk review");
-    expect(body).toContain(
-      "🔴 2 critical · 🟡 1 warning — `bbbbbbbb`, diff from `aaaaaaaa`",
-    );
+    expect(body).toContain("## 🔴 2 critical findings · 1 warning");
+    expect(body).toContain("reviewed `bbbbbbbb` · diff from `aaaaaaaa`");
   });
 
   // Item 3's actual point: counted by SEVERITY, not tier — a real posted PR
@@ -601,7 +658,7 @@ describe("renderPrComment", () => {
   // both were genuinely CRITICAL. This is the case that distinguishes the
   // two counting rules: severity-based reads 2 critical / 0 warning here,
   // tier-based would read 0 / 0 (both landed advisory, neither is WARNING).
-  test("a downgraded CRITICAL still counts as critical, never hidden by its advisory tier", () => {
+  test("a downgraded CRITICAL still counts as critical, the title says 2 critical findings", () => {
     const findings = [
       finding({
         id: "F001",
@@ -623,13 +680,14 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).toContain("🔴 2 critical · 🟡 0 warning");
+    expect(body).toContain("## 🔴 2 critical findings");
+    expect(body).not.toContain("0 warning");
   });
 
   // #19 W0: the headline above still counts hunter severity, but the
   // per-finding index must not scream 🔴 next to a finding the engine
   // already made advisory.
-  test("a downgraded CRITICAL index line uses the advisory scan aid, not 🔴", () => {
+  test("a downgraded CRITICAL table row uses the advisory scan aid, not 🔴", () => {
     const findings = [
       finding({
         id: "F001",
@@ -648,9 +706,9 @@ describe("renderPrComment", () => {
       undefined,
     );
     expect(body).toContain(
-      `${scanAidEmoji({ severity: "CRITICAL", tier: "advisory" })} \`src/a.ts:10\` — the value is stored`,
+      `| ${scanAidEmoji({ severity: "CRITICAL", tier: "advisory" })} | the value is stored in seconds and read as milliseconds | \`src/a.ts:10\` | advisory |`,
     );
-    expect(body).not.toContain("🔴 `src/a.ts:10`");
+    expect(body).not.toContain("| 🔴 | the value");
   });
 
   // ROADMAP B6 rework (Juanma's PR #2 feedback item 1): the earlier "one
@@ -660,7 +718,7 @@ describe("renderPrComment", () => {
   // short lead-in) with no tier headings, no full claim paragraph, and no
   // Evidence block of its own; those still live only on the per-finding
   // comment (renderInlineComment/renderIssueFindingComment).
-  test("the summary carries a one-line index, never tier headings or evidence blocks", () => {
+  test("the summary carries a one-line table row per finding, never tier headings or evidence blocks", () => {
     const findings = [
       finding({
         id: "F001",
@@ -686,14 +744,13 @@ describe("renderPrComment", () => {
     expect(body).not.toContain("### 🔴 Blocking");
     expect(body).not.toContain("### 🟡 Advisory");
     expect(body).not.toContain("#### `src/a.ts:10`");
-    expect(body).not.toContain("<details>");
+    expect(body).not.toContain("<details><summary>Evidence");
     expect(body).not.toContain("Evidence");
-    // The one-line index DOES carry a short lead-in of the claim now — the
-    // partial reversal above — so this only asserts the FULL claim sentence
-    // never appears (that stays on the per-finding comment).
+    // The table row DOES carry a short lead-in of the claim — the partial
+    // reversal above — so this only asserts the FULL claim sentence never
+    // appears (that stays on the per-finding comment).
     expect(body).toContain(
-      `${severityEmoji("BLOCKER")} \`src/a.ts:10\` — the value is stored ` +
-        "in seconds and read as milliseconds",
+      `| ${severityEmoji("BLOCKER")} | the value is stored in seconds and read as milliseconds | \`src/a.ts:10\` | blocking |`,
     );
     // No finding ids: engine internals stay in report.md.
     expect(body).not.toContain("F001");
@@ -703,7 +760,7 @@ describe("renderPrComment", () => {
   // CRITICAL, WARNING, SUGGESTION), then path, then line — this is the ONE
   // place priority ordering actually applies; posted inline comments
   // themselves sort however GitHub lays out file/line, not by pr-hero.
-  test("the index sorts by severity rank, then path, then line", () => {
+  test("the table sorts by severity rank, then path, then line", () => {
     const findings = [
       finding({
         id: "F001",
@@ -743,18 +800,20 @@ describe("renderPrComment", () => {
       .split("\n")
       .filter(
         (l) =>
-          (l.startsWith("🔴") || l.startsWith("🟡") || l.startsWith("🔵")) &&
-          !l.includes("critical"),
+          l.startsWith("| 🔴 |") ||
+          l.startsWith("| 🟡 |") ||
+          l.startsWith("| 🔵 |"),
       );
+    const claim = finding({ id: "F001" }).claim;
     expect(lines).toEqual([
-      `🔴 \`src/a.ts:1\` — ${finding({ id: "F003" }).claim}`,
-      `🔴 \`src/a.ts:5\` — ${finding({ id: "F002" }).claim}`,
-      `🟡 \`src/m.ts:1\` — ${finding({ id: "F004" }).claim}`,
-      `🔵 \`src/z.ts:1\` — ${finding({ id: "F001" }).claim}`,
+      `| 🔴 | ${claim} | \`src/a.ts:1\` | blocking |`,
+      `| 🔴 | ${claim} | \`src/a.ts:5\` | blocking |`,
+      `| 🟡 | ${claim} | \`src/m.ts:1\` | advisory |`,
+      `| 🔵 | ${claim} | \`src/z.ts:1\` | advisory |`,
     ]);
   });
 
-  test("an index line links to the finding's comment when the url map has one", () => {
+  test("an index row links to the finding's comment when the url map has one", () => {
     const findings = [finding({ id: "F001", path: "src/a.ts", line: 10 })];
     const body = renderPrComment(
       doc({ findings }),
@@ -767,11 +826,11 @@ describe("renderPrComment", () => {
       ]),
     );
     expect(body).toContain(
-      "🔴 [`src/a.ts:10`](https://github.com/musivetech/musive/pull/1#discussion_r5) — the value",
+      "| 🔴 | the value is stored in seconds and read as milliseconds | [`src/a.ts:10`](https://github.com/musivetech/musive/pull/1#discussion_r5) | blocking |",
     );
   });
 
-  test("an index line without a url map entry renders plain, unlinked text", () => {
+  test("an index row without a url map entry renders plain, unlinked text", () => {
     const findings = [finding({ id: "F001", path: "src/a.ts", line: 10 })];
     const body = renderPrComment(
       doc({ findings }),
@@ -780,16 +839,19 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).toContain("🔴 `src/a.ts:10` — the value");
+    expect(body).toContain(
+      "| 🔴 | the value is stored in seconds and read as milliseconds | `src/a.ts:10` | blocking |",
+    );
     expect(body).not.toContain("[`src/a.ts:10`]");
   });
 
-  test("zero findings render the explicit clean bill", () => {
+  test("zero findings render the ✅ title and no clean-bill sentence", () => {
     const body = renderPrComment(doc(), undefined, undefined, [], undefined);
-    expect(body).toContain("🔴 0 critical · 🟡 0 warning");
-    expect(body).toContain(
+    expect(body).toContain("## ✅ No issues found");
+    expect(body).not.toContain(
       "✅ Crysk reviewed this PR and found nothing to report.",
     );
+    expect(body).not.toContain("|  | Finding | Where | State |");
     expect(body).not.toContain("### ");
   });
 
@@ -808,7 +870,7 @@ describe("renderPrComment", () => {
     } as Telemetry["per_agent"],
   };
 
-  test("a partial run with zero findings never prints the clean bill", () => {
+  test("a partial run with zero findings never prints the ✅ title or the clean bill", () => {
     const body = renderPrComment(
       doc({ run_status: "partial", telemetry: PARTIAL_TELEMETRY }),
       undefined,
@@ -816,7 +878,8 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).not.toContain("✅");
+    expect(body).toContain("## ⚠️ Review incomplete");
+    expect(body).not.toContain("## ✅");
     expect(body).not.toContain("found nothing to report");
     expect(body).toContain(
       "The agents that completed reported nothing. That is not a clean " +
@@ -824,7 +887,7 @@ describe("renderPrComment", () => {
     );
   });
 
-  test("the incompleteness notice sits above the finding count, not in the footer", () => {
+  test("the incompleteness notice sits above the checklist, not in the footer", () => {
     const body = renderPrComment(
       doc({ run_status: "partial", telemetry: PARTIAL_TELEMETRY }),
       undefined,
@@ -833,8 +896,9 @@ describe("renderPrComment", () => {
       undefined,
     );
     expect(body).toContain("⚠️ **This review is incomplete.**");
+    expect(body).toContain("## ⚠️ Review incomplete");
     expect(body.indexOf("This review is incomplete")).toBeLessThan(
-      body.indexOf("🔴 0 critical"),
+      body.indexOf("**Before merging**"),
     );
     // The footer disclosure that used to be the only one still stands; it is
     // no longer load-bearing.
@@ -976,7 +1040,8 @@ describe("renderPrComment", () => {
         "No agent is recorded as completed. The run record does not name " +
           "which agents were lost.",
       );
-      expect(body).not.toContain("✅");
+      expect(body).toContain("## ⚠️ Review incomplete");
+      expect(body).not.toContain("## ✅");
     }
   });
 
@@ -996,12 +1061,14 @@ describe("renderPrComment", () => {
     expect(body).toContain("`resilience` (failed)");
   });
 
-  test("a complete run keeps its clean bill and grows no notice", () => {
+  test("a complete clean run keeps its ✅ title and grows no notice", () => {
     const body = renderPrComment(doc(), undefined, undefined, [], undefined);
-    expect(body).toContain(
+    expect(body).toContain("## ✅ No issues found");
+    expect(body).not.toContain(
       "✅ Crysk reviewed this PR and found nothing to report.",
     );
     expect(body).not.toContain("This review is incomplete");
+    expect(body).not.toContain("**Before merging**");
   });
 
   // GitHub #39. The defect these pin: the review POST carried no commit_id,
@@ -1010,18 +1077,21 @@ describe("renderPrComment", () => {
   // else. The pin lives in pr/pr.ts; this is the half the READER sees.
   const MOVED_HEAD = "d".repeat(40);
 
-  test("a moved head is disclosed above everything, naming both shas in full", () => {
+  test("a moved head is disclosed right under the subtitle, naming both shas in full", () => {
     const body = renderPrComment(doc(), undefined, undefined, [], MOVED_HEAD);
     expect(body).toContain("⚠️ **The PR moved while this review ran.**");
     expect(body).toContain(
       `Reviewed \`${"b".repeat(40)}\`; the PR head is now \`${MOVED_HEAD}\`. ` +
         "Everything below describes the reviewed commit.",
     );
-    // Above the counts it qualifies — a reader who meets the number first has
-    // already read it as a statement about the current head.
-    expect(body.indexOf("The PR moved while this review ran")).toBeLessThan(
-      body.indexOf("🔴 0 critical"),
-    );
+    // Below the subtitle and above the checklist it qualifies — a reader who
+    // meets the checklist first has already read it as a statement about the
+    // current head.
+    const subtitle = body.indexOf("reviewed `bbbbbbbb`");
+    const moved = body.indexOf("The PR moved while this review ran");
+    expect(subtitle).toBeGreaterThan(-1);
+    expect(moved).toBeGreaterThan(subtitle);
+    expect(moved).toBeLessThan(body.indexOf("**Before merging**"));
   });
 
   // The marker is the machine-readable half, and the watch guard (B3) reads
@@ -1038,7 +1108,7 @@ describe("renderPrComment", () => {
   // notices compose in one fixed order: which code the comment is about
   // first, how much of it was looked at second. Reversing them makes the
   // coverage sentence read as a statement about the current head.
-  test("partial AND moved renders both notices, moved first, counts last", () => {
+  test("partial AND moved renders both notices, moved first, checklist last", () => {
     const body = renderPrComment(
       doc({ run_status: "partial", telemetry: PARTIAL_TELEMETRY }),
       undefined,
@@ -1048,10 +1118,10 @@ describe("renderPrComment", () => {
     );
     const moved = body.indexOf("The PR moved while this review ran");
     const incomplete = body.indexOf("This review is incomplete");
-    const counts = body.indexOf("🔴 0 critical");
+    const checklist = body.indexOf("**Before merging**");
     expect(moved).toBeGreaterThan(-1);
     expect(moved).toBeLessThan(incomplete);
-    expect(incomplete).toBeLessThan(counts);
+    expect(incomplete).toBeLessThan(checklist);
     // Both bodies survive intact — neither notice swallows the other.
     expect(body).toContain(`the PR head is now \`${MOVED_HEAD}\``);
     expect(body).toContain("`resilience` (failed)");
@@ -1060,7 +1130,7 @@ describe("renderPrComment", () => {
   // Absent means "unmoved, or the re-read could not be made", and the two are
   // deliberately indistinguishable: the headline names the reviewed sha and
   // never claims it is current, so silence adds nothing rather than lying.
-  test("an unmoved head inserts nothing — the counts still follow the heading", () => {
+  test("an unmoved head inserts nothing — the title and subtitle lead the body", () => {
     const lines = renderPrComment(
       doc(),
       undefined,
@@ -1070,17 +1140,17 @@ describe("renderPrComment", () => {
     ).split("\n");
     expect(lines.slice(0, 4)).toEqual([
       prCommentMarker("b".repeat(40)),
-      "## Crysk review",
+      "## ✅ No issues found",
       "",
-      "🔴 0 critical · 🟡 0 warning — `bbbbbbbb`, diff from `aaaaaaaa`",
+      "reviewed `bbbbbbbb` · diff from `aaaaaaaa`",
     ]);
   });
 
   test("the footer is the sub line with run status and engine", () => {
     const body = renderPrComment(doc(), undefined, undefined, [], undefined);
     expect(body).toContain(
-      "<sub>run complete · crysk 1.0.0 · Assistant report, not a merge " +
-        "gate: every line above is a claim to verify.</sub>",
+      "<sub>run complete · crysk 1.0.0 · AI review, not a merge gate: " +
+        "verify each claim · `/crysk review` asks for a new review</sub>",
     );
   });
 
@@ -1250,7 +1320,7 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).not.toContain("✅");
+    expect(body).toContain("## 🟡 No new findings · 1 carried");
     expect(body).toContain("Live: 1 carried");
   });
 
@@ -1355,7 +1425,7 @@ describe("renderPrComment", () => {
     );
     expect(body).not.toContain("found nothing to report");
     expect(body).toContain("No changes since the last review of this head.");
-    expect(body).toContain("No discovery hunter ran this pass.");
+    expect(body).not.toContain("No discovery hunter ran this pass.");
     expect(body).toContain(
       "No live findings are carried from the previous review.",
     );
@@ -1393,7 +1463,7 @@ describe("renderPrComment", () => {
       "Every changed file was excluded from review " +
         "(dist/bundle.js, vendor/lib.min.js), so the effective diff is empty.",
     );
-    expect(body).toContain("No discovery hunter ran this pass.");
+    expect(body).not.toContain("No discovery hunter ran this pass.");
   });
 
   // #286 finding 3 (report.ts:817 rereviewIsClean ignoring verifiedGone):
@@ -1527,7 +1597,7 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).not.toContain("✅");
+    expect(body).toContain("## 🟡 No new findings · 2 unconfirmed");
     expect(body).toContain("Live: 2 unconfirmed");
   });
 
@@ -1576,13 +1646,13 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).toContain("`carried`");
+    expect(body).toContain("| carried |");
     expect(body).toContain("(R001)");
-    expect(body).toContain("`deferred`");
+    expect(body).toContain("| deferred |");
     expect(body).toContain("(R002)");
     expect(body).not.toContain("(R003)");
     expect(body).toContain("1 finding suppressed");
-    expect(body).toContain("🔴 1 critical · 🟡 1 warning");
+    expect(body).toContain("## 🔴 1 critical finding · 1 warning");
   });
 
   // The three below pin the WHOLE rendered row, not a substring. O-2b's
@@ -1622,7 +1692,7 @@ describe("renderPrComment", () => {
   const liveRowLine = (body: string, id: string): string | undefined =>
     body.split("\n").find((line) => line.includes(`(${id})`));
 
-  test("O-2c — a live row with a claim renders it verbatim after the separator", () => {
+  test("O-2c — a live row with a claim renders it verbatim in its table row", () => {
     const body = liveRowBody({
       id: "R001",
       sev: "WARNING",
@@ -1631,12 +1701,12 @@ describe("renderPrComment", () => {
       claim: "the wizard writes before it validates",
     });
     expect(liveRowLine(body, "R001")).toBe(
-      "- `carried` 🟡 `src/wizard.ts:721` — the wizard writes before it validates (R001)",
+      "| 🟡 | the wizard writes before it validates (R001) | `src/wizard.ts:721` | carried |",
     );
     expect(body).not.toContain("\x1b");
   });
 
-  test("O-2d — a live row with no claim says so, never a bare separator", () => {
+  test("O-2d — a live row with no claim says so, never a bare cell", () => {
     const body = liveRowBody({
       id: "R002",
       sev: "WARNING",
@@ -1646,10 +1716,9 @@ describe("renderPrComment", () => {
     });
     const line = liveRowLine(body, "R002");
     expect(line).toBe(
-      "- `carried` 🟡 `src/wizard.ts:721` — _claim text unavailable; " +
-        "see this finding's own comment on the PR_ (R002)",
+      "| 🟡 | _claim text unavailable; see this finding's own comment on the PR_ (R002) | `src/wizard.ts:721` | carried |",
     );
-    expect(line).not.toContain("—  ");
+    expect(line).not.toContain("|  (R002)");
     expect(body).not.toContain("\x1b");
   });
 
@@ -1663,10 +1732,9 @@ describe("renderPrComment", () => {
     });
     const line = liveRowLine(body, "R003");
     expect(line).toBe(
-      "- `deferred` 🔴 `src/pr.ts:42` — _claim text unavailable; " +
-        "see this finding's own comment on the PR_ (R003)",
+      "| 🔴 | _claim text unavailable; see this finding's own comment on the PR_ (R003) | `src/pr.ts:42` | deferred |",
     );
-    expect(line).not.toContain("—  ");
+    expect(line).not.toContain("|  (R003)");
   });
 
   test("#206 — an unrecoverable severity renders its own glyph, never a real-severity one", () => {
@@ -1679,9 +1747,8 @@ describe("renderPrComment", () => {
     });
     const line = liveRowLine(body, "R004");
     expect(line).toBe(
-      "- `carried` ⚠️ severity unavailable `src/watch.ts:614` — " +
-        "_claim text unavailable; see this finding's own comment on the " +
-        "PR_ (R004)",
+      "| ⚠️ | _claim text unavailable; see this finding's own comment on the " +
+        "PR_ (R004) | `src/watch.ts:614` | carried |",
     );
     // Never one of the three real-severity glyphs — reusing 🟡 by accident
     // IS the bug (a live BLOCKER rendering as a warning).
@@ -1690,7 +1757,7 @@ describe("renderPrComment", () => {
     expect(line).not.toContain("🔵");
   });
 
-  test("#206 — the headline gives an unrecoverable severity its own bucket, never warning", () => {
+  test("#206 — the title gives an unrecoverable severity its own bucket, never warning", () => {
     const body = renderPrComment(
       doc(),
       undefined,
@@ -1721,9 +1788,8 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).toContain(
-      "🔴 0 critical · 🟡 0 warning · ⚠️ 1 severity unavailable",
-    );
+    expect(body).toContain("## 🟡 1 of unknown severity");
+    expect(body).not.toContain("warning");
   });
 
   test("#206 — a recovered BLOCKER live row counts as critical, headline never says 0 critical", () => {
@@ -1757,8 +1823,8 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).toContain("🔴 1 critical · 🟡 0 warning");
-    expect(body).not.toContain("🔴 0 critical");
+    expect(body).toContain("## 🔴 1 critical finding");
+    expect(body).not.toContain("0 critical finding");
   });
 
   test("D4 — force-push case banners the full-range review", () => {
@@ -1854,7 +1920,7 @@ describe("renderPrComment", () => {
     expect(body).not.toContain("since");
   });
 
-  test("renders the artifact summary before the finding index", () => {
+  test("renders the artifact summary before the finding table", () => {
     const body = renderPrComment(
       doc({
         findings: [finding({ id: "F001" })],
@@ -1866,27 +1932,29 @@ describe("renderPrComment", () => {
       undefined,
     );
     const block =
-      "### Summary\n\n" +
       `${SUMMARY.prose}\n\n` +
-      `**Confidence: ${SUMMARY.score}/5** — ${SUMMARY.score_reason}`;
+      `<sub>Why ${SUMMARY.score}/5: ${SUMMARY.score_reason}</sub>`;
     expect(body).toContain(block);
-    expect(body.indexOf(block)).toBeLessThan(
-      body.indexOf("🔴 `src/app.ts:42`"),
+    expect(body).toContain(
+      `Confidence ${SUMMARY.score}/5 · reviewed \`bbbbbbbb\``,
     );
+    expect(body.indexOf(block)).toBeLessThan(body.indexOf("|  | Finding |"));
     expect(body).not.toContain("$12.90");
     expect(body).not.toContain("120 tokens");
   });
 
-  test("an absent summary preserves the comment output byte-for-byte", () => {
+  test("an absent summary renders no summary block and the exact clean shape", () => {
     const body = renderPrComment(doc(), undefined, undefined, [], undefined);
     expect(body).toBe(
       "<!-- crysk-report head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n" +
-        "## Crysk review\n\n" +
-        "🔴 0 critical · 🟡 0 warning — `bbbbbbbb`, diff from `aaaaaaaa`\n\n" +
-        "✅ Crysk reviewed this PR and found nothing to report.\n\n" +
+        "## ✅ No issues found\n\n" +
+        "reviewed `bbbbbbbb` · diff from `aaaaaaaa`\n\n" +
+        "<details><summary>Review details</summary>\n\n" +
+        "- Agents: reliability ran · lifecycle ran\n\n" +
+        "</details>\n\n" +
         "---\n\n" +
-        "<sub>run complete · crysk 1.0.0 · Assistant report, not a merge " +
-        "gate: every line above is a claim to verify.</sub>\n",
+        "<sub>run complete · crysk 1.0.0 · AI review, not a merge gate: " +
+        "verify each claim · `/crysk review` asks for a new review</sub>\n",
     );
   });
 
@@ -1934,18 +2002,19 @@ describe("renderPrComment", () => {
     expect(body).toContain(
       `[\`src/never-b.ts:2\`](${WEB_URL}/blob/${HEAD}/src/never-b.ts#L2)`,
     );
-    expect(body).toContain("Prompt to fix with AI");
+    expect(body).not.toContain("Prompt to fix with AI");
     expect(body).not.toContain("Posted as a standalone comment");
     expect(body).not.toContain("$");
     expect(body).not.toContain("token");
-    // Index stays one-liners (lead-in); the bucket has the full body. Both
-    // may mention the claim — Greptile does similar — but the index line is
+    // Index stays one-liners (table rows); the bucket has the full body. Both
+    // may mention the claim — Greptile does similar — but the table row is
     // not the full finding block.
     const indexLine = body
       .split("\n")
-      .find((l) => l.startsWith("🔴 `src/never-a.ts:1`"));
-    expect(indexLine).toBeDefined();
-    expect(indexLine).not.toContain("Prompt to fix");
+      .find((l) => l.startsWith("| 🔴 | first un-anchorable claim"));
+    expect(indexLine).toBe(
+      "| 🔴 | first un-anchorable claim | `src/never-a.ts:1` | blocking |",
+    );
   });
 
   test("outside-diff findings without a url map stay unlinked in the index", () => {
@@ -1963,7 +2032,7 @@ describe("renderPrComment", () => {
       undefined,
     );
     expect(body).toContain(
-      "🔴 `src/never.ts:1` — could not anchor this finding",
+      "| 🔴 | could not anchor this finding | `src/never.ts:1` | blocking |",
     );
     expect(body).not.toContain("#discussion_r");
     expect(body).not.toContain("#issuecomment-");
@@ -1971,6 +2040,109 @@ describe("renderPrComment", () => {
     expect(body).toContain(
       `[\`src/never.ts:1\`](${WEB_URL}/blob/${HEAD}/src/never.ts#L1)`,
     );
+  });
+
+  test("a pipe in a claim is escaped as \\| inside its table row", () => {
+    const body = renderPrComment(
+      doc({
+        findings: [finding({ id: "F001", claim: "a | b pipe in the claim" })],
+      }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+    );
+    expect(body).toContain(
+      "| 🔴 | a \\| b pipe in the claim | `src/app.ts:42` | blocking |",
+    );
+  });
+
+  test("the caution alert names the blocking finding", () => {
+    const body = renderPrComment(
+      doc({ findings: [finding({ id: "F001" })] }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+    );
+    expect(body).toContain(
+      "> [!CAUTION]\n> **the value is stored in seconds and read as milliseconds** `src/app.ts:42`",
+    );
+  });
+
+  test("no caution alert renders when every finding is advisory", () => {
+    const body = renderPrComment(
+      doc({
+        findings: [
+          finding({
+            id: "F001",
+            severity: "WARNING",
+            tier: "advisory",
+          }),
+        ],
+      }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+    );
+    expect(body).not.toContain("[!CAUTION]");
+  });
+
+  test("a clean complete review has the ✅ title, no table, no checklist, and no details block when the delta is zero", () => {
+    const body = renderPrComment(
+      doc({ telemetry: { ...TELEMETRY, per_agent: undefined } as Telemetry }),
+      undefined,
+      { resolved: 0, new: 0, persist: 0 },
+      [],
+      undefined,
+    );
+    expect(body).toContain("## ✅ No issues found");
+    expect(body).not.toContain("|  | Finding | Where | State |");
+    expect(body).not.toContain("**Before merging**");
+    expect(body).not.toContain("Review details");
+  });
+
+  test("a suggestion-only review titles 🔵 1 suggestion", () => {
+    const body = renderPrComment(
+      doc({
+        findings: [
+          finding({ id: "F001", severity: "SUGGESTION", tier: "advisory" }),
+        ],
+      }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+    );
+    expect(body).toContain("## 🔵 1 suggestion");
+    expect(body).not.toContain("[!CAUTION]");
+  });
+
+  test("an all-zero delta is left out of the details block, a non-zero one is inside it", () => {
+    const findings = [finding({ id: "F001" })];
+    const zero = renderPrComment(
+      doc({ findings }),
+      undefined,
+      { resolved: 0, new: 0, persist: 0 },
+      [],
+      undefined,
+    );
+    expect(zero).not.toContain("Δ");
+    expect(zero).toContain("<details><summary>Review details</summary>");
+
+    const nonZero = renderPrComment(
+      doc({ findings }),
+      undefined,
+      { resolved: 0, new: 1, persist: 0 },
+      [],
+      undefined,
+    );
+    const details = nonZero.slice(
+      nonZero.indexOf("<details><summary>Review details</summary>"),
+      nonZero.indexOf("</details>"),
+    );
+    expect(details).toContain("- Δ: 0 resolved · 1 new · 0 persist");
   });
 });
 
@@ -2349,25 +2521,25 @@ describe("renderInlineComment", () => {
     );
   });
 
-  test("a finding without proof refs has no evidence block, but keeps the prompt block", () => {
+  test("a finding without proof refs has no evidence block and no prompt block", () => {
     const body = renderInlineComment(
       finding({ id: "F001", proof_refs: [] }),
       HEAD,
     );
     expect(body).not.toContain("Evidence");
-    expect(body).toContain("Prompt to fix with AI");
+    expect(body).not.toContain("Prompt to fix with AI");
   });
 
-  // Item "Prompt to fix with AI": a copy-pasteable prompt naming the path,
-  // line, and claim — never a deep link to a hosted service this project
-  // does not have.
-  test("the prompt-to-fix block is copy-pasteable, never a deep link", () => {
+  // The "Prompt to fix with AI" block is gone: it repeated the claim inside a
+  // code fence, and the agents that fix findings read the claim itself. The
+  // claim stays, and no link to a hosted service is rendered either.
+  test("the inline body keeps the claim, with no prompt-to-fix block and no deep link", () => {
     const body = renderInlineComment(
       finding({ id: "F001", path: "src/inline.ts", line: 72 }),
       HEAD,
     );
-    expect(body).toContain("<details><summary>Prompt to fix with AI</summary>");
-    expect(body).toContain("Fix this issue in src/inline.ts at line 72:");
+    expect(body).not.toContain("Prompt to fix with AI");
+    expect(body).not.toContain("Fix this issue in");
     expect(body).toContain(
       "the value is stored in seconds and read as milliseconds",
     );
@@ -2461,13 +2633,13 @@ describe("renderIssueFindingComment", () => {
     );
   });
 
-  test("carries the prompt-to-fix block too", () => {
+  test("carries no prompt-to-fix block", () => {
     const body = renderIssueFindingComment(
       finding({ id: "F001", path: "src/a.ts", line: 10 }),
       HEAD,
     );
-    expect(body).toContain("Prompt to fix with AI");
-    expect(body).toContain("Fix this issue in src/a.ts at line 10:");
+    expect(body).not.toContain("Prompt to fix with AI");
+    expect(body).not.toContain("Fix this issue in");
   });
 
   test("no cost or token figures anywhere", () => {
@@ -2570,9 +2742,9 @@ describe("the report footers follow the gate mode (S4)", () => {
   const GATE_CLOSING =
     "Generated by crysk 1.0.0. This report backs the crysk commit status, the required check in gate mode: every line above is a claim to verify. A blocking finding sets that status to failure. Whether it blocks the merge is up to branch protection.";
   const ADVISORY_COMMENT_FOOTER =
-    "Assistant report, not a merge gate: every line above is a claim to verify.</sub>";
+    "AI review, not a merge gate: verify each claim · `/crysk review` asks for a new review</sub>";
   const GATE_COMMENT_FOOTER =
-    "Assistant report backing the crysk commit status, the required check in gate mode: every line above is a claim to verify.</sub>";
+    "AI review backing the required crysk check: verify each claim · `/crysk review` asks for a new review</sub>";
 
   test("advisory: the closing note is byte-identical to today's, and omitting the mode is advisory", () => {
     const advisory = renderReport(doc(), { ...META, ciMode: "advisory" });
@@ -2655,7 +2827,7 @@ describe("renderPrComment — compact Outside Diff entries (S1b)", () => {
     expect(section).toContain(
       `[\`src/never-b.ts:2\`](${WEB_URL}/blob/${"b".repeat(40)}/src/never-b.ts#L2)`,
     );
-    expect(section.split("Prompt to fix with AI").length - 1).toBe(1);
+    expect(section.split("Prompt to fix with AI").length - 1).toBe(0);
   });
 
   test("compacting from index 0 leaves only linked locations in the section", () => {

@@ -726,8 +726,8 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       expect(body).toContain("the prior nobody touched");
       // C7: zero new findings is not a clean bill while priors are live.
       expect(body).not.toContain("found nothing to report");
-      expect(body).toContain("`carried`");
-      expect(body).toContain("`unconfirmed`");
+      expect(body).toContain("| carried |");
+      expect(body).toContain("| unconfirmed |");
       // Nothing was verified gone, so nothing is collapsed.
       expect(
         calls.filter((c) => c.argv.join(" ").includes("reviewThreads")),
