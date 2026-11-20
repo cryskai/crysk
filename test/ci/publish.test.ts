@@ -4288,3 +4288,25 @@ describe("runPublish — the override read gets one retry", () => {
     expect(run.stdout).not.toContain("::warning");
   });
 });
+
+describe("runPublish — override notice titles", () => {
+  test("a landed override opens its body with a gate-overridden title under the marker", () => {
+    const run = runPublishIn({ record: overrideRecord() });
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body.split("\n")[0]).toBe(
+      `<!-- crysk-override head=${SHA} run=4242 attempt=1 -->`,
+    );
+    expect(body.split("\n")[1]).toBe("");
+    expect(body.split("\n")[2]).toBe("## ⚑ Gate overridden by @maintainer");
+    expect(body.split("\n")[3]).toBe("");
+  });
+
+  test("an override that did not land opens its body with an override-not-applied title", () => {
+    const run = runPublishIn({
+      record: overrideRecord({ head_sha: undefined }),
+    });
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body.split("\n")[2]).toBe("## ⚠️ Override not applied");
+    expect(body.split("\n")[3]).toBe("");
+  });
+});

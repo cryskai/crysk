@@ -207,3 +207,149 @@ describe("every other skip on a platform repository", () => {
     expect(comments[0]).not.toContain("`max-changed-lines`");
   });
 });
+
+// Notice titles and tips: each skip, stop and override notice opens with a one-line
+// title, and the command that asks for a review sits in a GitHub `> [!TIP]` alert.
+describe("notice titles and tips on a skip, a stop and a manual-required notice", () => {
+  const prior = { blocking: 0, advisory: 0, score: 0, source: "none" as const };
+  const tipOf = (hint: string) => `> [!TIP]\n> ${hint}`;
+
+  test("the size skip has its title, no warning glyph, and the hint in a TIP", () => {
+    const comment =
+      planCiSizeSkip({
+        isCi: true,
+        verdict: {
+          ok: false,
+          reason: "lines",
+          effectiveLines: 5000,
+          effectiveFiles: 3,
+          excludedFiles: 0,
+          excludedLines: 0,
+          limit: 4000,
+          message: "5000 changed lines exceed the limit of 4000",
+        },
+        prNumber: 11,
+        maxChangedLines: 4000,
+        maxChangedFiles: 50,
+        ciMode: "advisory",
+      })?.comment ?? "";
+    expect(comment).toContain(
+      "## ⏸ Review skipped: this pull request is too large",
+    );
+    expect(comment).not.toContain("## Crysk review skipped");
+    expect(comment).not.toContain("⚠️");
+    expect(comment).toContain(tipOf(ciForceReviewHintLine(11)));
+  });
+
+  test("the spend-limit skip has its title, no warning glyph, and the hint in a TIP", () => {
+    const comment =
+      planCiLimitsSkip({
+        isCi: true,
+        billingMode: "metered",
+        limits: { reviewUsd: 10, estimateUsd: 11.06 },
+        prNumber: 11,
+        force: false,
+        ciMode: "advisory",
+      })?.comment ?? "";
+    expect(comment).toContain("## ⏸ Review skipped: spend limit reached");
+    expect(comment).not.toContain("## Crysk review skipped");
+    expect(comment).not.toContain("⚠️");
+    expect(comment).toContain(tipOf(ciForceReviewHintLine(11, true)));
+  });
+
+  test("a maintainer stop is titled as stopped automatic reviews, with the hint in a TIP", () => {
+    const comment = planCiReviewSkip({
+      prNumber: 7,
+      ciMode: "advisory",
+      verdict: {
+        action: "skip",
+        reason: "stopped",
+        prior,
+        reviewCount: 1,
+        maxAttempts: 2,
+        minScore: 4,
+      },
+    }).comment;
+    expect(comment).toContain("## ⏸ Automatic reviews stopped");
+    expect(comment).toContain(
+      "⏸️ A maintainer stopped automatic reviews on this pull request.",
+    );
+    expect(comment).toContain(tipOf(ciForceReviewHintLine(7)));
+  });
+
+  test("a push that did not justify a run is titled for this push, with the hint in a TIP", () => {
+    const comment = planCiReviewSkip({
+      prNumber: 7,
+      ciMode: "advisory",
+      verdict: {
+        action: "skip",
+        reason: "below-threshold",
+        prior,
+        reviewCount: 1,
+        maxAttempts: 2,
+        minScore: 4,
+      },
+    }).comment;
+    expect(comment).toContain("## ⏸ Review skipped for this push");
+    expect(comment).toContain(
+      "⚠️ This push did not justify another review run.",
+    );
+    expect(comment).toContain(tipOf(ciForceReviewHintLine(7)));
+  });
+
+  test("the automatic-reviews-done notice has its title, the sentence, and rules folded in a details block", () => {
+    const comment = planCiReviewManualRequired({
+      prNumber: 9,
+      ciMode: "advisory",
+      verdict: {
+        action: "manual-required",
+        reason: "max-attempts-exhausted",
+        prior,
+        reviewCount: 2,
+        maxAttempts: 2,
+        minScore: 4,
+      },
+    }).comment;
+    const at = (text: string) => comment.indexOf(text);
+    expect(comment).toContain(
+      "## ⏹ Automatic reviews are done for this pull request",
+    );
+    expect(comment).not.toContain("## Crysk: automatic reviews are done");
+    expect(comment).toContain(
+      "⏹️ No more automatic reviews will run on this pull request.",
+    );
+    expect(at("## ⏹ Automatic")).toBeLessThan(at("No more automatic"));
+    expect(at("No more automatic")).toBeLessThan(at("[!TIP]"));
+    expect(at("[!TIP]")).toBeLessThan(
+      at(
+        "<details><summary>Why, and what the gate does with later pushes</summary>",
+      ),
+    );
+    expect(comment).toContain(
+      "<details><summary>Why, and what the gate does with later pushes</summary>",
+    );
+    expect(comment).toContain("How it got here, by this repository's rules:");
+    expect(comment).toContain("</details>");
+  });
+
+  test("the override hint sits inside the TIP of the manual-required notice", () => {
+    const comment = planCiReviewManualRequired({
+      prNumber: 9,
+      ciMode: "advisory",
+      verdict: {
+        action: "manual-required",
+        reason: "max-attempts-exhausted",
+        prior,
+        reviewCount: 2,
+        maxAttempts: 2,
+        minScore: 4,
+      },
+    }).comment;
+    expect(comment).toContain(
+      `> [!TIP]\n> Want more review rounds? ${ciForceReviewHintLine(9)}\n>\n> To merge a head no review verified, comment `,
+    );
+    expect(comment).toMatch(
+      /^> To merge a head no review verified, comment .+\.$/m,
+    );
+  });
+});
