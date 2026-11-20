@@ -1410,11 +1410,16 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
       },
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
     ]);
+    // One un-anchorable finding, so the delta is not all zeros: the Review
+    // details block (which carries the since clause) is omitted for an
+    // all-zero delta.
     await postInlineFindings({
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
-      doc: doc({ findings: [] }),
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/never.ts", line: 1 })],
+      }),
       diffPatch: diffAddingLines("src/a.ts", 20),
       webUrl: undefined,
       spawnFn,
@@ -1943,7 +1948,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
     const body = lastSummaryBody(calls);
     expect(body).toContain(`Δ since \`${OLD_HEAD.slice(0, 8)}\``);
     expect(body).toContain("0 unconfirmed · 1 carried · 0 deferred · 1 new");
-    expect(body).toContain("Still live:");
+    expect(body).toContain("| carried |");
     expect(body).toContain(PRIOR_CLAIM);
     expect(body).toContain(`<!-- crysk-state v=1 head=${HEAD} -->`);
     expect(logged).not.toContain("drops the re-review framing");
