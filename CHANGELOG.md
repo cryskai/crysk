@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The PR summary comment answers "what did this review find?" first.** Its title is the verdict (`🔴 1 critical finding · 2 warnings`, `🟡 …`, `✅ No issues found`, `⚠️ Review incomplete`), followed by the confidence score, the reviewed commit and the PR summary. A blocking finding is called out in a red `[!CAUTION]` box, every finding still to deal with (this review's and the priors still live) is one row of a table with its location and state, a short "Before merging" checklist follows, and the agents and delta counts fold into "Review details". All-zero delta lines and the "No discovery hunter ran this pass" sentence are gone, and the footer is one short line. Finding comments no longer carry the "Prompt to fix with AI" block, which repeated the claim word for word.
 - **Error comments open with what happened, not with a code.** A run that could not review now posts `## ⏸ Review didn't run` (or the case's own sentence, such as `## ⏸ Not reviewed` for a cancelled run), and the `CRYSK-*` code and the docs link move to a footer line. `crysk status` reads the code from both the new footer and the `### CRYSK-*` heading of comments posted before.
 
 ## [0.10.0] - 2026-11-19
