@@ -1496,6 +1496,29 @@ export function renderInlineComment(
   return `${out.join("\n").trimEnd()}\n`;
 }
 
+// A finding whose line is outside the diff but whose file is in it, posted as a
+// file-level review comment: it gets a thread like an inline finding. GitHub does
+// not anchor it to the line, so the location line links to it, unlike
+// renderInlineComment. The marker carries the finding's real line, the only line
+// anchor a re-run can match on (a file-level comment's own `line` is null).
+export function renderFileLevelComment(
+  finding: Finding,
+  headSha: string,
+  webUrl?: string,
+): string {
+  const out: string[] = [
+    findingMarker({
+      path: finding.path,
+      line: finding.line,
+      headSha,
+      claim: finding.claim,
+    }),
+    "",
+    ...findingBodyLines(finding, headSha, webUrl, true),
+  ];
+  return `${out.join("\n").trimEnd()}\n`;
+}
+
 // Kept for postIssueComment (src/pr/pr.ts) and its tests: leftover W1 orphans
 // from old runs still have this body shape. New posting (W2, issues #16/#17)
 // does not call this — un-anchorable findings go into the summary Outside

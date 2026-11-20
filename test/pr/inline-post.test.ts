@@ -3303,3 +3303,219 @@ describe("postInlineFindings — a forced zero survives a merged re-review rende
     expect(countAfter(second)).toBe(1);
   });
 });
+
+describe("postInlineFindings — a finding outside the diff lines but in a diff file posts file-level", () => {
+  const WEB = "https://github.com/acme/app";
+  const fileLevelPosts = (calls: RecordedCall[]) =>
+    calls.filter((c) => c.argv.join(" ").includes("subject_type=file"));
+  const summaryPatch = (calls: RecordedCall[]) =>
+    calls.findLast(
+      (c) =>
+        c.argv.join(" ").includes("PATCH") &&
+        c.stdin?.startsWith("<!-- crysk-report "),
+    )?.stdin ?? "";
+  const script = (extra: ScriptEntry[] = []) =>
+    makeFakeGh([
+      ...extra,
+      {
+        match: ["issues/42/comments", "--paginate"],
+        // No summary yet: a first review, which writes the state block.
+        response: { stdout: "" },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+
+  test("its file is in the diff: one file-level review comment, pinned to the head, and no Outside Diff entry", async () => {
+    const { spawnFn, calls } = script();
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 50,
+            claim: "a line the diff does not show",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    const posts = fileLevelPosts(calls);
+    expect(posts).toHaveLength(1);
+    const argv = posts[0]?.argv.join(" ") ?? "";
+    expect(argv).toContain("pulls/42/comments");
+    expect(argv).toContain(`commit_id=${HEAD}`);
+    expect(argv).toContain("path=src/a.ts");
+    expect(posts[0]?.stdin).toStartWith("<!-- crysk-finding ");
+    expect(posts[0]?.stdin).toContain("line=50");
+    expect(posts[0]?.stdin).toContain("a line the diff does not show");
+    expect(outcome.outsideDiffCount).toBe(0);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    const body = summaryPatch(calls);
+    expect(body).not.toContain("### Comments Outside Diff");
+    expect(body).toMatch(
+      /\]\(https:\/\/github\.com\/acme\/app\/pull\/42#discussion_r\d+\)/,
+    );
+    expect(body).toContain('"channel":"inline"');
+    expect(body).not.toContain('"channel":"outside"');
+  });
+
+  test("a failed file-level POST demotes the finding to the summary, never drops it", async () => {
+    const { spawnFn, calls } = script([
+      {
+        match: ["subject_type=file"],
+        response: { exitCode: 1, stderr: "HTTP 422" },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 50,
+            claim: "a line the diff does not show",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(1);
+    expect(outcome.outsideDiffCount).toBe(1);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    const body = summaryPatch(calls);
+    expect(body).toContain("### Comments Outside Diff (1)");
+    expect(body).toContain("a line the diff does not show");
+  });
+
+  test("its file is not in the diff: no file-level POST, the finding stays in the summary", async () => {
+    const { spawnFn, calls } = script();
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/never.ts",
+            line: 3,
+            claim: "a file the PR never touched",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(0);
+    expect(outcome.outsideDiffCount).toBe(1);
+    const body = summaryPatch(calls);
+    expect(body).toContain("### Comments Outside Diff (1)");
+    expect(body).toContain('"channel":"outside"');
+  });
+});
+
+describe("postInlineFindings — a failed file-level POST is re-read before it is demoted", () => {
+  const WEB = "https://github.com/acme/app";
+  const F = finding({
+    id: "F001",
+    path: "src/a.ts",
+    line: 50,
+    claim: "a line the diff does not show",
+  });
+  const summaryPatch = (calls: RecordedCall[]) =>
+    calls.findLast(
+      (c) =>
+        c.argv.join(" ").includes("PATCH") &&
+        c.stdin?.startsWith("<!-- crysk-report "),
+    )?.stdin ?? "";
+  const run = (landed: unknown[]) =>
+    makeFakeGh([
+      {
+        match: ["subject_type=file"],
+        response: { exitCode: 1, stderr: "HTTP 504: gateway timeout" },
+      },
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        // The plan's read sees nothing; the re-read after the failed POST sees
+        // whatever landed.
+        responses: [{ stdout: "" }, { stdout: ndjson(landed) }],
+      },
+    ]);
+
+  test("the comment landed despite the error: no summary entry, the table links to it", async () => {
+    const marker = findingMarker({
+      path: F.path,
+      line: F.line,
+      headSha: HEAD,
+      claim: F.claim,
+    });
+    const { spawnFn, calls } = run([
+      {
+        id: 777,
+        user: "pr-hero",
+        body: `${marker}\nclaim`,
+        path: "src/a.ts",
+        line: null,
+        original_line: null,
+        in_reply_to_id: null,
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [F] }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(outcome.outsideDiffCount).toBe(0);
+    const body = summaryPatch(calls);
+    expect(body).not.toContain("### Comments Outside Diff");
+    expect(body).toContain(`${WEB}/pull/42#discussion_r777`);
+  });
+
+  test("the comment did not land: the summary lists it and the log says why", async () => {
+    const { spawnFn, calls } = run([]);
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    let outcome: Awaited<ReturnType<typeof postInlineFindings>>;
+    try {
+      outcome = await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [F] }),
+        diffPatch: diffAddingLines("src/a.ts", 5),
+        webUrl: WEB,
+        spawnFn,
+      });
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    expect(outcome.outsideDiffCount).toBe(1);
+    expect(summaryPatch(calls)).toContain("### Comments Outside Diff (1)");
+    expect(chunks.join("")).toContain(
+      "file-level comment for src/a.ts:50 did not post (HTTP 504: gateway timeout) — listed in the summary instead",
+    );
+  });
+});

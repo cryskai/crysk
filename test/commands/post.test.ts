@@ -278,6 +278,40 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
     }
   });
 
+  test("dry-run names a finding in a diff file, but off its lines, as file-level", async () => {
+    const { dir, cleanup } = await writeRunDir({
+      findings: [finding({ id: "F001", path: "src/a.ts", line: 500 })],
+    });
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
+      const exitCode = await runPostCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        dryRun: true,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const logged = chunks.join("");
+      expect(logged).toContain("1 file-level, 0 outside diff");
+      expect(logged).toContain("file    src/a.ts:500 F001");
+      for (const call of calls) {
+        expect(call.argv).not.toContain("--method");
+      }
+    } finally {
+      process.stderr.write = origWrite;
+      await cleanup();
+    }
+  });
+
   test("dry-run lists un-anchorable findings as outside, not issue", async () => {
     const { dir, cleanup } = await writeRunDir({
       findings: [finding({ id: "F001", path: "src/never.ts", line: 1 })],

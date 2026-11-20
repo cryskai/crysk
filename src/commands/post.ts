@@ -7,6 +7,7 @@ import { resolveRepoRoot } from "#git/git";
 import { postingExitCode } from "#pr/inline";
 import type { PostMinSeverity } from "#pr/post-floor";
 import {
+  fileLevelFindingIds,
   ghCurrentBranchPr,
   ghRepoWebUrl,
   missingRereviewBlockMessage,
@@ -223,9 +224,13 @@ export async function runPostCommand(input: {
     ) {
       throw new CliError(vanishedPriorSummaryMessage(prNumber));
     }
+    // The same split the live post makes (postInlineFindings), so the preview
+    // names which un-anchorable findings get a file-level comment.
+    const fileLevel = fileLevelFindingIds(plan.issueComments, diffPatch);
     log(
       `plan: ${plan.reviewComments.length} review comment(s), ` +
-        `${plan.issueComments.length} outside diff, ` +
+        `${fileLevel.size} file-level, ` +
+        `${plan.issueComments.length - fileLevel.size} outside diff, ` +
         `${plan.persisting.length} already posted (skipped)` +
         (previousHeadSha === undefined
           ? `, ${plan.resolved.length} resolved`
@@ -245,7 +250,9 @@ export async function runPostCommand(input: {
       log(`  review  ${finding.path}:${finding.line} ${finding.id}`);
     }
     for (const finding of plan.issueComments) {
-      log(`  outside ${finding.path}:${finding.line} ${finding.id}`);
+      log(
+        `  ${fileLevel.has(finding.id) ? "file   " : "outside"} ${finding.path}:${finding.line} ${finding.id}`,
+      );
     }
     for (const finding of plan.notPosted) {
       log(`  hidden  ${finding.path}:${finding.line} ${finding.id}`);

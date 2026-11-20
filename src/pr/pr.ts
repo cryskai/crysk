@@ -58,6 +58,7 @@ import type { Finding, FindingsDocument } from "#review/findings";
 import {
   type PrCommentDelta,
   parseFindingCommentBadge,
+  renderFileLevelComment,
   renderInlineComment,
   renderIssueFindingComment,
   renderPrComment,
@@ -2243,6 +2244,62 @@ export async function postReviewCommentReply(input: {
   return parsePostedCommentId(result.stdout, "triage review reply");
 }
 
+// Which un-anchorable findings post as file-level review comments: those whose
+// FILE is in the diff (only their line is not). Shared by the live post and the
+// `post --dry-run` preview, so the preview names the same split.
+export function fileLevelFindingIds(
+  issueComments: readonly { id: string; path: string }[],
+  diffPatch: string,
+): Set<string> {
+  const diffFiles = new Set(parseHunkAnchors(diffPatch).keys());
+  return new Set(
+    issueComments.filter((f) => diffFiles.has(f.path)).map((f) => f.id),
+  );
+}
+
+// A file-level review comment: POST pulls/<n>/comments with subject_type "file",
+// pinned to the reviewed commit like the batch review (GitHub #39). Never throws:
+// it returns the comment id, or why the post failed.
+export async function postFileLevelComment(input: {
+  operatorRoot: string;
+  pr: number;
+  headSha: string;
+  path: string;
+  body: string;
+  spawnFn?: typeof Bun.spawn;
+}): Promise<{ id: number } | { error: string }> {
+  const result = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "--method",
+      "POST",
+      `repos/{owner}/{repo}/pulls/${input.pr}/comments`,
+      "-F",
+      "body=@-",
+      "-f",
+      `commit_id=${input.headSha}`,
+      "-f",
+      `path=${input.path}`,
+      "-f",
+      "subject_type=file",
+    ],
+    input.body,
+    input.spawnFn,
+    POSTING_GH_TIMEOUT_MS,
+  );
+  if (!result.ok) {
+    return { error: result.stderr.trim().split("\n")[0] || "gh api failed" };
+  }
+  try {
+    return {
+      id: parsePostedCommentId(result.stdout, "file-level finding comment"),
+    };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 // Un-anchorable finding (#17 channel): GitHub issue comments have no
 // native thread, so the reply is another top-level issue comment. The
 // caller puts the permalink in the body; this function does not guess one.
@@ -3167,7 +3224,15 @@ export async function postInlineFindings(input: {
   // bucket (field name unchanged this slice). Known before any write, so
   // the create-first POST already includes it — after the review, the
   // closing PATCH may grow it with 422-demoted findings.
-  const plannedOutsideDiff = findingsFor(plan.issueComments);
+  //
+  // Except the findings whose FILE is in the diff (only their line is not): those
+  // post as file-level review comments after the review, so they get a thread, a
+  // reply and the CI adjudicator like an inline finding. A finding whose file is
+  // not in the diff has nowhere to anchor and stays in the summary.
+  const fileLevelIds = fileLevelFindingIds(plan.issueComments, input.diffPatch);
+  const plannedOutsideDiff = findingsFor(
+    plan.issueComments.filter((f) => !fileLevelIds.has(f.id)),
+  );
 
   // The state block is merged ONCE, here, and both writes append the same
   // string, so the create-first POST and the closing PATCH cannot disagree
@@ -3177,7 +3242,7 @@ export async function postInlineFindings(input: {
   // plan posted from, so a fresh row's locs name the line the comment sits on.
   const lineById = new Map(findingRefs.map((ref) => [ref.id, ref.line]));
   const freshChannel = (id: string): FindingChannel =>
-    plan.issueComments.some((f) => f.id === id) ||
+    (plan.issueComments.some((f) => f.id === id) && !fileLevelIds.has(id)) ||
     plan.persisting.some(
       (match) => match.finding.id === id && match.posted.channel === "issue",
     )
@@ -3409,6 +3474,73 @@ export async function postInlineFindings(input: {
     ];
   }
 
+  // The file-level comments, one POST each (the batch review endpoint takes no
+  // subject_type). A failed POST demotes the finding to the summary, the same
+  // recovery a 422 gives an inline finding, so nothing is lost.
+  const fileLevelUrls = new Map<string, string>();
+  const fileLevelPosted = (finding: Finding, commentId: number): void => {
+    reachedIds.add(finding.id);
+    if (webUrl !== undefined) {
+      fileLevelUrls.set(
+        finding.id,
+        findingCommentUrl(webUrl, pr, "review", commentId),
+      );
+    }
+  };
+  const fileLevelFailed: { finding: Finding; error: string }[] = [];
+  for (const finding of findingsFor(
+    plan.issueComments.filter((f) => fileLevelIds.has(f.id)),
+  )) {
+    const posted = await postFileLevelComment({
+      operatorRoot,
+      pr,
+      headSha,
+      body: renderFileLevelComment(finding, headSha, webUrl),
+      path: finding.path,
+      spawnFn,
+    });
+    if ("id" in posted) fileLevelPosted(finding, posted.id);
+    else fileLevelFailed.push({ finding, error: posted.error });
+  }
+  // WHY re-read before demoting: a POST that timed out may have landed, and
+  // demoting it too would show the finding twice (a thread and a summary entry).
+  // Same check as the batch review's CRIT-A recovery: match by marker. A failed
+  // re-read demotes them all, which never drops a finding.
+  if (fileLevelFailed.length > 0) {
+    let landed: PrReviewComment[] = [];
+    try {
+      landed = await fetchPrReviewComments(operatorRoot, pr, {
+        spawnFn,
+        timeoutMs: POSTING_GH_TIMEOUT_MS,
+      });
+    } catch {
+      landed = [];
+    }
+    for (const { finding, error } of fileLevelFailed) {
+      const fingerprint = claimFingerprint(finding.claim);
+      const match = landed.find((c) => {
+        const marker = parseFindingMarker(c.body);
+        return (
+          marker !== null &&
+          marker.path === finding.path &&
+          marker.line === finding.line &&
+          marker.headSha === headSha &&
+          marker.c === fingerprint
+        );
+      });
+      if (match !== undefined) {
+        fileLevelPosted(finding, match.id);
+        continue;
+      }
+      log(
+        `file-level comment for ${finding.path}:${finding.line} did not post (${error}) — listed in the summary instead`,
+      );
+      if (!outsideDiff.some((f) => f.id === finding.id)) {
+        outsideDiff = [...outsideDiff, finding];
+      }
+    }
+  }
+
   // Outside Diff findings reached the summary — they must not fire
   // droppedFindingIds. No rematch-before-POST: that block existed only to
   // prevent duplicate issue comments, and this slice posts none. Re-review
@@ -3423,7 +3555,7 @@ export async function postInlineFindings(input: {
     reachedIds,
   );
 
-  const commentUrlByFindingId = await buildCommentUrlMap({
+  const reviewUrlByFindingId = await buildCommentUrlMap({
     operatorRoot,
     pr,
     headSha,
@@ -3434,6 +3566,10 @@ export async function postInlineFindings(input: {
     freshlyPostedReview:
       reviewResult.outcome === "posted" ? reviewFindings : [],
   });
+  const commentUrlByFindingId =
+    fileLevelUrls.size === 0
+      ? reviewUrlByFindingId
+      : new Map([...(reviewUrlByFindingId ?? []), ...fileLevelUrls]);
 
   const delta: PrCommentDelta = { ...plan.delta, previousHeadSha };
   // S1 — the 422 demotion grew the Outside Diff after the POST-shaped merge,
