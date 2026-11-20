@@ -17,7 +17,10 @@ A finding is a comment whose first line matches the following (comments older th
 <!-- crysk-finding path=<url-encoded-path> line=<n> head=<40-hex-sha> c=<12-hex> -->
 ```
 
-A finding GitHub could not anchor has no comment. It is a row under `Comments Outside Diff` in the
+A finding on a line the diff does not show, in a file the PR changes, is a file-level review comment
+with the same marker: it has a thread, so you answer it like any inline finding.
+
+A finding in a file the PR does not change has no comment. It is a row under `Comments Outside Diff` in the
 summary comment (`<!-- crysk-report head=<sha> -->`), and `crysk status` lists it with
 `comment_id: null`. You answer it the same way. Ordinary human review comments are not findings.
 

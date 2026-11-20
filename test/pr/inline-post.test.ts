@@ -3303,3 +3303,125 @@ describe("postInlineFindings — a forced zero survives a merged re-review rende
     expect(countAfter(second)).toBe(1);
   });
 });
+
+describe("postInlineFindings — a finding outside the diff lines but in a diff file posts file-level", () => {
+  const WEB = "https://github.com/acme/app";
+  const fileLevelPosts = (calls: RecordedCall[]) =>
+    calls.filter((c) => c.argv.join(" ").includes("subject_type=file"));
+  const summaryPatch = (calls: RecordedCall[]) =>
+    calls.findLast(
+      (c) =>
+        c.argv.join(" ").includes("PATCH") &&
+        c.stdin?.startsWith("<!-- crysk-report "),
+    )?.stdin ?? "";
+  const script = (extra: ScriptEntry[] = []) =>
+    makeFakeGh([
+      ...extra,
+      {
+        match: ["issues/42/comments", "--paginate"],
+        // No summary yet: a first review, which writes the state block.
+        response: { stdout: "" },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+
+  test("its file is in the diff: one file-level review comment, pinned to the head, and no Outside Diff entry", async () => {
+    const { spawnFn, calls } = script();
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 50,
+            claim: "a line the diff does not show",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    const posts = fileLevelPosts(calls);
+    expect(posts).toHaveLength(1);
+    const argv = posts[0]?.argv.join(" ") ?? "";
+    expect(argv).toContain("pulls/42/comments");
+    expect(argv).toContain(`commit_id=${HEAD}`);
+    expect(argv).toContain("path=src/a.ts");
+    expect(posts[0]?.stdin).toStartWith("<!-- crysk-finding ");
+    expect(posts[0]?.stdin).toContain("line=50");
+    expect(posts[0]?.stdin).toContain("a line the diff does not show");
+    expect(outcome.outsideDiffCount).toBe(0);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    const body = summaryPatch(calls);
+    expect(body).not.toContain("### Comments Outside Diff");
+    expect(body).toMatch(
+      /\]\(https:\/\/github\.com\/acme\/app\/pull\/42#discussion_r\d+\)/,
+    );
+    expect(body).toContain('"channel":"inline"');
+    expect(body).not.toContain('"channel":"outside"');
+  });
+
+  test("a failed file-level POST demotes the finding to the summary, never drops it", async () => {
+    const { spawnFn, calls } = script([
+      {
+        match: ["subject_type=file"],
+        response: { exitCode: 1, stderr: "HTTP 422" },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 50,
+            claim: "a line the diff does not show",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(1);
+    expect(outcome.outsideDiffCount).toBe(1);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    const body = summaryPatch(calls);
+    expect(body).toContain("### Comments Outside Diff (1)");
+    expect(body).toContain("a line the diff does not show");
+  });
+
+  test("its file is not in the diff: no file-level POST, the finding stays in the summary", async () => {
+    const { spawnFn, calls } = script();
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/never.ts",
+            line: 3,
+            claim: "a file the PR never touched",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(0);
+    expect(outcome.outsideDiffCount).toBe(1);
+    const body = summaryPatch(calls);
+    expect(body).toContain("### Comments Outside Diff (1)");
+    expect(body).toContain('"channel":"outside"');
+  });
+});

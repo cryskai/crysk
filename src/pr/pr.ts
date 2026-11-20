@@ -58,6 +58,7 @@ import type { Finding, FindingsDocument } from "#review/findings";
 import {
   type PrCommentDelta,
   parseFindingCommentBadge,
+  renderFileLevelComment,
   renderInlineComment,
   renderIssueFindingComment,
   renderPrComment,
@@ -2243,6 +2244,45 @@ export async function postReviewCommentReply(input: {
   return parsePostedCommentId(result.stdout, "triage review reply");
 }
 
+// A file-level review comment: POST pulls/<n>/comments with subject_type "file",
+// pinned to the reviewed commit like the batch review (GitHub #39). Never throws:
+// the caller demotes the finding to the summary when this returns undefined.
+export async function postFileLevelComment(input: {
+  operatorRoot: string;
+  pr: number;
+  headSha: string;
+  path: string;
+  body: string;
+  spawnFn?: typeof Bun.spawn;
+}): Promise<number | undefined> {
+  const result = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "--method",
+      "POST",
+      `repos/{owner}/{repo}/pulls/${input.pr}/comments`,
+      "-F",
+      "body=@-",
+      "-f",
+      `commit_id=${input.headSha}`,
+      "-f",
+      `path=${input.path}`,
+      "-f",
+      "subject_type=file",
+    ],
+    input.body,
+    input.spawnFn,
+    POSTING_GH_TIMEOUT_MS,
+  );
+  if (!result.ok) return undefined;
+  try {
+    return parsePostedCommentId(result.stdout, "file-level finding comment");
+  } catch {
+    return undefined;
+  }
+}
+
 // Un-anchorable finding (#17 channel): GitHub issue comments have no
 // native thread, so the reply is another top-level issue comment. The
 // caller puts the permalink in the body; this function does not guess one.
@@ -3167,7 +3207,18 @@ export async function postInlineFindings(input: {
   // bucket (field name unchanged this slice). Known before any write, so
   // the create-first POST already includes it — after the review, the
   // closing PATCH may grow it with 422-demoted findings.
-  const plannedOutsideDiff = findingsFor(plan.issueComments);
+  //
+  // Except the findings whose FILE is in the diff (only their line is not): those
+  // post as file-level review comments after the review, so they get a thread, a
+  // reply and the CI adjudicator like an inline finding. A finding whose file is
+  // not in the diff has nowhere to anchor and stays in the summary.
+  const diffFiles = new Set(parseHunkAnchors(input.diffPatch).keys());
+  const fileLevelIds = new Set(
+    plan.issueComments.filter((f) => diffFiles.has(f.path)).map((f) => f.id),
+  );
+  const plannedOutsideDiff = findingsFor(
+    plan.issueComments.filter((f) => !fileLevelIds.has(f.id)),
+  );
 
   // The state block is merged ONCE, here, and both writes append the same
   // string, so the create-first POST and the closing PATCH cannot disagree
@@ -3177,7 +3228,7 @@ export async function postInlineFindings(input: {
   // plan posted from, so a fresh row's locs name the line the comment sits on.
   const lineById = new Map(findingRefs.map((ref) => [ref.id, ref.line]));
   const freshChannel = (id: string): FindingChannel =>
-    plan.issueComments.some((f) => f.id === id) ||
+    (plan.issueComments.some((f) => f.id === id) && !fileLevelIds.has(id)) ||
     plan.persisting.some(
       (match) => match.finding.id === id && match.posted.channel === "issue",
     )
@@ -3409,6 +3460,36 @@ export async function postInlineFindings(input: {
     ];
   }
 
+  // The file-level comments, one POST each (the batch review endpoint takes no
+  // subject_type). A failed POST demotes the finding to the summary, the same
+  // recovery a 422 gives an inline finding, so nothing is lost.
+  const fileLevelUrls = new Map<string, string>();
+  for (const finding of findingsFor(
+    plan.issueComments.filter((f) => fileLevelIds.has(f.id)),
+  )) {
+    const commentId = await postFileLevelComment({
+      operatorRoot,
+      pr,
+      headSha,
+      body: renderFileLevelComment(finding, headSha, webUrl),
+      path: finding.path,
+      spawnFn,
+    });
+    if (commentId === undefined) {
+      if (!outsideDiff.some((f) => f.id === finding.id)) {
+        outsideDiff = [...outsideDiff, finding];
+      }
+      continue;
+    }
+    reachedIds.add(finding.id);
+    if (webUrl !== undefined) {
+      fileLevelUrls.set(
+        finding.id,
+        findingCommentUrl(webUrl, pr, "review", commentId),
+      );
+    }
+  }
+
   // Outside Diff findings reached the summary — they must not fire
   // droppedFindingIds. No rematch-before-POST: that block existed only to
   // prevent duplicate issue comments, and this slice posts none. Re-review
@@ -3423,7 +3504,7 @@ export async function postInlineFindings(input: {
     reachedIds,
   );
 
-  const commentUrlByFindingId = await buildCommentUrlMap({
+  const reviewUrlByFindingId = await buildCommentUrlMap({
     operatorRoot,
     pr,
     headSha,
@@ -3434,6 +3515,10 @@ export async function postInlineFindings(input: {
     freshlyPostedReview:
       reviewResult.outcome === "posted" ? reviewFindings : [],
   });
+  const commentUrlByFindingId =
+    fileLevelUrls.size === 0
+      ? reviewUrlByFindingId
+      : new Map([...(reviewUrlByFindingId ?? []), ...fileLevelUrls]);
 
   const delta: PrCommentDelta = { ...plan.delta, previousHeadSha };
   // S1 — the 422 demotion grew the Outside Diff after the POST-shaped merge,
