@@ -530,7 +530,7 @@ describe("renderPrComment", () => {
     expect(body).toContain("src/app.ts:42");
   });
 
-  test("with every finding below the floor, the clean bill narrows to the floor", () => {
+  test("with every finding below the floor, the title narrows to the floor and never claims no issues", () => {
     const body = renderPrComment(
       doc(),
       undefined,
@@ -543,10 +543,68 @@ describe("renderPrComment", () => {
       { count: 1, floor: "blocking" },
     );
     expect(body).not.toContain("found nothing to report");
-    expect(body).toContain("No findings at or above `blocking` severity.");
+    expect(body).toContain("## ✅ No findings at or above `blocking` severity");
+    expect(body).not.toContain("No issues found");
     expect(body).toContain(
       "1 advisory finding not posted (`post_min_severity: blocking`).",
     );
+  });
+
+  test("a carried prior of unknown severity never lets the checklist say no critical findings", () => {
+    const body = renderPrComment(
+      doc(),
+      undefined,
+      {
+        resolved: 0,
+        new: 0,
+        persist: 1,
+        rereview: {
+          verifiedGone: 0,
+          unconfirmed: 0,
+          carried: 1,
+          deferred: 0,
+          new: 0,
+          suppressed: 0,
+          returned: 0,
+          reTiered: 0,
+          live: [
+            {
+              id: "R001",
+              sev: SEVERITY_UNRECOVERABLE,
+              status: "carried",
+              locs: ["src/app.ts:10"],
+              claim: "a prior",
+            },
+          ],
+        },
+      },
+      [],
+      undefined,
+    );
+    expect(body).not.toContain("No critical findings open");
+    expect(body).toContain(
+      "- ⚠️ 1 of unknown severity open, read it before merging",
+    );
+  });
+
+  test("a complete run with a failed agent names it in the checklist, never every agent finished", () => {
+    const body = renderPrComment(
+      doc({
+        telemetry: {
+          ...TELEMETRY,
+          per_agent: {
+            reliability: { tokens_total: 60, duration_ms: 1000 },
+            summary: { status: "failed", tokens_total: 0, duration_ms: 10 },
+          } as Telemetry["per_agent"],
+        },
+      }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+    );
+    expect(body).not.toContain("Every agent finished");
+    expect(body).toContain("- ⚠️ Did not finish: `summary`");
   });
 
   test("without a floor the summary is unchanged", () => {

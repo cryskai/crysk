@@ -631,7 +631,7 @@ export function renderPrComment(
   // old counter line used, so a carried prior still counts.
   const findingsCount = doc.findings.length + liveForHeadline.length;
   out.push(
-    `## ${verdictTitle({ critical, warning, severityUnavailable, findingsCount, partial: doc.run_status === "partial", rereview: delta?.rereview })}`,
+    `## ${verdictTitle({ critical, warning, severityUnavailable, findingsCount, partial: doc.run_status === "partial", rereview: delta?.rereview, floor: notPosted?.floor })}`,
   );
   out.push("");
   out.push(
@@ -743,13 +743,9 @@ export function renderPrComment(
     // remain live (carried / unconfirmed / deferred / suppressed) or this
     // run returned / re-tiered a prior. MatchResult.resolved cannot say so.
     const cleanBill = cleanBillLine(doc.run_status, delta?.rereview);
-    // The ✅ claims nothing was found. With findings held back by the floor
-    // that claim is false, so it narrows to what the floor let through. A
-    // plain clean bill adds nothing to the ✅ title, so it is left out.
-    if (notPosted !== undefined && cleanBill === CLEAN_BILL) {
-      out.push(`No findings at or above ${code(notPosted.floor)} severity.`);
-      out.push("");
-    } else if (cleanBill !== CLEAN_BILL) {
+    // A plain clean bill adds nothing to the ✅ title, so it is left out. With
+    // findings held back by the floor, the title itself narrows to the floor.
+    if (cleanBill !== CLEAN_BILL) {
       out.push(cleanBill);
       out.push("");
     }
@@ -768,15 +764,21 @@ export function renderPrComment(
     out.push("");
   }
   out.push(...liveFindingLines(delta?.rereview));
+  const lostAgentKeys = agentRows(doc)
+    .filter((r) => r.status === "failed" || r.status === "unsettled")
+    .map((r) => r.key);
   if (
     findingsCount > 0 ||
     doc.run_status === "partial" ||
-    movedHeadSha !== undefined
+    movedHeadSha !== undefined ||
+    lostAgentKeys.length > 0
   ) {
     out.push(
       ...mergeChecklistLines({
         critical,
+        severityUnavailable,
         partial: doc.run_status === "partial",
+        lostAgentKeys,
         moved: movedHeadSha !== undefined,
       }),
     );
@@ -824,6 +826,9 @@ function verdictTitle(input: {
   findingsCount: number;
   partial: boolean;
   rereview: RereviewDelta | undefined;
+  // Set when post_min_severity held findings back: a bare ✅ would claim the PR
+  // has no issues while the body says some were not posted.
+  floor: PostMinSeverity | undefined;
 }): string {
   const parts: string[] = [];
   if (input.critical > 0)
@@ -846,6 +851,8 @@ function verdictTitle(input: {
   // when no live row lists them.
   if (input.rereview !== undefined && !rereviewIsClean(input.rereview))
     return `🟡 No new findings · ${liveBits(input.rereview).join(" · ")}`;
+  if (input.floor !== undefined)
+    return `✅ No findings at or above ${code(input.floor)} severity`;
   return "✅ No issues found";
 }
 
@@ -927,20 +934,35 @@ function findingTableLines(
 // the same here (see movedHeadSha).
 function mergeChecklistLines(input: {
   critical: number;
+  // #206: a prior whose severity could not be recovered may be critical, so it
+  // never lets the critical line read green.
+  severityUnavailable: number;
   partial: boolean;
+  // The agents whose status is failed or unsettled. A complete run can still have
+  // one (a failed summarizer, see incompleteReviewAnnotation).
+  lostAgentKeys: readonly string[];
   moved: boolean;
 }): string[] {
   const out = ["**Before merging**", ""];
-  out.push(
-    input.critical === 0
-      ? "- ✅ No critical findings open"
-      : `- ❌ ${plural(input.critical, "critical finding")} open`,
-  );
-  out.push(
-    input.partial
-      ? "- ⚠️ Some agents did not finish"
-      : "- ✅ Every agent finished",
-  );
+  if (input.critical > 0) {
+    out.push(`- ❌ ${plural(input.critical, "critical finding")} open`);
+  } else if (input.severityUnavailable === 0) {
+    out.push("- ✅ No critical findings open");
+  }
+  if (input.severityUnavailable > 0) {
+    out.push(
+      `- ⚠️ ${input.severityUnavailable} of unknown severity open, read ${input.severityUnavailable === 1 ? "it" : "them"} before merging`,
+    );
+  }
+  if (input.partial) {
+    out.push("- ⚠️ Some agents did not finish");
+  } else if (input.lostAgentKeys.length > 0) {
+    out.push(
+      `- ⚠️ Did not finish: ${input.lostAgentKeys.map((key) => code(key)).join(", ")}`,
+    );
+  } else {
+    out.push("- ✅ Every agent finished");
+  }
   if (input.moved) out.push("- ⚠️ The PR moved after this review");
   return out;
 }
