@@ -562,7 +562,7 @@ export async function reviewPr(
     const markerTrust = await resolveMarkerTrust({ operatorRoot });
     const [issueComments, postedFindings, reviewComments] = await Promise.all([
       fetchPrComments(operatorRoot, prNumber),
-      fetchPostedFindingComments(operatorRoot, prNumber),
+      fetchPostedFindingComments(operatorRoot, prNumber, markerTrust),
       fetchPrReviewComments(operatorRoot, prNumber),
     ]);
     const replyWriters = await lookUpReplyWriters({

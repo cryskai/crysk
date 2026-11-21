@@ -942,9 +942,14 @@ describe("fetchPostedFindingComments — marker prefix disjointness", () => {
         },
       },
     ]);
-    const posted = await fetchPostedFindingComments(OPERATOR_ROOT, 42, {
-      spawnFn,
-    });
+    const posted = await fetchPostedFindingComments(
+      OPERATOR_ROOT,
+      42,
+      FIXTURE_MARKER_TRUST,
+      {
+        spawnFn,
+      },
+    );
     expect(posted).toHaveLength(1);
     expect(posted[0]?.id).toBe(2);
     expect(posted[0]?.channel).toBe("issue");
@@ -973,13 +978,19 @@ describe("fetchPostedFindingComments — marker prefix disjointness", () => {
       },
       { match: ["issues/42/comments"], response: { stdout: ndjson([]) } },
     ]);
-    const posted = await fetchPostedFindingComments(OPERATOR_ROOT, 42, {
-      spawnFn,
-    });
+    const posted = await fetchPostedFindingComments(
+      OPERATOR_ROOT,
+      42,
+      FIXTURE_MARKER_TRUST,
+      {
+        spawnFn,
+      },
+    );
     expect(posted).toEqual([
       {
         id: 9,
         channel: "review",
+        user: "pr-hero",
         marker: {
           path: "src/a.ts",
           line: 10,
@@ -1019,9 +1030,14 @@ describe("fetchPostedFindingComments — marker prefix disjointness", () => {
           },
         },
       ]);
-      const posted = await fetchPostedFindingComments(OPERATOR_ROOT, 42, {
-        spawnFn,
-      });
+      const posted = await fetchPostedFindingComments(
+        OPERATOR_ROOT,
+        42,
+        FIXTURE_MARKER_TRUST,
+        {
+          spawnFn,
+        },
+      );
       expect(posted).toHaveLength(1);
       return posted[0];
     }
@@ -1275,6 +1291,7 @@ describe("postPrReview", () => {
   test("zero anchorable findings never reaches gh at all", async () => {
     const { spawnFn, calls } = makeFakeGh([]);
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1298,6 +1315,7 @@ describe("postPrReview", () => {
       finding({ id: "F002", path: "src/b.ts", line: 20 }),
     ];
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1342,6 +1360,7 @@ describe("postPrReview", () => {
       finding({ id: "F002", path: "src/b.ts", line: 20 }),
     ];
     await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1369,6 +1388,7 @@ describe("postPrReview", () => {
     ]);
     const findings = [finding({ id: "F001", path: "src/a.ts", line: 10 })];
     await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1407,6 +1427,7 @@ describe("postPrReview", () => {
       { match: ["issues/42/comments"], response: { stdout: ndjson([]) } },
     ]);
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1491,6 +1512,7 @@ describe("postPrReview", () => {
       { match: ["issues/42/comments"], response: { stdout: ndjson([]) } },
     ]);
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1573,6 +1595,7 @@ describe("postPrReview", () => {
       { match: ["issues/42/comments"], response: { stdout: ndjson([]) } },
     ]);
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1601,6 +1624,7 @@ describe("postPrReview", () => {
     const f001 = finding({ id: "F001" });
     await expect(
       postPrReview({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -3204,6 +3228,7 @@ describe("the findings POST bounds every gh call (F004)", () => {
     headSha: HEAD,
     findings: [oneFinding],
     allFindings: [toRef(oneFinding)],
+    trust: FIXTURE_MARKER_TRUST,
     spawnFn,
   });
 

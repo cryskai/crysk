@@ -11,6 +11,7 @@ import {
   SKIP_COVERAGE_COMMENT_MARKER,
   SKIP_SIZE_COMMENT_MARKER,
 } from "#ci/gates";
+import { OUTCOME_MARKER_PREFIX } from "#ci/outcome";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
 import { renderCiAdmissionBlock } from "#ci/review-admission";
 import {
@@ -167,7 +168,8 @@ function withAuthor<T extends { user?: string; body: string }>(comment: T): T {
   if (comment.user !== undefined) return comment;
   const engine =
     matchMarkerPrefix(comment.body, PR_FINDING_MARKER_PREFIX) !== undefined ||
-    matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined;
+    matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined ||
+    matchMarkerPrefix(comment.body, OUTCOME_MARKER_PREFIX) !== undefined;
   return { ...comment, user: engine ? CI_ADJUDICATOR_LOGIN : "dev" };
 }
 

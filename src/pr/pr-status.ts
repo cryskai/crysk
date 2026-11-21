@@ -80,7 +80,11 @@ import {
   isStatusContext,
   matchMarkerPrefix,
 } from "../brand";
-import { isTrustedMarkerAuthor, markerTrust } from "../trust/marker-trust";
+import {
+  isTrustedMarkerAuthor,
+  markerAuthoredComments,
+  markerTrust,
+} from "../trust/marker-trust";
 
 export const PR_STATUS_SCHEMA = "pr-hero.status/v1" as const;
 
@@ -350,7 +354,7 @@ export function buildPrStatus(unfiltered: PrStatusInput): PrStatusJson {
       head: summary.head,
       complete: summary.complete,
       reviews: summary.reviews,
-      outcome_code: outcomeCodeOf(input.issueComments),
+      outcome_code: outcomeCodeOf(input.issueComments, input.trustedActors),
       engine_version: summary.engine,
     },
     findings: analyzed.map((a) => a.finding),
@@ -602,9 +606,17 @@ function readSummary(comments: PrStatusComment[]): {
 
 // The newest outcome comment's code. Only the newest is read: an older run's code says
 // nothing about the run the gate now reflects. Null when the newest has no catalogued code.
-function outcomeCodeOf(comments: PrStatusComment[]): string | null {
+// Only a trusted author's outcome comment is read (src/trust/marker-trust.ts): the workflow posts it,
+// and one typed by anyone else would name a run that never happened.
+function outcomeCodeOf(
+  comments: PrStatusComment[],
+  trustedActors: ReadonlySet<string> | undefined,
+): string | null {
   let newest: PrStatusComment | null = null;
-  for (const comment of comments) {
+  for (const comment of markerAuthoredComments(
+    comments,
+    markerTrust(trustedActors),
+  )) {
     if (matchMarkerPrefix(comment.body, OUTCOME_MARKER_PREFIX) === undefined) {
       continue;
     }

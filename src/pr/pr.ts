@@ -78,6 +78,7 @@ import {
 } from "../brand";
 import { CliError } from "../errors";
 import {
+  isTrustedMarkerAuthor,
   type MarkerTrust,
   markerAuthoredComments,
 } from "../trust/marker-trust";
@@ -1300,9 +1301,12 @@ function postedTier(body: string): { tier?: "blocking" | "advisory" } {
 // summary comment's `<!-- pr-hero-report ` marker never parses as a
 // `<!-- pr-hero-finding ` one, so it drops out of this list without any
 // special-casing, and a human's reply (any shape) drops out the same way.
+// A marker counts only from a trusted author (src/trust/marker-trust.ts): anyone can type one, and a
+// typed one would otherwise stand in for the review's own finding everywhere this list is read.
 export async function fetchPostedFindingComments(
   operatorRoot: string,
   pr: number,
+  trust: MarkerTrust,
   options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<PostedFindingComment[]> {
   const [reviewComments, issueComments] = await Promise.all([
@@ -1312,10 +1316,13 @@ export async function fetchPostedFindingComments(
   const out: PostedFindingComment[] = [];
   for (const comment of reviewComments) {
     const marker = parseFindingMarker(comment.body);
-    if (marker === null) continue;
+    if (marker === null || !isTrustedMarkerAuthor(comment.user, trust)) {
+      continue;
+    }
     out.push({
       id: comment.id,
       channel: "review",
+      user: comment.user,
       marker,
       livePath: comment.path,
       liveLine: comment.line ?? undefined,
@@ -1334,10 +1341,13 @@ export async function fetchPostedFindingComments(
   }
   for (const comment of issueComments) {
     const marker = parseFindingMarker(comment.body);
-    if (marker === null) continue;
+    if (marker === null || !isTrustedMarkerAuthor(comment.user, trust)) {
+      continue;
+    }
     out.push({
       id: comment.id,
       channel: "issue",
+      user: comment.user,
       marker,
       ...postedTier(comment.body),
       ...(comment.created_at === undefined
@@ -2039,6 +2049,8 @@ export async function postPrReview(input: {
   // see ReviewSubmissionOutcome's WHY above for the failure this closes.
   allFindings: PrHeroFindingRef[];
   webUrl?: string;
+  // Who may have written the finding comments the 422 recovery re-reads.
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   // Bounds the submission and its 422 recovery reads (F004). Defaults to the
   // posting bound; a timeout is NOT retried, because the submission may already
@@ -2107,6 +2119,7 @@ export async function postPrReview(input: {
   const posted = await fetchPostedFindingComments(
     input.operatorRoot,
     input.pr,
+    input.trust,
     {
       spawnFn: input.spawnFn,
       timeoutMs: input.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
@@ -3082,6 +3095,7 @@ export async function resolveInlinePostPlan(input: {
   const posted = await fetchPostedFindingComments(
     input.operatorRoot,
     input.pr,
+    input.trust,
     { spawnFn: input.spawnFn, timeoutMs: POSTING_GH_TIMEOUT_MS },
   );
   const anchors = parseHunkAnchors(input.diffPatch);
@@ -3676,6 +3690,7 @@ export async function postInlineFindings(input: {
     // fails if this is ever swapped back to `reviewFindings`.
     allFindings: findingRefs,
     webUrl,
+    trust,
     spawnFn,
   });
   // On 422, reviewResult.findings JOIN the Outside Diff set instead of
@@ -3733,10 +3748,13 @@ export async function postInlineFindings(input: {
   if (fileLevelFailed.length > 0) {
     let landed: PrReviewComment[] = [];
     try {
-      landed = await fetchPrReviewComments(operatorRoot, pr, {
-        spawnFn,
-        timeoutMs: POSTING_GH_TIMEOUT_MS,
-      });
+      landed = markerAuthoredComments(
+        await fetchPrReviewComments(operatorRoot, pr, {
+          spawnFn,
+          timeoutMs: POSTING_GH_TIMEOUT_MS,
+        }),
+        trust,
+      );
     } catch {
       landed = [];
     }
@@ -3784,6 +3802,7 @@ export async function postInlineFindings(input: {
     pr,
     headSha,
     webUrl,
+    trust,
     spawnFn,
     persisting: plan.persisting,
     issueIdByFindingId: new Map(),
@@ -4097,6 +4116,7 @@ async function buildCommentUrlMap(input: {
   pr: number;
   headSha: string;
   webUrl: string | undefined;
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   persisting: PostPlan["persisting"];
   issueIdByFindingId: Map<string, number>;
@@ -4115,10 +4135,13 @@ async function buildCommentUrlMap(input: {
     urls.set(findingId, findingCommentUrl(webUrl, pr, "issue", id));
   }
   if (input.freshlyPostedReview.length > 0) {
-    const freshReview = await fetchPrReviewComments(operatorRoot, pr, {
-      spawnFn,
-      timeoutMs: POSTING_GH_TIMEOUT_MS,
-    });
+    const freshReview = markerAuthoredComments(
+      await fetchPrReviewComments(operatorRoot, pr, {
+        spawnFn,
+        timeoutMs: POSTING_GH_TIMEOUT_MS,
+      }),
+      input.trust,
+    );
     for (const finding of input.freshlyPostedReview) {
       const fingerprint = claimFingerprint(finding.claim);
       const match = freshReview.find((c) => {

@@ -176,6 +176,9 @@ export const FINDING_LINE_WINDOW = 5;
 export interface PostedFindingComment {
   id: number;
   channel: "review" | "issue";
+  // The login GitHub says posted it. Only a trusted author's comment is listed
+  // (src/trust/marker-trust.ts). Absent only in fixtures built by hand.
+  user?: string;
   marker: ParsedFindingMarker;
   // GitHub's live location for a REVIEW comment. Preferred over the marker's
   // stored path/line because it follows renames and reflects the ACTUAL

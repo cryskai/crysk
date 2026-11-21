@@ -1119,10 +1119,14 @@ export function enrichPriorsFromThreads(input: {
       }
     }
     // The review's own claim-update reply is not someone answering the finding
-    // (PR #592 R001): counted, it would queue a paid verification.
+    // (PR #592 R001): counted, it would queue a paid verification. Only the
+    // thread root's author writes it (pr/preflight.ts threadShownClaim); the
+    // marker typed by anyone else is a reply like any other.
+    const rootAuthor = input.replies.find((r) => r.id === parent.id)?.user;
     const newThreadReply = thread.some(
       (reply) =>
-        parseClaimUpdateFingerprint(reply.body) === undefined &&
+        (parseClaimUpdateFingerprint(reply.body) === undefined ||
+          reply.user !== rootAuthor) &&
         reply.created_at !== undefined &&
         input.summaryUpdatedAt !== null &&
         reply.created_at > input.summaryUpdatedAt,

@@ -38,7 +38,8 @@ import { matchMarkerPrefix } from "../brand";
 import { CliError, CliUsageError } from "../errors";
 import { tryOriginRepoId } from "../home";
 import { prheroLayout } from "../home-preflight";
-import { markerTrust } from "../trust/marker-trust";
+import { type MarkerTrust, markerTrust } from "../trust/marker-trust";
+import { resolveMarkerTrust } from "../trust/resolve";
 import { readPrStatus } from "./status";
 
 // `crysk triage reply --pr <n> [--from <run-dir>] --finding <id> ...`: the
@@ -278,6 +279,7 @@ async function postedFindingFromRunDir(input: {
   bodyFile: string;
   spawnFn: typeof Bun.spawn | undefined;
   sleepFn: (ms: number) => Promise<void>;
+  markerTrust: MarkerTrust | undefined;
 }): Promise<{
   target: ReplyTarget;
   headSha: string;
@@ -324,9 +326,18 @@ async function postedFindingFromRunDir(input: {
     proof_refs: finding.proof_refs,
     diffPatch,
   });
-  const posted = await fetchPostedFindingComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
+  // Only a trusted author's finding comment can be bound (src/trust/marker-trust.ts), so the poster
+  // `trustPosterOf` adds below is never someone who typed the marker by hand.
+  const trust =
+    input.markerTrust ?? (await resolveMarkerTrust({ operatorRoot, spawnFn }));
+  const posted = await fetchPostedFindingComments(
+    operatorRoot,
+    prNumber,
+    trust,
+    {
+      spawnFn,
+    },
+  );
   const match = matchPostedFindingExact({
     finding: identity,
     headSha: doc.head_sha,
@@ -406,6 +417,9 @@ export async function runTriageReplyCommand(input: {
   spawnFn?: typeof Bun.spawn;
   // The wait between the two permission asks. Tests pass an immediate one.
   sleepFn?: (ms: number) => Promise<void>;
+  // Who may have written the finding comment `--from` binds to. A seam, like `spawnFn`: absent, it
+  // is resolved (src/trust/resolve.ts), the signed-in gh login included.
+  markerTrust?: MarkerTrust;
 }): Promise<number> {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
   // WHY refused: `rejected` says the dismissal does not hold, yet the reply would still read as an
@@ -439,6 +453,7 @@ export async function runTriageReplyCommand(input: {
             bodyFile: input.bodyFile,
             spawnFn,
             sleepFn: input.sleepFn ?? Bun.sleep,
+            markerTrust: input.markerTrust,
           })),
         };
   const { target: replyTarget, headSha, reasoning, answeredTag } = found;

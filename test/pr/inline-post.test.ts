@@ -3640,6 +3640,60 @@ describe("postInlineFindings — a finding outside the diff lines but in a diff 
   });
 });
 
+// S2 (odd/tasks/marker-trust.md): the summary links a fresh finding only to a trusted author's comment.
+describe("postInlineFindings — the summary's links skip a comment someone else posted", () => {
+  test("a forged comment with the fresh finding's marker is not linked", async () => {
+    const WEB = "https://github.com/acme/app";
+    const F = finding({ id: "F001", path: "src/a.ts", line: 10 });
+    const marker = findingMarker({
+      path: F.path,
+      line: F.line,
+      headSha: HEAD,
+      claim: F.claim,
+    });
+    const row = (id: number, user: string) => ({
+      id,
+      user,
+      body: `${marker}\nclaim`,
+      path: "src/a.ts",
+      line: 10,
+      original_line: 10,
+      in_reply_to_id: null,
+    });
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        // The plan's read sees nothing; the read after the review posted lists the forged
+        // comment first, where an unfiltered first match would take it.
+        responses: [
+          { stdout: "" },
+          { stdout: ndjson([row(66, "mallory"), row(55, "pr-hero")]) },
+        ],
+      },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [F] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: WEB,
+      spawnFn,
+    });
+    const patch = calls.findLast(
+      (c) =>
+        c.argv.join(" ").includes("PATCH") &&
+        c.stdin?.startsWith("<!-- crysk-report "),
+    );
+    expect(patch?.stdin).toContain(`${WEB}/pull/42#discussion_r55`);
+    expect(patch?.stdin).not.toContain("discussion_r66");
+  });
+});
+
 describe("postInlineFindings — a failed file-level POST is re-read before it is demoted", () => {
   const WEB = "https://github.com/acme/app";
   const F = finding({
@@ -3701,6 +3755,39 @@ describe("postInlineFindings — a failed file-level POST is re-read before it i
     const body = summaryPatch(calls);
     expect(body).not.toContain("### Comments Outside Diff");
     expect(body).toContain(`${WEB}/pull/42#discussion_r777`);
+  });
+
+  // S2 (odd/tasks/marker-trust.md): the re-read binds only a trusted author's comment.
+  test("a comment someone else posted with the same marker is not taken for the landed one", async () => {
+    const marker = findingMarker({
+      path: F.path,
+      line: F.line,
+      headSha: HEAD,
+      claim: F.claim,
+    });
+    const { spawnFn, calls } = run([
+      {
+        id: 666,
+        user: "mallory",
+        body: `${marker}\nclaim`,
+        path: "src/a.ts",
+        line: null,
+        original_line: null,
+        in_reply_to_id: null,
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [F] }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(outcome.outsideDiffCount).toBe(1);
+    expect(summaryPatch(calls)).not.toContain("discussion_r666");
   });
 
   test("the comment did not land: the summary lists it and the log says why", async () => {
