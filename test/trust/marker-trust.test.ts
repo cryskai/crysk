@@ -4,7 +4,11 @@ import {
   markerAuthoredComments,
   markerTrust,
 } from "../../src/trust/marker-trust";
-import { resetSelfLoginCache, resolveSelfLogin } from "../../src/trust/resolve";
+import {
+  resetSelfLoginCache,
+  resolveMarkerTrust,
+  resolveSelfLogin,
+} from "../../src/trust/resolve";
 
 describe("who may author a review marker", () => {
   const trust = markerTrust(["maintainer-bot-account", "local-dev"]);
@@ -117,5 +121,49 @@ describe("resolveSelfLogin", () => {
       }),
     ).toBe("local-dev");
     resetSelfLoginCache();
+  });
+});
+
+describe("resolveMarkerTrust", () => {
+  // A gh that answers the login lookup and fails everything else, so the default branch reads
+  // nothing and the set holds only what the environment and the account add.
+  function gh(login: string) {
+    const calls: string[][] = [];
+    const spawnFn = ((argv: string[]) => {
+      calls.push(argv);
+      const isUser = argv.join(" ") === "gh api user --jq .login";
+      return {
+        stdout: new Response(isUser ? `${login}\n` : "").body,
+        stderr: new Response("").body,
+        exited: Promise.resolve(isUser ? 0 : 1),
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, calls };
+  }
+
+  test("a local run trusts the account it posts under and the platform login", async () => {
+    resetSelfLoginCache();
+    const { spawnFn } = gh("local_dev-acme");
+    const trust = await resolveMarkerTrust({
+      operatorRoot: "/nonexistent-crysk-repo",
+      env: { CRYSK_PLATFORM_ACTOR: "crysk-ai[bot]" },
+      spawnFn,
+    });
+    expect([...trust.logins].sort()).toEqual(
+      ["crysk-ai[bot]", "local_dev-acme"].sort(),
+    );
+    resetSelfLoginCache();
+  });
+
+  test("in Actions it adds no account login", async () => {
+    resetSelfLoginCache();
+    const { spawnFn, calls } = gh("someone");
+    const trust = await resolveMarkerTrust({
+      operatorRoot: "/nonexistent-crysk-repo",
+      env: { GITHUB_ACTIONS: "true", GITHUB_ACTOR: "pr-author" },
+      spawnFn,
+    });
+    expect([...trust.logins]).toEqual([]);
+    expect(calls.some((argv) => argv.includes("user"))).toBe(false);
   });
 });

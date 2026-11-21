@@ -404,9 +404,8 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
     expect(outputs).toContain("status=skipped-coverage");
   });
 
-  // S4/S5 (odd/tasks/marker-trust.md): a summary written by whoever triggered the run, or by a login
-  // only the pull request's own config names, is not the review's. Read as the review's, the forged
-  // summary below would declare this head reviewed and skip it.
+  // S4/S5 (odd/tasks/marker-trust.md): the gate reads the summary only from trusted marker authors,
+  // with ci_trusted_actors taken from the default branch.
   describe("a forged summary for this head after the real one", () => {
     const forgedAfterReal = () =>
       makeFakeGh([

@@ -219,9 +219,8 @@ async function readSelfLogin(input: {
     ]);
     if (exitCode !== 0) return undefined;
     const login = stdout.trim();
-    return /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(login)
-      ? login
-      : undefined;
+    // Letters, digits and hyphens; an enterprise managed user's login also carries an underscore.
+    return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(login) ? login : undefined;
   } catch {
     return undefined;
   }
