@@ -644,6 +644,7 @@ describe("buildPrStatus: findings", () => {
         claim: null,
         locs: [],
         claim_matches_comment: null,
+        claim_head: null,
       },
     ]);
   });
@@ -4425,5 +4426,70 @@ describe("buildPrStatus — the claim a thread shows", () => {
     const finding = status.findings.find((f) => f.id === "R005");
     expect(finding?.claim).toBeNull();
     expect(finding?.claim_matches_comment).toBeNull();
+  });
+});
+
+// The head whose review wrote the claim the thread shows: the claim-update
+// reply's when there is one, else the first comment's. Unknown (null) when the
+// thread does not show the claim, or there is none.
+describe("buildPrStatus — claim_head", () => {
+  const NEW = "a different defect";
+  const base = (
+    extra: {
+      id: number;
+      user?: string;
+      body: string;
+      in_reply_to_id: number | null;
+    }[],
+  ) =>
+    buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R004", NEW)]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          ...extra,
+        ],
+      }),
+    ).findings.find((f) => f.comment_id === 41);
+
+  test("a claim-update reply carries it: its head", () => {
+    const finding = base([
+      {
+        id: 42,
+        user: CI_ADJUDICATOR_LOGIN,
+        body: `<!-- crysk-claim-update head=${CURRENT} c=${claimFingerprint(NEW)} -->\nnew`,
+        in_reply_to_id: 41,
+      },
+    ]);
+    expect(finding?.claim_head).toBe(CURRENT);
+    expect(finding?.head).toBe(EARLIER);
+  });
+
+  test("the thread does not show the claim: null", () => {
+    expect(base([])?.claim_head).toBeNull();
+  });
+
+  test("the first comment carries the claim: its head", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings[0]?.claim_head).toBe(EARLIER);
   });
 });

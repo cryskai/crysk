@@ -215,8 +215,10 @@ Handle every finding with `needs_reply: true` in one pass, then push once.
    from `crysk status --json` (its `locs` are the cited code), not the thread's first comment. A
    re-review can keep a thread for a different claim; it then replies in the thread with a
    `claim-update` comment carrying the new one. `claim_matches_comment: false` means the thread does
-   not show this claim at all (that reply is missing). When `claim` is `null`, the comment is the only
-   text.
+   not show this claim at all (that reply is missing). `locs` are where the review that last saw the
+   finding placed it: re-found findings move with the code, but a carried one keeps its older lines, so
+   if the cited lines do not show it, look nearby in the same file. `claim_head` only says which review
+   wrote the text the thread shows. When `claim` is `null`, the comment is the only text.
 4. **For `applied`:** fix it in the working tree, sweep its class (`fix-the-class.md`) and run the
    relevant tests. Do not push yet.
 5. **For the other tags:** run the isolated adjudicator as `dismissal.md` says.

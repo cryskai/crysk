@@ -40,7 +40,7 @@ import {
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
   parseFindingMarker,
-  threadShownFingerprint,
+  threadShownClaim,
 } from "#pr/preflight";
 import {
   type RecoveredTier,
@@ -189,6 +189,10 @@ export interface PrStatusFinding {
   // False when the thread's comment carries another claim than the row (its fingerprint differs),
   // so the comment text is not this finding. Null when there is no row or no comment.
   claim_matches_comment: boolean | null;
+  // The head of the review that wrote the claim the thread shows (its newest claim-update reply,
+  // else its first comment), when that is this claim. Null when the thread does not show it, or
+  // there is no claim or comment. `head` stays the head the thread was first posted on.
+  claim_head: string | null;
 }
 
 export interface PrStatusJson {
@@ -718,11 +722,7 @@ function readFindings(
         inconclusive_heads: inconclusiveHeads(repliesTo(source, raw), writers),
         claim: rowClaim(row),
         locs: row?.locs ?? [],
-        claim_matches_comment:
-          rowClaim(row) === null
-            ? null
-            : row?.c ===
-              threadShownFingerprint(source.id, marker.c, input.reviewComments),
+        ...threadClaimFields(row, source.id, marker, input),
       },
       // The newest reply the gate counts decides, as at the gate (triage/reply.ts).
       answersReview:
@@ -767,6 +767,28 @@ function readFindings(
     });
   }
   return out;
+}
+
+// Whether the thread shows the row's claim, and the head of the review that wrote what it shows.
+function threadClaimFields(
+  row: StateFinding | undefined,
+  commentId: number,
+  marker: ParsedFindingMarker,
+  input: PrStatusRead,
+): { claim_matches_comment: boolean | null; claim_head: string | null } {
+  if (row === undefined || rowClaim(row) === null) {
+    return { claim_matches_comment: null, claim_head: null };
+  }
+  const shown = threadShownClaim(
+    commentId,
+    { fingerprint: marker.c, head: marker.headSha },
+    input.reviewComments,
+  );
+  const matches = shown.fingerprint === row.c;
+  return {
+    claim_matches_comment: matches,
+    claim_head: matches ? shown.head : null,
+  };
 }
 
 // A row's claim, or null when it has none to judge: no row, or one whose claim
@@ -816,6 +838,7 @@ function unthreadedFinding(
     claim: rowClaim(row),
     locs: row.locs,
     claim_matches_comment: null,
+    claim_head: null,
   };
 }
 
