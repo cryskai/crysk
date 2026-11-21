@@ -860,29 +860,43 @@ describe("evaluateCiReviewAdmission — policy modes", () => {
 });
 
 describe("resolveCiTrustedActors", () => {
-  test("includes GITHUB_ACTOR and repo-config extras", () => {
+  test("includes the platform login and the default branch's extras", () => {
     const actors = resolveCiTrustedActors({
-      githubActor: "pr-hero[bot]",
+      platformActor: "crysk-ai[bot]",
       extra: ["custom-bot"],
     });
-    expect(actors).toEqual(new Set(["pr-hero[bot]", "custom-bot"]));
+    expect(actors).toEqual(new Set(["crysk-ai[bot]", "custom-bot"]));
   });
 
-  test("includes the login the platform returned, and nothing when it is empty", () => {
+  // S5 (odd/tasks/marker-trust.md): whoever triggered the event is not a marker author. The input
+  // no longer has a field for that login, so a caller cannot pass it.
+  test("an empty platform login adds nothing", () => {
+    expect(resolveCiTrustedActors({ platformActor: "" })).toEqual(new Set());
+  });
+
+  test("with nothing configured the set is empty, which reads bots only", () => {
+    const actors = resolveCiTrustedActors({});
+    expect(actors).toEqual(new Set());
     expect(
-      resolveCiTrustedActors({
-        githubActor: "crysk-dev[bot]",
-        platformActor: "crysk-dev[bot]",
+      scanPostedFindingTiers({
+        summaryHead: HEAD_A,
+        comments: [
+          {
+            user: "github-actions[bot]",
+            body: postedFindingComment({ head: HEAD_A, tier: "blocking" }),
+          },
+          {
+            user: "pr-author",
+            body: postedFindingComment({
+              head: HEAD_A,
+              tier: "blocking",
+              c: "forged",
+            }),
+          },
+        ],
+        trustedActors: actors,
       }),
-    ).toEqual(new Set(["crysk-dev[bot]"]));
-    expect(
-      resolveCiTrustedActors({ githubActor: "dev", platformActor: "app[bot]" }),
-    ).toEqual(new Set(["dev", "app[bot]"]));
-    expect(resolveCiTrustedActors({ platformActor: "" })).toBeUndefined();
-  });
-
-  test("returns undefined when no actors are configured", () => {
-    expect(resolveCiTrustedActors({})).toBeUndefined();
+    ).toEqual({ blocking: 1, advisory: 0, matchedMarkers: 1, parsedTiers: 1 });
   });
 });
 

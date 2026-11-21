@@ -404,6 +404,81 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
     expect(outputs).toContain("status=skipped-coverage");
   });
 
+  // S4/S5 (odd/tasks/marker-trust.md): a summary written by whoever triggered the run, or by a login
+  // only the pull request's own config names, is not the review's. Read as the review's, the forged
+  // summary below would declare this head reviewed and skip it.
+  describe("a forged summary for this head after the real one", () => {
+    const forgedAfterReal = () =>
+      makeFakeGh([
+        EMPTY_CHECK_RUNS,
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: [
+              {
+                ...summaryComment(1, HEAD_A, { blocking: 1, advisory: 0 }, 1),
+                user: "github-actions[bot]",
+              },
+              {
+                ...summaryComment(2, HEAD_B, { blocking: 0, advisory: 0 }, 1),
+                user: "pr-author",
+              },
+            ]
+              .map((row) => JSON.stringify(row))
+              .join("\n"),
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        compareResponse("src/changed.ts"),
+        REPO_VIEW,
+      ]);
+    const gate = (
+      env: Partial<Record<GateEnvKey, string>>,
+      config: LocalConfig,
+    ) =>
+      withGateEnv(env, async () => {
+        const recordCalls: string[] = [];
+        const result = await evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_B,
+          config,
+          isCi: true,
+          options: baseOptions(),
+          spawnFn: forgedAfterReal(),
+          recordSkip: async (recorded) => {
+            recordCalls.push(recorded.reason);
+          },
+        });
+        return { result, recordCalls };
+      });
+
+    test("from the run's actor does not mark the head reviewed", async () => {
+      const { recordCalls } = await gate(
+        { GITHUB_ACTOR: "pr-author" },
+        EMPTY_LOCAL_CONFIG,
+      );
+      expect(recordCalls).not.toContain("this commit was already reviewed");
+    });
+
+    test("from a login the checkout's own config trusts does not mark the head reviewed", async () => {
+      const { recordCalls } = await gate(
+        {},
+        { ...EMPTY_LOCAL_CONFIG, ci_trusted_actors: ["pr-author"] },
+      );
+      expect(recordCalls).not.toContain("this commit was already reviewed");
+    });
+
+    test("from the platform App's login it is still the review's", async () => {
+      const { recordCalls } = await gate(
+        { CRYSK_PLATFORM_ACTOR: "pr-author" },
+        EMPTY_LOCAL_CONFIG,
+      );
+      expect(recordCalls).toContain("this commit was already reviewed");
+    });
+  });
+
   test("an exhausted attempt budget on a new head requires manual override", async () => {
     const spawnFn = makeFakeGh([
       EMPTY_CHECK_RUNS,

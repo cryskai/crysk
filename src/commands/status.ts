@@ -166,7 +166,9 @@ export async function readPrStatus(input: {
       }
     }
   }
-  memo.trustedActors ??= await defaultBranchTrustedActors(operatorRoot);
+  memo.trustedActors ??= await defaultBranchTrustedActors(operatorRoot, {
+    spawnFn,
+  });
   const bound = input.trustPosterOf;
   const boundPoster =
     bound === undefined

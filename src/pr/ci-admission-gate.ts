@@ -90,6 +90,7 @@ import {
 } from "#watch/preflight";
 import { CliError } from "../errors";
 import { markerTrust } from "../trust/marker-trust";
+import { defaultBranchTrustedActors } from "../trust/resolve";
 
 export interface CiAdmissionGateResult {
   ciPolicy: CiReviewPolicy;
@@ -156,13 +157,14 @@ export async function evaluateCiAdmissionGate(input: {
         throw error;
       }
     }
+    // ci_trusted_actors from the default branch, never from `config`: CI checks out the pull
+    // request's head, whose author would otherwise name themselves (src/trust/resolve.ts).
     const trustedActors = resolveCiTrustedActors({
-      githubActor: process.env.GITHUB_ACTOR,
       platformActor: process.env.CRYSK_PLATFORM_ACTOR,
-      extra: config.ci_trusted_actors,
+      extra: await defaultBranchTrustedActors(operatorRoot, { spawnFn }),
     });
     // Who may have written the summary and its blocks (src/trust/marker-trust.ts).
-    const markerTrustSet = markerTrust(trustedActors ?? []);
+    const markerTrustSet = markerTrust(trustedActors);
     const existingSummaryId = findTrustedMarkedCommentId(
       issueComments,
       markerTrustSet,
