@@ -2307,6 +2307,25 @@ async function postClaimUpdateReplies(input: {
         `claim update on thread ${posted.id} did not post ` +
           `(${error instanceof Error ? error.message : String(error)})`,
       );
+      continue;
+    }
+    // After the reply, so a reopened thread always shows why. Best effort: a
+    // token that cannot reopen threads leaves the reply in a folded thread,
+    // which status still hands to the agent.
+    try {
+      const reopened = await reopenReviewThreadForComment({
+        operatorRoot: input.operatorRoot,
+        pr: input.pr,
+        commentId: posted.id,
+        spawnFn: input.spawnFn,
+        timeoutMs: input.timeoutMs,
+      });
+      if (reopened === "reopened") log(`reopened: thread ${posted.id}`);
+    } catch (error) {
+      log(
+        `thread ${posted.id} was not reopened after its claim update ` +
+          `(${error instanceof Error ? error.message : String(error)})`,
+      );
     }
   }
 }
@@ -2460,6 +2479,10 @@ const RESOLVE_THREAD_MUTATION =
   "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){" +
   "thread{isResolved}}}";
 
+const UNRESOLVE_THREAD_MUTATION =
+  "mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){" +
+  "thread{isResolved}}}";
+
 // Fake-gh tests never send the document to GitHub, so they cannot catch a
 // truncated query. Live W1 on #34 failed with GraphQL EOF
 // (`Expected NAME, actual: (none) ("")`) because REVIEW_THREADS_QUERY was
@@ -2576,8 +2599,76 @@ export async function resolveReviewThreadForComment(input: {
   // graphql round trips. A bound on two of three still hangs on the third.
   timeoutMs?: number;
 }): Promise<ResolveThreadOutcome> {
-  assertBalancedGraphql(REVIEW_THREADS_QUERY, "reviewThreads");
   assertBalancedGraphql(RESOLVE_THREAD_MUTATION, "resolveReviewThread");
+  const thread = await findReviewThreadForComment(input);
+  if (thread === undefined) return "not-found";
+  if (thread.isResolved) return "already-resolved";
+  const mutated = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "graphql",
+      "-f",
+      `query=${RESOLVE_THREAD_MUTATION}`,
+      "-f",
+      `id=${thread.id}`,
+    ],
+    undefined,
+    input.spawnFn,
+    input.timeoutMs,
+  );
+  if (!mutated.ok) {
+    throw new CliError(
+      `gh api graphql (resolveReviewThread) failed: ${mutated.stderr.trim()}`,
+    );
+  }
+  return "resolved";
+}
+
+// Reopens the thread a review comment starts, for a thread that gets a claim
+// update: GitHub folds a resolved thread away, so the new claim would be hidden.
+async function reopenReviewThreadForComment(input: {
+  operatorRoot: string;
+  pr: number;
+  commentId: number;
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<"reopened" | "already-open" | "not-found"> {
+  assertBalancedGraphql(UNRESOLVE_THREAD_MUTATION, "unresolveReviewThread");
+  const thread = await findReviewThreadForComment(input);
+  if (thread === undefined) return "not-found";
+  if (!thread.isResolved) return "already-open";
+  const mutated = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "graphql",
+      "-f",
+      `query=${UNRESOLVE_THREAD_MUTATION}`,
+      "-f",
+      `id=${thread.id}`,
+    ],
+    undefined,
+    input.spawnFn,
+    input.timeoutMs,
+  );
+  if (!mutated.ok) {
+    throw new CliError(
+      `gh api graphql (unresolveReviewThread) failed: ${mutated.stderr.trim()}`,
+    );
+  }
+  return "reopened";
+}
+
+// The review thread whose first comment is `commentId`, or undefined.
+async function findReviewThreadForComment(input: {
+  operatorRoot: string;
+  pr: number;
+  commentId: number;
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<GraphQlThread | undefined> {
+  assertBalancedGraphql(REVIEW_THREADS_QUERY, "reviewThreads");
   const repo = await ghRepoOwnerName(
     input.operatorRoot,
     input.spawnFn,
@@ -2606,32 +2697,10 @@ export async function resolveReviewThreadForComment(input: {
       `gh api graphql (reviewThreads) failed: ${listed.stderr.trim()}`,
     );
   }
-  const thread = parseReviewThreads(listed.stdout).find((candidate) => {
+  return parseReviewThreads(listed.stdout).find((candidate) => {
     const first = candidate.comments?.nodes?.[0]?.fullDatabaseId;
     return graphqlDatabaseId(first) === input.commentId;
   });
-  if (thread === undefined) return "not-found";
-  if (thread.isResolved) return "already-resolved";
-  const mutated = await gh(
-    input.operatorRoot,
-    [
-      "api",
-      "graphql",
-      "-f",
-      `query=${RESOLVE_THREAD_MUTATION}`,
-      "-f",
-      `id=${thread.id}`,
-    ],
-    undefined,
-    input.spawnFn,
-    input.timeoutMs,
-  );
-  if (!mutated.ok) {
-    throw new CliError(
-      `gh api graphql (resolveReviewThread) failed: ${mutated.stderr.trim()}`,
-    );
-  }
-  return "resolved";
 }
 
 // Re-export for callers that already import check-run constants from pr.ts.

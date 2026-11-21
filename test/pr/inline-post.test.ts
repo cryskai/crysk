@@ -3812,6 +3812,73 @@ describe("postInlineFindings — a kept thread whose claim changed gets the new 
     expect(body).toContain("`src/a.ts:10`");
   });
 
+  // A thread the agent already answered is usually resolved, and GitHub folds
+  // it away: the new claim would be hidden from a person reading the PR.
+  const repoView: ScriptEntry = {
+    match: ["repo", "view", "--json", "owner,name"],
+    response: {
+      stdout: JSON.stringify({ owner: { login: "acme" }, name: "app" }),
+    },
+  };
+  const threads = (resolved: boolean): ScriptEntry => ({
+    match: ["reviewThreads"],
+    response: {
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [
+                  {
+                    id: "T900",
+                    isResolved: resolved,
+                    comments: { nodes: [{ fullDatabaseId: 900 }] },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    },
+  });
+  const reopens = (calls: RecordedCall[]) =>
+    calls.filter((c) => c.argv.join(" ").includes("unresolveReviewThread"));
+
+  test("a resolved thread that gets a claim update is reopened", async () => {
+    const { spawnFn, calls } = run([], [repoView, threads(true)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(reopens(calls)).toHaveLength(1);
+    expect(reopens(calls)[0]?.argv.join(" ")).toContain("id=T900");
+  });
+
+  test("an open thread that gets a claim update is left as it is", async () => {
+    const { spawnFn, calls } = run([], [repoView, threads(false)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+    expect(reopens(calls)).toHaveLength(0);
+  });
+
+  test("a refused reopen is only logged: the reply stays", async () => {
+    const { spawnFn, calls } = run(
+      [],
+      [
+        repoView,
+        threads(true),
+        {
+          match: ["unresolveReviewThread"],
+          response: {
+            stderr: "Resource not accessible by integration",
+            exitCode: 1,
+          },
+        },
+      ],
+    );
+    const outcome = await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+    expect(outcome.summary.action).toBe("updated");
+  });
+
   test("the same claim: no reply", async () => {
     const { spawnFn, calls } = run();
     await post(spawnFn, OLD_CLAIM);
