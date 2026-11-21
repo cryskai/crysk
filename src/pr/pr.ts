@@ -58,6 +58,7 @@ import type { Finding, FindingsDocument } from "#review/findings";
 import {
   type PrCommentDelta,
   parseFindingCommentBadge,
+  renderClaimUpdateReply,
   renderFileLevelComment,
   renderInlineComment,
   renderIssueFindingComment,
@@ -80,6 +81,7 @@ import { buildFindingStateRecord } from "./finding-state-record";
 import {
   buildPostPlan,
   computeDroppedFindingIds,
+  type FindingMatch,
   type InlinePostOutcome,
   matchPostedFindings,
   type PostedFindingComment,
@@ -96,6 +98,7 @@ import {
   claimFingerprint,
   decideWorktree,
   findMarkedCommentId,
+  PR_CLAIM_UPDATE_MARKER_PREFIX,
   parseFindingMarker,
   type WorktreeDecision,
   worktreeDirty,
@@ -2263,6 +2266,69 @@ export function fileLevelFindingIds(
   );
 }
 
+async function postClaimUpdateReplies(input: {
+  operatorRoot: string;
+  pr: number;
+  headSha: string;
+  persisting: FindingMatch[];
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<void> {
+  const changed = input.persisting.filter(
+    ({ finding, posted }) =>
+      posted.channel === "review" &&
+      posted.marker.c !== claimFingerprint(finding.claim),
+  );
+  if (changed.length === 0) return;
+  let existing: PrReviewComment[] = [];
+  try {
+    existing = await fetchPrReviewComments(input.operatorRoot, input.pr, {
+      spawnFn: input.spawnFn,
+      timeoutMs: input.timeoutMs,
+    });
+  } catch (error) {
+    log(
+      "claim updates skipped: could not read the review comments " +
+        `(${error instanceof Error ? error.message : String(error)})`,
+    );
+    return;
+  }
+  for (const { finding, posted } of changed) {
+    const fingerprint = claimFingerprint(finding.claim);
+    const marker = `${PR_CLAIM_UPDATE_MARKER_PREFIX}head=${input.headSha} c=${fingerprint} -->`;
+    // Idempotent per head and claim: a replay of the same run posts nothing new.
+    if (
+      existing.some(
+        (c) => c.in_reply_to_id === posted.id && c.body.startsWith(marker),
+      )
+    ) {
+      continue;
+    }
+    try {
+      const id = await postReviewCommentReply({
+        operatorRoot: input.operatorRoot,
+        pr: input.pr,
+        inReplyTo: posted.id,
+        body: renderClaimUpdateReply({
+          headSha: input.headSha,
+          path: finding.path,
+          line: finding.line,
+          claim: finding.claim,
+          fingerprint,
+        }),
+        spawnFn: input.spawnFn,
+        timeoutMs: input.timeoutMs,
+      });
+      log(`posted: claim update ${id} on thread ${posted.id}`);
+    } catch (error) {
+      log(
+        `claim update on thread ${posted.id} did not post ` +
+          `(${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+  }
+}
+
 // Hides an issue comment as outdated. The REST id is all the caller has, and
 // the mutation takes the node id, hence the read first.
 async function minimizeIssueComment(input: {
@@ -3775,6 +3841,20 @@ export async function postInlineFindings(input: {
     }
     recordResolveThreads([...refusedResolves], input.env);
   }
+
+  // A kept thread whose finding's claim changed (the matcher binds by place):
+  // its first comment shows the earlier claim, and every reader, the loop's
+  // agent included, would judge that one. A reply carries the new claim. Caught
+  // and bounded: the review is already published, so a lost reply is a log
+  // line, never a failed run.
+  await postClaimUpdateReplies({
+    operatorRoot,
+    pr,
+    headSha,
+    persisting: plan.persisting,
+    spawnFn,
+    timeoutMs: ghTimeoutMs,
+  });
 
   // Closes a RE-review with a visible comment. Everything above only PATCHed
   // the existing summary, and an edit is invisible on GitHub: no

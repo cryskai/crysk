@@ -207,10 +207,15 @@ Handle every finding with `needs_reply: true` in one pass, then push once.
 
    A finding with no comment has its replies as top-level comments whose marker says `row=R###`.
 
-   If you answered `dismissed`, `deferred` or `misclassified` and `git diff <old-head>..<head> -- <path>`
-   does not touch the finding's lines, post the same tag, verdict and argument again with no new
-   adjudication. If those lines changed, judge it afresh.
-3. **Judge each finding** against the repository and pick exactly one tag.
+   If you answered `dismissed`, `deferred` or `misclassified`, `claim_matches_comment` is not `false`,
+   and `git diff <old-head>..<head> -- <path>` does not touch the finding's lines, post the same tag,
+   verdict and argument again with no new adjudication. If those lines changed, or the claim did, judge
+   it afresh: your earlier reply answered another claim.
+3. **Judge each finding** against the repository and pick exactly one tag. Judge the finding's `claim`
+   from `crysk status --json` (its `locs` are the cited code), not the thread's first comment. When
+   `claim_matches_comment` is `false`, a re-review kept this thread for a different claim: the comment
+   shows the earlier text and a `claim-update` reply in the thread shows this one. When `claim` is
+   `null`, the comment is the only text.
 4. **For `applied`:** fix it in the working tree, sweep its class (`fix-the-class.md`) and run the
    relevant tests. Do not push yet.
 5. **For the other tags:** run the isolated adjudicator as `dismissal.md` says.

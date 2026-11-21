@@ -179,6 +179,15 @@ export interface PrStatusFinding {
   needs_reply: boolean;
   // How many heads in a row, newest first, have a newest reply whose verdict is `inconclusive`.
   inconclusive_heads: number;
+  // What the latest review found, from its state row. Null when the finding has no row: the
+  // comment is then the only text. A re-review can bind a different claim to an existing thread,
+  // so this, not the comment, is what to judge.
+  claim: string | null;
+  // The row's locations (path:line or path:a-b). Empty when the finding has no row.
+  locs: string[];
+  // False when the thread's comment carries another claim than the row (its fingerprint differs),
+  // so the comment text is not this finding. Null when there is no row or no comment.
+  claim_matches_comment: boolean | null;
 }
 
 export interface PrStatusJson {
@@ -706,6 +715,9 @@ function readFindings(
             : null,
         needs_reply: false,
         inconclusive_heads: inconclusiveHeads(repliesTo(source, raw), writers),
+        claim: row?.claim ?? null,
+        locs: row?.locs ?? [],
+        claim_matches_comment: row === undefined ? null : row.c === marker.c,
       },
       // The newest reply the gate counts decides, as at the gate (triage/reply.ts).
       answersReview:
@@ -790,6 +802,9 @@ function unthreadedFinding(
     ci_verdict: ciVerdict,
     needs_reply: false,
     inconclusive_heads: inconclusiveHeadCount,
+    claim: row.claim,
+    locs: row.locs,
+    claim_matches_comment: null,
   };
 }
 

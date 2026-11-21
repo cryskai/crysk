@@ -640,6 +640,9 @@ describe("buildPrStatus: findings", () => {
         ci_verdict: null,
         needs_reply: false,
         inconclusive_heads: 0,
+        claim: null,
+        locs: [],
+        claim_matches_comment: null,
       },
     ]);
   });
@@ -4270,5 +4273,89 @@ describe("skillsReloadCommand", () => {
     ["the CLI version is not a plain version", "0.10.0", "0.9.5-dev"],
   ])("names nothing when %s", (_case, recorded, cli) => {
     expect(skillsReloadCommand(recorded, cli)).toBeNull();
+  });
+});
+
+// A re-review can bind a different claim to an existing thread: the comment
+// then shows the old text, and an agent reading it judges the wrong finding.
+// The row's claim is what the review found, so status hands it over.
+describe("buildPrStatus — the claim the review found", () => {
+  test("a row bound to its own comment: claim, locs, and the comment matches", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const finding = status.findings[0];
+    expect(finding?.id).toBe("R001");
+    expect(finding?.claim).toBe(CLAIM);
+    expect(finding?.locs).toEqual(["src/a.ts:10"]);
+    expect(finding?.claim_matches_comment).toBe(true);
+  });
+
+  test("a row bound to a comment with another claim: the row's claim, flagged", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 1,
+            body: summary(CURRENT, [stateRow("R004", "a different defect")]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const finding = status.findings[0];
+    expect(finding?.id).toBe("R004");
+    expect(finding?.comment_id).toBe(41);
+    expect(finding?.claim).toBe("a different defect");
+    expect(finding?.claim_matches_comment).toBe(false);
+  });
+
+  test("a comment with no row: no claim, the comment is the only text", () => {
+    const status = buildPrStatus(
+      input({
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const finding = status.findings[0];
+    expect(finding?.claim).toBeNull();
+    expect(finding?.locs).toEqual([]);
+    expect(finding?.claim_matches_comment).toBeNull();
+  });
+
+  test("a row no comment carries: its claim, and nothing to match", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R002", CLAIM)]) },
+        ],
+      }),
+    );
+    const finding = status.findings[0];
+    expect(finding?.comment_id).toBeNull();
+    expect(finding?.claim).toBe(CLAIM);
+    expect(finding?.claim_matches_comment).toBeNull();
   });
 });

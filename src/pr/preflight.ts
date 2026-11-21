@@ -450,6 +450,11 @@ export const PR_COMMENT_MARKER_PREFIX = `${MARKER_OPEN}report `;
 // (prefix `pr-hero-report `) can never mistake it for the summary.
 export const PR_REREVIEW_CLOSED_MARKER_PREFIX = `${MARKER_OPEN}rereview-closed `;
 
+// A reply a re-review posts in a kept thread whose finding now has another
+// claim (pr/pr.ts's postInlineFindings): the thread's first comment still shows
+// the earlier text. `head` and `c` make it idempotent per head and claim.
+export const PR_CLAIM_UPDATE_MARKER_PREFIX = `${MARKER_OPEN}claim-update `;
+
 // Rereview-coverage fix (GitHub #42's re-review half, MusiveTech/musive
 // #1823): a PARTIAL run (some hunters or the refuter failed, but not all —
 // `sessionFailed` false) used to post the exact same marker a COMPLETE run
