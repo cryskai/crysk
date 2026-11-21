@@ -234,6 +234,7 @@ function candidatesFor(
 ): Candidate[] {
   const exact: Candidate[] = [];
   const windowed: Candidate[] = [];
+  let newestFileLevel: PostedFindingComment | undefined;
   for (const posted of available) {
     const path = posted.livePath ?? posted.marker.path;
     if (path !== finding.path) continue;
@@ -241,12 +242,16 @@ function candidatesFor(
     // GitHub, so a push that moves the code more than the window away would
     // repost the same finding as a second thread. The claim fingerprint keeps
     // this from swallowing a different defect in the same file; a reworded
-    // claim falls through to the window below, as before.
+    // claim falls through to the window below, as before. Only the newest
+    // such comment is a candidate: two of them (an advisory one escalated to
+    // blocking leaves both) would tie and post a fresh one on every push.
     if (
       posted.fileLevel === true &&
       posted.marker.c === claimFingerprint(finding.claim)
     ) {
-      exact.push({ posted, distance: 0 });
+      if (newestFileLevel === undefined || posted.id > newestFileLevel.id) {
+        newestFileLevel = posted;
+      }
       continue;
     }
     const sameHead = posted.marker.headSha === headSha;
@@ -287,6 +292,9 @@ function candidatesFor(
   // candidate for this finding, even one that happens to also sit at
   // distance 0 on the live line — the exact branch is authoritative, not
   // merely a tiebreak, per design D2's ordering ("exact first, THEN window").
+  if (newestFileLevel !== undefined) {
+    exact.push({ posted: newestFileLevel, distance: 0 });
+  }
   return exact.length > 0 ? exact : windowed;
 }
 

@@ -739,6 +739,22 @@ describe("matchPostedFindings — file-level comments match by claim, not by lin
     expect(result.fresh).toHaveLength(1);
   });
 
+  // PR #591 R001: an advisory comment escalated to blocking leaves two
+  // file-level comments with the same claim. Tied, they would post a third
+  // on every push; the newest one wins instead.
+  test("two file-level comments with the same claim: the newest one keeps it", () => {
+    const result = matchPostedFindings({
+      findings: [finding("src/a.ts", 40)],
+      posted: [
+        posted("src/a.ts", 10, { id: 1, fileLevel: true, tier: "advisory" }),
+        posted("src/a.ts", 12, { id: 2, fileLevel: true, tier: "blocking" }),
+      ],
+      headSha: NEW_HEAD,
+    });
+    expect(result.fresh).toHaveLength(0);
+    expect(result.persist[0]?.posted.id).toBe(2);
+  });
+
   test("an inline comment far away still posts fresh (unchanged)", () => {
     const result = matchPostedFindings({
       findings: [finding("src/a.ts", 40)],

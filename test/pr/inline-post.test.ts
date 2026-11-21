@@ -2652,6 +2652,28 @@ describe("postInlineFindings — re-review closing comment", () => {
       expect(minimizes(calls)).toHaveLength(1);
     });
 
+    // PR #591 R002: hiding the old receipt when the new one did not post
+    // would leave the PR with no sign the re-review ran.
+    test("is left visible when the new closing comment fails to post", async () => {
+      const { spawnFn, calls } = script([
+        {
+          match: ["--method", "POST", "issues/42/comments"],
+          response: { stderr: "HTTP 502", exitCode: 1 },
+        },
+      ]);
+      await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+      });
+      expect(closingPosts(calls)).toHaveLength(1);
+      expect(minimizes(calls)).toHaveLength(0);
+    });
+
     test("a failed hide degrades to a log line and keeps the new closing comment", async () => {
       const { spawnFn, calls } = script([
         {

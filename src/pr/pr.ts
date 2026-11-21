@@ -3836,7 +3836,14 @@ export async function postInlineFindings(input: {
   // After the new one, so one closing comment is always visible. Caught and
   // bounded like the post above: a stale receipt left visible is noise, never
   // a reason to fail a paid run.
-  if (priorClosingCommentId !== null && existingSummaryId !== null) {
+  // Not when this run's own closing comment failed: hiding the old one then
+  // would leave the PR with no sign the re-review ran.
+  const closingVisible = !closingNeeded || closingCommentId !== undefined;
+  if (
+    priorClosingCommentId !== null &&
+    existingSummaryId !== null &&
+    closingVisible
+  ) {
     try {
       await minimizeIssueComment({
         operatorRoot,
