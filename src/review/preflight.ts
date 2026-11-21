@@ -36,9 +36,9 @@ import {
 } from "#review/prompt-set";
 import { type AgentSpec, isSafeSlug, type ReviewSpec } from "#review/spec";
 import {
-  ADJUDICATED_TAGS,
   type TriageTag,
   type TriageVerdict,
+  VERDICT_REQUIRED_TAGS,
 } from "#triage/triage";
 import { type EngineAssets, resolveEngineAssets } from "../assets";
 import { type BrandEnvValue, readBrandEnv } from "../brand";
@@ -524,8 +524,9 @@ Options:
   --body-file <path>  triage reply only: reasoning prose. The driver prepends
                       the triage marker and the visible badge
   --verdict <word>    triage reply only: upheld, rejected, or inconclusive.
-                      Required for dismissed/deferred/misclassified;
-                      forbidden for applied
+                      Required for dismissed, and for deferred or
+                      misclassified on a blocking finding; optional for
+                      those two on an advisory one; forbidden for applied
   --issue <n>         triage reply only: optional GitHub issue number on
                       deferred. Not required — deferred is a tag plus
                       reasoning; the coding agent decides whether an issue
@@ -1376,7 +1377,12 @@ export function parseArgs(argv: string[]): ParsedCli {
     if (options.bodyFile === undefined) {
       throw new CliUsageError("triage reply requires --body-file <path>");
     }
-    if (ADJUDICATED_TAGS.has(options.tag) && options.verdict === undefined) {
+    // deferred and misclassified need --verdict only on a blocking finding,
+    // which the command decides once it has read the finding.
+    if (
+      VERDICT_REQUIRED_TAGS.has(options.tag) &&
+      options.verdict === undefined
+    ) {
       throw new CliUsageError(
         `triage reply --tag ${options.tag} requires --verdict ` +
           "(upheld, rejected, or inconclusive)",

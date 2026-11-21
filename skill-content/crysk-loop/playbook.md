@@ -219,7 +219,8 @@ Handle every finding with `needs_reply: true` in one pass, then push once.
    text.
 4. **For `applied`:** fix it in the working tree, sweep its class (`fix-the-class.md`) and run the
    relevant tests. Do not push yet.
-5. **For the other tags:** run the isolated adjudicator as `dismissal.md` says.
+5. **For the other tags:** run the isolated adjudicator as `dismissal.md` says. An advisory finding
+   answered `deferred` or `misclassified` needs none: post it without `--verdict`.
 6. **Reply through the driver,** one finding at a time. Write your reasoning to a file outside the
    repository, then:
 
@@ -263,8 +264,8 @@ The refusals exit non-zero and post nothing. Do not work around them with `gh`.
 |---|---|---|---|
 | `applied` | Fixed in this pull request, with every instance of its class this pull request introduced. | A pointer to the fix, the class, and the sites you swept. | Never |
 | `dismissed` | The finding is wrong. | Positive disproof with cited code. "I did it on purpose" is not evidence. | Required |
-| `deferred` | The finding is right, but fixing it is out of scope here. | Why, and what you are doing instead. `--issue <n>` only if a tracking issue already exists. Do not create one to fill the field. | Required |
-| `misclassified` | The finding is real, but its `severity`, `tier` or `causal_disposition` is wrong. | Which field, what it should be, and the evidence. | Required |
+| `deferred` | The finding is right, but fixing it is out of scope here. | Why, and what you are doing instead. `--issue <n>` only if a tracking issue already exists. Do not create one to fill the field. | Required on a blocking finding; none on an advisory one |
+| `misclassified` | The finding is real, but its `severity`, `tier` or `causal_disposition` is wrong. | Which field, what it should be, and the evidence. | Required on a blocking finding; none on an advisory one |
 
 Pick exactly one. If you are torn between `dismissed` and `misclassified`, the claim is right and the
 label is wrong, so it is `misclassified`. Never reply with a local verdict of `rejected`: `dismissal.md`

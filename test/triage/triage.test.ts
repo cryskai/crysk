@@ -148,30 +148,29 @@ describe("triageMarker + parseTriageMarker", () => {
     ).toThrow(/positive integer/);
   });
 
-  // The same two-way guard, now for `verdict`: dismissed, deferred, and
-  // misclassified all spawn an adjudicator, so a marker missing its verdict
-  // must fail to BUILD...
-  test("triageMarker throws for dismissed/deferred/misclassified with no verdict", () => {
+  // The same two-way guard, now for `verdict`: only an upheld dismissal
+  // clears the gate, so a dismissed marker missing its verdict must fail to
+  // BUILD. deferred and misclassified never clear it, and on an advisory
+  // finding they are written without one.
+  test("triageMarker throws for dismissed with no verdict; deferred and misclassified build without one", () => {
     expect(() =>
       triageMarker({ tag: "dismissed", headSha: HEAD, actor: "agent" }),
     ).toThrow(/dismissed requires a verdict/);
-    expect(() =>
-      triageMarker({
-        tag: "deferred",
-        headSha: HEAD,
-        actor: "agent",
-      }),
-    ).toThrow(/deferred requires a verdict/);
-    expect(() =>
+    expect(
+      triageMarker({ tag: "deferred", headSha: HEAD, actor: "agent" }),
+    ).toBe(`${TRIAGE_MARKER_PREFIX}tag=deferred head=${HEAD} actor=agent -->`);
+    expect(
       triageMarker({ tag: "misclassified", headSha: HEAD, actor: "agent" }),
-    ).toThrow(/misclassified requires a verdict/);
+    ).toBe(
+      `${TRIAGE_MARKER_PREFIX}tag=misclassified head=${HEAD} actor=agent -->`,
+    );
   });
 
   // ...and must fail to PARSE, for the same reason a missing `issue` on a
   // deferred marker must fail to parse: a hand-written or corrupted marker
   // with no `verdict=` field must never be accepted, or 6c would read an
   // un-adjudicated finding as settled.
-  test("dismissed/deferred/misclassified markers with no verdict field do not parse", () => {
+  test("a dismissed marker with no verdict does not parse; deferred and misclassified do", () => {
     expect(
       parseTriageMarker(
         `${TRIAGE_MARKER_PREFIX}tag=dismissed head=${HEAD} actor=agent -->`,
@@ -181,12 +180,12 @@ describe("triageMarker + parseTriageMarker", () => {
       parseTriageMarker(
         `${TRIAGE_MARKER_PREFIX}tag=deferred head=${HEAD} actor=agent issue=482 -->`,
       ),
-    ).toBeNull();
+    ).toEqual({ tag: "deferred", headSha: HEAD, actor: "agent", issue: 482 });
     expect(
       parseTriageMarker(
         `${TRIAGE_MARKER_PREFIX}tag=misclassified head=${HEAD} actor=agent -->`,
       ),
-    ).toBeNull();
+    ).toEqual({ tag: "misclassified", headSha: HEAD, actor: "agent" });
   });
 
   test("a marker with an unknown verdict word does not parse", () => {
