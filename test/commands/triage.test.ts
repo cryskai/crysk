@@ -1284,7 +1284,7 @@ describe("runTriageReplyCommand — anchor.patch is the anchoring diff", () => {
 // summary's state block names it, the posted
 // finding comment carries its head, and the reply binds to that comment.
 describe("runTriageReplyCommand — without a run directory", () => {
-  function prScript(): ScriptEntry[] {
+  function prScript(tier: "blocking" | "advisory" = "blocking"): ScriptEntry[] {
     const summaryBody = [
       `<!-- pr-hero-report head=${RUN_HEAD} -->`,
       "",
@@ -1293,8 +1293,8 @@ describe("runTriageReplyCommand — without a run directory", () => {
         [
           stateFinding({
             id: "R001",
-            sev: "CRITICAL",
-            tier: "blocking",
+            sev: tier === "blocking" ? "CRITICAL" : "WARNING",
+            tier,
             channel: "inline",
             locs: [`${F001_PATH}:144`],
             claim: F001_CLAIM,
@@ -1328,6 +1328,62 @@ describe("runTriageReplyCommand — without a run directory", () => {
       cleanup: () => rm(dir, { recursive: true, force: true }),
     };
   }
+
+  // An advisory finding answered deferred or misclassified needs no adjudicator:
+  // neither tag ever clears the gate, and advisory never blocks it.
+  test("an advisory finding is deferred without --verdict", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(prScript("advisory"));
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "deferred",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const post = calls.find(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
+      );
+      expect(post?.stdin).toContain(
+        `<!-- crysk-triage tag=deferred head=${RUN_HEAD} actor=agent -->`,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a blocking finding still needs --verdict for deferred, and nothing is posted", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(prScript("blocking"));
+      await expect(
+        runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "misclassified",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+        }),
+      ).rejects.toThrow(/R001 is blocking.*--verdict/);
+      expect(
+        calls.some(
+          (call) =>
+            call.argv.includes("--method") &&
+            call.argv.join(" ").includes("pulls/42/comments"),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
 
   test("binds R001 from the PR and writes the finding's head into the marker", async () => {
     const { bodyFile, cleanup } = await bodyOnly();

@@ -145,6 +145,7 @@ async function postedFindingFromPr(
   target: ReplyTarget;
   headSha: string;
   answeredTag: TriageTag | null;
+  blocking: boolean;
 }> {
   // The read `crysk status` makes, so the reply is decided on the replies the gate counts.
   const read = await readPrStatus({
@@ -186,6 +187,7 @@ async function postedFindingFromPr(
       },
       headSha,
       answeredTag: answeredTagAt(finding, headSha),
+      blocking: finding.blocking,
     };
   }
   // The summary status read: a summary-shaped comment from anyone else is not linked to.
@@ -213,6 +215,7 @@ async function postedFindingFromPr(
     headSha,
     // A summary-row reply is answered by the newest counted reply that names the row, at this head.
     answeredTag: answeredTagAt(finding, headSha),
+    blocking: finding.blocking,
   };
 }
 
@@ -275,6 +278,7 @@ async function postedFindingFromRunDir(input: {
   headSha: string;
   reasoning: string;
   answeredTag: TriageTag | null;
+  blocking: boolean;
 }> {
   const { operatorRoot, prNumber, runDir, spawnFn } = input;
   const findingsPath = path.join(runDir, "findings.json");
@@ -378,6 +382,8 @@ async function postedFindingFromRunDir(input: {
     headSha: doc.head_sha,
     reasoning,
     answeredTag: answeredTagAt(postedRow, doc.head_sha),
+    // The status row's tier when there is one, else the run's own: unknown blocks (fail closed).
+    blocking: postedRow?.blocking ?? finding.tier !== "advisory",
   };
 }
 
@@ -431,6 +437,19 @@ export async function runTriageReplyCommand(input: {
           })),
         };
   const { target: replyTarget, headSha, reasoning, answeredTag } = found;
+  // WHY only on a blocking finding: deferred and misclassified never clear the gate, so on an
+  // advisory finding an adjudicator rules on nothing. On a blocking one the ruling is the record a
+  // maintainer reads before overriding. A finding whose tier cannot be read counts as blocking.
+  if (
+    (input.tag === "deferred" || input.tag === "misclassified") &&
+    input.verdict === undefined &&
+    found.blocking
+  ) {
+    throw new CliUsageError(
+      `${input.findingId} is blocking, so --tag ${input.tag} requires --verdict ` +
+        "(upheld, rejected, or inconclusive) from the isolated adjudicator, and nothing was posted",
+    );
+  }
   // WHY refused rather than skipped: the skip below is the retry path of the same answer, and a changed
   // answer dropped there exits 0 while GitHub keeps the old one. A dry run reports the same refusal.
   if (answeredTag !== null && answeredTag !== input.tag) {
