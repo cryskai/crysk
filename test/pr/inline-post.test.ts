@@ -53,6 +53,7 @@ import {
   unresolvedBlockingCount,
 } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
+import { triageMarker } from "#triage/triage";
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -3856,6 +3857,39 @@ describe("postInlineFindings — a kept thread whose claim changed gets the new 
     const { spawnFn, calls } = run([], [repoView, threads(false)]);
     await post(spawnFn, NEW_CLAIM);
     expect(claimReplies(calls)).toHaveLength(1);
+    expect(reopens(calls)).toHaveLength(0);
+  });
+
+  // PR #593 R002: a reopen that failed once must be tried again while the
+  // claim update is still unanswered, or the thread stays folded for good.
+  const updateReply = {
+    id: 901,
+    user: "pr-hero",
+    body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+    in_reply_to_id: 900,
+  };
+  test("an unanswered claim update in a resolved thread: reopened again, not replied again", async () => {
+    const { spawnFn, calls } = run([updateReply], [repoView, threads(true)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+    expect(reopens(calls)).toHaveLength(1);
+  });
+
+  test("a claim update the agent already answered: the thread is left resolved", async () => {
+    const { spawnFn, calls } = run(
+      [
+        updateReply,
+        {
+          id: 902,
+          user: "dev",
+          body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nfixed`,
+          in_reply_to_id: 900,
+        },
+      ],
+      [repoView, threads(true)],
+    );
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
     expect(reopens(calls)).toHaveLength(0);
   });
 

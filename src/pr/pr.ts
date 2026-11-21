@@ -67,6 +67,7 @@ import {
   rereviewDeltaFromProvenance,
 } from "#review/report";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
+import { parseTriageMarker } from "#triage/triage";
 import { log } from "#ui/primitives";
 import { parseMarkerHead } from "#watch/preflight";
 import {
@@ -98,6 +99,7 @@ import {
   claimFingerprint,
   decideWorktree,
   findMarkedCommentId,
+  parseClaimUpdateFingerprint,
   parseFindingMarker,
   threadShownFingerprint,
   type WorktreeDecision,
@@ -2284,6 +2286,11 @@ async function postClaimUpdateReplies(input: {
     // later head that still sees it posts nothing; a claim that comes back to
     // an earlier text under a newer one is replied again.
     if ((posted.shownFingerprint ?? posted.marker.c) === fingerprint) {
+      // Already shown. Still unanswered means the thread should be open: try
+      // the reopen again, in case an earlier one failed.
+      if (posted.claimUpdateUnanswered === true) {
+        await reopenAfterClaimUpdate(input, posted.id);
+      }
       continue;
     }
     try {
@@ -2309,24 +2316,42 @@ async function postClaimUpdateReplies(input: {
       );
       continue;
     }
-    // After the reply, so a reopened thread always shows why. Best effort: a
-    // token that cannot reopen threads leaves the reply in a folded thread,
-    // which status still hands to the agent.
-    try {
-      const reopened = await reopenReviewThreadForComment({
-        operatorRoot: input.operatorRoot,
-        pr: input.pr,
-        commentId: posted.id,
-        spawnFn: input.spawnFn,
-        timeoutMs: input.timeoutMs,
-      });
-      if (reopened === "reopened") log(`reopened: thread ${posted.id}`);
-    } catch (error) {
+    // After the reply, so a reopened thread always shows why.
+    await reopenAfterClaimUpdate(input, posted.id);
+  }
+}
+
+// Best effort: a token that cannot reopen threads leaves the reply in a folded
+// thread, which status still hands to the agent. Every outcome but an open
+// thread is logged.
+async function reopenAfterClaimUpdate(
+  input: {
+    operatorRoot: string;
+    pr: number;
+    spawnFn?: typeof Bun.spawn;
+    timeoutMs?: number;
+  },
+  commentId: number,
+): Promise<void> {
+  try {
+    const reopened = await reopenReviewThreadForComment({
+      operatorRoot: input.operatorRoot,
+      pr: input.pr,
+      commentId,
+      spawnFn: input.spawnFn,
+      timeoutMs: input.timeoutMs,
+    });
+    if (reopened === "reopened") log(`reopened: thread ${commentId}`);
+    if (reopened === "not-found") {
       log(
-        `thread ${posted.id} was not reopened after its claim update ` +
-          `(${error instanceof Error ? error.message : String(error)})`,
+        `thread ${commentId} not found among the review threads; not reopened`,
       );
     }
+  } catch (error) {
+    log(
+      `thread ${commentId} was not reopened after its claim update ` +
+        `(${error instanceof Error ? error.message : String(error)})`,
+    );
   }
 }
 
@@ -2377,9 +2402,22 @@ function shownFingerprintField(
   rootId: number,
   markerFingerprint: string,
   comments: readonly PrReviewComment[],
-): { shownFingerprint?: string } {
+): { shownFingerprint?: string; claimUpdateUnanswered?: boolean } {
   const shown = threadShownFingerprint(rootId, markerFingerprint, comments);
-  return shown === markerFingerprint ? {} : { shownFingerprint: shown };
+  if (shown === markerFingerprint) return {};
+  const replies = comments.filter((c) => c.in_reply_to_id === rootId);
+  const update = Math.max(
+    ...replies
+      .filter((c) => parseClaimUpdateFingerprint(c.body) !== undefined)
+      .map((c) => c.id),
+  );
+  const answered = replies.some(
+    (c) => c.id > update && parseTriageMarker(c.body) !== null,
+  );
+  return {
+    shownFingerprint: shown,
+    ...(answered ? {} : { claimUpdateUnanswered: true }),
+  };
 }
 
 // A file-level review comment: POST pulls/<n>/comments with subject_type "file",

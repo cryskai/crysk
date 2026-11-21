@@ -1543,7 +1543,8 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   reply from the same author), `false` when it does not, and `null` when there is no row or its claim could not be
   read (then `claim` is `null`, `locs` is empty and the comment is the only text) or no comment. `claim_head` is the
   head of the review that wrote the claim the thread shows (its newest `claim-update` reply, else its first comment)
-  when that is this claim, and `null` otherwise; `head` stays the head the thread was first posted on. A thread that
+  when that is this claim, and `null` otherwise; `head` stays the head the thread was first posted on. `locs` are
+  positions as of the latest review (`report.head`), not as of `claim_head`. A thread that
   gets a `claim-update` reply while resolved is reopened, so GitHub does not fold the new claim away (best effort: a
   token that cannot reopen threads only logs it).
 - `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
