@@ -13,6 +13,7 @@ import type { Severity } from "#review/findings";
 import { parseFindingCommentBadge } from "#review/report";
 import {
   type AdjudicationSubject,
+  isBotLogin,
   MAX_ADJUDICATIONS_PER_RUN,
   parseAdjudicationMarker,
   trustedAdjudicator,
@@ -1126,7 +1127,7 @@ export function enrichPriorsFromThreads(input: {
     const newThreadReply = thread.some(
       (reply) =>
         (parseClaimUpdateFingerprint(reply.body) === undefined ||
-          reply.user !== rootAuthor) &&
+          (reply.user !== rootAuthor && !isBotLogin(reply.user))) &&
         reply.created_at !== undefined &&
         input.summaryUpdatedAt !== null &&
         reply.created_at > input.summaryUpdatedAt,

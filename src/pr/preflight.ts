@@ -30,6 +30,7 @@ import {
   type SizeGateConfig,
   type SizeGateVerdict,
 } from "#review/size-gate";
+import { isBotLogin } from "#triage/adjudication";
 import {
   canonicalStatusText,
   isLegacyStatusContext,
@@ -476,7 +477,14 @@ export function threadShownClaim(
   const author = comments.find((c) => c.id === rootId)?.user;
   let newest: { id: number; fingerprint: string; head: string } | undefined;
   for (const reply of comments) {
-    if (reply.in_reply_to_id !== rootId || reply.user !== author) continue;
+    // The root's author or a bot: a pull request can switch from the workflow
+    // token to the Crysk App partway through. A person's typed marker never counts.
+    if (
+      reply.in_reply_to_id !== rootId ||
+      (reply.user !== author && !isBotLogin(reply.user))
+    ) {
+      continue;
+    }
     const update = parseClaimUpdate(reply.body);
     if (
       update !== undefined &&
