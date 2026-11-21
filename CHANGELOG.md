@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Crysk's marker comments are now read only from trusted authors.** The summary, finding, claim-update and outcome comments a review reads back count only when the review's own authors wrote them, and `ci_trusted_actors` is read from the default branch. See "Who the gate trusts" in docs/github-actions.md.
+
 ### Changed
 
 - **An advisory finding can be deferred or misclassified without an adjudicator.** `crysk triage reply --tag deferred` (or `misclassified`) no longer needs `--verdict` on an advisory finding: neither tag ever clears the gate, so the ruling decided nothing and the agent had to run an adjudicator or leave the finding unanswered. A blocking finding still needs it. Requires a platform that reads these markers (cryskai/platform#50).
