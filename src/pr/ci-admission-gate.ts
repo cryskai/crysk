@@ -38,7 +38,6 @@ import {
   pathsFromPostedFindingMarkers,
   resolveCiAdmissionAttemptCount,
   resolveCiReviewPolicy,
-  resolveCiTrustedActors,
   scanPostedFindingTiers,
   stateReviewCount,
   stopCommandsNewestFirst,
@@ -75,7 +74,7 @@ import { verdictAtMs } from "#pr/pr-status";
 import {
   type CiMode,
   type CommitStatusContext,
-  findMarkedCommentId,
+  findTrustedMarkedCommentId,
   IN_FLIGHT_TTL_MS,
   inFlightContextsFor,
   isInFlightCommitStatus,
@@ -89,6 +88,7 @@ import {
   summaryMarkerFields,
 } from "#watch/preflight";
 import { CliError } from "../errors";
+import { resolveMarkerTrust } from "../trust/resolve";
 
 export interface CiAdmissionGateResult {
   ciPolicy: CiReviewPolicy;
@@ -155,7 +155,15 @@ export async function evaluateCiAdmissionGate(input: {
         throw error;
       }
     }
-    const existingSummaryId = findMarkedCommentId(issueComments);
+    // Who may have written the summary, its blocks and the finding comments: the one rule the rest
+    // of the run reads markers by (src/trust/resolve.ts), with ci_trusted_actors from the default
+    // branch, never from `config`, since CI checks out the pull request's head.
+    const markerTrustSet = await resolveMarkerTrust({ operatorRoot, spawnFn });
+    const trustedActors = markerTrustSet.logins;
+    const existingSummaryId = findTrustedMarkedCommentId(
+      issueComments,
+      markerTrustSet,
+    );
     const summaryBody =
       existingSummaryId === null
         ? null
@@ -175,11 +183,6 @@ export async function evaluateCiAdmissionGate(input: {
     if (!authority.ok) {
       authorityFailOpen = true;
     }
-    const trustedActors = resolveCiTrustedActors({
-      githubActor: process.env.GITHUB_ACTOR,
-      platformActor: process.env.CRYSK_PLATFORM_ACTOR,
-      extra: config.ci_trusted_actors,
-    });
     const allComments = [...reviewComments, ...issueComments];
     const readAnswered = answeredReader({
       operatorRoot,
@@ -199,7 +202,7 @@ export async function evaluateCiAdmissionGate(input: {
             comments: allComments,
             trustedActors,
           });
-    const markerSeen = markerCommentSeen(issueComments);
+    const markerSeen = markerCommentSeen(issueComments, markerTrustSet);
     const stateCount = stateReviewCount(state, markerSeen, parsedAdmission);
     const headBranch = process.env.GITHUB_HEAD_REF;
     const workflowHeads =

@@ -21,6 +21,7 @@ import {
   MARKER_OPEN,
   matchMarkerPrefix,
 } from "../brand";
+import { isTrustedMarkerAuthor, markerTrust } from "../trust/marker-trust";
 import {
   type AdmissionRecord,
   countTerminalAttempts,
@@ -164,26 +165,6 @@ export function resolveCiReviewPolicy(
 export function ciReviewPolicyHash(policy: CiReviewPolicy): string {
   const canonical = JSON.stringify(policy, Object.keys(policy).sort());
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
-}
-
-// GITHUB_ACTOR in Actions, the login the Crysk platform returned in platform
-// mode (action.yml sets CRYSK_PLATFORM_ACTOR only from the platform step's
-// output, so it is empty in a standalone run), plus optional repo-config
-// extras. Undefined when no actor is known — callers treat that as "do not
-// filter by author".
-export function resolveCiTrustedActors(input: {
-  githubActor?: string;
-  platformActor?: string;
-  extra?: readonly string[];
-}): ReadonlySet<string> | undefined {
-  const actors = new Set<string>();
-  for (const login of [input.githubActor, input.platformActor]) {
-    if (login !== undefined && login.length > 0) actors.add(login);
-  }
-  for (const login of input.extra ?? []) {
-    if (login.length > 0) actors.add(login);
-  }
-  return actors.size > 0 ? actors : undefined;
 }
 
 export function stateReviewCount(
@@ -485,12 +466,14 @@ export function parseFindingCommentTier(body: string): Tier | null {
   return null;
 }
 
+// Undefined is a pure caller that judges no author (the CI gate always passes a set). A set is read
+// as the shared marker trust: any bot, plus its logins.
 function isTrustedActor(
   user: string | undefined,
   trustedActors: ReadonlySet<string> | undefined,
 ): boolean {
   if (trustedActors === undefined) return true;
-  return user !== undefined && trustedActors.has(user);
+  return isTrustedMarkerAuthor(user, markerTrust(trustedActors));
 }
 
 export function postedFindingFingerprint(marker: {

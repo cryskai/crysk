@@ -30,6 +30,7 @@ import {
   type SizeGateConfig,
   type SizeGateVerdict,
 } from "#review/size-gate";
+import { isBotLogin } from "#triage/adjudication";
 import {
   canonicalStatusText,
   isLegacyStatusContext,
@@ -40,6 +41,10 @@ import {
   STATUS_CONTEXT,
 } from "../brand";
 import { CliError, CliUsageError } from "../errors";
+import {
+  type MarkerTrust,
+  markerAuthoredComments,
+} from "../trust/marker-trust";
 
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
 
@@ -472,7 +477,14 @@ export function threadShownClaim(
   const author = comments.find((c) => c.id === rootId)?.user;
   let newest: { id: number; fingerprint: string; head: string } | undefined;
   for (const reply of comments) {
-    if (reply.in_reply_to_id !== rootId || reply.user !== author) continue;
+    // The root's author or a bot: a pull request can switch from the workflow
+    // token to the Crysk App partway through. A person's typed marker never counts.
+    if (
+      reply.in_reply_to_id !== rootId ||
+      (reply.user !== author && !isBotLogin(reply.user))
+    ) {
+      continue;
+    }
     const update = parseClaimUpdate(reply.body);
     if (
       update !== undefined &&
@@ -566,6 +578,17 @@ export function findMarkedCommentId(
     found = comment.id;
   }
   return found;
+}
+
+// The newest marked comment a trusted author wrote (src/trust/marker-trust.ts). Every reader of the
+// review's own summary goes through this: a summary-shaped comment from anyone else is never found,
+// so it can neither stand in for the review nor become the comment a run PATCHes.
+export function findTrustedMarkedCommentId(
+  comments: readonly { id: number; body: string; user?: string }[],
+  trust: MarkerTrust,
+  prefix: string = PR_COMMENT_MARKER_PREFIX,
+): number | null {
+  return findMarkedCommentId(markerAuthoredComments(comments, trust), prefix);
 }
 
 // ---------------------------------------------------------------------------

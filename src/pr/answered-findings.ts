@@ -1,7 +1,7 @@
 import { liveBlockingFindings } from "#pr/pr-status";
 import { parseFindingMarker } from "#pr/preflight";
 import { TIER_UNRECOVERABLE } from "#rereview/classify";
-import { CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
+
 import { withPlainAppliedReplies } from "#triage/plain-reply";
 import {
   countedTriageReplies,
@@ -10,6 +10,7 @@ import {
 } from "#triage/reply";
 import { parseTriageMarker } from "#triage/triage";
 import { parsePrCommentMarker } from "#watch/preflight";
+import { isTrustedMarkerAuthor, markerTrust } from "../trust/marker-trust";
 
 // budget-exhausted-carry S3-S5: whether every blocking finding of the reviewed head is answered, read when a
 // skip carries a blocking red and no review is left to verify the fixes. Pure: the impure half (who may write
@@ -71,15 +72,16 @@ export function triageReplyAuthors(
   return [...authors];
 }
 
-// WHY the CI bot is trusted for a finding or a summary: Crysk posts both as github-actions[bot], which only a
-// workflow of this repository can write as. `trustedActors` (resolveCiTrustedActors) adds the configured
-// writers; when it is undefined no author is known, and every author passes, as scanPostedFindingTiers does.
+// WHY a bot is trusted for a finding or a summary: Crysk posts both as github-actions[bot] or as the
+// platform App's bot, and a person cannot post as either (src/trust/marker-trust.ts). `trustedActors`
+// (the gate's resolveMarkerTrust logins) adds the platform login and the default branch's ci_trusted_actors; when it
+// is undefined the caller judges no author, as scanPostedFindingTiers does. The gate always passes a set.
 function trustedPoster(
   user: string,
   trustedActors: ReadonlySet<string> | undefined,
 ): boolean {
   if (trustedActors === undefined) return true;
-  return user === CI_ADJUDICATOR_LOGIN || trustedActors.has(user);
+  return isTrustedMarkerAuthor(user, markerTrust(trustedActors));
 }
 
 function isGateInput(body: string): boolean {
