@@ -67,7 +67,6 @@ import {
   rereviewDeltaFromProvenance,
 } from "#review/report";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
-import { parseTriageMarker } from "#triage/triage";
 import { log } from "#ui/primitives";
 import { parseMarkerHead } from "#watch/preflight";
 import {
@@ -99,7 +98,6 @@ import {
   claimFingerprint,
   decideWorktree,
   findMarkedCommentId,
-  parseClaimUpdateFingerprint,
   parseFindingMarker,
   threadShownFingerprint,
   type WorktreeDecision,
@@ -2286,11 +2284,6 @@ async function postClaimUpdateReplies(input: {
     // later head that still sees it posts nothing; a claim that comes back to
     // an earlier text under a newer one is replied again.
     if ((posted.shownFingerprint ?? posted.marker.c) === fingerprint) {
-      // Already shown. Still unanswered means the thread should be open: try
-      // the reopen again, in case an earlier one failed.
-      if (posted.claimUpdateUnanswered === true) {
-        await reopenAfterClaimUpdate(input, posted.id);
-      }
       continue;
     }
     try {
@@ -2316,7 +2309,10 @@ async function postClaimUpdateReplies(input: {
       );
       continue;
     }
-    // After the reply, so a reopened thread always shows why.
+    // After the reply, so a reopened thread always shows why. Once, here, and
+    // never retried on a later run: by then a person may have resolved the
+    // thread on purpose, and a reopen would undo it (PR #593 R005). A thread
+    // left folded still reaches the agent through crysk status.
     await reopenAfterClaimUpdate(input, posted.id);
   }
 }
@@ -2402,22 +2398,9 @@ function shownFingerprintField(
   rootId: number,
   markerFingerprint: string,
   comments: readonly PrReviewComment[],
-): { shownFingerprint?: string; claimUpdateUnanswered?: boolean } {
+): { shownFingerprint?: string } {
   const shown = threadShownFingerprint(rootId, markerFingerprint, comments);
-  if (shown === markerFingerprint) return {};
-  const replies = comments.filter((c) => c.in_reply_to_id === rootId);
-  const update = Math.max(
-    ...replies
-      .filter((c) => parseClaimUpdateFingerprint(c.body) !== undefined)
-      .map((c) => c.id),
-  );
-  const answered = replies.some(
-    (c) => c.id > update && parseTriageMarker(c.body) !== null,
-  );
-  return {
-    shownFingerprint: shown,
-    ...(answered ? {} : { claimUpdateUnanswered: true }),
-  };
+  return shown === markerFingerprint ? {} : { shownFingerprint: shown };
 }
 
 // A file-level review comment: POST pulls/<n>/comments with subject_type "file",

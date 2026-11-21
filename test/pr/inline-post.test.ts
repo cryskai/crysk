@@ -3860,19 +3860,20 @@ describe("postInlineFindings — a kept thread whose claim changed gets the new 
     expect(reopens(calls)).toHaveLength(0);
   });
 
-  // PR #593 R002: a reopen that failed once must be tried again while the
-  // claim update is still unanswered, or the thread stays folded for good.
+  // PR #593 R005: a later run never reopens a thread that already shows the
+  // claim: a person may have resolved it on purpose. The reopen happens once,
+  // with the reply.
   const updateReply = {
     id: 901,
     user: "pr-hero",
     body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
     in_reply_to_id: 900,
   };
-  test("an unanswered claim update in a resolved thread: reopened again, not replied again", async () => {
+  test("a thread that already shows the claim and was resolved since: left resolved", async () => {
     const { spawnFn, calls } = run([updateReply], [repoView, threads(true)]);
     await post(spawnFn, NEW_CLAIM);
     expect(claimReplies(calls)).toHaveLength(0);
-    expect(reopens(calls)).toHaveLength(1);
+    expect(reopens(calls)).toHaveLength(0);
   });
 
   test("a claim update the agent already answered: the thread is left resolved", async () => {

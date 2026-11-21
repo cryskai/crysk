@@ -193,10 +193,6 @@ export interface PostedFindingComment {
   // threadShownFingerprint): its newest claim-update reply, else the marker's.
   // Absent means the marker's.
   shownFingerprint?: string;
-  // True when that claim came from a claim-update reply nobody has answered
-  // with a triage reply since: the thread should be open, so a reopen that
-  // failed before is tried again (PR #593 R002).
-  claimUpdateUnanswered?: boolean;
 }
 
 export interface FindingMatch {
