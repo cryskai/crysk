@@ -142,6 +142,36 @@ async function readConfigThroughApi(
     const raw = Buffer.from(encoded, "base64").toString("utf8");
     return { ok: true, actors: configuredActors(raw, file) };
   }
+  // The contents API also answers 404 for a branch it cannot find or a token that cannot
+  // read the repository. Only a branch it can read makes "no file" an empty list; anything
+  // else is a failed read, logged and never kept.
+  const branchProc = (spawnFn ?? Bun.spawn)(
+    [
+      "gh",
+      "api",
+      `repos/{owner}/{repo}/branches/${encodeURIComponent(branch)}`,
+      "--jq",
+      ".name",
+    ],
+    {
+      cwd: operatorRoot,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: DEFAULT_BRANCH_TIMEOUT_MS,
+    },
+  );
+  const [, , branchExit] = await Promise.all([
+    new Response(branchProc.stdout).text(),
+    new Response(branchProc.stderr).text(),
+    branchProc.exited,
+  ]);
+  if (branchExit !== 0) {
+    return {
+      ok: false,
+      why: `branch ${branch} could not be read from the API`,
+    };
+  }
   return { ok: true, actors: new Set() };
 }
 

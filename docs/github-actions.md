@@ -1520,7 +1520,8 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   default branch, never from the checkout, which may be the pull request itself. The branch is `origin/HEAD`,
   else the one the Actions event names, else the one `gh repo view` reports. The file is read with git plumbing
   when the clone has that branch's ref, and through the GitHub contents API when it does not; the clone itself is
-  never fetched into. When it cannot be read, only bots count and one line says so. A review posted
+  never fetched into. Through the API, "no config file" counts only when the branch itself can be read. When it
+  cannot be read, only bots count and one line says so. A review posted
   under a person's account that is not listed there is not read. A local `crysk review --pr` or `crysk post`
   also reads the comments of the gh account it posts under, so its own re-review finds its summary.
 - `findings` covers every posted `<!-- crysk-finding` comment, on every head. `channel` is `inline` for a review

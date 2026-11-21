@@ -194,7 +194,10 @@ describe("defaultBranchTrustedActors", () => {
 
   test("through the API no config file is an empty list and no log line", async () => {
     const dir = await ciClone("no-file-clone");
-    const gh = fakeGh([{ has: "contents/", ...NOT_FOUND }]);
+    const gh = fakeGh([
+      { has: "contents/", ...NOT_FOUND },
+      { has: "branches/main", stdout: "main\n" },
+    ]);
     const lines: string[] = [];
     const read = await readDefaultBranchTrustedActors(dir, {
       env: { GITHUB_EVENT_PATH: await eventFile("main") },
@@ -203,6 +206,51 @@ describe("defaultBranchTrustedActors", () => {
     });
     expect(read).toEqual({ ok: true, actors: new Set() });
     expect(lines).toEqual([]);
+  });
+
+  // The contents API also answers 404 for a missing branch or a token that cannot read
+  // the repository: that is not "no file", and must not read as a legitimately empty list.
+  test("through the API a 404 whose branch cannot be read is a failed read and one log line", async () => {
+    const dir = await ciClone("no-branch-clone");
+    const gh = fakeGh([
+      { has: "contents/", ...NOT_FOUND },
+      { has: "branches/main", ...NOT_FOUND },
+    ]);
+    const lines: string[] = [];
+    const read = await readDefaultBranchTrustedActors(dir, {
+      env: { GITHUB_EVENT_PATH: await eventFile("main") },
+      spawnFn: gh.spawnFn,
+      log: (line) => lines.push(line),
+    });
+    expect(read).toEqual({ ok: false });
+    expect(lines).toHaveLength(1);
+  });
+
+  test("a 404 read whose branch cannot be read is not kept for the next read", async () => {
+    const dir = await ciClone("no-branch-cache-clone");
+    const env = { GITHUB_EVENT_PATH: await eventFile("main") };
+    await readDefaultBranchTrustedActors(dir, {
+      env,
+      spawnFn: fakeGh([
+        { has: "contents/", ...NOT_FOUND },
+        { has: "branches/main", ...NOT_FOUND },
+      ]).spawnFn,
+      log: () => {},
+    });
+    const read = await readDefaultBranchTrustedActors(dir, {
+      env,
+      spawnFn: fakeGh([
+        {
+          has: "contents/.crysk/config.json?ref=main",
+          stdout: base64(config(["from-default-branch"])),
+        },
+      ]).spawnFn,
+      log: () => {},
+    });
+    expect(read).toEqual({
+      ok: true,
+      actors: new Set(["from-default-branch"]),
+    });
   });
 
   test("an API read that fails is a failed read, an empty list and one log line", async () => {
