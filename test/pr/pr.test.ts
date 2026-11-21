@@ -71,6 +71,7 @@ import type { Finding } from "#review/findings";
 import { renderIssueFindingComment } from "#review/report";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { CliError } from "../../src/errors";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 // ---------------------------------------------------------------------------
 // FakeSpawn: scripted {stdout, stderr, exitCode} per call, in call order.
@@ -1755,6 +1756,7 @@ describe("postPrComment — custom marker prefix (ROADMAP Pillar 3 CI skip comme
       OPERATOR_ROOT,
       42,
       `${SKIP_SIZE_COMMENT_MARKER}\nsize skip`,
+      FIXTURE_MARKER_TRUST,
       spawnFn,
       undefined,
       SKIP_SIZE_COMMENT_MARKER,
@@ -1792,6 +1794,7 @@ describe("postPrComment — custom marker prefix (ROADMAP Pillar 3 CI skip comme
       OPERATOR_ROOT,
       42,
       `${SKIP_SIZE_COMMENT_MARKER}\nnew size skip`,
+      FIXTURE_MARKER_TRUST,
       spawnFn,
       undefined,
       SKIP_SIZE_COMMENT_MARKER,
@@ -1830,6 +1833,7 @@ describe("postPrComment — custom marker prefix (ROADMAP Pillar 3 CI skip comme
       OPERATOR_ROOT,
       42,
       `${SKIP_SIZE_COMMENT_MARKER}\nsize skip`,
+      FIXTURE_MARKER_TRUST,
       spawnFn,
       undefined,
       SKIP_SIZE_COMMENT_MARKER,
@@ -1865,6 +1869,7 @@ describe("postPrComment — custom marker prefix (ROADMAP Pillar 3 CI skip comme
       OPERATOR_ROOT,
       42,
       `${PR_COMMENT_MARKER_PREFIX}head=${"a".repeat(40)} -->\nupdated summary`,
+      FIXTURE_MARKER_TRUST,
       spawnFn,
     );
     expect(result).toEqual({ action: "updated", commentId: 94 });
@@ -3209,6 +3214,7 @@ describe("the findings POST bounds every gh call (F004)", () => {
         OPERATOR_ROOT,
         42,
         "body",
+        FIXTURE_MARKER_TRUST,
         hangOn(base.spawnFn, (argv) => argv.includes("POST")),
         undefined,
         undefined,
@@ -3224,6 +3230,7 @@ describe("the findings POST bounds every gh call (F004)", () => {
         OPERATOR_ROOT,
         42,
         "body",
+        FIXTURE_MARKER_TRUST,
         hangOn(base.spawnFn, (argv) => argv.includes("PATCH")),
         77,
         undefined,
@@ -3262,7 +3269,14 @@ describe("the findings POST bounds every gh call (F004)", () => {
       },
     ]);
     const rec = recordTimeouts(base.spawnFn);
-    await postPrComment(OPERATOR_ROOT, 42, "body", rec.spawnFn, 77);
+    await postPrComment(
+      OPERATOR_ROOT,
+      42,
+      "body",
+      FIXTURE_MARKER_TRUST,
+      rec.spawnFn,
+      77,
+    );
     await postPrReview(reviewInput(rec.spawnFn));
     await ghPrHeadSha(OPERATOR_ROOT, 42, { spawnFn: rec.spawnFn });
     await ghRepoWebUrl(OPERATOR_ROOT, { spawnFn: rec.spawnFn });

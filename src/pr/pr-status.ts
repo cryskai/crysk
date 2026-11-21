@@ -80,6 +80,7 @@ import {
   isStatusContext,
   matchMarkerPrefix,
 } from "../brand";
+import { isTrustedMarkerAuthor, markerTrust } from "../trust/marker-trust";
 
 export const PR_STATUS_SCHEMA = "pr-hero.status/v1" as const;
 
@@ -292,14 +293,12 @@ interface AnalyzedFinding {
 export function trustedMarkerComments<
   T extends { body: string; user?: string },
 >(comments: readonly T[], trustedActors?: ReadonlySet<string>): T[] {
+  const trust = markerTrust(trustedActors);
   return comments.filter((comment) => {
     const engineMarker =
       matchMarkerPrefix(comment.body, PR_FINDING_MARKER_PREFIX) !== undefined ||
       matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined;
-    if (!engineMarker || isBotLogin(comment.user)) return true;
-    return (
-      comment.user !== undefined && trustedActors?.has(comment.user) === true
-    );
+    return !engineMarker || isTrustedMarkerAuthor(comment.user, trust);
   });
 }
 
@@ -377,11 +376,10 @@ function hasLimitSkipNotice(
   comments: readonly PrStatusComment[],
   trustedActors: ReadonlySet<string> | undefined,
 ): boolean {
+  const trust = markerTrust(trustedActors);
   return comments.some(
     (comment) =>
-      (isBotLogin(comment.user) ||
-        (comment.user !== undefined &&
-          trustedActors?.has(comment.user) === true)) &&
+      isTrustedMarkerAuthor(comment.user, trust) &&
       [
         SKIP_SIZE_COMMENT_MARKER,
         SKIP_BUDGET_COMMENT_MARKER,

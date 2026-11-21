@@ -25,6 +25,8 @@ import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
 import { log } from "#ui/primitives";
 import { CliError, CliUsageError } from "../errors";
+import type { MarkerTrust } from "../trust/marker-trust";
+import { resolveMarkerTrust } from "../trust/resolve";
 
 // `pr-hero post --pr <n> --from <run-dir> [--dry-run]` (ROADMAP B6, spec
 // "Offline replay via `post` verb"): the `ledger` verb's precedent — read a
@@ -81,6 +83,10 @@ export async function runPostCommand(input: {
   dryRun: boolean;
   spawnFn?: typeof Bun.spawn;
   postMinSeverity?: PostMinSeverity;
+  // Who may have written the summary and the finding comments this post reads back. A seam, like
+  // `spawnFn`: absent, it is resolved here (src/trust/resolve.ts), the signed-in gh login included,
+  // since this command posts under it.
+  markerTrust?: MarkerTrust;
 }): Promise<number> {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
   const runDir = path.resolve(input.from);
@@ -197,6 +203,8 @@ export async function runPostCommand(input: {
     );
   }
 
+  const trust =
+    input.markerTrust ?? (await resolveMarkerTrust({ operatorRoot, spawnFn }));
   if (dryRun) {
     const { plan, previousHeadSha, existingSummaryId } =
       await resolveInlinePostPlan({
@@ -205,6 +213,7 @@ export async function runPostCommand(input: {
         headSha: doc.head_sha,
         doc,
         diffPatch,
+        trust,
         spawnFn,
         postMinSeverity: input.postMinSeverity,
       });
@@ -272,6 +281,7 @@ export async function runPostCommand(input: {
     doc,
     diffPatch,
     webUrl: repoWebUrl,
+    trust,
     spawnFn,
     ...(rereview === undefined ? {} : { rereview, rereviewPriors: [] }),
     requireRereviewOnPriorSummary: true,

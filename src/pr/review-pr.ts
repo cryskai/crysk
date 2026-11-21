@@ -71,7 +71,7 @@ import {
 } from "#pr/pr";
 import {
   createPrRunDir,
-  findMarkedCommentId,
+  findTrustedMarkedCommentId,
   resolveCiPosture,
   resolvePrTarget,
 } from "#pr/preflight";
@@ -125,6 +125,8 @@ import { worktreeLockPath } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
 import { resolveRunClaudeCredential } from "../security/claude-credential";
+import type { MarkerTrust } from "../trust/marker-trust";
+import { resolveMarkerTrust } from "../trust/resolve";
 import { writeGateRecord } from "./gate-record";
 
 // The CLI's record for a pipeline whose every hunter failed (cli.json,
@@ -212,6 +214,7 @@ async function readCommentAuthor(input: {
 async function readSummaryAuthor(input: {
   operatorRoot: string;
   pr: number;
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
 }): Promise<string | undefined> {
   try {
@@ -219,7 +222,7 @@ async function readSummaryAuthor(input: {
       spawnFn: input.spawnFn,
       timeoutMs: ADJUDICATION_REPLY_TIMEOUT_MS,
     });
-    const id = findMarkedCommentId(comments);
+    const id = findTrustedMarkedCommentId(comments, input.trust);
     return comments.find((comment) => comment.id === id)?.user;
   } catch {
     return undefined;
@@ -231,6 +234,8 @@ export async function postAdjudicationReplies(input: {
   pr: number;
   headSha: string;
   adjudications: readonly AdjudicationOutcome[];
+  // Who may have written the review summary whose author stands in for a finding with no comment.
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
 }): Promise<void> {
   for (const entry of input.adjudications) {
@@ -306,6 +311,7 @@ export async function postAdjudicationReplies(input: {
           ? await readSummaryAuthor({
               operatorRoot: input.operatorRoot,
               pr: input.pr,
+              trust: input.trust,
               spawnFn: input.spawnFn,
             })
           : await readCommentAuthor({
@@ -551,6 +557,9 @@ export async function reviewPr(
     // an error (C6) — first review (case A) still fails loud. See
     // resolvePrDiscovery (src/pr/discovery.ts) for the full rationale; the
     // three comment fetches stay here (its own header explains why).
+    // Who may have written the summary and the finding comments this run reads back
+    // (src/trust/marker-trust.ts): a marker from anyone else is not this review's.
+    const markerTrust = await resolveMarkerTrust({ operatorRoot });
     const [issueComments, postedFindings, reviewComments] = await Promise.all([
       fetchPrComments(operatorRoot, prNumber),
       fetchPostedFindingComments(operatorRoot, prNumber),
@@ -579,6 +588,7 @@ export async function reviewPr(
         postedFindings,
         reviewComments,
         replyWriters,
+        markerTrust,
         git: {
           commitExists: (sha) => gitCommitExists(gitDirOwner, sha),
           isAncestor: (ancestor, descendant) =>
@@ -991,6 +1001,7 @@ export async function reviewPr(
         home,
         repoId: repoHome.repoId,
         postEnabled,
+        markerTrust,
         rereview,
         phaseB,
         gitDirOwner,
@@ -1017,6 +1028,7 @@ export async function reviewPr(
           pr: prNumber,
           headSha,
           adjudications: result?.adjudications ?? [],
+          trust: markerTrust,
         });
       }
       return exitCode;

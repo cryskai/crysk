@@ -54,6 +54,7 @@ import {
 } from "#watch/preflight";
 import { CliUsageError } from "../../src/errors";
 import { parseIgnoreFile } from "../../src/ignore-file";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 function file(path: string, insertions: number, deletions = 0): NumstatFile {
   return { path, insertions, deletions, binary: false };
@@ -469,14 +470,22 @@ describe("parseMarkerHead", () => {
     ).toBeNull();
   });
 
+  // These cases are about the marker's shape, so each comment stands as posted by a trusted login.
+  // Who may author one is pinned in test/trust/marker-trust.test.ts.
+  const postedByFixture = (comments: { body: string }[]) =>
+    comments.map((comment) => ({ ...comment, user: "pr-hero" }));
+
   test("markerDeclaredHeads collects only real declarations", () => {
     expect(
-      markerDeclaredHeads([
-        { body: "LGTM" },
-        { body: `<!-- pr-hero-report head=${HEAD_A} -->\nbody` },
-        { body: "<!-- pr-hero-report -->\nold format" },
-        { body: `<!-- pr-hero-report head=${HEAD_B} -->` },
-      ]),
+      markerDeclaredHeads(
+        postedByFixture([
+          { body: "LGTM" },
+          { body: `<!-- pr-hero-report head=${HEAD_A} -->\nbody` },
+          { body: "<!-- pr-hero-report -->\nold format" },
+          { body: `<!-- pr-hero-report head=${HEAD_B} -->` },
+        ]),
+        FIXTURE_MARKER_TRUST,
+      ),
     ).toEqual([HEAD_A, HEAD_B]);
   });
 
@@ -488,11 +497,14 @@ describe("parseMarkerHead", () => {
   // own.
   test("a partial marker's head is still declared (no automatic relaunch)", () => {
     expect(
-      markerDeclaredHeads([
-        {
-          body: `<!-- pr-hero-report head=${HEAD_A} coverage=partial -->\nbody`,
-        },
-      ]),
+      markerDeclaredHeads(
+        postedByFixture([
+          {
+            body: `<!-- pr-hero-report head=${HEAD_A} coverage=partial -->\nbody`,
+          },
+        ]),
+        FIXTURE_MARKER_TRUST,
+      ),
     ).toEqual([HEAD_A]);
   });
 
@@ -513,22 +525,33 @@ describe("parseMarkerHead", () => {
   // (markerSeen true) — the fact the one-review-per-PR default consumes.
   test("markerCommentSeen sees any marker, headless included", () => {
     expect(
-      markerCommentSeen([{ body: "<!-- pr-hero-report -->\nold format" }]),
+      markerCommentSeen(
+        postedByFixture([{ body: "<!-- pr-hero-report -->\nold format" }]),
+        FIXTURE_MARKER_TRUST,
+      ),
     ).toBe(true);
     expect(
-      markerCommentSeen([
-        { body: `<!-- pr-hero-report head=${HEAD_A} -->\nbody` },
-      ]),
+      markerCommentSeen(
+        postedByFixture([
+          { body: `<!-- pr-hero-report head=${HEAD_A} -->\nbody` },
+        ]),
+        FIXTURE_MARKER_TRUST,
+      ),
     ).toBe(true);
     expect(
-      markerCommentSeen([
-        { body: "LGTM" },
-        { body: "<!-- linear-linkback -->" },
-        { body: "<!-- pr-hero-reporter -->" },
-        { body: `quoted:\n<!-- pr-hero-report head=${HEAD_A} -->` },
-      ]),
+      markerCommentSeen(
+        postedByFixture([
+          { body: "LGTM" },
+          { body: "<!-- linear-linkback -->" },
+          { body: "<!-- pr-hero-reporter -->" },
+          { body: `quoted:\n<!-- pr-hero-report head=${HEAD_A} -->` },
+        ]),
+        FIXTURE_MARKER_TRUST,
+      ),
     ).toBe(false);
-    expect(markerCommentSeen([])).toBe(false);
+    expect(markerCommentSeen(postedByFixture([]), FIXTURE_MARKER_TRUST)).toBe(
+      false,
+    );
   });
 });
 

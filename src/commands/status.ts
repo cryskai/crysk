@@ -10,7 +10,7 @@
 // history is the exception: only forced_runs_on_head reads it (readPrStatus).
 
 import os from "node:os";
-import { git, remoteHeadRef, resolveRepoRoot } from "#git/git";
+import { resolveRepoRoot } from "#git/git";
 import {
   carriedReviewVerdictTime,
   headStatusRed,
@@ -39,13 +39,14 @@ import {
   verdictAtMs,
 } from "#pr/pr-status";
 import { resolvePrTarget } from "#pr/preflight";
-import { type CliOptions, parseLocalConfig } from "#review/preflight";
+import type { CliOptions } from "#review/preflight";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { parseTriageMarker } from "#triage/triage";
 import { log } from "#ui/primitives";
 import { resolveEngineAssets } from "../assets";
 import { CliError, CliUsageError } from "../errors";
 import { readEngineVersion, recordEngineVersion } from "../skills-cache";
+import { defaultBranchTrustedActors } from "../trust/resolve";
 
 export async function statusCommand(options: CliOptions): Promise<number> {
   // parseArgs already requires a numeric --pr for this command; the check is the type
@@ -75,44 +76,6 @@ export interface PrStatusReadMemo {
   trustedActors?: ReadonlySet<string>;
   // A head's first gate status never changes once it exists, so a --wait run reads it once.
   firstStatus?: { head: string; at: string };
-}
-
-const REPO_CONFIG_PATHS = [".crysk/config.json", ".prhero/config.json"];
-const REGULAR_FILE_MODES = new Set(["100644", "100755"]);
-
-// The repository's ci_trusted_actors, read from the default branch's objects with local git only.
-// WHY not the working tree: the checkout is often the pull request, and its author must not be able
-// to name themselves. Anything unreadable (no origin/HEAD, no file, a file that does not parse) is an
-// empty list, so status falls back to reading bots alone, which can only read less.
-export async function defaultBranchTrustedActors(
-  operatorRoot: string,
-): Promise<ReadonlySet<string>> {
-  try {
-    const branch = await remoteHeadRef(operatorRoot);
-    if (branch === undefined) return new Set();
-    for (const file of REPO_CONFIG_PATHS) {
-      const listed = await git(operatorRoot, [
-        "ls-tree",
-        "--full-tree",
-        `refs/remotes/origin/${branch}`,
-        "--",
-        file,
-      ]);
-      if (!listed.ok) return new Set();
-      const [meta] = listed.stdout.split("\t");
-      const [mode, type, sha] = (meta ?? "").trim().split(" ");
-      if (sha === undefined) continue;
-      if (type !== "blob" || !REGULAR_FILE_MODES.has(mode ?? "")) {
-        return new Set();
-      }
-      const blob = await git(operatorRoot, ["cat-file", "blob", sha]);
-      if (!blob.ok) return new Set();
-      return new Set(parseLocalConfig(blob.stdout, file).ci_trusted_actors);
-    }
-    return new Set();
-  } catch {
-    return new Set();
-  }
 }
 
 // One read of a pull request as `crysk status` reports it: the head, its statuses, the time of the

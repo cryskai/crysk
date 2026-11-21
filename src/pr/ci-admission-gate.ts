@@ -75,7 +75,7 @@ import { verdictAtMs } from "#pr/pr-status";
 import {
   type CiMode,
   type CommitStatusContext,
-  findMarkedCommentId,
+  findTrustedMarkedCommentId,
   IN_FLIGHT_TTL_MS,
   inFlightContextsFor,
   isInFlightCommitStatus,
@@ -89,6 +89,7 @@ import {
   summaryMarkerFields,
 } from "#watch/preflight";
 import { CliError } from "../errors";
+import { markerTrust } from "../trust/marker-trust";
 
 export interface CiAdmissionGateResult {
   ciPolicy: CiReviewPolicy;
@@ -155,7 +156,17 @@ export async function evaluateCiAdmissionGate(input: {
         throw error;
       }
     }
-    const existingSummaryId = findMarkedCommentId(issueComments);
+    const trustedActors = resolveCiTrustedActors({
+      githubActor: process.env.GITHUB_ACTOR,
+      platformActor: process.env.CRYSK_PLATFORM_ACTOR,
+      extra: config.ci_trusted_actors,
+    });
+    // Who may have written the summary and its blocks (src/trust/marker-trust.ts).
+    const markerTrustSet = markerTrust(trustedActors ?? []);
+    const existingSummaryId = findTrustedMarkedCommentId(
+      issueComments,
+      markerTrustSet,
+    );
     const summaryBody =
       existingSummaryId === null
         ? null
@@ -175,11 +186,6 @@ export async function evaluateCiAdmissionGate(input: {
     if (!authority.ok) {
       authorityFailOpen = true;
     }
-    const trustedActors = resolveCiTrustedActors({
-      githubActor: process.env.GITHUB_ACTOR,
-      platformActor: process.env.CRYSK_PLATFORM_ACTOR,
-      extra: config.ci_trusted_actors,
-    });
     const allComments = [...reviewComments, ...issueComments];
     const readAnswered = answeredReader({
       operatorRoot,
@@ -199,7 +205,7 @@ export async function evaluateCiAdmissionGate(input: {
             comments: allComments,
             trustedActors,
           });
-    const markerSeen = markerCommentSeen(issueComments);
+    const markerSeen = markerCommentSeen(issueComments, markerTrustSet);
     const stateCount = stateReviewCount(state, markerSeen, parsedAdmission);
     const headBranch = process.env.GITHUB_HEAD_REF;
     const workflowHeads =

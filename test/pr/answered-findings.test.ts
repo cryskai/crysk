@@ -16,6 +16,7 @@ import { renderStateBlock, stateFinding } from "#rereview/state";
 import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { replyAnswersReview } from "#triage/reply";
 import { type TriageTag, triageMarker } from "#triage/triage";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 const REVIEWED = "1".repeat(40);
 const BOT = CI_ADJUDICATOR_LOGIN;
@@ -676,6 +677,7 @@ describe("answeredBlockingFindings — a summary row with no comment", () => {
     }) as unknown as typeof Bun.spawn;
 
     await postAdjudicationReplies({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: "/repo",
       pr: 7,
       headSha: REVIEWED,

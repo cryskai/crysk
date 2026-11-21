@@ -54,6 +54,7 @@ import {
 } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import { triageMarker } from "#triage/triage";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -312,6 +313,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -377,6 +379,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -421,6 +424,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -450,6 +454,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       ...emptyCommentScript(),
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -473,6 +478,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -506,6 +512,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -540,6 +547,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -561,6 +569,7 @@ describe("postInlineFindings — step-14 ordering", () => {
     const findings = [finding({ id: "F001", path: "src/never.ts", line: 1 })];
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -597,6 +606,7 @@ describe("postInlineFindings — step-14 ordering", () => {
     ];
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -630,6 +640,7 @@ describe("postInlineFindings — step-14 ordering", () => {
     ];
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -658,6 +669,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -715,6 +727,7 @@ describe("postInlineFindings — post_min_severity", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -765,6 +778,7 @@ describe("postInlineFindings — post_min_severity", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -830,6 +844,7 @@ describe("postInlineFindings — the 422 recovery never drops a finding", () => 
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -937,6 +952,7 @@ describe("postInlineFindings — the 422 recovery never drops a finding", () => 
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1006,6 +1022,7 @@ describe("postInlineFindings — no finding issue-comment POST (issues #16/#17)"
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1087,6 +1104,7 @@ describe("postInlineFindings — no finding issue-comment POST (issues #16/#17)"
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1167,6 +1185,7 @@ describe("postInlineFindings — idempotency, same head, drifted live line", () 
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1235,6 +1254,7 @@ describe("postInlineFindings — carried finding already posted inline (incremen
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1362,6 +1382,7 @@ describe("postInlineFindings — comment url map reaches the summary's index", (
     }) as unknown as typeof Bun.spawn;
 
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1415,6 +1436,7 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
     // details block (which carries the since clause) is omitted for an
     // all-zero delta.
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1451,6 +1473,7 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1477,6 +1500,7 @@ describe("postInlineFindings — the record of findings across runs", () => {
   test("a first review records its findings under stable ids", async () => {
     const { spawnFn } = gh();
     const posted = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1511,6 +1535,7 @@ describe("postInlineFindings — the record of findings across runs", () => {
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
     ]);
     const posted = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1580,6 +1605,7 @@ describe("postInlineFindings — the claim feed reaches the fingerprint tie-brea
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1615,6 +1641,7 @@ describe("postInlineFindings — every gh call on the findings POST is bounded (
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1644,6 +1671,7 @@ describe("postInlineFindings — every gh call on the findings POST is bounded (
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1664,6 +1692,7 @@ describe("postInlineIfEligible — sessionFailed suppresses all posting", () => 
   test("sessionFailed true: zero HTTP calls, returns null", async () => {
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineIfEligible({
+      trust: FIXTURE_MARKER_TRUST,
       sessionFailed: true,
       skippedReason: "post skipped: every hunter failed",
       operatorRoot: OPERATOR_ROOT,
@@ -1681,6 +1710,7 @@ describe("postInlineIfEligible — sessionFailed suppresses all posting", () => 
   test("sessionFailed false: posts normally and returns the outcome", async () => {
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineIfEligible({
+      trust: FIXTURE_MARKER_TRUST,
       sessionFailed: false,
       skippedReason: "unreachable",
       operatorRoot: OPERATOR_ROOT,
@@ -1832,6 +1862,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
       }),
       diffPatch: diffAddingLines("src/a.ts", 20),
       webUrl: undefined,
+      trust: FIXTURE_MARKER_TRUST,
       spawnFn,
       rereview: liveRereview(),
       rereviewPriors: [],
@@ -2056,6 +2087,7 @@ describe("postInlineFindings — the collapse loop cannot hang (F005)", () => {
     try {
       const { spawnFn, calls } = makeFakeGh(priorCommentScript(hangOn));
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2181,6 +2213,7 @@ describe("postInlineFindings — the collapse loop cannot hang (F005)", () => {
     try {
       const { spawnFn, calls } = makeFakeGh(script);
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2332,6 +2365,7 @@ describe("postInlineFindings — refused thread resolves are recorded (#562)", (
     try {
       const { spawnFn } = makeFakeGh(script);
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2469,6 +2503,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a re-review whose only finding is below post_min_severity does not claim kept findings", async () => {
     const { spawnFn, calls } = rereviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2496,6 +2531,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a clean re-review posts one closing comment after the summary PATCH", async () => {
     const { spawnFn, calls } = rereviewScript();
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2534,6 +2570,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a re-review whose new findings only reach the summary names how many were posted", async () => {
     const { spawnFn, calls } = rereviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2554,6 +2591,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a re-review that posts a review comment posts no closing comment", async () => {
     const { spawnFn, calls } = rereviewScript();
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2571,6 +2609,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a partial re-review keeps its closing comment even when it posted a review comment", async () => {
     const { spawnFn, calls } = rereviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2617,6 +2656,7 @@ describe("postInlineFindings — re-review closing comment", () => {
     test("is hidden as outdated after the new one posts", async () => {
       const { spawnFn, calls } = script();
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2639,6 +2679,7 @@ describe("postInlineFindings — re-review closing comment", () => {
     test("is hidden when this pass posts review comments instead of a closing comment", async () => {
       const { spawnFn, calls } = script();
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2663,6 +2704,7 @@ describe("postInlineFindings — re-review closing comment", () => {
         },
       ]);
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2683,6 +2725,7 @@ describe("postInlineFindings — re-review closing comment", () => {
         },
       ]);
       const outcome = await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2700,6 +2743,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a partial re-review says so in the closing comment", async () => {
     const { spawnFn, calls } = rereviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2753,6 +2797,7 @@ describe("postInlineFindings — re-review closing comment", () => {
       },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2785,6 +2830,7 @@ describe("postInlineFindings — re-review closing comment", () => {
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2801,6 +2847,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a first review posts no closing comment — the new summary is already visible", async () => {
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2821,6 +2868,7 @@ describe("postInlineFindings — re-review closing comment", () => {
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2892,6 +2940,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
   test("a re-review's Δ new count leaves out findings below post_min_severity", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2923,6 +2972,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
   test("S1 — review 2's fresh blocking finding is in the state, and review 3 still counts it", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2977,6 +3027,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
     });
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3026,6 +3077,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       });
       const { spawnFn, calls } = reviewScript();
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -3081,6 +3133,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
   test("S3 — a fresh row's locs use the line the comment was posted at, not findings.json's", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3112,6 +3165,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3182,6 +3236,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3242,6 +3297,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       claim: "advisory prior kept",
     });
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3277,6 +3333,7 @@ describe("postInlineFindings — the engine version in the summary", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3314,6 +3371,7 @@ describe("postInlineFindings — the summary counter and a forced run", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3389,6 +3447,7 @@ describe("postInlineFindings — a forced zero survives a merged re-review rende
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3414,6 +3473,7 @@ describe("postInlineFindings — a forced zero survives a merged re-review rende
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: FIRST_HEAD,
@@ -3479,6 +3539,7 @@ describe("postInlineFindings — a finding outside the diff lines but in a diff 
   test("its file is in the diff: one file-level review comment, pinned to the head, and no Outside Diff entry", async () => {
     const { spawnFn, calls } = script();
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3524,6 +3585,7 @@ describe("postInlineFindings — a finding outside the diff lines but in a diff 
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3552,6 +3614,7 @@ describe("postInlineFindings — a finding outside the diff lines but in a diff 
   test("its file is not in the diff: no file-level POST, the finding stays in the summary", async () => {
     const { spawnFn, calls } = script();
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3625,6 +3688,7 @@ describe("postInlineFindings — a failed file-level POST is re-read before it i
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3652,6 +3716,7 @@ describe("postInlineFindings — a failed file-level POST is re-read before it i
     let outcome: Awaited<ReturnType<typeof postInlineFindings>>;
     try {
       outcome = await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -3716,6 +3781,7 @@ describe("postInlineFindings — a file-level comment survives line drift", () =
   test("the same claim 40 lines away keeps its file-level comment", async () => {
     const { spawnFn, calls } = run({ line: null, original_line: null });
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3730,6 +3796,7 @@ describe("postInlineFindings — a file-level comment survives line drift", () =
   test("an outdated inline comment (it keeps original_line) is not treated as file-level", async () => {
     const { spawnFn, calls } = run({ line: null, original_line: 10 });
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3790,6 +3857,7 @@ describe("postInlineFindings — a kept thread whose claim changed gets the new 
     ]);
   const post = (spawnFn: typeof Bun.spawn, claim: string) =>
     postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,

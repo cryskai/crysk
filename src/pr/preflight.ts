@@ -40,6 +40,10 @@ import {
   STATUS_CONTEXT,
 } from "../brand";
 import { CliError, CliUsageError } from "../errors";
+import {
+  type MarkerTrust,
+  markerAuthoredComments,
+} from "../trust/marker-trust";
 
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
 
@@ -566,6 +570,17 @@ export function findMarkedCommentId(
     found = comment.id;
   }
   return found;
+}
+
+// The newest marked comment a trusted author wrote (src/trust/marker-trust.ts). Every reader of the
+// review's own summary goes through this: a summary-shaped comment from anyone else is never found,
+// so it can neither stand in for the review nor become the comment a run PATCHes.
+export function findTrustedMarkedCommentId(
+  comments: readonly { id: number; body: string; user?: string }[],
+  trust: MarkerTrust,
+  prefix: string = PR_COMMENT_MARKER_PREFIX,
+): number | null {
+  return findMarkedCommentId(markerAuthoredComments(comments, trust), prefix);
 }
 
 // ---------------------------------------------------------------------------

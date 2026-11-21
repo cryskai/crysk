@@ -10,6 +10,7 @@ import path from "node:path";
 import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import { PR_COMMENT_MARKER_PREFIX } from "#pr/preflight";
 import { postAdjudicationReplies, recordPipelineOutcome } from "#pr/review-pr";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 const SHA = "a".repeat(40);
 
@@ -368,6 +369,7 @@ describe("postAdjudicationReplies", () => {
   test("POSTs one reply on the thread, carrying the marker, badge and evidence", async () => {
     const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
     await postAdjudicationReplies({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: "/repo",
       pr: 42,
       headSha: HEAD,
@@ -395,6 +397,7 @@ describe("postAdjudicationReplies", () => {
     const token = `ghp_${"a".repeat(36)}`;
     const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
     await postAdjudicationReplies({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: "/repo",
       pr: 42,
       headSha: HEAD,
@@ -423,6 +426,7 @@ describe("postAdjudicationReplies", () => {
     }) as typeof process.stdout.write;
     try {
       await postAdjudicationReplies({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: "/repo",
         pr: 42,
         headSha: HEAD,
@@ -507,6 +511,7 @@ describe("postAdjudicationReplies", () => {
     const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
     const { out } = await captureStdout(() =>
       postAdjudicationReplies({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: "/repo",
         pr: 42,
         headSha: HEAD,
@@ -531,6 +536,7 @@ describe("postAdjudicationReplies", () => {
     const { spawnFn, calls } = fakeAuthorGh("someone-else");
     const { out } = await captureStdout(() =>
       postAdjudicationReplies({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: "/repo",
         pr: 42,
         headSha: HEAD,
@@ -546,6 +552,7 @@ describe("postAdjudicationReplies", () => {
     const { spawnFn } = fakeAuthorGh("github-actions[bot]", true);
     const { out } = await captureStdout(() =>
       postAdjudicationReplies({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: "/repo",
         pr: 42,
         headSha: HEAD,
@@ -560,6 +567,7 @@ describe("postAdjudicationReplies", () => {
     const { spawnFn } = fakeAuthorGh("github-actions[bot]");
     const { out } = await captureStdout(() =>
       postAdjudicationReplies({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: "/repo",
         pr: 42,
         headSha: HEAD,
@@ -578,6 +586,7 @@ describe("postAdjudicationReplies", () => {
       const { spawnFn } = fakeAuthorGh("crysk-ai[bot]");
       const { out } = await captureStdout(() =>
         postAdjudicationReplies({
+          trust: FIXTURE_MARKER_TRUST,
           operatorRoot: "/repo",
           pr: 42,
           headSha: HEAD,
@@ -603,6 +612,7 @@ describe("postAdjudicationReplies", () => {
       );
       const { out } = await captureStdout(() =>
         postAdjudicationReplies({
+          trust: FIXTURE_MARKER_TRUST,
           operatorRoot: "/repo",
           pr: 42,
           headSha: HEAD,
@@ -624,6 +634,7 @@ describe("postAdjudicationReplies", () => {
       const { spawnFn } = fakeAuthorGh("other-app[bot]");
       const { out } = await captureStdout(() =>
         postAdjudicationReplies({
+          trust: FIXTURE_MARKER_TRUST,
           operatorRoot: "/repo",
           pr: 42,
           headSha: HEAD,
@@ -642,6 +653,7 @@ describe("postAdjudicationReplies", () => {
     const { spawnFn } = fakeAuthorGh("someone-else");
     const { out } = await captureStdout(() =>
       postAdjudicationReplies({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: "/repo",
         pr: 42,
         headSha: HEAD,
@@ -710,6 +722,7 @@ describe("postAdjudicationReplies", () => {
   test("a ruling with no thread is posted as a top-level comment that names the finding", async () => {
     const { spawnFn, calls } = fakeIssueGh("github-actions[bot]", "other[bot]");
     await postAdjudicationReplies({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: "/repo",
       pr: 42,
       headSha: HEAD,
@@ -734,6 +747,7 @@ describe("postAdjudicationReplies", () => {
     const { spawnFn, calls } = fakeIssueGh("github-actions[bot]", "other[bot]");
     const { out } = await captureStdout(() =>
       postAdjudicationReplies({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: "/repo",
         pr: 42,
         headSha: HEAD,
@@ -751,6 +765,7 @@ describe("postAdjudicationReplies", () => {
     const { spawnFn } = fakeIssueGh("someone[bot]", "other[bot]");
     const { out } = await captureStdout(() =>
       postAdjudicationReplies({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: "/repo",
         pr: 42,
         headSha: HEAD,

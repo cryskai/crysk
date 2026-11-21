@@ -71,6 +71,8 @@ import {
   LEGACY_WATCH_LAUNCHD_LABEL,
   retireLegacyAgent,
 } from "../legacy-launchd";
+import type { MarkerTrust } from "../trust/marker-trust";
+import { resolveMarkerTrust } from "../trust/resolve";
 import {
   countAttempts,
   countLaunchedToday,
@@ -350,6 +352,7 @@ export async function gatherRepoFacts(
     const inFlight: { pr: number; head: string }[] = [];
     const pending: { pr: number; head: string }[] = [];
     const nowMs = Date.now();
+    let markerTrust: MarkerTrust | undefined;
     for (const candidate of prs) {
       if (candidate.isDraft) continue;
       const locallyBlocked = runDirs.localReviews.some(
@@ -411,11 +414,14 @@ export async function gatherRepoFacts(
           continue;
         }
       }
+      // Read once per repository, and only for a PR that reaches this fetch: the summaries the
+      // watcher's own reviews post carry this machine's gh login (src/trust/resolve.ts).
+      markerTrust ??= await resolveMarkerTrust({ operatorRoot: repoRoot });
       const comments = await fetchPrComments(repoRoot, candidate.pr);
       remoteHeads.push({
         pr: candidate.pr,
-        heads: markerDeclaredHeads(comments),
-        markerSeen: markerCommentSeen(comments),
+        heads: markerDeclaredHeads(comments, markerTrust),
+        markerSeen: markerCommentSeen(comments, markerTrust),
       });
       const statuses = await fetchCommitStatuses(repoRoot, candidate.head);
       // The watcher's own leftover pending is local-only (T3 S7): it settles

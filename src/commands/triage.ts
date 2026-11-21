@@ -13,8 +13,11 @@ import {
   postReviewCommentReply,
   resolveReviewThreadForComment,
 } from "#pr/pr";
-import { type PrStatusFinding, trustedMarkerComments } from "#pr/pr-status";
-import { findMarkedCommentId, resolveCurrentPrNumber } from "#pr/preflight";
+import type { PrStatusFinding } from "#pr/pr-status";
+import {
+  findTrustedMarkedCommentId,
+  resolveCurrentPrNumber,
+} from "#pr/preflight";
 import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
 import { openProductStore, recordFindingTriage } from "#store/store";
@@ -35,6 +38,7 @@ import { matchMarkerPrefix } from "../brand";
 import { CliError, CliUsageError } from "../errors";
 import { tryOriginRepoId } from "../home";
 import { prheroLayout } from "../home-preflight";
+import { markerTrust } from "../trust/marker-trust";
 import { readPrStatus } from "./status";
 
 // `crysk triage reply --pr <n> [--from <run-dir>] --finding <id> ...`: the
@@ -191,8 +195,9 @@ async function postedFindingFromPr(
     };
   }
   // The summary status read: a summary-shaped comment from anyone else is not linked to.
-  const summaryId = findMarkedCommentId(
-    trustedMarkerComments(issueComments, read.trustedActors),
+  const summaryId = findTrustedMarkedCommentId(
+    issueComments,
+    markerTrust(read.trustedActors),
   );
   if (
     summaryId === null ||

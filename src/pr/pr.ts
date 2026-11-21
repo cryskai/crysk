@@ -77,6 +77,10 @@ import {
   WORKFLOW_FILE_NAME,
 } from "../brand";
 import { CliError } from "../errors";
+import {
+  type MarkerTrust,
+  markerAuthoredComments,
+} from "../trust/marker-trust";
 import { buildFindingStateRecord } from "./finding-state-record";
 import {
   buildPostPlan,
@@ -97,7 +101,7 @@ import {
   type CommitStatusRequest,
   claimFingerprint,
   decideWorktree,
-  findMarkedCommentId,
+  findTrustedMarkedCommentId,
   parseFindingMarker,
   threadShownFingerprint,
   type WorktreeDecision,
@@ -919,10 +923,13 @@ export async function initCodegraphIndex(
 // `timeoutMs` bounds the lookup and the write alike (F004). Its default is the
 // findings POST's bound, and both production callers are on that path; the
 // parameter exists so a test can prove a hang fails inside a few ms.
+// `trust` names who may have written the comment the lookup finds: a marked
+// comment from anyone else is never the one this run PATCHes.
 export async function postPrComment(
   operatorRoot: string,
   pr: number,
   body: string,
+  trust: MarkerTrust,
   spawnFn?: typeof Bun.spawn,
   knownCommentId?: number,
   markerPrefix?: string,
@@ -930,8 +937,9 @@ export async function postPrComment(
 ): Promise<{ action: "created" | "updated"; commentId: number }> {
   const existingId =
     knownCommentId ??
-    findMarkedCommentId(
+    findTrustedMarkedCommentId(
       await fetchPrComments(operatorRoot, pr, { spawnFn, timeoutMs }),
+      trust,
       markerPrefix,
     );
   const action = existingId === null ? "created" : "updated";
@@ -3033,6 +3041,8 @@ export async function resolveInlinePostPlan(input: {
   headSha: string;
   doc: FindingsDocument;
   diffPatch: string;
+  // Who may have written the summary, the closing comment and the finding comments this plan reads.
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   postMinSeverity?: PostMinSeverity;
 }): Promise<{
@@ -3060,7 +3070,10 @@ export async function resolveInlinePostPlan(input: {
     spawnFn: input.spawnFn,
     timeoutMs: POSTING_GH_TIMEOUT_MS,
   });
-  const existingSummaryId = findMarkedCommentId(issueComments);
+  const existingSummaryId = findTrustedMarkedCommentId(
+    issueComments,
+    input.trust,
+  );
   const summaryBody = summaryBodyForId(issueComments, existingSummaryId);
   const previousHeadSha =
     summaryBody === null
@@ -3102,8 +3115,9 @@ export async function resolveInlinePostPlan(input: {
     ),
   });
   const priorClosingCommentId =
-    issueComments.findLast((c) => REREVIEW_CLOSED_MARKER.test(c.body))?.id ??
-    null;
+    markerAuthoredComments(issueComments, input.trust).findLast((c) =>
+      REREVIEW_CLOSED_MARKER.test(c.body),
+    )?.id ?? null;
   return {
     plan,
     previousHeadSha,
@@ -3255,6 +3269,8 @@ export async function postInlineFindings(input: {
   doc: FindingsDocument;
   diffPatch: string;
   webUrl: string | undefined;
+  // Who may have written the marker comments this post reads (src/trust/marker-trust.ts).
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   rereview?: RereviewProvenance;
   rereviewPriors?: readonly {
@@ -3307,7 +3323,7 @@ export async function postInlineFindings(input: {
   // `spawnFn`: production callers omit it and the writer reads the process environment.
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<InlinePostOutcome> {
-  const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
+  const { operatorRoot, pr, headSha, doc, webUrl, spawnFn, trust } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
   const {
     plan,
@@ -3611,6 +3627,7 @@ export async function postInlineFindings(input: {
       // PATCH is authoritative, and the re-read belongs as close to the
       // ANCHOR-BEARING call as it can get, not one write earlier.
       renderBody(plannedDelta, plannedOutsideDiff, undefined),
+      trust,
       spawnFn,
     );
     summaryCommentId = created.commentId;
@@ -3829,6 +3846,7 @@ export async function postInlineFindings(input: {
     operatorRoot,
     pr,
     patchBody,
+    trust,
     spawnFn,
     summaryCommentId ?? undefined,
   );
@@ -4140,6 +4158,7 @@ export async function postInlineIfEligible(input: {
   doc: FindingsDocument;
   diffPatch: string;
   webUrl: string | undefined;
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   rereview?: RereviewProvenance;
   rereviewPriors?: readonly {

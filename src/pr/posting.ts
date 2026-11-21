@@ -21,6 +21,7 @@ import type { CiMode } from "#pr/preflight";
 import type { RereviewProvenance } from "#rereview/prepare";
 import type { FindingsDocument } from "#review/findings";
 import { log } from "#ui/primitives";
+import type { MarkerTrust } from "../trust/marker-trust";
 import { writeFindingStateRecord } from "./finding-state-record";
 
 export interface PostingStageResult {
@@ -37,6 +38,8 @@ export async function postFindingsIfEnabled(input: {
   doc: FindingsDocument;
   diffPatch: string;
   runDir: string;
+  // Who may have written the marker comments the post reads (src/trust/marker-trust.ts).
+  markerTrust: MarkerTrust;
   rereview?: RereviewProvenance;
   rereviewPriors?: readonly {
     id: string;
@@ -82,6 +85,7 @@ export async function postFindingsIfEnabled(input: {
     doc: input.doc,
     diffPatch: input.diffPatch,
     webUrl: postedWebUrl,
+    trust: input.markerTrust,
     spawnFn: input.spawnFn,
     rereview: input.rereview,
     rereviewPriors: input.rereviewPriors,
