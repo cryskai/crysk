@@ -13,7 +13,7 @@ Check the result with `crysk config`.
 | `ci_max_attempts` | `2` | Automatic reviews per pull request |
 | `ci_rereview_min_score` | `4` | Score floor for a re-review |
 | `ci_blocking_weight` / `ci_advisory_weight` | `2` / `1` | Score = blocking × weight + advisory × weight |
-| `ci_trusted_actors` | `[]` | Extra logins whose Crysk markers count |
+| `ci_trusted_actors` | `[]` | Extra logins whose Crysk markers count, besides bots and the Crysk App; read from the default branch |
 | `ci_admission_observe_only` | `false` | Log what would be skipped, but review every push |
 | `max_verification_steps` | `8` | Earlier open findings a re-review verifies (`0` pauses it) |
 | `max_changed_lines` / `max_changed_files` | see below | A larger pull request is skipped |

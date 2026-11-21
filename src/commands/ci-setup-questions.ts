@@ -241,7 +241,7 @@ async function askAdvanced(
 
   say();
   say(
-    "Trusted actors: extra GitHub logins (bots, other automation) whose crysk markers count, besides the workflow's own actor.",
+    "Trusted actors: extra GitHub logins whose crysk markers count, besides bots and the Crysk App. Read from the default branch.",
   );
   const currentActors = Array.isArray(cfg.ci_trusted_actors)
     ? (cfg.ci_trusted_actors as string[]).join(", ")
