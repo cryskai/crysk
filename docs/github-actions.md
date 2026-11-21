@@ -1517,9 +1517,10 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 - `gate` is Crysk's own commit status on the head. `state: "none"` means no `crysk` status is on it.
 - Finding and summary comments are read only from a bot login (`github-actions[bot]` or a GitHub App) or a login in
   `ci_trusted_actors`, because anyone who can comment can type those markers. `ci_trusted_actors` is read from the
-  default branch with git plumbing, never from the checkout, which may be the pull request itself. The branch is
-  `origin/HEAD`, else the one the Actions event names, else the one `gh repo view` reports, and its tip is
-  fetched when the clone lacks it. When it cannot be read, only bots count and one line says so. A review posted
+  default branch, never from the checkout, which may be the pull request itself. The branch is `origin/HEAD`,
+  else the one the Actions event names, else the one `gh repo view` reports. The file is read with git plumbing
+  when the clone has that branch's ref, and through the GitHub contents API when it does not; the clone itself is
+  never fetched into. When it cannot be read, only bots count and one line says so. A review posted
   under a person's account that is not listed there is not read. A local `crysk review --pr` or `crysk post`
   also reads the comments of the gh account it posts under, so its own re-review finds its summary.
 - `findings` covers every posted `<!-- crysk-finding` comment, on every head. `channel` is `inline` for a review

@@ -26,7 +26,6 @@ import {
   renderCiAdmissionBlock,
   resolveCiAdmissionAttemptCount,
   resolveCiReviewPolicy,
-  resolveCiTrustedActors,
   resolveReviewAttemptCount,
   scanPostedFindingTiers,
   stateReviewCount,
@@ -859,24 +858,8 @@ describe("evaluateCiReviewAdmission — policy modes", () => {
   });
 });
 
-describe("resolveCiTrustedActors", () => {
-  test("includes the platform login and the default branch's extras", () => {
-    const actors = resolveCiTrustedActors({
-      platformActor: "crysk-ai[bot]",
-      extra: ["custom-bot"],
-    });
-    expect(actors).toEqual(new Set(["crysk-ai[bot]", "custom-bot"]));
-  });
-
-  // S5 (odd/tasks/marker-trust.md): whoever triggered the event is not a marker author. The input
-  // no longer has a field for that login, so a caller cannot pass it.
-  test("an empty platform login adds nothing", () => {
-    expect(resolveCiTrustedActors({ platformActor: "" })).toEqual(new Set());
-  });
-
-  test("with nothing configured the set is empty, which reads bots only", () => {
-    const actors = resolveCiTrustedActors({});
-    expect(actors).toEqual(new Set());
+describe("scanPostedFindingTiers — an empty trusted set", () => {
+  test("reads bots only, never everyone", () => {
     expect(
       scanPostedFindingTiers({
         summaryHead: HEAD_A,
@@ -894,7 +877,7 @@ describe("resolveCiTrustedActors", () => {
             }),
           },
         ],
-        trustedActors: actors,
+        trustedActors: new Set(),
       }),
     ).toEqual({ blocking: 1, advisory: 0, matchedMarkers: 1, parsedTiers: 1 });
   });

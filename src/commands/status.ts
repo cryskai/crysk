@@ -46,7 +46,7 @@ import { log } from "#ui/primitives";
 import { resolveEngineAssets } from "../assets";
 import { CliError, CliUsageError } from "../errors";
 import { readEngineVersion, recordEngineVersion } from "../skills-cache";
-import { defaultBranchTrustedActors } from "../trust/resolve";
+import { readDefaultBranchTrustedActors } from "../trust/resolve";
 
 export async function statusCommand(options: CliOptions): Promise<number> {
   // parseArgs already requires a numeric --pr for this command; the check is the type
@@ -166,9 +166,16 @@ export async function readPrStatus(input: {
       }
     }
   }
-  memo.trustedActors ??= await defaultBranchTrustedActors(operatorRoot, {
-    spawnFn,
-  });
+  // Kept between polls only when the read worked, as `walked` is: a failed read leaves this poll on
+  // bots alone and is read again on the next one.
+  let configured = memo.trustedActors;
+  if (configured === undefined) {
+    const read = await readDefaultBranchTrustedActors(operatorRoot, {
+      spawnFn,
+    });
+    configured = read.ok ? read.actors : new Set<string>();
+    if (read.ok) memo.trustedActors = read.actors;
+  }
   const bound = input.trustPosterOf;
   const boundPoster =
     bound === undefined
@@ -178,8 +185,8 @@ export async function readPrStatus(input: {
         )?.user;
   const trustedActors =
     boundPoster === undefined
-      ? memo.trustedActors
-      : new Set([...memo.trustedActors, boundPoster]);
+      ? configured
+      : new Set([...configured, boundPoster]);
   // Only authors whose replies can count are asked: a stale reply is dropped before its author matters.
   const writers = await requireReplyWriters({
     operatorRoot,

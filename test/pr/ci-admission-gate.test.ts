@@ -61,6 +61,10 @@ import {
 import { triageMarker } from "#triage/triage";
 import { CliError } from "../../src/errors";
 import { ClaudeCredentialRefusalError } from "../../src/security/claude-credential";
+import {
+  resetDefaultBranchTrustCache,
+  resetSelfLoginCache,
+} from "../../src/trust/resolve";
 
 const PR = 42;
 const HEAD_A = "a".repeat(40);
@@ -73,6 +77,7 @@ const GATE_ENV_KEYS = [
   "GITHUB_ACTOR",
   "CRYSK_PLATFORM_ACTOR",
   "GITHUB_WORKFLOW_REF",
+  "GITHUB_ACTIONS",
 ] as const;
 type GateEnvKey = (typeof GATE_ENV_KEYS)[number];
 
@@ -476,6 +481,49 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       );
       expect(recordCalls).toContain("this commit was already reviewed");
     });
+  });
+
+  // PR #595 R001: the gate reads marker authors by the same rule as the rest of the run, so a run
+  // outside Actions finds the summary it posted under the signed-in gh login.
+  test("outside Actions, the summary posted under the local gh login marks the head reviewed", async () => {
+    resetSelfLoginCache();
+    resetDefaultBranchTrustCache();
+    const spawnFn = makeFakeGh([
+      { match: ["api user --jq .login"], response: { stdout: "local-dev\n" } },
+      EMPTY_CHECK_RUNS,
+      {
+        match: ["issues", "comments"],
+        response: {
+          stdout: `${JSON.stringify({
+            ...summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1),
+            user: "local-dev",
+          })}\n`,
+        },
+      },
+      EMPTY_REVIEW_COMMENTS,
+      REPO_VIEW,
+    ]);
+    const recordCalls: string[] = [];
+    try {
+      await withGateEnv({}, () =>
+        evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_B,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions(),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push(recorded.reason);
+          },
+        }),
+      );
+    } finally {
+      resetSelfLoginCache();
+    }
+    expect(recordCalls).toEqual(["this commit was already reviewed"]);
   });
 
   test("an exhausted attempt budget on a new head requires manual override", async () => {

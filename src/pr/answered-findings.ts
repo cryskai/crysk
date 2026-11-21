@@ -74,7 +74,7 @@ export function triageReplyAuthors(
 
 // WHY a bot is trusted for a finding or a summary: Crysk posts both as github-actions[bot] or as the
 // platform App's bot, and a person cannot post as either (src/trust/marker-trust.ts). `trustedActors`
-// (resolveCiTrustedActors) adds the platform login and the default branch's ci_trusted_actors; when it
+// (the gate's resolveMarkerTrust logins) adds the platform login and the default branch's ci_trusted_actors; when it
 // is undefined the caller judges no author, as scanPostedFindingTiers does. The gate always passes a set.
 function trustedPoster(
   user: string,

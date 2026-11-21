@@ -1,12 +1,23 @@
 // S4 (odd/tasks/marker-trust.md): ci_trusted_actors is read from the default branch, never from the
 // checkout, including in a CI-shaped clone: shallow, on the pull request's head, with no origin/HEAD
-// and no local ref for the default branch.
+// and no local ref for the default branch. Reading it never changes the clone (PR #595 R002).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { defaultBranchTrustedActors } from "../../src/trust/resolve";
+import {
+  defaultBranchTrustedActors,
+  readDefaultBranchTrustedActors,
+  resetDefaultBranchTrustCache,
+} from "../../src/trust/resolve";
 
 async function run(cwd: string, ...args: string[]): Promise<string> {
   const proc = Bun.spawn(["git", ...args], {
@@ -73,7 +84,7 @@ async function ciClone(name: string): Promise<string> {
     `file://${origin}`,
     dir,
   );
-  await run(dir, "update-ref", "-d", "refs/remotes/origin/HEAD").catch(
+  await run(dir, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(
     () => "",
   );
   return dir;
@@ -88,64 +99,183 @@ async function eventFile(defaultBranch: string): Promise<string> {
   return file;
 }
 
-const noGh = (() => {
-  throw new Error("gh is not reached when the event names the branch");
-}) as unknown as typeof Bun.spawn;
+// A clone with the default branch's remote ref (a full fetch, no origin/HEAD).
+async function fullClone(name: string): Promise<string> {
+  const dir = path.join(scratch, name);
+  await run(scratch, "clone", "-q", "--branch", "pr", `file://${origin}`, dir);
+  await run(dir, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(
+    () => "",
+  );
+  return dir;
+}
+
+// A gh that answers by the first rule whose text appears in the joined argv; anything else fails.
+function fakeGh(
+  rules: { has: string; stdout?: string; stderr?: string; code?: number }[],
+) {
+  const calls: string[] = [];
+  const spawnFn = ((argv: string[]) => {
+    const joined = argv.join(" ");
+    calls.push(joined);
+    const rule = rules.find((r) => joined.includes(r.has));
+    return {
+      stdout: new Response(rule?.stdout ?? "").body,
+      stderr: new Response(rule?.stderr ?? "").body,
+      exited: Promise.resolve(rule === undefined ? 1 : (rule.code ?? 0)),
+      kill() {},
+    };
+  }) as unknown as typeof Bun.spawn;
+  return { spawnFn, calls };
+}
+
+const base64 = (text: string) => Buffer.from(text).toString("base64");
+const NOT_FOUND = { stderr: "gh: Not Found (HTTP 404)", code: 1 };
+
+beforeEach(() => resetDefaultBranchTrustCache());
 
 describe("defaultBranchTrustedActors", () => {
-  test("a CI-shaped clone reads the default branch's list, not the checkout's", async () => {
-    const dir = await ciClone("ci-clone");
+  test("with the default branch's ref present, it reads that branch with git, not the checkout", async () => {
+    const dir = await fullClone("full-clone");
+    const gh = fakeGh([]);
     const lines: string[] = [];
     const actors = await defaultBranchTrustedActors(dir, {
       env: { GITHUB_EVENT_PATH: await eventFile("main") },
-      spawnFn: noGh,
+      spawnFn: gh.spawnFn,
       log: (line) => lines.push(line),
     });
     expect([...actors]).toEqual(["from-default-branch"]);
     expect(lines).toEqual([]);
-    // The fetch kept the clone shallow.
-    expect(
-      (await run(dir, "rev-parse", "--is-shallow-repository")).trim(),
-    ).toBe("true");
+    expect(gh.calls).toEqual([]);
+  });
+
+  // R002: reading trust must not change the clone the review then diffs.
+  test("a CI-shaped clone without the ref reads the file through the API and leaves the clone as it was", async () => {
+    const dir = await ciClone("ci-clone");
+    const shallowBefore = await readFile(
+      path.join(dir, ".git", "shallow"),
+      "utf8",
+    );
+    const gh = fakeGh([
+      {
+        has: "contents/.crysk/config.json?ref=main",
+        stdout: `${base64(config(["from-default-branch"]))}\n`,
+      },
+    ]);
+    const lines: string[] = [];
+    const actors = await defaultBranchTrustedActors(dir, {
+      env: { GITHUB_EVENT_PATH: await eventFile("main") },
+      spawnFn: gh.spawnFn,
+      log: (line) => lines.push(line),
+    });
+    expect([...actors]).toEqual(["from-default-branch"]);
+    expect(lines).toEqual([]);
+    expect(await run(dir, "for-each-ref", "refs/remotes/origin/main")).toBe("");
+    expect(await readFile(path.join(dir, ".git", "shallow"), "utf8")).toBe(
+      shallowBefore,
+    );
+  });
+
+  test("through the API the legacy path is read when the current one is absent", async () => {
+    const dir = await ciClone("legacy-clone");
+    const gh = fakeGh([
+      { has: "contents/.crysk/config.json", ...NOT_FOUND },
+      {
+        has: "contents/.prhero/config.json?ref=main",
+        stdout: base64(config(["legacy-actor"])),
+      },
+    ]);
+    const actors = await defaultBranchTrustedActors(dir, {
+      env: { GITHUB_EVENT_PATH: await eventFile("main") },
+      spawnFn: gh.spawnFn,
+      log: () => {},
+    });
+    expect([...actors]).toEqual(["legacy-actor"]);
+  });
+
+  test("through the API no config file is an empty list and no log line", async () => {
+    const dir = await ciClone("no-file-clone");
+    const gh = fakeGh([{ has: "contents/", ...NOT_FOUND }]);
+    const lines: string[] = [];
+    const read = await readDefaultBranchTrustedActors(dir, {
+      env: { GITHUB_EVENT_PATH: await eventFile("main") },
+      spawnFn: gh.spawnFn,
+      log: (line) => lines.push(line),
+    });
+    expect(read).toEqual({ ok: true, actors: new Set() });
+    expect(lines).toEqual([]);
+  });
+
+  test("an API read that fails is a failed read, an empty list and one log line", async () => {
+    const dir = await ciClone("api-fail-clone");
+    const gh = fakeGh([
+      { has: "contents/", stderr: "HTTP 502: bad gateway", code: 1 },
+    ]);
+    const lines: string[] = [];
+    const read = await readDefaultBranchTrustedActors(dir, {
+      env: { GITHUB_EVENT_PATH: await eventFile("main") },
+      spawnFn: gh.spawnFn,
+      log: (line) => lines.push(line),
+    });
+    expect(read).toEqual({ ok: false });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("bots only");
   });
 
   test("with no event payload the branch comes from gh", async () => {
-    const dir = await ciClone("gh-clone");
-    const calls: string[][] = [];
-    const gh = ((argv: string[]) => {
-      calls.push(argv);
-      return {
-        stdout: new Response("main\n").body,
-        stderr: new Response("").body,
-        exited: Promise.resolve(0),
-      };
-    }) as unknown as typeof Bun.spawn;
+    const dir = await fullClone("gh-clone");
+    const gh = fakeGh([{ has: "repo view", stdout: "main\n" }]);
     const actors = await defaultBranchTrustedActors(dir, {
       env: {},
-      spawnFn: gh,
+      spawnFn: gh.spawnFn,
       log: () => {},
     });
     expect([...actors]).toEqual(["from-default-branch"]);
-    expect(calls.map((argv) => argv.slice(0, 3))).toEqual([
-      ["gh", "repo", "view"],
-    ]);
+    expect(gh.calls.every((call) => call.startsWith("gh repo view"))).toBe(
+      true,
+    );
   });
 
   test("an unreadable default branch is an empty list and one log line", async () => {
     const dir = await ciClone("unreadable-clone");
     const lines: string[] = [];
-    const failingGh = (() => ({
-      stdout: new Response("").body,
-      stderr: new Response("").body,
-      exited: Promise.resolve(1),
-    })) as unknown as typeof Bun.spawn;
     const actors = await defaultBranchTrustedActors(dir, {
       env: {},
-      spawnFn: failingGh,
+      spawnFn: fakeGh([]).spawnFn,
       log: (line) => lines.push(line),
     });
     expect([...actors]).toEqual([]);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("bots only");
+  });
+
+  test("a successful read is reused in the process; a failed one is read again", async () => {
+    const dir = await ciClone("cache-clone");
+    const env = { GITHUB_EVENT_PATH: await eventFile("main") };
+    const failing = fakeGh([{ has: "contents/", stderr: "HTTP 502", code: 1 }]);
+    expect(
+      await readDefaultBranchTrustedActors(dir, {
+        env,
+        spawnFn: failing.spawnFn,
+        log: () => {},
+      }),
+    ).toEqual({ ok: false });
+    const working = fakeGh([
+      {
+        has: "contents/.crysk/config.json",
+        stdout: base64(config(["from-default-branch"])),
+      },
+    ]);
+    const lines: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      expect(
+        await readDefaultBranchTrustedActors(dir, {
+          env,
+          spawnFn: working.spawnFn,
+          log: (line) => lines.push(line),
+        }),
+      ).toEqual({ ok: true, actors: new Set(["from-default-branch"]) });
+    }
+    expect(working.calls).toHaveLength(1);
+    expect(lines).toEqual([]);
   });
 });

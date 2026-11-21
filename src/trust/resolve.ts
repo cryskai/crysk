@@ -9,60 +9,144 @@ import { type MarkerTrust, markerTrust } from "./marker-trust";
 const REPO_CONFIG_PATHS = [".crysk/config.json", ".prhero/config.json"];
 const REGULAR_FILE_MODES = new Set(["100644", "100755"]);
 
-// The repository's ci_trusted_actors, read from the default branch's objects with git plumbing.
+// What a read of the default branch's ci_trusted_actors gave: the list (empty when the repository has
+// no config file), or a failure. A caller that keeps a read between polls keeps only a list.
+export type DefaultBranchTrustedActorsRead =
+  | { ok: true; actors: ReadonlySet<string> }
+  | { ok: false };
+
+// One successful read per repository and process: the gate and the review of one CI run read the
+// same branch, so the second reads it from here and says nothing twice. A failure is never kept.
+const defaultBranchActorsCache = new Map<string, ReadonlySet<string>>();
+
+export function resetDefaultBranchTrustCache(): void {
+  defaultBranchActorsCache.clear();
+}
+
+// The repository's ci_trusted_actors as the default branch holds them.
 // WHY not the working tree: in CI the checkout is the pull request's head, and its author must not be
-// able to name themselves. A repository with no config file trusts no login beyond the bots. Anything
-// unreadable (no default branch, a ref that cannot be fetched, a file that does not parse) is an empty
-// list plus one log line, so a reader falls back to bots alone, which can only read less.
-export async function defaultBranchTrustedActors(
+// able to name themselves. The branch's remote ref is read with git plumbing when the clone has it;
+// a CI checkout often does not, and then the file is read through the GitHub API at that branch.
+// The clone is never fetched into: its refs and shallow boundary are what the review then diffs. A
+// repository with no config file trusts no login beyond the bots. Anything unreadable is a failed
+// read plus one log line, so a reader falls back to bots alone, which can only read less.
+export async function readDefaultBranchTrustedActors(
   operatorRoot: string,
   options: {
     env?: Record<string, string | undefined>;
     spawnFn?: typeof Bun.spawn;
     log?: (line: string) => void;
   } = {},
-): Promise<ReadonlySet<string>> {
+): Promise<DefaultBranchTrustedActorsRead> {
+  const cached = defaultBranchActorsCache.get(operatorRoot);
+  if (cached !== undefined) return { ok: true, actors: cached };
   const env = options.env ?? process.env;
   const say = options.log ?? log;
-  const unreadable = (why: string): ReadonlySet<string> => {
+  const unreadable = (why: string): DefaultBranchTrustedActorsRead => {
     say(
       `crysk: ci_trusted_actors not read from the default branch (${why}); reading markers from bots only`,
     );
-    return new Set();
+    return { ok: false };
   };
   try {
     const branch = await defaultBranchName(operatorRoot, env, options.spawnFn);
     if (branch === undefined) return unreadable("no default branch found");
     const ref = `refs/remotes/origin/${branch}`;
-    if (!(await refExists(operatorRoot, ref))) {
-      await fetchDefaultBranch(operatorRoot, branch, ref);
-      if (!(await refExists(operatorRoot, ref))) {
-        return unreadable(`origin/${branch} could not be fetched`);
-      }
-    }
-    for (const file of REPO_CONFIG_PATHS) {
-      const listed = await git(operatorRoot, [
-        "ls-tree",
-        "--full-tree",
-        ref,
-        "--",
-        file,
-      ]);
-      if (!listed.ok) return unreadable(`origin/${branch} could not be listed`);
-      const [meta] = listed.stdout.split("\t");
-      const [mode, type, sha] = (meta ?? "").trim().split(" ");
-      if (sha === undefined) continue;
-      if (type !== "blob" || !REGULAR_FILE_MODES.has(mode ?? "")) {
-        return unreadable(`${file} is not a regular file`);
-      }
-      const blob = await git(operatorRoot, ["cat-file", "blob", sha]);
-      if (!blob.ok) return unreadable(`${file} could not be read`);
-      return new Set(parseLocalConfig(blob.stdout, file).ci_trusted_actors);
-    }
-    return new Set();
+    const read = (await refExists(operatorRoot, ref))
+      ? await readConfigAtRef(operatorRoot, ref)
+      : await readConfigThroughApi(operatorRoot, branch, options.spawnFn);
+    if (!read.ok) return unreadable(read.why);
+    defaultBranchActorsCache.set(operatorRoot, read.actors);
+    return read;
   } catch (error) {
     return unreadable((error as Error).message.split("\n")[0] ?? "error");
   }
+}
+
+// The list alone, for a reader that does not keep reads: a failed read is an empty list.
+export async function defaultBranchTrustedActors(
+  operatorRoot: string,
+  options: Parameters<typeof readDefaultBranchTrustedActors>[1] = {},
+): Promise<ReadonlySet<string>> {
+  const read = await readDefaultBranchTrustedActors(operatorRoot, options);
+  return read.ok ? read.actors : new Set();
+}
+
+type ConfigRead =
+  | { ok: true; actors: ReadonlySet<string> }
+  | { ok: false; why: string };
+
+async function readConfigAtRef(
+  operatorRoot: string,
+  ref: string,
+): Promise<ConfigRead> {
+  for (const file of REPO_CONFIG_PATHS) {
+    const listed = await git(operatorRoot, [
+      "ls-tree",
+      "--full-tree",
+      ref,
+      "--",
+      file,
+    ]);
+    if (!listed.ok) return { ok: false, why: `${ref} could not be listed` };
+    const [meta] = listed.stdout.split("\t");
+    const [mode, type, sha] = (meta ?? "").trim().split(" ");
+    if (sha === undefined) continue;
+    if (type !== "blob" || !REGULAR_FILE_MODES.has(mode ?? "")) {
+      return { ok: false, why: `${file} is not a regular file` };
+    }
+    const blob = await git(operatorRoot, ["cat-file", "blob", sha]);
+    if (!blob.ok) return { ok: false, why: `${file} could not be read` };
+    return { ok: true, actors: configuredActors(blob.stdout, file) };
+  }
+  return { ok: true, actors: new Set() };
+}
+
+// The file at the branch through `gh api .../contents`, which answers the file's bytes in base64. A
+// 404 is a file that does not exist there; any other failure is an unreadable branch.
+async function readConfigThroughApi(
+  operatorRoot: string,
+  branch: string,
+  spawnFn: typeof Bun.spawn | undefined,
+): Promise<ConfigRead> {
+  for (const file of REPO_CONFIG_PATHS) {
+    const proc = (spawnFn ?? Bun.spawn)(
+      [
+        "gh",
+        "api",
+        `repos/{owner}/{repo}/contents/${file}?ref=${encodeURIComponent(branch)}`,
+        "--jq",
+        ".content",
+      ],
+      {
+        cwd: operatorRoot,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: DEFAULT_BRANCH_TIMEOUT_MS,
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (exitCode !== 0) {
+      if (/\(HTTP 404\)/.test(stderr)) continue;
+      return { ok: false, why: `${file} could not be read from the API` };
+    }
+    const encoded = stdout.replace(/\s+/g, "");
+    if (encoded.length === 0 || !/^[A-Za-z0-9+/]+=*$/.test(encoded)) {
+      return { ok: false, why: `${file} came back without content` };
+    }
+    const raw = Buffer.from(encoded, "base64").toString("utf8");
+    return { ok: true, actors: configuredActors(raw, file) };
+  }
+  return { ok: true, actors: new Set() };
+}
+
+function configuredActors(raw: string, file: string): ReadonlySet<string> {
+  return new Set(parseLocalConfig(raw, file).ci_trusted_actors);
 }
 
 // A branch name as git and GitHub spell it, never an option or a path that walks out of refs/.
@@ -131,41 +215,6 @@ async function refExists(operatorRoot: string, ref: string): Promise<boolean> {
   return result.ok;
 }
 
-// Fetches only the default branch's tip into its remote-tracking ref, bounded. A shallow checkout
-// (the CI default) stays shallow; a full clone is not made shallow.
-async function fetchDefaultBranch(
-  operatorRoot: string,
-  branch: string,
-  ref: string,
-): Promise<void> {
-  const shallow = await git(operatorRoot, [
-    "rev-parse",
-    "--is-shallow-repository",
-  ]);
-  const depth =
-    shallow.ok && shallow.stdout.trim() === "true" ? ["--depth=1"] : [];
-  const proc = Bun.spawn(
-    [
-      "git",
-      "-C",
-      operatorRoot,
-      "fetch",
-      "--no-tags",
-      "--quiet",
-      ...depth,
-      "origin",
-      `+refs/heads/${branch}:${ref}`,
-    ],
-    {
-      stdin: "ignore",
-      stdout: "ignore",
-      stderr: "ignore",
-      timeout: DEFAULT_BRANCH_TIMEOUT_MS,
-    },
-  );
-  await proc.exited;
-}
-
 const SELF_LOGIN_TIMEOUT_MS = 10_000;
 
 // One answer per process: the account gh is signed in as does not change while a command runs. A
@@ -229,6 +278,9 @@ async function readSelfLogin(input: {
 // The trust a command reads marker comments with: every bot, the platform App's login, the
 // repository's ci_trusted_actors from the default branch, and, outside Actions, the login this
 // machine posts as (a local `review --pr` or `post` writes the summary under it).
+// The one rule every reader uses, the CI admission gate included. WHY not GITHUB_ACTOR: it is whoever
+// triggered the event, and their replies and commands are judged by their repository permission,
+// not by this set. An empty set reads bots only; it never means everyone.
 export async function resolveMarkerTrust(input: {
   operatorRoot: string;
   env?: Record<string, string | undefined>;

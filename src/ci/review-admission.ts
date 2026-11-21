@@ -167,20 +167,6 @@ export function ciReviewPolicyHash(policy: CiReviewPolicy): string {
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
 
-// The logins besides bots whose review markers the CI gate reads (src/trust/marker-trust.ts): the
-// login the Crysk platform returned in platform mode (action.yml sets CRYSK_PLATFORM_ACTOR only from
-// the platform step's output, so it is empty in a standalone run), plus the repository's
-// ci_trusted_actors as the default branch holds them (src/trust/resolve.ts), never the checkout's.
-// WHY not GITHUB_ACTOR: it is whoever triggered the event, often the pull request's author, and a
-// marker that person types must not count as the review's. Their replies and commands are judged
-// elsewhere, by their repository permission. An empty set reads bots only; it never means everyone.
-export function resolveCiTrustedActors(input: {
-  platformActor?: string;
-  extra?: Iterable<string>;
-}): ReadonlySet<string> {
-  return markerTrust([input.platformActor, ...(input.extra ?? [])]).logins;
-}
-
 export function stateReviewCount(
   state: ParsedStateBlock | null,
   markerSeen: boolean,
