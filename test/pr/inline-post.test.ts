@@ -2528,9 +2528,31 @@ describe("postInlineFindings — re-review closing comment", () => {
     expect(outcome.summary.action).toBe("updated");
   });
 
-  test("a re-review with new findings names how many were posted", async () => {
+  // A finding in a file the PR does not touch only lands in the summary, and
+  // an edit notifies nobody, so the closing comment still has to announce it.
+  test("a re-review whose new findings only reach the summary names how many were posted", async () => {
     const { spawnFn, calls } = rereviewScript();
     await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/b.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const body = closingPosts(calls)[0]?.stdin ?? "";
+    expect(body).toContain("1 new finding(s) posted in this pass.");
+    expect(body).toContain("The summary comment above was updated.");
+  });
+
+  // The review comments this pass posted already notify, so a closing comment
+  // on top of them is noise.
+  test("a re-review that posts a review comment posts no closing comment", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    const outcome = await postInlineFindings({
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2541,9 +2563,115 @@ describe("postInlineFindings — re-review closing comment", () => {
       webUrl: undefined,
       spawnFn,
     });
-    const body = closingPosts(calls)[0]?.stdin ?? "";
-    expect(body).toContain("1 new finding(s) posted in this pass.");
-    expect(body).toContain("The summary comment above was updated.");
+    expect(closingPosts(calls)).toHaveLength(0);
+    expect(outcome.closingCommentId).toBeUndefined();
+  });
+
+  test("a partial re-review keeps its closing comment even when it posted a review comment", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+        run_status: "partial",
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(closingPosts(calls)).toHaveLength(1);
+  });
+
+  // Only one closing comment stays visible: each new one hides the previous.
+  describe("the previous closing comment", () => {
+    const PRIOR_CLOSING = `<!-- crysk-rereview-closed head=${OLD_HEAD} -->\n### ✅ Crysk re-review complete`;
+    const script = (extra: ScriptEntry[] = []) =>
+      makeFakeGh([
+        ...extra,
+        { match: ["issues/comments/7"], response: { stdout: "IC_node7\n" } },
+        {
+          match: ["graphql", "minimizeComment"],
+          response: { stdout: "{}" },
+        },
+        headRefOidScript(HEAD),
+        {
+          match: ["issues/42/comments", "--paginate"],
+          response: {
+            stdout: ndjson([
+              { id: 1, user: "pr-hero", body: priorSummary },
+              { id: 7, user: "pr-hero", body: PRIOR_CLOSING },
+            ]),
+          },
+        },
+        {
+          match: ["pulls/42/comments", "--paginate"],
+          response: { stdout: "" },
+        },
+      ]);
+    const minimizes = (calls: RecordedCall[]) =>
+      calls.filter((c) => c.argv.join(" ").includes("minimizeComment"));
+
+    test("is hidden as outdated after the new one posts", async () => {
+      const { spawnFn, calls } = script();
+      await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+      });
+      const hidden = minimizes(calls);
+      expect(hidden).toHaveLength(1);
+      const argv = hidden[0]?.argv.join(" ") ?? "";
+      expect(argv).toContain("id=IC_node7");
+      expect(argv).toContain("OUTDATED");
+      const closing = closingPosts(calls)[0] as RecordedCall;
+      expect(calls.indexOf(hidden[0] as RecordedCall)).toBeGreaterThan(
+        calls.indexOf(closing),
+      );
+    });
+
+    test("is hidden when this pass posts review comments instead of a closing comment", async () => {
+      const { spawnFn, calls } = script();
+      await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({
+          findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+        }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+      });
+      expect(closingPosts(calls)).toHaveLength(0);
+      expect(minimizes(calls)).toHaveLength(1);
+    });
+
+    test("a failed hide degrades to a log line and keeps the new closing comment", async () => {
+      const { spawnFn, calls } = script([
+        {
+          match: ["graphql", "minimizeComment"],
+          response: { stderr: "HTTP 502", exitCode: 1 },
+        },
+      ]);
+      const outcome = await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+      });
+      expect(minimizes(calls)).toHaveLength(1);
+      expect(outcome.closingCommentId).toBeGreaterThan(0);
+      expect(outcome.summary.action).toBe("updated");
+    });
   });
 
   test("a partial re-review says so in the closing comment", async () => {
@@ -3517,5 +3645,76 @@ describe("postInlineFindings — a failed file-level POST is re-read before it i
     expect(chunks.join("")).toContain(
       "file-level comment for src/a.ts:50 did not post (HTTP 504: gateway timeout) — listed in the summary instead",
     );
+  });
+});
+
+// GitHub gives a file-level comment no line (line and original_line both
+// null), so a later head that moves the finding must not repost it (#590 R001).
+describe("postInlineFindings — a file-level comment survives line drift", () => {
+  const CLAIM = "a line the diff does not show";
+  const fileLevelPosts = (calls: RecordedCall[]) =>
+    calls.filter((c) => c.argv.join(" ").includes("subject_type=file"));
+  const run = (prior: { line: number | null; original_line: number | null }) =>
+    makeFakeGh([
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 1,
+              user: "pr-hero",
+              body: `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`,
+            },
+          ]),
+        },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 900,
+              user: "pr-hero",
+              body: `${findingMarker({ path: "src/a.ts", line: 10, headSha: OLD_HEAD, claim: CLAIM })}\nclaim`,
+              path: "src/a.ts",
+              ...prior,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+    ]);
+  const drifted = doc({
+    findings: [
+      finding({ id: "F001", path: "src/a.ts", line: 50, claim: CLAIM }),
+    ],
+  });
+
+  test("the same claim 40 lines away keeps its file-level comment", async () => {
+    const { spawnFn, calls } = run({ line: null, original_line: null });
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: drifted,
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(0);
+  });
+
+  test("an outdated inline comment (it keeps original_line) is not treated as file-level", async () => {
+    const { spawnFn, calls } = run({ line: null, original_line: 10 });
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: drifted,
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(1);
   });
 });

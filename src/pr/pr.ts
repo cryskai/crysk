@@ -1308,6 +1308,12 @@ export async function fetchPostedFindingComments(
       marker,
       livePath: comment.path,
       liveLine: comment.line ?? undefined,
+      // A file-level comment has neither; an outdated inline one keeps its
+      // original_line, so this never mistakes one for the other.
+      ...((comment.line ?? null) === null &&
+      (comment.original_line ?? null) === null
+        ? { fileLevel: true }
+        : {}),
       ...postedTier(comment.body),
       ...(comment.created_at === undefined
         ? {}
@@ -2257,6 +2263,47 @@ export function fileLevelFindingIds(
   );
 }
 
+// Hides an issue comment as outdated. The REST id is all the caller has, and
+// the mutation takes the node id, hence the read first.
+async function minimizeIssueComment(input: {
+  operatorRoot: string;
+  commentId: number;
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<void> {
+  const node = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      `repos/{owner}/{repo}/issues/comments/${input.commentId}`,
+      "--jq",
+      ".node_id",
+    ],
+    undefined,
+    input.spawnFn,
+    input.timeoutMs,
+  );
+  const nodeId = node.stdout.trim();
+  if (!node.ok || nodeId === "") {
+    throw new Error(node.stderr.trim() || "no node id");
+  }
+  const hidden = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "graphql",
+      "-f",
+      "query=mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}",
+      "-f",
+      `id=${nodeId}`,
+    ],
+    undefined,
+    input.spawnFn,
+    input.timeoutMs,
+  );
+  if (!hidden.ok) throw new Error(hidden.stderr.trim() || "minimize failed");
+}
+
 // A file-level review comment: POST pulls/<n>/comments with subject_type "file",
 // pinned to the reviewed commit like the batch review (GitHub #39). Never throws:
 // it returns the comment id, or why the post failed.
@@ -2856,6 +2903,9 @@ export async function resolveInlinePostPlan(input: {
   // resolved). See ReviewSubmissionOutcome's WHY in pr/pr.ts.
   findingRefs: PrHeroFindingRef[];
   posted: PostedFindingComment[];
+  // The newest re-review closing comment already on the PR, hidden once this
+  // run closes. Older ones were hidden by the runs that followed them.
+  priorClosingCommentId: number | null;
 }> {
   const issueComments = await fetchPrComments(input.operatorRoot, input.pr, {
     spawnFn: input.spawnFn,
@@ -2902,6 +2952,9 @@ export async function resolveInlinePostPlan(input: {
         .map((f) => f.id),
     ),
   });
+  const priorClosingCommentId =
+    issueComments.findLast((c) => REREVIEW_CLOSED_MARKER.test(c.body))?.id ??
+    null;
   return {
     plan,
     previousHeadSha,
@@ -2909,8 +2962,12 @@ export async function resolveInlinePostPlan(input: {
     summaryBody,
     findingRefs,
     posted,
+    priorClosingCommentId,
   };
 }
+
+// Both spellings: comments posted before the rename carry `pr-hero-`.
+const REREVIEW_CLOSED_MARKER = /^<!-- (?:crysk|pr-hero)-rereview-closed /;
 
 function summaryBodyForId(
   comments: { id: number; body: string }[],
@@ -3110,6 +3167,7 @@ export async function postInlineFindings(input: {
     summaryBody,
     findingRefs,
     posted,
+    priorClosingCommentId,
   } = await resolveInlinePostPlan(input);
   const previousState =
     summaryBody === null ? null : parseStateBlock(summaryBody);
@@ -3731,8 +3789,23 @@ export async function postInlineFindings(input: {
   // catch alone cannot stop a request that is accepted but never answered.
   // As the last await here, a hang would park the caller's receipt write
   // and teardown forever.
+  //
+  // WHY not when this pass posted review comments: those already notify and
+  // move the PR down the timeline, so a closing comment on top is noise. A
+  // finding that only reached the summary does not notify, so it still gets
+  // one, and so does a partial pass, whose warning must be seen.
+  const outsideIds = new Set(outsideDiff.map((finding) => finding.id));
+  const threadsPosted = [...reachedIds].filter(
+    (id) => !outsideIds.has(id),
+  ).length;
+  const closingNeeded = threadsPosted === 0 || doc.run_status !== "complete";
   let closingCommentId: number | undefined;
-  if (existingSummaryId !== null) {
+  if (existingSummaryId !== null && !closingNeeded) {
+    log(
+      `re-review closing comment skipped: ${threadsPosted} new review comment(s) already notify`,
+    );
+  }
+  if (existingSummaryId !== null && closingNeeded) {
     try {
       closingCommentId = await postIssueCommentBody(
         operatorRoot,
@@ -3757,6 +3830,27 @@ export async function postInlineFindings(input: {
         "re-review closing comment did not post " +
           `(${error instanceof Error ? error.message : String(error)}) ` +
           "— the summary was still updated",
+      );
+    }
+  }
+  // After the new one, so one closing comment is always visible. Caught and
+  // bounded like the post above: a stale receipt left visible is noise, never
+  // a reason to fail a paid run.
+  if (priorClosingCommentId !== null && existingSummaryId !== null) {
+    try {
+      await minimizeIssueComment({
+        operatorRoot,
+        commentId: priorClosingCommentId,
+        spawnFn,
+        timeoutMs: ghTimeoutMs,
+      });
+      log(
+        `hidden: previous re-review closing comment ${priorClosingCommentId}`,
+      );
+    } catch (error) {
+      log(
+        `previous re-review closing comment ${priorClosingCommentId} was not hidden ` +
+          `(${error instanceof Error ? error.message : String(error)})`,
       );
     }
   }

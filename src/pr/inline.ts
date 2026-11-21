@@ -186,6 +186,9 @@ export interface PostedFindingComment {
   // unreadable; absent means unknown, and the matcher then behaves as before.
   tier?: "blocking" | "advisory";
   created_at?: string;
+  // A file-level review comment (subject_type "file"). GitHub gives it no
+  // line, so the marker's line is only where the finding sat at post time.
+  fileLevel?: boolean;
 }
 
 export interface FindingMatch {
@@ -234,6 +237,18 @@ function candidatesFor(
   for (const posted of available) {
     const path = posted.livePath ?? posted.marker.path;
     if (path !== finding.path) continue;
+    // WHY a file-level comment matches on its claim alone: it has no line on
+    // GitHub, so a push that moves the code more than the window away would
+    // repost the same finding as a second thread. The claim fingerprint keeps
+    // this from swallowing a different defect in the same file; a reworded
+    // claim falls through to the window below, as before.
+    if (
+      posted.fileLevel === true &&
+      posted.marker.c === claimFingerprint(finding.claim)
+    ) {
+      exact.push({ posted, distance: 0 });
+      continue;
+    }
     const sameHead = posted.marker.headSha === headSha;
     // WHY the fingerprint is consulted here too, not just in resolveWinner's
     // tie-break: this branch used to treat same-head path+line alone as

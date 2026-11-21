@@ -713,3 +713,39 @@ describe("resolvePostLine", () => {
     ).toBeUndefined();
   });
 });
+
+// A file-level comment has no line on GitHub, so its marker's line is only
+// where the finding was at post time. Line drift must not repost it.
+describe("matchPostedFindings — file-level comments match by claim, not by line", () => {
+  const NEW_HEAD = "c".repeat(40);
+
+  test("same claim, far away on a later head: persists", () => {
+    const result = matchPostedFindings({
+      findings: [finding("src/a.ts", 40)],
+      posted: [posted("src/a.ts", 10, { fileLevel: true })],
+      headSha: NEW_HEAD,
+    });
+    expect(result.persist).toHaveLength(1);
+    expect(result.fresh).toHaveLength(0);
+  });
+
+  test("a different claim far away still posts fresh", () => {
+    const result = matchPostedFindings({
+      findings: [finding("src/a.ts", 40, { claim: "another defect" })],
+      posted: [posted("src/a.ts", 10, { fileLevel: true })],
+      headSha: NEW_HEAD,
+    });
+    expect(result.persist).toHaveLength(0);
+    expect(result.fresh).toHaveLength(1);
+  });
+
+  test("an inline comment far away still posts fresh (unchanged)", () => {
+    const result = matchPostedFindings({
+      findings: [finding("src/a.ts", 40)],
+      posted: [posted("src/a.ts", 10)],
+      headSha: NEW_HEAD,
+    });
+    expect(result.persist).toHaveLength(0);
+    expect(result.fresh).toHaveLength(1);
+  });
+});
