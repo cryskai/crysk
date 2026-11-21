@@ -99,6 +99,7 @@ import {
   decideWorktree,
   findMarkedCommentId,
   PR_CLAIM_UPDATE_MARKER_PREFIX,
+  parseClaimUpdateFingerprint,
   parseFindingMarker,
   type WorktreeDecision,
   worktreeDirty,
@@ -2295,11 +2296,13 @@ async function postClaimUpdateReplies(input: {
   }
   for (const { finding, posted } of changed) {
     const fingerprint = claimFingerprint(finding.claim);
-    const marker = `${PR_CLAIM_UPDATE_MARKER_PREFIX}head=${input.headSha} c=${fingerprint} -->`;
-    // Idempotent per head and claim: a replay of the same run posts nothing new.
+    // Once per claim per thread, whatever the head: a later push that still
+    // sees this claim must not repeat it (PR #592 R004).
     if (
       existing.some(
-        (c) => c.in_reply_to_id === posted.id && c.body.startsWith(marker),
+        (c) =>
+          c.in_reply_to_id === posted.id &&
+          parseClaimUpdateFingerprint(c.body) === fingerprint,
       )
     ) {
       continue;

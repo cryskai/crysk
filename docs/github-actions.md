@@ -1537,9 +1537,10 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   write access: a reply whose author's permission cannot be read is left out.
 - `claim` and `locs` are what the latest review found, from the finding's state-block row. A re-review can keep an
   existing thread for a finding whose claim changed, so these, not the thread's first comment, say what to judge.
-  `claim_matches_comment` is `false` in that case (the review also replies in the thread with a `claim-update`
-  comment carrying the new claim), `true` when the comment carries the same claim, and `null` when there is no row
-  (then `claim` is `null`, `locs` is empty and the comment is the only text) or no comment.
+  The review then replies in the thread with a `claim-update` comment carrying the new claim.
+  `claim_matches_comment` is `true` when the thread shows this claim (its first comment, or the newest `claim-update`
+  reply from the same author), `false` when it does not, and `null` when there is no row or its claim could not be
+  read (then `claim` is `null`, `locs` is empty and the comment is the only text) or no comment.
 - `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
   live blocking findings in `findings`.
 - `report.outcome_code` is the `CRYSK-*` code of the newest outcome comment, when that comment has one. A comment

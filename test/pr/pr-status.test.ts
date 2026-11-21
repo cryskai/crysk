@@ -30,6 +30,7 @@ import {
 import {
   COMMIT_STATUS_CONTEXT,
   type CommitStatusFact,
+  claimFingerprint,
   findingMarker,
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
@@ -4356,6 +4357,73 @@ describe("buildPrStatus — the claim the review found", () => {
     const finding = status.findings[0];
     expect(finding?.comment_id).toBeNull();
     expect(finding?.claim).toBe(CLAIM);
+    expect(finding?.claim_matches_comment).toBeNull();
+  });
+});
+
+// PR #592 round 1. R002: once the review replied with the new claim, the thread
+// shows it, so the flag must not stay false for the thread's whole life.
+// R003: a row whose claim could not be read carries no claim to compare.
+describe("buildPrStatus — the claim a thread shows", () => {
+  const NEW = "a different defect";
+  const update = (c: string, user = CI_ADJUDICATOR_LOGIN) => ({
+    id: 42,
+    user,
+    body: `<!-- crysk-claim-update head=${CURRENT} c=${c} -->\n🔄 new claim`,
+    in_reply_to_id: 41,
+  });
+  const read = (reply: ReturnType<typeof update>) =>
+    buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R004", NEW)]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          reply,
+        ],
+      }),
+    ).findings.find((f) => f.comment_id === 41);
+
+  test("a claim-update reply from the review carrying this claim: the thread matches", () => {
+    expect(read(update(claimFingerprint(NEW)))?.claim_matches_comment).toBe(
+      true,
+    );
+  });
+
+  test("a claim-update reply for an older claim: still does not match", () => {
+    expect(
+      read(update(claimFingerprint("yet another")))?.claim_matches_comment,
+    ).toBe(false);
+  });
+
+  test("a claim-update reply typed by someone else does not count", () => {
+    expect(
+      read(update(claimFingerprint(NEW), "dev"))?.claim_matches_comment,
+    ).toBe(false);
+  });
+
+  test("a row whose claim could not be read: no claim and nothing to match", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R005", "")]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const finding = status.findings.find((f) => f.id === "R005");
+    expect(finding?.claim).toBeNull();
     expect(finding?.claim_matches_comment).toBeNull();
   });
 });

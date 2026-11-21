@@ -39,6 +39,7 @@ import {
   type ParsedFindingMarker,
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
+  parseClaimUpdateFingerprint,
   parseFindingMarker,
 } from "#pr/preflight";
 import {
@@ -715,9 +716,12 @@ function readFindings(
             : null,
         needs_reply: false,
         inconclusive_heads: inconclusiveHeads(repliesTo(source, raw), writers),
-        claim: row?.claim ?? null,
+        claim: rowClaim(row),
         locs: row?.locs ?? [],
-        claim_matches_comment: row === undefined ? null : row.c === marker.c,
+        claim_matches_comment:
+          rowClaim(row) === null
+            ? null
+            : row?.c === threadClaimFingerprint(source.id, marker.c, input),
       },
       // The newest reply the gate counts decides, as at the gate (triage/reply.ts).
       answersReview:
@@ -764,6 +768,31 @@ function readFindings(
   return out;
 }
 
+// A row's claim, or null when it has none to judge: no row, or one whose claim
+// could not be read (the engine stores it empty, PR #592 R003).
+function rowClaim(row: StateFinding | undefined): string | null {
+  return row === undefined || row.claim === "" ? null : row.claim;
+}
+
+// The claim a thread shows now: the newest claim-update reply the thread's own
+// author (the review) posted, else its first comment's (PR #592 R002).
+function threadClaimFingerprint(
+  commentId: number,
+  markerFingerprint: string,
+  input: PrStatusRead,
+): string {
+  const author = input.reviewComments.find((c) => c.id === commentId)?.user;
+  let newest: { id: number; c: string } | undefined;
+  for (const reply of input.reviewComments) {
+    if (reply.in_reply_to_id !== commentId || reply.user !== author) continue;
+    const c = parseClaimUpdateFingerprint(reply.body);
+    if (c !== undefined && (newest === undefined || reply.id > newest.id)) {
+      newest = { id: reply.id, c };
+    }
+  }
+  return newest?.c ?? markerFingerprint;
+}
+
 // A state row with no comment: its anchor is the first of its locs (path:line or path:a-b, the
 // start line), read with the same parser the binder uses. A row with no parseable loc keeps its raw
 // text and line 0, so it still blocks and still reports. Its newest reply is the newest top-level
@@ -802,7 +831,7 @@ function unthreadedFinding(
     ci_verdict: ciVerdict,
     needs_reply: false,
     inconclusive_heads: inconclusiveHeadCount,
-    claim: row.claim,
+    claim: rowClaim(row),
     locs: row.locs,
     claim_matches_comment: null,
   };

@@ -3837,6 +3837,24 @@ describe("postInlineFindings — a kept thread whose claim changed gets the new 
     expect(claimReplies(calls)).toHaveLength(0);
   });
 
+  // PR #592 R004: a later head that still sees the changed claim must not
+  // repeat the reply the thread already has.
+  test("a reply for this claim from an earlier head is not posted again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nold`,
+        path: "src/a.ts",
+        line: 10,
+        original_line: 10,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+  });
+
   test("a failed reply degrades to a log line, never fails the paid run", async () => {
     const { spawnFn, calls } = run(
       [],
