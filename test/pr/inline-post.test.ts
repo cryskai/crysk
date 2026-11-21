@@ -3740,3 +3740,174 @@ describe("postInlineFindings — a file-level comment survives line drift", () =
     expect(fileLevelPosts(calls)).toHaveLength(1);
   });
 });
+
+// A re-review can keep an existing thread for a finding whose claim changed:
+// the comment then shows the earlier text. A reply in the thread carries the
+// new claim, so a reader (or an agent) sees what this review actually found.
+describe("postInlineFindings — a kept thread whose claim changed gets the new claim", () => {
+  const OLD_CLAIM = "the value is stored in seconds";
+  const NEW_CLAIM = "a different defect on the same line";
+  const claimReplies = (calls: RecordedCall[]) =>
+    calls.filter(
+      (c) =>
+        c.argv.includes("in_reply_to=900") &&
+        c.stdin?.startsWith("<!-- crysk-claim-update "),
+    );
+  const run = (extraReplies: unknown[] = [], first: ScriptEntry[] = []) =>
+    makeFakeGh([
+      ...first,
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 1,
+              user: "pr-hero",
+              body: `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`,
+            },
+          ]),
+        },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 900,
+              user: "pr-hero",
+              body: `${findingMarker({ path: "src/a.ts", line: 10, headSha: OLD_HEAD, claim: OLD_CLAIM })}\nclaim`,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+            ...extraReplies,
+          ]),
+        },
+      },
+    ]);
+  const post = (spawnFn: typeof Bun.spawn, claim: string) =>
+    postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10, claim })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+
+  test("a different claim: one reply in the thread with the new claim and the head", async () => {
+    const { spawnFn, calls } = run();
+    await post(spawnFn, NEW_CLAIM);
+    const replies = claimReplies(calls);
+    expect(replies).toHaveLength(1);
+    const body = replies[0]?.stdin ?? "";
+    expect(body).toContain(`head=${HEAD}`);
+    expect(body).toContain(NEW_CLAIM);
+    expect(body).toContain(`\`${HEAD.slice(0, 8)}\``);
+    expect(body).toContain("`src/a.ts:10`");
+  });
+
+  test("the same claim: no reply", async () => {
+    const { spawnFn, calls } = run();
+    await post(spawnFn, OLD_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+  });
+
+  test("a reply for this head and claim already in the thread is not posted again", async () => {
+    const { spawnFn: first, calls: firstCalls } = run();
+    await post(first, NEW_CLAIM);
+    const already = claimReplies(firstCalls)[0]?.stdin ?? "";
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: already,
+        path: "src/a.ts",
+        line: 10,
+        original_line: 10,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+  });
+
+  // PR #592 R004: a later head that still sees the changed claim must not
+  // repeat the reply the thread already has.
+  test("a reply for this claim from an earlier head is not posted again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nold`,
+        path: "src/a.ts",
+        line: 10,
+        original_line: 10,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+  });
+
+  // PR #592 R006: what the thread shows is its newest claim update. A claim
+  // that comes back to an earlier text still needs a reply, or the thread keeps
+  // showing the other one.
+  test("a claim back to one an older reply carried, under a newer one: replied again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+        in_reply_to_id: 900,
+      },
+      {
+        id: 902,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint("a third claim")} -->\nC`,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+  });
+
+  test("a claim back to the first comment's, under a reply for another: replied again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, OLD_CLAIM);
+    expect(
+      calls.filter(
+        (c) =>
+          c.argv.includes("in_reply_to=900") &&
+          c.stdin?.startsWith("<!-- crysk-claim-update "),
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("a failed reply degrades to a log line, never fails the paid run", async () => {
+    const { spawnFn, calls } = run(
+      [],
+      [
+        {
+          match: ["in_reply_to=900"],
+          response: { stderr: "HTTP 502", exitCode: 1 },
+        },
+      ],
+    );
+    const outcome = await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+    expect(outcome.summary.action).toBe("updated");
+  });
+});

@@ -4,7 +4,11 @@
 // The case machine itself stays in rereview/plan.ts.
 
 import { normalizePath } from "#compare/compare";
-import { claimFingerprint, parseFindingMarker } from "#pr/preflight";
+import {
+  claimFingerprint,
+  parseClaimUpdateFingerprint,
+  parseFindingMarker,
+} from "#pr/preflight";
 import type { Severity } from "#review/findings";
 import { parseFindingCommentBadge } from "#review/report";
 import {
@@ -1114,8 +1118,11 @@ export function enrichPriorsFromThreads(input: {
         triage = { ...triage, ciVerdict: adjudication.verdict };
       }
     }
+    // The review's own claim-update reply is not someone answering the finding
+    // (PR #592 R001): counted, it would queue a paid verification.
     const newThreadReply = thread.some(
       (reply) =>
+        parseClaimUpdateFingerprint(reply.body) === undefined &&
         reply.created_at !== undefined &&
         input.summaryUpdatedAt !== null &&
         reply.created_at > input.summaryUpdatedAt,

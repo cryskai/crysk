@@ -58,6 +58,7 @@ import type { Finding, FindingsDocument } from "#review/findings";
 import {
   type PrCommentDelta,
   parseFindingCommentBadge,
+  renderClaimUpdateReply,
   renderFileLevelComment,
   renderInlineComment,
   renderIssueFindingComment,
@@ -80,6 +81,7 @@ import { buildFindingStateRecord } from "./finding-state-record";
 import {
   buildPostPlan,
   computeDroppedFindingIds,
+  type FindingMatch,
   type InlinePostOutcome,
   matchPostedFindings,
   type PostedFindingComment,
@@ -97,6 +99,7 @@ import {
   decideWorktree,
   findMarkedCommentId,
   parseFindingMarker,
+  threadShownFingerprint,
   type WorktreeDecision,
   worktreeDirty,
 } from "./preflight";
@@ -1314,6 +1317,7 @@ export async function fetchPostedFindingComments(
       (comment.original_line ?? null) === null
         ? { fileLevel: true }
         : {}),
+      ...shownFingerprintField(comment.id, marker.c, reviewComments),
       ...postedTier(comment.body),
       ...(comment.created_at === undefined
         ? {}
@@ -2263,6 +2267,50 @@ export function fileLevelFindingIds(
   );
 }
 
+async function postClaimUpdateReplies(input: {
+  operatorRoot: string;
+  pr: number;
+  headSha: string;
+  persisting: FindingMatch[];
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<void> {
+  for (const { finding, posted } of input.persisting) {
+    if (posted.channel !== "review") continue;
+    const fingerprint = claimFingerprint(finding.claim);
+    // Reply only when the thread does not already show this claim: its newest
+    // claim update, else its first comment (PR #592 R004, R006), read when the
+    // plan fetched the comments, so this costs no extra call. A replay or a
+    // later head that still sees it posts nothing; a claim that comes back to
+    // an earlier text under a newer one is replied again.
+    if ((posted.shownFingerprint ?? posted.marker.c) === fingerprint) {
+      continue;
+    }
+    try {
+      const id = await postReviewCommentReply({
+        operatorRoot: input.operatorRoot,
+        pr: input.pr,
+        inReplyTo: posted.id,
+        body: renderClaimUpdateReply({
+          headSha: input.headSha,
+          path: finding.path,
+          line: finding.line,
+          claim: finding.claim,
+          fingerprint,
+        }),
+        spawnFn: input.spawnFn,
+        timeoutMs: input.timeoutMs,
+      });
+      log(`posted: claim update ${id} on thread ${posted.id}`);
+    } catch (error) {
+      log(
+        `claim update on thread ${posted.id} did not post ` +
+          `(${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+  }
+}
+
 // Hides an issue comment as outdated. The REST id is all the caller has, and
 // the mutation takes the node id, hence the read first.
 async function minimizeIssueComment(input: {
@@ -2302,6 +2350,17 @@ async function minimizeIssueComment(input: {
     input.timeoutMs,
   );
   if (!hidden.ok) throw new Error(hidden.stderr.trim() || "minimize failed");
+}
+
+// Only when a claim update moved it off the marker's, so an ordinary thread keeps
+// its shape.
+function shownFingerprintField(
+  rootId: number,
+  markerFingerprint: string,
+  comments: readonly PrReviewComment[],
+): { shownFingerprint?: string } {
+  const shown = threadShownFingerprint(rootId, markerFingerprint, comments);
+  return shown === markerFingerprint ? {} : { shownFingerprint: shown };
 }
 
 // A file-level review comment: POST pulls/<n>/comments with subject_type "file",
@@ -3775,6 +3834,20 @@ export async function postInlineFindings(input: {
     }
     recordResolveThreads([...refusedResolves], input.env);
   }
+
+  // A kept thread whose finding's claim changed (the matcher binds by place):
+  // its first comment shows the earlier claim, and every reader, the loop's
+  // agent included, would judge that one. A reply carries the new claim. Caught
+  // and bounded: the review is already published, so a lost reply is a log
+  // line, never a failed run.
+  await postClaimUpdateReplies({
+    operatorRoot,
+    pr,
+    headSha,
+    persisting: plan.persisting,
+    spawnFn,
+    timeoutMs: ghTimeoutMs,
+  });
 
   // Closes a RE-review with a visible comment. Everything above only PATCHed
   // the existing summary, and an edit is invisible on GitHub: no

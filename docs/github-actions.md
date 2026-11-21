@@ -1498,7 +1498,8 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
     { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
       "severity": "CRITICAL", "tier": "blocking", "blocking": true, "live_on_head": true,
       "triage": { "tag": "dismissed", "verdict": "upheld", "actor": "agent", "head": "<40-hex>" },
-      "ci_verdict": null, "needs_reply": true, "inconclusive_heads": 0 }
+      "ci_verdict": null, "needs_reply": true, "inconclusive_heads": 0,
+      "claim": "<what the latest review found>", "locs": ["src/a.ts:10"], "claim_matches_comment": true }
   ],
   "unresolved_blocking": 1,
   "next_action": "triage",
@@ -1534,6 +1535,12 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   when some finding has it. `inconclusive_heads` counts the heads in a row, newest first, whose newest reply to this
   finding carries the verdict `inconclusive`. It reads replies from earlier reviews too, and counts only logins with
   write access: a reply whose author's permission cannot be read is left out.
+- `claim` and `locs` are what the latest review found, from the finding's state-block row. A re-review can keep an
+  existing thread for a finding whose claim changed, so these, not the thread's first comment, say what to judge.
+  The review then replies in the thread with a `claim-update` comment carrying the new claim.
+  `claim_matches_comment` is `true` when the thread shows this claim (its first comment, or the newest `claim-update`
+  reply from the same author), `false` when it does not, and `null` when there is no row or its claim could not be
+  read (then `claim` is `null`, `locs` is empty and the comment is the only text) or no comment.
 - `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
   live blocking findings in `findings`.
 - `report.outcome_code` is the `CRYSK-*` code of the newest outcome comment, when that comment has one. A comment

@@ -12,6 +12,7 @@ import type { PostMinSeverity } from "#pr/post-floor";
 import {
   type CiMode,
   findingMarker,
+  PR_CLAIM_UPDATE_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
   PR_REREVIEW_CLOSED_MARKER_PREFIX,
   prCommentMarker,
@@ -1169,6 +1170,26 @@ function deltaLine(delta: PrCommentDelta): string {
 // re-review looked exactly like a run that never happened. The delta line is
 // the summary's own `deltaLine`, so the two comments cannot disagree on the
 // numbers.
+// The reply in a kept thread whose finding's claim changed. The new claim in
+// full: an agent reading the thread judges this, not the comment above it.
+export function renderClaimUpdateReply(input: {
+  headSha: string;
+  path: string;
+  line: number;
+  claim: string;
+  fingerprint: string;
+}): string {
+  return [
+    `${PR_CLAIM_UPDATE_MARKER_PREFIX}head=${input.headSha} c=${input.fingerprint} -->`,
+    `🔄 **The review of ${code(input.headSha.slice(0, 8))} reports a different claim on this thread**`,
+    "",
+    `${code(`${input.path}:${input.line}`)} — ${oneLine(input.claim)}`,
+    "",
+    "<sub>This is the finding to judge and answer now. The comment that opens this thread is from an earlier review.</sub>",
+    "",
+  ].join("\n");
+}
+
 export function renderRereviewClosedComment(input: {
   headSha: string;
   delta: PrCommentDelta;
