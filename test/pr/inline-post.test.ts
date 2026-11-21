@@ -53,6 +53,7 @@ import {
   unresolvedBlockingCount,
 } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
+import { triageMarker } from "#triage/triage";
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -3810,6 +3811,107 @@ describe("postInlineFindings — a kept thread whose claim changed gets the new 
     expect(body).toContain(NEW_CLAIM);
     expect(body).toContain(`\`${HEAD.slice(0, 8)}\``);
     expect(body).toContain("`src/a.ts:10`");
+  });
+
+  // A thread the agent already answered is usually resolved, and GitHub folds
+  // it away: the new claim would be hidden from a person reading the PR.
+  const repoView: ScriptEntry = {
+    match: ["repo", "view", "--json", "owner,name"],
+    response: {
+      stdout: JSON.stringify({ owner: { login: "acme" }, name: "app" }),
+    },
+  };
+  const threads = (resolved: boolean): ScriptEntry => ({
+    match: ["reviewThreads"],
+    response: {
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [
+                  {
+                    id: "T900",
+                    isResolved: resolved,
+                    comments: { nodes: [{ fullDatabaseId: 900 }] },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    },
+  });
+  const reopens = (calls: RecordedCall[]) =>
+    calls.filter((c) => c.argv.join(" ").includes("unresolveReviewThread"));
+
+  test("a resolved thread that gets a claim update is reopened", async () => {
+    const { spawnFn, calls } = run([], [repoView, threads(true)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(reopens(calls)).toHaveLength(1);
+    expect(reopens(calls)[0]?.argv.join(" ")).toContain("id=T900");
+  });
+
+  test("an open thread that gets a claim update is left as it is", async () => {
+    const { spawnFn, calls } = run([], [repoView, threads(false)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+    expect(reopens(calls)).toHaveLength(0);
+  });
+
+  // PR #593 R005: a later run never reopens a thread that already shows the
+  // claim: a person may have resolved it on purpose. The reopen happens once,
+  // with the reply.
+  const updateReply = {
+    id: 901,
+    user: "pr-hero",
+    body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+    in_reply_to_id: 900,
+  };
+  test("a thread that already shows the claim and was resolved since: left resolved", async () => {
+    const { spawnFn, calls } = run([updateReply], [repoView, threads(true)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+    expect(reopens(calls)).toHaveLength(0);
+  });
+
+  test("a claim update the agent already answered: the thread is left resolved", async () => {
+    const { spawnFn, calls } = run(
+      [
+        updateReply,
+        {
+          id: 902,
+          user: "dev",
+          body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nfixed`,
+          in_reply_to_id: 900,
+        },
+      ],
+      [repoView, threads(true)],
+    );
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+    expect(reopens(calls)).toHaveLength(0);
+  });
+
+  test("a refused reopen is only logged: the reply stays", async () => {
+    const { spawnFn, calls } = run(
+      [],
+      [
+        repoView,
+        threads(true),
+        {
+          match: ["unresolveReviewThread"],
+          response: {
+            stderr: "Resource not accessible by integration",
+            exitCode: 1,
+          },
+        },
+      ],
+    );
+    const outcome = await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+    expect(outcome.summary.action).toBe("updated");
   });
 
   test("the same claim: no reply", async () => {
