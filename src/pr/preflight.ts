@@ -458,6 +458,31 @@ export const PR_CLAIM_UPDATE_MARKER_PREFIX = `${MARKER_OPEN}claim-update `;
 // The claim fingerprint a claim-update reply carries, or undefined when the
 // body is not one. Every reader goes through this: the poster's dedupe, the
 // status flag and the re-review's new-reply check must agree on what it is.
+// The claim a finding thread shows now: the newest claim-update reply its own
+// author (the review) posted, else its first comment's. The poster and
+// `crysk status` both read it here, so they never disagree (PR #592 R006/R007).
+export function threadShownFingerprint(
+  rootId: number,
+  rootFingerprint: string,
+  comments: readonly {
+    id: number;
+    user?: string;
+    in_reply_to_id: number | null;
+    body: string;
+  }[],
+): string {
+  const author = comments.find((c) => c.id === rootId)?.user;
+  let newest: { id: number; c: string } | undefined;
+  for (const reply of comments) {
+    if (reply.in_reply_to_id !== rootId || reply.user !== author) continue;
+    const c = parseClaimUpdateFingerprint(reply.body);
+    if (c !== undefined && (newest === undefined || reply.id > newest.id)) {
+      newest = { id: reply.id, c };
+    }
+  }
+  return newest?.c ?? rootFingerprint;
+}
+
 export function parseClaimUpdateFingerprint(body: string): string | undefined {
   const prefix = matchMarkerPrefix(body, PR_CLAIM_UPDATE_MARKER_PREFIX);
   if (prefix === undefined) return undefined;

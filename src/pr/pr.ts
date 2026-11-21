@@ -98,9 +98,8 @@ import {
   claimFingerprint,
   decideWorktree,
   findMarkedCommentId,
-  PR_CLAIM_UPDATE_MARKER_PREFIX,
-  parseClaimUpdateFingerprint,
   parseFindingMarker,
+  threadShownFingerprint,
   type WorktreeDecision,
   worktreeDirty,
 } from "./preflight";
@@ -1318,6 +1317,7 @@ export async function fetchPostedFindingComments(
       (comment.original_line ?? null) === null
         ? { fileLevel: true }
         : {}),
+      ...shownFingerprintField(comment.id, marker.c, reviewComments),
       ...postedTier(comment.body),
       ...(comment.created_at === undefined
         ? {}
@@ -2275,36 +2275,15 @@ async function postClaimUpdateReplies(input: {
   spawnFn?: typeof Bun.spawn;
   timeoutMs?: number;
 }): Promise<void> {
-  const changed = input.persisting.filter(
-    ({ finding, posted }) =>
-      posted.channel === "review" &&
-      posted.marker.c !== claimFingerprint(finding.claim),
-  );
-  if (changed.length === 0) return;
-  let existing: PrReviewComment[] = [];
-  try {
-    existing = await fetchPrReviewComments(input.operatorRoot, input.pr, {
-      spawnFn: input.spawnFn,
-      timeoutMs: input.timeoutMs,
-    });
-  } catch (error) {
-    log(
-      "claim updates skipped: could not read the review comments " +
-        `(${error instanceof Error ? error.message : String(error)})`,
-    );
-    return;
-  }
-  for (const { finding, posted } of changed) {
+  for (const { finding, posted } of input.persisting) {
+    if (posted.channel !== "review") continue;
     const fingerprint = claimFingerprint(finding.claim);
-    // Once per claim per thread, whatever the head: a later push that still
-    // sees this claim must not repeat it (PR #592 R004).
-    if (
-      existing.some(
-        (c) =>
-          c.in_reply_to_id === posted.id &&
-          parseClaimUpdateFingerprint(c.body) === fingerprint,
-      )
-    ) {
+    // Reply only when the thread does not already show this claim: its newest
+    // claim update, else its first comment (PR #592 R004, R006), read when the
+    // plan fetched the comments, so this costs no extra call. A replay or a
+    // later head that still sees it posts nothing; a claim that comes back to
+    // an earlier text under a newer one is replied again.
+    if ((posted.shownFingerprint ?? posted.marker.c) === fingerprint) {
       continue;
     }
     try {
@@ -2371,6 +2350,17 @@ async function minimizeIssueComment(input: {
     input.timeoutMs,
   );
   if (!hidden.ok) throw new Error(hidden.stderr.trim() || "minimize failed");
+}
+
+// Only when a claim update moved it off the marker's, so an ordinary thread keeps
+// its shape.
+function shownFingerprintField(
+  rootId: number,
+  markerFingerprint: string,
+  comments: readonly PrReviewComment[],
+): { shownFingerprint?: string } {
+  const shown = threadShownFingerprint(rootId, markerFingerprint, comments);
+  return shown === markerFingerprint ? {} : { shownFingerprint: shown };
 }
 
 // A file-level review comment: POST pulls/<n>/comments with subject_type "file",

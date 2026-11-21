@@ -189,6 +189,10 @@ export interface PostedFindingComment {
   // A file-level review comment (subject_type "file"). GitHub gives it no
   // line, so the marker's line is only where the finding sat at post time.
   fileLevel?: boolean;
+  // The claim fingerprint the thread shows now (pr/preflight.ts
+  // threadShownFingerprint): its newest claim-update reply, else the marker's.
+  // Absent means the marker's.
+  shownFingerprint?: string;
 }
 
 export interface FindingMatch {

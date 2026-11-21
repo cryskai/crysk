@@ -3855,6 +3855,47 @@ describe("postInlineFindings — a kept thread whose claim changed gets the new 
     expect(claimReplies(calls)).toHaveLength(0);
   });
 
+  // PR #592 R006: what the thread shows is its newest claim update. A claim
+  // that comes back to an earlier text still needs a reply, or the thread keeps
+  // showing the other one.
+  test("a claim back to one an older reply carried, under a newer one: replied again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+        in_reply_to_id: 900,
+      },
+      {
+        id: 902,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint("a third claim")} -->\nC`,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+  });
+
+  test("a claim back to the first comment's, under a reply for another: replied again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, OLD_CLAIM);
+    expect(
+      calls.filter(
+        (c) =>
+          c.argv.includes("in_reply_to=900") &&
+          c.stdin?.startsWith("<!-- crysk-claim-update "),
+      ),
+    ).toHaveLength(1);
+  });
+
   test("a failed reply degrades to a log line, never fails the paid run", async () => {
     const { spawnFn, calls } = run(
       [],
