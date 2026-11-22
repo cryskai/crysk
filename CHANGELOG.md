@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **An `applied` triage reply must say what the fix swept.** `crysk triage reply --tag applied` now refuses, and posts nothing, unless the reasoning contains a line like `Class: <the rule the finding broke>. Swept <N> sites, fixed <M>.` Most findings after the first review are bugs the previous round's fix wrote at another site of the same class, and the loop playbook asked for this sweep without anything checking it. The playbook now lists the sweep steps in place instead of only pointing at a companion file.
+
 ## [0.11.0] - 2026-11-22
 
 ### Security

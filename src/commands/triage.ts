@@ -225,6 +225,13 @@ async function postedFindingFromPr(
   };
 }
 
+// A line that names the defect class and the sweep: `Class: ... Swept N ..., fixed M.`
+function hasSweepLine(reasoning: string): boolean {
+  return reasoning
+    .split("\n")
+    .some((line) => /^\s*Class:\s*\S.*\bswept\b/i.test(line));
+}
+
 async function readReasoning(bodyFile: string): Promise<string> {
   const bodyPath = path.resolve(bodyFile);
   if (!existsSync(bodyPath)) {
@@ -457,6 +464,18 @@ export async function runTriageReplyCommand(input: {
           })),
         };
   const { target: replyTarget, headSha, reasoning, answeredTag } = found;
+  // WHY applied must carry a sweep line: nothing adjudicates an applied fix, only the next review,
+  // and most findings after the first review are bugs the previous round's fix wrote at another site
+  // of the same class. The line is the agent's record that it named the class and checked the pull
+  // request for it (crysk-loop playbook, step 4). A dry run is refused the same way.
+  if (input.tag === "applied" && !hasSweepLine(reasoning)) {
+    throw new CliUsageError(
+      "--tag applied needs a sweep line, and nothing was posted. End the reasoning with one line: " +
+        "`Class: <the rule the finding showed broken>. Swept <N> sites, fixed <M>.` " +
+        "Name the defect class, check the whole pull request for it, and fix every instance it introduced " +
+        "(crysk-loop playbook, step 4)",
+    );
+  }
   // WHY only on a blocking finding: deferred and misclassified never clear the gate, so on an
   // advisory finding an adjudicator rules on nothing. On a blocking one the ruling is the record a
   // maintainer reads before overriding. A finding whose tier cannot be read counts as blocking.
