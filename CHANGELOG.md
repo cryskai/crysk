@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The `openai` profile's refuter runs on `gpt-6.2-sol`.** It ran on `gpt-6.1-sol`, which GPT-6.2 Sol replaces. The other roles already run the newest Terra and Luna. To keep the previous model, set `models.refuter` to `opencode:openai/gpt-6.1-sol`.
+
 ## [0.12.0] - 2026-11-22
 
 ### Changed

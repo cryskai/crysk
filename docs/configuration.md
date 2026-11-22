@@ -102,7 +102,7 @@ A **profile** is a ready-made set of models for every role. Pick one in your per
 | Profile | Hunters | Refuter | Consolidate | Summary | Judge |
 | --- | --- | --- | --- | --- | --- |
 | `claude` (the default) | `claude:sonnet-latest`, `xhigh` | `claude:opus-latest`, `high` | `claude:sonnet-latest`, `high` | `claude:haiku-latest` | `claude:sonnet-latest` |
-| `openai` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.1-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6-luna` | `opencode:openai/gpt-6.1-terra` |
+| `openai` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.2-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6-luna` | `opencode:openai/gpt-6.1-terra` |
 
 - `profile` is person-only, like `models`: it chooses the model and the bill, so a repo file cannot set it. An
   unknown value is refused and the message names the known profiles.
