@@ -1400,6 +1400,11 @@ driver reads the finding off the pull request:
 crysk triage reply --pr <n> --finding R001 --tag applied --body-file reasoning.md
 ```
 
+An `applied` reply must contain a sweep line naming the defect class and how far the fix checked for it,
+for example `Class: a config value used before validation. Swept 4 reads, fixed 2.` When the pull
+request's diff could not be read, write `Class: <the rule>. Not swept: <why>.` instead of claiming a sweep.
+The driver refuses a reply with neither and posts nothing.
+
 A reply's marker carries the head of the review it answers (the summary's head), so a finding
 carried from an earlier review is answered with the same command after each review.
 

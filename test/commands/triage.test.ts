@@ -316,7 +316,10 @@ async function writeReplyRunDir(input?: {
     `${diffBody}\n`;
   await Bun.write(path.join(dir, "diff.patch"), diffPatch);
   const bodyFile = path.join(dir, "reason.md");
-  await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.");
+  await Bun.write(
+    bodyFile,
+    "Fixed by resetting the latch on unmount.\nClass: a latch left set after unmount. Swept 3 latch resets in this PR, fixed 1.",
+  );
   return {
     dir,
     bodyFile,
@@ -1363,7 +1366,10 @@ describe("runTriageReplyCommand — without a run directory", () => {
   }> {
     const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-pr-"));
     const bodyFile = path.join(dir, "body.md");
-    await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+    await Bun.write(
+      bodyFile,
+      "Fixed by resetting the latch on unmount.\nClass: a latch left set after unmount. Swept 3 latch resets in this PR, fixed 1.\n",
+    );
     return {
       bodyFile,
       cleanup: () => rm(dir, { recursive: true, force: true }),
@@ -1423,6 +1429,131 @@ describe("runTriageReplyCommand — without a run directory", () => {
       ).toBe(false);
     } finally {
       await cleanup();
+    }
+  });
+
+  // An applied fix is verified only by the next review, and most findings after
+  // the first review are bugs the previous round's fix wrote. The sweep line is
+  // the proof the agent checked the defect class across the pull request.
+  test("applied without a sweep line is refused, and nothing is posted", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-sweep-"));
+    const bodyFile = path.join(dir, "body.md");
+    await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+    try {
+      const { spawnFn, calls } = makeFakeGh(prScript());
+      await expect(
+        runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "applied",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+        }),
+      ).rejects.toThrow(/Class:.*Swept/);
+      expect(
+        calls.some(
+          (call) =>
+            call.argv.includes("--method") &&
+            call.argv.join(" ").includes("pulls/42/comments"),
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a Class line that names no sweep is not a sweep line", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-sweep-"));
+    const bodyFile = path.join(dir, "body.md");
+    await Bun.write(
+      bodyFile,
+      "Fixed.\nClass: a latch left set after unmount.\n",
+    );
+    try {
+      const { spawnFn } = makeFakeGh(prScript());
+      await expect(
+        runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "applied",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+        }),
+      ).rejects.toThrow(/sweep line/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // PR #602 R001/R002: the line must carry the counts the messages promise, and
+  // an agent that could not get the diff says so instead of claiming a sweep.
+  async function appliedWith(body: string, posts: boolean) {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-sweep-"));
+    const bodyFile = path.join(dir, "body.md");
+    await Bun.write(bodyFile, `Fixed.\n${body}\n`);
+    try {
+      const { spawnFn } = makeFakeGh(prScript());
+      const run = runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      if (posts) expect(await run).toBe(0);
+      else await expect(run).rejects.toThrow(/sweep line/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  // PR #602 R003: the class itself can contain the words "not swept".
+  test('a counted sweep line whose class mentions "not swept" is accepted', async () => {
+    await appliedWith(
+      "Class: a call site not swept after the rename. Swept 3 sites, fixed 1.",
+      true,
+    );
+  });
+
+  test("a sweep line without counts is refused", async () => {
+    await appliedWith("Class: a latch left set. Swept sites, fixed.", false);
+  });
+
+  test('a "Not swept" line is not a sweep, but its stated reason is accepted', async () => {
+    await appliedWith("Class: a latch left set. Not swept.", false);
+    await appliedWith(
+      "Class: a latch left set. Not swept: the pull request diff was unavailable.",
+      true,
+    );
+  });
+
+  test("the sweep line is asked of applied only: a deferral posts without one", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-sweep-"));
+    const bodyFile = path.join(dir, "body.md");
+    await Bun.write(
+      bodyFile,
+      "Out of scope here; tracked for the next release.\n",
+    );
+    try {
+      const { spawnFn } = makeFakeGh(prScript("advisory"));
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "deferred",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 
@@ -1813,7 +1944,10 @@ describe("triage reply — the reply the driver posts is the one the gate counts
     const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-roundtrip-"));
     try {
       const bodyFile = path.join(dir, "body.md");
-      await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+      await Bun.write(
+        bodyFile,
+        "Fixed by resetting the latch on unmount.\nClass: a latch left set after unmount. Swept 3 latch resets in this PR, fixed 1.\n",
+      );
       const { spawnFn, calls } = makeFakeGh(script);
       await runTriageReplyCommand({
         operatorRoot: OPERATOR_ROOT,
@@ -1857,7 +1991,10 @@ describe("triage reply — the reply the driver posts is the one the gate counts
     const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-roundtrip-"));
     try {
       const bodyFile = path.join(dir, "body.md");
-      await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+      await Bun.write(
+        bodyFile,
+        "Fixed by resetting the latch on unmount.\nClass: a latch left set after unmount. Swept 3 latch resets in this PR, fixed 1.\n",
+      );
       const { spawnFn, calls } = makeFakeGh(script);
       await runTriageReplyCommand({
         operatorRoot: OPERATOR_ROOT,
@@ -2129,7 +2266,10 @@ describe("runTriageReplyCommand — a finding with no comment", () => {
   }> {
     const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-row-"));
     const bodyFile = path.join(dir, "body.md");
-    await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+    await Bun.write(
+      bodyFile,
+      "Fixed by resetting the latch on unmount.\nClass: a latch left set after unmount. Swept 3 latch resets in this PR, fixed 1.\n",
+    );
     return {
       bodyFile,
       cleanup: () => rm(dir, { recursive: true, force: true }),
@@ -2685,7 +2825,10 @@ describe("runTriageReplyCommand — a finding posted as a top-level comment", ()
     const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-top-"));
     try {
       const bodyFile = path.join(dir, "body.md");
-      await Bun.write(bodyFile, "Fixed by resetting the latch on unmount.\n");
+      await Bun.write(
+        bodyFile,
+        "Fixed by resetting the latch on unmount.\nClass: a latch left set after unmount. Swept 3 latch resets in this PR, fixed 1.\n",
+      );
       const written: string[] = [];
       const spy = spyOn(process.stderr, "write").mockImplementation(
         (chunk: string | Uint8Array) => {

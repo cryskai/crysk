@@ -219,8 +219,18 @@ Handle every finding with `needs_reply: true` in one pass, then push once.
    finding placed it: re-found findings move with the code, but a carried one keeps its older lines, so
    if the cited lines do not show it, look nearby in the same file. `claim_head` only says which review
    wrote the text the thread shows. When `claim` is `null`, the comment is the only text.
-4. **For `applied`:** fix it in the working tree, sweep its class (`fix-the-class.md`) and run the
-   relevant tests. Do not push yet.
+4. **For `applied`:** most findings after the first review are bugs the previous round's fix wrote, so
+   fix the class, not only the site (details in `fix-the-class.md`):
+   - Name the class in one sentence: the rule the finding showed broken, not the line.
+   - Sweep the whole pull request for it by shape (`gh pr diff <n>` plus your unpushed changes), and fix
+     every instance this pull request introduced, each with a test that fails without its fix.
+   - Re-read your own fix as the next reviewer will: new branches, fallbacks, and every caller that now
+     sees a different value.
+   - End the reply with the sweep line, `Class: <the rule>. Swept <N> sites, fixed <M>.` If you could not
+     get the pull request's diff, write `Class: <the rule>. Not swept: <why>.` instead; never claim a sweep
+     you did not do. The driver refuses an `applied` reply with neither.
+
+   Run the relevant tests. Do not push yet.
 5. **For the other tags:** run the isolated adjudicator as `dismissal.md` says. An advisory finding
    answered `deferred` or `misclassified` needs none: post it without `--verdict`.
 6. **Reply through the driver,** one finding at a time. Write your reasoning to a file outside the
