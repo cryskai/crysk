@@ -1513,6 +1513,14 @@ describe("runTriageReplyCommand — without a run directory", () => {
     }
   }
 
+  // PR #602 R003: the class itself can contain the words "not swept".
+  test('a counted sweep line whose class mentions "not swept" is accepted', async () => {
+    await appliedWith(
+      "Class: a call site not swept after the rename. Swept 3 sites, fixed 1.",
+      true,
+    );
+  });
+
   test("a sweep line without counts is refused", async () => {
     await appliedWith("Class: a latch left set. Swept sites, fixed.", false);
   });

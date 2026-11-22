@@ -235,11 +235,7 @@ const NOT_SWEPT_LINE = /^\s*Class:\s*\S.*\bNot swept:\s*\S/i;
 function hasSweepLine(reasoning: string): boolean {
   return reasoning
     .split("\n")
-    .some((line) =>
-      /\bnot swept\b/i.test(line)
-        ? NOT_SWEPT_LINE.test(line)
-        : SWEPT_LINE.test(line),
-    );
+    .some((line) => SWEPT_LINE.test(line) || NOT_SWEPT_LINE.test(line));
 }
 
 async function readReasoning(bodyFile: string): Promise<string> {
