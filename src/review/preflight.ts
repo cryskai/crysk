@@ -525,6 +525,7 @@ Options:
                       the triage marker and the visible badge. With --tag
                       applied it must contain a sweep line:
                       Class: <the rule>. Swept <N> sites, fixed <M>.
+                      (or Class: <the rule>. Not swept: <why>.)
   --verdict <word>    triage reply only: upheld, rejected, or inconclusive.
                       Required for dismissed, and for deferred or
                       misclassified on a blocking finding; optional for

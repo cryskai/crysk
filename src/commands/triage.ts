@@ -225,11 +225,21 @@ async function postedFindingFromPr(
   };
 }
 
-// A line that names the defect class and the sweep: `Class: ... Swept N ..., fixed M.`
+// A line that names the defect class and either the sweep with its counts
+// (`Class: ... Swept N ..., fixed M.`) or, when the pull request's diff could not
+// be read, why there was none (`Class: ... Not swept: <reason>.`), as
+// fix-the-class.md asks: an agent that could not sweep says so, never claims it.
+const SWEPT_LINE = /^\s*Class:\s*\S.*\bSwept\s+\d+\b.*\bfixed\s+\d+\b/i;
+const NOT_SWEPT_LINE = /^\s*Class:\s*\S.*\bNot swept:\s*\S/i;
+
 function hasSweepLine(reasoning: string): boolean {
   return reasoning
     .split("\n")
-    .some((line) => /^\s*Class:\s*\S.*\bswept\b/i.test(line));
+    .some((line) =>
+      /\bnot swept\b/i.test(line)
+        ? NOT_SWEPT_LINE.test(line)
+        : SWEPT_LINE.test(line),
+    );
 }
 
 async function readReasoning(bodyFile: string): Promise<string> {
@@ -472,7 +482,8 @@ export async function runTriageReplyCommand(input: {
     throw new CliUsageError(
       "--tag applied needs a sweep line, and nothing was posted. End the reasoning with one line: " +
         "`Class: <the rule the finding showed broken>. Swept <N> sites, fixed <M>.` " +
-        "Name the defect class, check the whole pull request for it, and fix every instance it introduced " +
+        "Name the defect class, check the whole pull request for it, and fix every instance it introduced. " +
+        "If the pull request's diff could not be read, write `Class: <the rule>. Not swept: <why>.` instead " +
         "(crysk-loop playbook, step 4)",
     );
   }

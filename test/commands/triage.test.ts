@@ -1517,7 +1517,7 @@ describe("runTriageReplyCommand — without a run directory", () => {
     await appliedWith("Class: a latch left set. Swept sites, fixed.", false);
   });
 
-  test("a \"Not swept\" line is not a sweep, but its stated reason is accepted", async () => {
+  test('a "Not swept" line is not a sweep, but its stated reason is accepted', async () => {
     await appliedWith("Class: a latch left set. Not swept.", false);
     await appliedWith(
       "Class: a latch left set. Not swept: the pull request diff was unavailable.",
