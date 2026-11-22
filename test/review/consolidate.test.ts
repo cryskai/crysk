@@ -292,6 +292,52 @@ test("enforcePlanInvariants rule 2: two non-split entries with one primary fold 
   expect(stats.repairs).toBe(1);
 });
 
+// A model plan can list one finding as a source of two entries: its own, and
+// another defect's (Martian 50, 2026-11-22, cal-8330: F001 blocking in its own
+// entry and again in F003's). Rule 1 then promoted F003's entry to F001 and
+// Rule 2 folded it into F001's entry, so F003's distinct defect and its claim
+// were posted nowhere. A source has one home: the entry it leads.
+test("enforcePlanInvariants: a source listed in another defect's entry stays in its own, and both defects post", () => {
+  const findings = [blockingF("F001"), advisoryF("F003")];
+  const stats = { repairs: 0 };
+  const out = enforcePlanInvariants(
+    [
+      { primary: "F001", sources: ["F001"], split: false, claim: "gate" },
+      {
+        primary: "F003",
+        sources: ["F003", "F001"],
+        split: false,
+        claim: "end bound",
+      },
+    ],
+    findings,
+    stats,
+  );
+  expect(out).toEqual([
+    { primary: "F001", sources: ["F001"], split: false, claim: "gate" },
+    { primary: "F003", sources: ["F003"], split: false, claim: "end bound" },
+  ]);
+  expect(stats.repairs).toBe(1);
+});
+
+test("enforcePlanInvariants: a source two entries share but neither leads stays in the first", () => {
+  const findings = [advisoryF("F001"), advisoryF("F002"), advisoryF("F003")];
+  const stats = { repairs: 0 };
+  const out = enforcePlanInvariants(
+    [
+      { primary: "F001", sources: ["F001", "F003"], split: false, claim: "a" },
+      { primary: "F002", sources: ["F002", "F003"], split: false, claim: "b" },
+    ],
+    findings,
+    stats,
+  );
+  expect(out).toEqual([
+    { primary: "F001", sources: ["F001", "F003"], split: false, claim: "a" },
+    { primary: "F002", sources: ["F002"], split: false, claim: "b" },
+  ]);
+  expect(stats.repairs).toBe(1);
+});
+
 test("enforcePlanInvariants rule 3: a blocking finding carried only by a split is appended", () => {
   const findings = [blockingF("F001"), advisoryF("F002")];
   const stats = { repairs: 0 };
