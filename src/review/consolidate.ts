@@ -155,6 +155,30 @@ export function enforcePlanInvariants(
   );
   let repairs = 0;
 
+  // Rule H — one home per source, before any other rule reads the sources. A
+  // model plan can list a finding in two non-split entries: its own and another
+  // defect's. Rules 1 and 2 then read that as "the other entry merged a
+  // blocking finding": they promoted it to that finding and folded it away,
+  // and the other defect, with its claim, was posted nowhere (Martian 50,
+  // 2026-11-22, cal-8330). A source stays in the entry it leads, or in the
+  // first entry naming it when it leads none; every other entry drops it.
+  // Entries that share a primary keep it (Rule 2 still folds those), and
+  // splits are left alone because applyPlan builds them from their primary.
+  const ledBy = new Set(plan.filter((e) => !e.split).map((e) => e.primary));
+  const placed = new Set<string>();
+  const oneHome = plan.map((e) => {
+    if (e.split) return e;
+    const sources = e.sources.filter((s) => {
+      if (s === e.primary) return true;
+      if (ledBy.has(s) || placed.has(s)) return false;
+      placed.add(s);
+      return true;
+    });
+    if (sources.length === e.sources.length) return e;
+    repairs += 1;
+    return { ...e, sources };
+  });
+
   // Rule 0 — primary first: applyPlan pools proof_refs in sources order, and
   // clusterByRootCause keys on proof_refs[0] ("where the defect lives",
   // root-cause.ts), so the primary's own refs must lead, as the dedupe fold
@@ -171,7 +195,7 @@ export function enforcePlanInvariants(
   // Rule 1 — promotion: a merge whose primary is not blocking would post the
   // merged finding off the blocking tier, so the first blocking source leads.
   // Promotion changes the primary, so Rule 0 runs again on its output.
-  const promoted = plan
+  const promoted = oneHome
     .map(primaryFirst)
     .map((e) => {
       if (e.split || blocking.has(e.primary)) return e;
@@ -184,6 +208,13 @@ export function enforcePlanInvariants(
 
   // Rule 2 — fold: two non-split entries with one primary would post that
   // finding twice. Splits are asides with their own ids and never fold.
+  //
+  // An entry that repeats a taken primary but carries a source the first entry
+  // does not describes that source's defect under the wrong primary: folding
+  // it would post its claim nowhere (Martian 50, 2026-11-22, cal-7232: the
+  // second entry under F003 was F004's defect, and F004 had only an aside).
+  // That entry is led by its own source instead, a blocking one first so the
+  // tier holds. Only an entry with nothing of its own folds.
   const folded: PlanEntry[] = [];
   const firstByPrimary = new Map<string, PlanEntry>();
   for (const e of promoted) {
@@ -196,6 +227,19 @@ export function enforcePlanInvariants(
       const copy = { ...e, sources: [...e.sources] };
       firstByPrimary.set(e.primary, copy);
       folded.push(copy);
+      continue;
+    }
+    const own = e.sources.filter((s) => !first.sources.includes(s));
+    const lead = own.find((s) => blocking.has(s)) ?? own[0];
+    if (lead !== undefined && !firstByPrimary.has(lead)) {
+      const releaded = {
+        ...e,
+        primary: lead,
+        sources: [lead, ...own.filter((s) => s !== lead)],
+      };
+      firstByPrimary.set(lead, releaded);
+      folded.push(releaded);
+      repairs += 1;
       continue;
     }
     for (const s of e.sources) {
