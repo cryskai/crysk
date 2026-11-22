@@ -483,6 +483,27 @@ describe("parseArgs triage reply", () => {
     );
   });
 
+  // The tier is only known once the finding is read, so the command decides
+  // whether a deferred or misclassified answer needs --verdict.
+  test("deferred and misclassified parse without --verdict", () => {
+    for (const tag of ["deferred", "misclassified"] as const) {
+      const { options } = parseArgs([
+        "triage",
+        "reply",
+        "--pr",
+        "5",
+        "--finding",
+        "R001",
+        "--tag",
+        tag,
+        "--body-file",
+        "/tmp/r.md",
+      ]);
+      expect(options.tag).toBe(tag);
+      expect(options.verdict).toBeUndefined();
+    }
+  });
+
   test("deferred does not require --issue", () => {
     const { options } = parseArgs([
       "triage",

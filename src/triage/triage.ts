@@ -75,6 +75,14 @@ export const ADJUDICATED_TAGS: ReadonlySet<TriageTag> = new Set<TriageTag>([
   "misclassified",
 ]);
 
+// The tag whose marker MUST carry a verdict: only an upheld dismissal clears
+// the gate. `deferred` and `misclassified` never clear it, so on an advisory
+// finding they are answered without an adjudicator and without a verdict; the
+// driver (commands/triage.ts) still requires one on a blocking finding.
+export const VERDICT_REQUIRED_TAGS: ReadonlySet<TriageTag> = new Set<TriageTag>(
+  ["dismissed"],
+);
+
 export interface TriageMarkerFields {
   tag: TriageTag;
   headSha: string;
@@ -161,7 +169,7 @@ export function triageMarker(fields: TriageMarkerFields): string {
       "triageMarker: tag=deferred issue must be a positive integer",
     );
   }
-  if (ADJUDICATED_TAGS.has(fields.tag) && fields.verdict === undefined) {
+  if (VERDICT_REQUIRED_TAGS.has(fields.tag) && fields.verdict === undefined) {
     throw new Error(
       `triageMarker: tag=${fields.tag} requires a verdict — it spawns an ` +
         "adjudicator (ROADMAP B6b)",
@@ -258,11 +266,19 @@ export function parseTriageMarker(body: string): ParsedTriageMarker | null {
   // as answered) when in fact nobody has ruled on it at all, and the
   // escalation rule (2 consecutive `inconclusive` heads) would have nothing
   // to count.
+  // A `dismissed` marker with no verdict is refused; `deferred` and
+  // `misclassified` may omit it (VERDICT_REQUIRED_TAGS). A present but unknown
+  // verdict is malformed on every tag.
   const rawVerdict = parts.get("verdict");
-  if (rawVerdict === undefined || !TRIAGE_VERDICTS.has(rawVerdict)) {
+  if (
+    rawVerdict === undefined
+      ? VERDICT_REQUIRED_TAGS.has(tag)
+      : !TRIAGE_VERDICTS.has(rawVerdict)
+  ) {
     return null;
   }
-  const verdict = rawVerdict as TriageVerdict;
+  const ruled =
+    rawVerdict === undefined ? {} : { verdict: rawVerdict as TriageVerdict };
 
   // `deferred` MAY carry a valid issue number. A missing `issue=` is a
   // valid reasoning-only defer (W1). A present but non-positive / NaN
@@ -271,11 +287,11 @@ export function parseTriageMarker(body: string): ParsedTriageMarker | null {
   if (tag === "deferred") {
     const rawIssue = parts.get("issue");
     if (rawIssue === undefined) {
-      return { tag, headSha, actor, verdict, ...rowPart };
+      return { tag, headSha, actor, ...ruled, ...rowPart };
     }
     const issue = Number.parseInt(rawIssue, 10);
     if (!Number.isInteger(issue) || issue <= 0) return null;
-    return { tag, headSha, actor, issue, verdict, ...rowPart };
+    return { tag, headSha, actor, issue, ...ruled, ...rowPart };
   }
-  return { tag, headSha, actor, verdict, ...rowPart };
+  return { tag, headSha, actor, ...ruled, ...rowPart };
 }

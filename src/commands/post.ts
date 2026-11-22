@@ -7,6 +7,7 @@ import { resolveRepoRoot } from "#git/git";
 import { postingExitCode } from "#pr/inline";
 import type { PostMinSeverity } from "#pr/post-floor";
 import {
+  fileLevelFindingIds,
   ghCurrentBranchPr,
   ghRepoWebUrl,
   missingRereviewBlockMessage,
@@ -24,6 +25,8 @@ import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
 import { log } from "#ui/primitives";
 import { CliError, CliUsageError } from "../errors";
+import type { MarkerTrust } from "../trust/marker-trust";
+import { resolveMarkerTrust } from "../trust/resolve";
 
 // `pr-hero post --pr <n> --from <run-dir> [--dry-run]` (ROADMAP B6, spec
 // "Offline replay via `post` verb"): the `ledger` verb's precedent — read a
@@ -80,6 +83,10 @@ export async function runPostCommand(input: {
   dryRun: boolean;
   spawnFn?: typeof Bun.spawn;
   postMinSeverity?: PostMinSeverity;
+  // Who may have written the summary and the finding comments this post reads back. A seam, like
+  // `spawnFn`: absent, it is resolved here (src/trust/resolve.ts), the signed-in gh login included,
+  // since this command posts under it.
+  markerTrust?: MarkerTrust;
 }): Promise<number> {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
   const runDir = path.resolve(input.from);
@@ -196,6 +203,8 @@ export async function runPostCommand(input: {
     );
   }
 
+  const trust =
+    input.markerTrust ?? (await resolveMarkerTrust({ operatorRoot, spawnFn }));
   if (dryRun) {
     const { plan, previousHeadSha, existingSummaryId } =
       await resolveInlinePostPlan({
@@ -204,6 +213,7 @@ export async function runPostCommand(input: {
         headSha: doc.head_sha,
         doc,
         diffPatch,
+        trust,
         spawnFn,
         postMinSeverity: input.postMinSeverity,
       });
@@ -223,9 +233,13 @@ export async function runPostCommand(input: {
     ) {
       throw new CliError(vanishedPriorSummaryMessage(prNumber));
     }
+    // The same split the live post makes (postInlineFindings), so the preview
+    // names which un-anchorable findings get a file-level comment.
+    const fileLevel = fileLevelFindingIds(plan.issueComments, diffPatch);
     log(
       `plan: ${plan.reviewComments.length} review comment(s), ` +
-        `${plan.issueComments.length} outside diff, ` +
+        `${fileLevel.size} file-level, ` +
+        `${plan.issueComments.length - fileLevel.size} outside diff, ` +
         `${plan.persisting.length} already posted (skipped)` +
         (previousHeadSha === undefined
           ? `, ${plan.resolved.length} resolved`
@@ -245,7 +259,9 @@ export async function runPostCommand(input: {
       log(`  review  ${finding.path}:${finding.line} ${finding.id}`);
     }
     for (const finding of plan.issueComments) {
-      log(`  outside ${finding.path}:${finding.line} ${finding.id}`);
+      log(
+        `  ${fileLevel.has(finding.id) ? "file   " : "outside"} ${finding.path}:${finding.line} ${finding.id}`,
+      );
     }
     for (const finding of plan.notPosted) {
       log(`  hidden  ${finding.path}:${finding.line} ${finding.id}`);
@@ -265,6 +281,7 @@ export async function runPostCommand(input: {
     doc,
     diffPatch,
     webUrl: repoWebUrl,
+    trust,
     spawnFn,
     ...(rereview === undefined ? {} : { rereview, rereviewPriors: [] }),
     requireRereviewOnPriorSummary: true,

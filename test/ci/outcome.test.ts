@@ -2290,6 +2290,48 @@ describe("parseOutcomeCode", () => {
   });
 });
 
+describe("the error comment: readable title and code footer", () => {
+  test("a code without a headline titles the comment Review didn't run, and the footer carries the code and link", () => {
+    const rendered = renderCode("CRYSK-CRED-MISSING", {}, "action");
+    expect(rendered.summary[0]).toBe("## ⏸ Review didn't run");
+    const link = /Docs: (\S+)$/.exec(rendered.annotation)?.[1];
+    expect(link).toBeDefined();
+    expect(rendered.summary.at(-1)).toBe(
+      `<sub>CRYSK-CRED-MISSING · [Docs](${link})</sub>`,
+    );
+  });
+
+  test("the cancelled code's summary starts with the Not reviewed title", () => {
+    const rendered = renderCode("CRYSK-CANCELLED", { pr: 7 }, "action");
+    expect(rendered.summary[0]).toBe("## ⏸ Not reviewed");
+  });
+
+  test("parseOutcomeCode reads the code from a body built with the new rendered summary", () => {
+    const rendered = renderCode("CRYSK-CRED-MISSING", {}, "action");
+    const body = [
+      `${OUTCOME_MARKER_PREFIX}v=1 head=${"a".repeat(40)} run=7 attempt=1 -->`,
+      "",
+      ...rendered.summary,
+    ].join("\n");
+    expect(parseOutcomeCode(body)).toBe("CRYSK-CRED-MISSING");
+  });
+
+  test("parseOutcomeCode still reads a legacy CRYSK heading comment", () => {
+    const body = `${OUTCOME_MARKER_PREFIX}v=1 head=unknown run=7 attempt=1 -->\n\n### CRYSK-PROVIDER-LIMITED\n\nbody`;
+    expect(parseOutcomeCode(body)).toBe("CRYSK-PROVIDER-LIMITED");
+  });
+
+  test("parseOutcomeCode still reads a legacy PRH heading comment", () => {
+    const body = `${OUTCOME_MARKER_PREFIX}v=1 head=unknown run=7 attempt=1 -->\n\n### PRH-PROVIDER-LIMITED\n\nbody`;
+    expect(parseOutcomeCode(body)).toBe("CRYSK-PROVIDER-LIMITED");
+  });
+
+  test("parseOutcomeCode returns null for a footer naming an uncatalogued code", () => {
+    const body = `${OUTCOME_MARKER_PREFIX}v=1 head=unknown -->\n\n<sub>CRYSK-NOT-A-CODE · [Docs](x)</sub>`;
+    expect(parseOutcomeCode(body)).toBeNull();
+  });
+});
+
 describe("a model the provider does not serve", () => {
   const modelUnavailable: ErrorClass = {
     kind: "transport",

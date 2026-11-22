@@ -53,6 +53,8 @@ import {
   unresolvedBlockingCount,
 } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
+import { triageMarker } from "#triage/triage";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -311,6 +313,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -376,6 +379,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -420,6 +424,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -449,6 +454,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       ...emptyCommentScript(),
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -472,6 +478,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -505,6 +512,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -539,6 +547,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -560,6 +569,7 @@ describe("postInlineFindings — step-14 ordering", () => {
     const findings = [finding({ id: "F001", path: "src/never.ts", line: 1 })];
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -596,6 +606,7 @@ describe("postInlineFindings — step-14 ordering", () => {
     ];
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -629,6 +640,7 @@ describe("postInlineFindings — step-14 ordering", () => {
     ];
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -657,6 +669,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -714,6 +727,7 @@ describe("postInlineFindings — post_min_severity", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -764,6 +778,7 @@ describe("postInlineFindings — post_min_severity", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -829,6 +844,7 @@ describe("postInlineFindings — the 422 recovery never drops a finding", () => 
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -936,6 +952,7 @@ describe("postInlineFindings — the 422 recovery never drops a finding", () => 
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1005,6 +1022,7 @@ describe("postInlineFindings — no finding issue-comment POST (issues #16/#17)"
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1086,6 +1104,7 @@ describe("postInlineFindings — no finding issue-comment POST (issues #16/#17)"
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1166,6 +1185,7 @@ describe("postInlineFindings — idempotency, same head, drifted live line", () 
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1234,6 +1254,7 @@ describe("postInlineFindings — carried finding already posted inline (incremen
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1361,6 +1382,7 @@ describe("postInlineFindings — comment url map reaches the summary's index", (
     }) as unknown as typeof Bun.spawn;
 
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1410,11 +1432,17 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
       },
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
     ]);
+    // One un-anchorable finding, so the delta is not all zeros: the Review
+    // details block (which carries the since clause) is omitted for an
+    // all-zero delta.
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
-      doc: doc({ findings: [] }),
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/never.ts", line: 1 })],
+      }),
       diffPatch: diffAddingLines("src/a.ts", 20),
       webUrl: undefined,
       spawnFn,
@@ -1445,6 +1473,7 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1471,6 +1500,7 @@ describe("postInlineFindings — the record of findings across runs", () => {
   test("a first review records its findings under stable ids", async () => {
     const { spawnFn } = gh();
     const posted = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1505,6 +1535,7 @@ describe("postInlineFindings — the record of findings across runs", () => {
       { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
     ]);
     const posted = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1574,6 +1605,7 @@ describe("postInlineFindings — the claim feed reaches the fingerprint tie-brea
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1609,6 +1641,7 @@ describe("postInlineFindings — every gh call on the findings POST is bounded (
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1638,6 +1671,7 @@ describe("postInlineFindings — every gh call on the findings POST is bounded (
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1658,6 +1692,7 @@ describe("postInlineIfEligible — sessionFailed suppresses all posting", () => 
   test("sessionFailed true: zero HTTP calls, returns null", async () => {
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineIfEligible({
+      trust: FIXTURE_MARKER_TRUST,
       sessionFailed: true,
       skippedReason: "post skipped: every hunter failed",
       operatorRoot: OPERATOR_ROOT,
@@ -1675,6 +1710,7 @@ describe("postInlineIfEligible — sessionFailed suppresses all posting", () => 
   test("sessionFailed false: posts normally and returns the outcome", async () => {
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineIfEligible({
+      trust: FIXTURE_MARKER_TRUST,
       sessionFailed: false,
       skippedReason: "unreachable",
       operatorRoot: OPERATOR_ROOT,
@@ -1826,6 +1862,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
       }),
       diffPatch: diffAddingLines("src/a.ts", 20),
       webUrl: undefined,
+      trust: FIXTURE_MARKER_TRUST,
       spawnFn,
       rereview: liveRereview(),
       rereviewPriors: [],
@@ -1943,7 +1980,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
     const body = lastSummaryBody(calls);
     expect(body).toContain(`Δ since \`${OLD_HEAD.slice(0, 8)}\``);
     expect(body).toContain("0 unconfirmed · 1 carried · 0 deferred · 1 new");
-    expect(body).toContain("Still live:");
+    expect(body).toContain("| carried |");
     expect(body).toContain(PRIOR_CLAIM);
     expect(body).toContain(`<!-- crysk-state v=1 head=${HEAD} -->`);
     expect(logged).not.toContain("drops the re-review framing");
@@ -2050,6 +2087,7 @@ describe("postInlineFindings — the collapse loop cannot hang (F005)", () => {
     try {
       const { spawnFn, calls } = makeFakeGh(priorCommentScript(hangOn));
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2175,6 +2213,7 @@ describe("postInlineFindings — the collapse loop cannot hang (F005)", () => {
     try {
       const { spawnFn, calls } = makeFakeGh(script);
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2326,6 +2365,7 @@ describe("postInlineFindings — refused thread resolves are recorded (#562)", (
     try {
       const { spawnFn } = makeFakeGh(script);
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2463,6 +2503,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a re-review whose only finding is below post_min_severity does not claim kept findings", async () => {
     const { spawnFn, calls } = rereviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2490,6 +2531,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a clean re-review posts one closing comment after the summary PATCH", async () => {
     const { spawnFn, calls } = rereviewScript();
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2523,14 +2565,17 @@ describe("postInlineFindings — re-review closing comment", () => {
     expect(outcome.summary.action).toBe("updated");
   });
 
-  test("a re-review with new findings names how many were posted", async () => {
+  // A finding in a file the PR does not touch only lands in the summary, and
+  // an edit notifies nobody, so the closing comment still has to announce it.
+  test("a re-review whose new findings only reach the summary names how many were posted", async () => {
     const { spawnFn, calls } = rereviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
       doc: doc({
-        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+        findings: [finding({ id: "F001", path: "src/b.ts", line: 10 })],
       }),
       diffPatch: diffAddingLines("src/a.ts", 20),
       webUrl: undefined,
@@ -2541,9 +2586,164 @@ describe("postInlineFindings — re-review closing comment", () => {
     expect(body).toContain("The summary comment above was updated.");
   });
 
+  // The review comments this pass posted already notify, so a closing comment
+  // on top of them is noise.
+  test("a re-review that posts a review comment posts no closing comment", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(closingPosts(calls)).toHaveLength(0);
+    expect(outcome.closingCommentId).toBeUndefined();
+  });
+
+  test("a partial re-review keeps its closing comment even when it posted a review comment", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+        run_status: "partial",
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(closingPosts(calls)).toHaveLength(1);
+  });
+
+  // Only one closing comment stays visible: each new one hides the previous.
+  describe("the previous closing comment", () => {
+    const PRIOR_CLOSING = `<!-- crysk-rereview-closed head=${OLD_HEAD} -->\n### ✅ Crysk re-review complete`;
+    const script = (extra: ScriptEntry[] = []) =>
+      makeFakeGh([
+        ...extra,
+        { match: ["issues/comments/7"], response: { stdout: "IC_node7\n" } },
+        {
+          match: ["graphql", "minimizeComment"],
+          response: { stdout: "{}" },
+        },
+        headRefOidScript(HEAD),
+        {
+          match: ["issues/42/comments", "--paginate"],
+          response: {
+            stdout: ndjson([
+              { id: 1, user: "pr-hero", body: priorSummary },
+              { id: 7, user: "pr-hero", body: PRIOR_CLOSING },
+            ]),
+          },
+        },
+        {
+          match: ["pulls/42/comments", "--paginate"],
+          response: { stdout: "" },
+        },
+      ]);
+    const minimizes = (calls: RecordedCall[]) =>
+      calls.filter((c) => c.argv.join(" ").includes("minimizeComment"));
+
+    test("is hidden as outdated after the new one posts", async () => {
+      const { spawnFn, calls } = script();
+      await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+      });
+      const hidden = minimizes(calls);
+      expect(hidden).toHaveLength(1);
+      const argv = hidden[0]?.argv.join(" ") ?? "";
+      expect(argv).toContain("id=IC_node7");
+      expect(argv).toContain("OUTDATED");
+      const closing = closingPosts(calls)[0] as RecordedCall;
+      expect(calls.indexOf(hidden[0] as RecordedCall)).toBeGreaterThan(
+        calls.indexOf(closing),
+      );
+    });
+
+    test("is hidden when this pass posts review comments instead of a closing comment", async () => {
+      const { spawnFn, calls } = script();
+      await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({
+          findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+        }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+      });
+      expect(closingPosts(calls)).toHaveLength(0);
+      expect(minimizes(calls)).toHaveLength(1);
+    });
+
+    // PR #591 R002: hiding the old receipt when the new one did not post
+    // would leave the PR with no sign the re-review ran.
+    test("is left visible when the new closing comment fails to post", async () => {
+      const { spawnFn, calls } = script([
+        {
+          match: ["--method", "POST", "issues/42/comments"],
+          response: { stderr: "HTTP 502", exitCode: 1 },
+        },
+      ]);
+      await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+      });
+      expect(closingPosts(calls)).toHaveLength(1);
+      expect(minimizes(calls)).toHaveLength(0);
+    });
+
+    test("a failed hide degrades to a log line and keeps the new closing comment", async () => {
+      const { spawnFn, calls } = script([
+        {
+          match: ["graphql", "minimizeComment"],
+          response: { stderr: "HTTP 502", exitCode: 1 },
+        },
+      ]);
+      const outcome = await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+      });
+      expect(minimizes(calls)).toHaveLength(1);
+      expect(outcome.closingCommentId).toBeGreaterThan(0);
+      expect(outcome.summary.action).toBe("updated");
+    });
+  });
+
   test("a partial re-review says so in the closing comment", async () => {
     const { spawnFn, calls } = rereviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2597,6 +2797,7 @@ describe("postInlineFindings — re-review closing comment", () => {
       },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2629,6 +2830,7 @@ describe("postInlineFindings — re-review closing comment", () => {
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2645,6 +2847,7 @@ describe("postInlineFindings — re-review closing comment", () => {
   test("a first review posts no closing comment — the new summary is already visible", async () => {
     const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2665,6 +2868,7 @@ describe("postInlineFindings — re-review closing comment", () => {
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2736,6 +2940,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
   test("a re-review's Δ new count leaves out findings below post_min_severity", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2767,6 +2972,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
   test("S1 — review 2's fresh blocking finding is in the state, and review 3 still counts it", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2821,6 +3027,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
     });
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2870,6 +3077,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       });
       const { spawnFn, calls } = reviewScript();
       await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -2925,6 +3133,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
   test("S3 — a fresh row's locs use the line the comment was posted at, not findings.json's", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -2956,6 +3165,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3026,6 +3236,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       },
     ]);
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3086,6 +3297,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       claim: "advisory prior kept",
     });
     const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3121,6 +3333,7 @@ describe("postInlineFindings — the engine version in the summary", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3158,6 +3371,7 @@ describe("postInlineFindings — the summary counter and a forced run", () => {
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3233,6 +3447,7 @@ describe("postInlineFindings — a forced zero survives a merged re-review rende
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -3258,6 +3473,7 @@ describe("postInlineFindings — a forced zero survives a merged re-review rende
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: FIRST_HEAD,
@@ -3296,5 +3512,659 @@ describe("postInlineFindings — a forced zero survives a merged re-review rende
     const second = await reReview(first, false);
     expect(second).toContain("<!-- crysk-state ");
     expect(countAfter(second)).toBe(1);
+  });
+});
+
+describe("postInlineFindings — a finding outside the diff lines but in a diff file posts file-level", () => {
+  const WEB = "https://github.com/acme/app";
+  const fileLevelPosts = (calls: RecordedCall[]) =>
+    calls.filter((c) => c.argv.join(" ").includes("subject_type=file"));
+  const summaryPatch = (calls: RecordedCall[]) =>
+    calls.findLast(
+      (c) =>
+        c.argv.join(" ").includes("PATCH") &&
+        c.stdin?.startsWith("<!-- crysk-report "),
+    )?.stdin ?? "";
+  const script = (extra: ScriptEntry[] = []) =>
+    makeFakeGh([
+      ...extra,
+      {
+        match: ["issues/42/comments", "--paginate"],
+        // No summary yet: a first review, which writes the state block.
+        response: { stdout: "" },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+
+  test("its file is in the diff: one file-level review comment, pinned to the head, and no Outside Diff entry", async () => {
+    const { spawnFn, calls } = script();
+    const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 50,
+            claim: "a line the diff does not show",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    const posts = fileLevelPosts(calls);
+    expect(posts).toHaveLength(1);
+    const argv = posts[0]?.argv.join(" ") ?? "";
+    expect(argv).toContain("pulls/42/comments");
+    expect(argv).toContain(`commit_id=${HEAD}`);
+    expect(argv).toContain("path=src/a.ts");
+    expect(posts[0]?.stdin).toStartWith("<!-- crysk-finding ");
+    expect(posts[0]?.stdin).toContain("line=50");
+    expect(posts[0]?.stdin).toContain("a line the diff does not show");
+    expect(outcome.outsideDiffCount).toBe(0);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    const body = summaryPatch(calls);
+    expect(body).not.toContain("### Comments Outside Diff");
+    expect(body).toMatch(
+      /\]\(https:\/\/github\.com\/acme\/app\/pull\/42#discussion_r\d+\)/,
+    );
+    expect(body).toContain('"channel":"inline"');
+    expect(body).not.toContain('"channel":"outside"');
+  });
+
+  test("a failed file-level POST demotes the finding to the summary, never drops it", async () => {
+    const { spawnFn, calls } = script([
+      {
+        match: ["subject_type=file"],
+        response: { exitCode: 1, stderr: "HTTP 422" },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 50,
+            claim: "a line the diff does not show",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(1);
+    expect(outcome.outsideDiffCount).toBe(1);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    const body = summaryPatch(calls);
+    expect(body).toContain("### Comments Outside Diff (1)");
+    expect(body).toContain("a line the diff does not show");
+  });
+
+  test("its file is not in the diff: no file-level POST, the finding stays in the summary", async () => {
+    const { spawnFn, calls } = script();
+    const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/never.ts",
+            line: 3,
+            claim: "a file the PR never touched",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(0);
+    expect(outcome.outsideDiffCount).toBe(1);
+    const body = summaryPatch(calls);
+    expect(body).toContain("### Comments Outside Diff (1)");
+    expect(body).toContain('"channel":"outside"');
+  });
+});
+
+// S2 (odd/tasks/marker-trust.md): the summary links a fresh finding only to a trusted author's comment.
+describe("postInlineFindings — the summary's links skip a comment someone else posted", () => {
+  test("a forged comment with the fresh finding's marker is not linked", async () => {
+    const WEB = "https://github.com/acme/app";
+    const F = finding({ id: "F001", path: "src/a.ts", line: 10 });
+    const marker = findingMarker({
+      path: F.path,
+      line: F.line,
+      headSha: HEAD,
+      claim: F.claim,
+    });
+    const row = (id: number, user: string) => ({
+      id,
+      user,
+      body: `${marker}\nclaim`,
+      path: "src/a.ts",
+      line: 10,
+      original_line: 10,
+      in_reply_to_id: null,
+    });
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        // The plan's read sees nothing; the read after the review posted lists the forged
+        // comment first, where an unfiltered first match would take it.
+        responses: [
+          { stdout: "" },
+          { stdout: ndjson([row(66, "mallory"), row(55, "pr-hero")]) },
+        ],
+      },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [F] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: WEB,
+      spawnFn,
+    });
+    const patch = calls.findLast(
+      (c) =>
+        c.argv.join(" ").includes("PATCH") &&
+        c.stdin?.startsWith("<!-- crysk-report "),
+    );
+    expect(patch?.stdin).toContain(`${WEB}/pull/42#discussion_r55`);
+    expect(patch?.stdin).not.toContain("discussion_r66");
+  });
+});
+
+describe("postInlineFindings — a failed file-level POST is re-read before it is demoted", () => {
+  const WEB = "https://github.com/acme/app";
+  const F = finding({
+    id: "F001",
+    path: "src/a.ts",
+    line: 50,
+    claim: "a line the diff does not show",
+  });
+  const summaryPatch = (calls: RecordedCall[]) =>
+    calls.findLast(
+      (c) =>
+        c.argv.join(" ").includes("PATCH") &&
+        c.stdin?.startsWith("<!-- crysk-report "),
+    )?.stdin ?? "";
+  const run = (landed: unknown[]) =>
+    makeFakeGh([
+      {
+        match: ["subject_type=file"],
+        response: { exitCode: 1, stderr: "HTTP 504: gateway timeout" },
+      },
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        // The plan's read sees nothing; the re-read after the failed POST sees
+        // whatever landed.
+        responses: [{ stdout: "" }, { stdout: ndjson(landed) }],
+      },
+    ]);
+
+  test("the comment landed despite the error: no summary entry, the table links to it", async () => {
+    const marker = findingMarker({
+      path: F.path,
+      line: F.line,
+      headSha: HEAD,
+      claim: F.claim,
+    });
+    const { spawnFn, calls } = run([
+      {
+        id: 777,
+        user: "pr-hero",
+        body: `${marker}\nclaim`,
+        path: "src/a.ts",
+        line: null,
+        original_line: null,
+        in_reply_to_id: null,
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [F] }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(outcome.outsideDiffCount).toBe(0);
+    const body = summaryPatch(calls);
+    expect(body).not.toContain("### Comments Outside Diff");
+    expect(body).toContain(`${WEB}/pull/42#discussion_r777`);
+  });
+
+  // S2 (odd/tasks/marker-trust.md): the re-read binds only a trusted author's comment.
+  test("a comment someone else posted with the same marker is not taken for the landed one", async () => {
+    const marker = findingMarker({
+      path: F.path,
+      line: F.line,
+      headSha: HEAD,
+      claim: F.claim,
+    });
+    const { spawnFn, calls } = run([
+      {
+        id: 666,
+        user: "mallory",
+        body: `${marker}\nclaim`,
+        path: "src/a.ts",
+        line: null,
+        original_line: null,
+        in_reply_to_id: null,
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [F] }),
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: WEB,
+      spawnFn,
+    });
+    expect(outcome.outsideDiffCount).toBe(1);
+    expect(summaryPatch(calls)).not.toContain("discussion_r666");
+  });
+
+  test("the comment did not land: the summary lists it and the log says why", async () => {
+    const { spawnFn, calls } = run([]);
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    let outcome: Awaited<ReturnType<typeof postInlineFindings>>;
+    try {
+      outcome = await postInlineFindings({
+        trust: FIXTURE_MARKER_TRUST,
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [F] }),
+        diffPatch: diffAddingLines("src/a.ts", 5),
+        webUrl: WEB,
+        spawnFn,
+      });
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    expect(outcome.outsideDiffCount).toBe(1);
+    expect(summaryPatch(calls)).toContain("### Comments Outside Diff (1)");
+    expect(chunks.join("")).toContain(
+      "file-level comment for src/a.ts:50 did not post (HTTP 504: gateway timeout) — listed in the summary instead",
+    );
+  });
+});
+
+// GitHub gives a file-level comment no line (line and original_line both
+// null), so a later head that moves the finding must not repost it (#590 R001).
+describe("postInlineFindings — a file-level comment survives line drift", () => {
+  const CLAIM = "a line the diff does not show";
+  const fileLevelPosts = (calls: RecordedCall[]) =>
+    calls.filter((c) => c.argv.join(" ").includes("subject_type=file"));
+  const run = (prior: { line: number | null; original_line: number | null }) =>
+    makeFakeGh([
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 1,
+              user: "pr-hero",
+              body: `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`,
+            },
+          ]),
+        },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 900,
+              user: "pr-hero",
+              body: `${findingMarker({ path: "src/a.ts", line: 10, headSha: OLD_HEAD, claim: CLAIM })}\nclaim`,
+              path: "src/a.ts",
+              ...prior,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+    ]);
+  const drifted = doc({
+    findings: [
+      finding({ id: "F001", path: "src/a.ts", line: 50, claim: CLAIM }),
+    ],
+  });
+
+  test("the same claim 40 lines away keeps its file-level comment", async () => {
+    const { spawnFn, calls } = run({ line: null, original_line: null });
+    await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: drifted,
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(0);
+  });
+
+  test("an outdated inline comment (it keeps original_line) is not treated as file-level", async () => {
+    const { spawnFn, calls } = run({ line: null, original_line: 10 });
+    await postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: drifted,
+      diffPatch: diffAddingLines("src/a.ts", 5),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(fileLevelPosts(calls)).toHaveLength(1);
+  });
+});
+
+// A re-review can keep an existing thread for a finding whose claim changed:
+// the comment then shows the earlier text. A reply in the thread carries the
+// new claim, so a reader (or an agent) sees what this review actually found.
+describe("postInlineFindings — a kept thread whose claim changed gets the new claim", () => {
+  const OLD_CLAIM = "the value is stored in seconds";
+  const NEW_CLAIM = "a different defect on the same line";
+  const claimReplies = (calls: RecordedCall[]) =>
+    calls.filter(
+      (c) =>
+        c.argv.includes("in_reply_to=900") &&
+        c.stdin?.startsWith("<!-- crysk-claim-update "),
+    );
+  const run = (extraReplies: unknown[] = [], first: ScriptEntry[] = []) =>
+    makeFakeGh([
+      ...first,
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 1,
+              user: "pr-hero",
+              body: `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`,
+            },
+          ]),
+        },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 900,
+              user: "pr-hero",
+              body: `${findingMarker({ path: "src/a.ts", line: 10, headSha: OLD_HEAD, claim: OLD_CLAIM })}\nclaim`,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+            ...extraReplies,
+          ]),
+        },
+      },
+    ]);
+  const post = (spawnFn: typeof Bun.spawn, claim: string) =>
+    postInlineFindings({
+      trust: FIXTURE_MARKER_TRUST,
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10, claim })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+
+  test("a different claim: one reply in the thread with the new claim and the head", async () => {
+    const { spawnFn, calls } = run();
+    await post(spawnFn, NEW_CLAIM);
+    const replies = claimReplies(calls);
+    expect(replies).toHaveLength(1);
+    const body = replies[0]?.stdin ?? "";
+    expect(body).toContain(`head=${HEAD}`);
+    expect(body).toContain(NEW_CLAIM);
+    expect(body).toContain(`\`${HEAD.slice(0, 8)}\``);
+    expect(body).toContain("`src/a.ts:10`");
+  });
+
+  // A thread the agent already answered is usually resolved, and GitHub folds
+  // it away: the new claim would be hidden from a person reading the PR.
+  const repoView: ScriptEntry = {
+    match: ["repo", "view", "--json", "owner,name"],
+    response: {
+      stdout: JSON.stringify({ owner: { login: "acme" }, name: "app" }),
+    },
+  };
+  const threads = (resolved: boolean): ScriptEntry => ({
+    match: ["reviewThreads"],
+    response: {
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [
+                  {
+                    id: "T900",
+                    isResolved: resolved,
+                    comments: { nodes: [{ fullDatabaseId: 900 }] },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    },
+  });
+  const reopens = (calls: RecordedCall[]) =>
+    calls.filter((c) => c.argv.join(" ").includes("unresolveReviewThread"));
+
+  test("a resolved thread that gets a claim update is reopened", async () => {
+    const { spawnFn, calls } = run([], [repoView, threads(true)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(reopens(calls)).toHaveLength(1);
+    expect(reopens(calls)[0]?.argv.join(" ")).toContain("id=T900");
+  });
+
+  test("an open thread that gets a claim update is left as it is", async () => {
+    const { spawnFn, calls } = run([], [repoView, threads(false)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+    expect(reopens(calls)).toHaveLength(0);
+  });
+
+  // PR #593 R005: a later run never reopens a thread that already shows the
+  // claim: a person may have resolved it on purpose. The reopen happens once,
+  // with the reply.
+  const updateReply = {
+    id: 901,
+    user: "pr-hero",
+    body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+    in_reply_to_id: 900,
+  };
+  test("a thread that already shows the claim and was resolved since: left resolved", async () => {
+    const { spawnFn, calls } = run([updateReply], [repoView, threads(true)]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+    expect(reopens(calls)).toHaveLength(0);
+  });
+
+  test("a claim update the agent already answered: the thread is left resolved", async () => {
+    const { spawnFn, calls } = run(
+      [
+        updateReply,
+        {
+          id: 902,
+          user: "dev",
+          body: `${triageMarker({ tag: "applied", headSha: HEAD, actor: "agent" })}\n\nfixed`,
+          in_reply_to_id: 900,
+        },
+      ],
+      [repoView, threads(true)],
+    );
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+    expect(reopens(calls)).toHaveLength(0);
+  });
+
+  test("a refused reopen is only logged: the reply stays", async () => {
+    const { spawnFn, calls } = run(
+      [],
+      [
+        repoView,
+        threads(true),
+        {
+          match: ["unresolveReviewThread"],
+          response: {
+            stderr: "Resource not accessible by integration",
+            exitCode: 1,
+          },
+        },
+      ],
+    );
+    const outcome = await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+    expect(outcome.summary.action).toBe("updated");
+  });
+
+  test("the same claim: no reply", async () => {
+    const { spawnFn, calls } = run();
+    await post(spawnFn, OLD_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+  });
+
+  test("a reply for this head and claim already in the thread is not posted again", async () => {
+    const { spawnFn: first, calls: firstCalls } = run();
+    await post(first, NEW_CLAIM);
+    const already = claimReplies(firstCalls)[0]?.stdin ?? "";
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: already,
+        path: "src/a.ts",
+        line: 10,
+        original_line: 10,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+  });
+
+  // PR #592 R004: a later head that still sees the changed claim must not
+  // repeat the reply the thread already has.
+  test("a reply for this claim from an earlier head is not posted again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nold`,
+        path: "src/a.ts",
+        line: 10,
+        original_line: 10,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(0);
+  });
+
+  // PR #592 R006: what the thread shows is its newest claim update. A claim
+  // that comes back to an earlier text still needs a reply, or the thread keeps
+  // showing the other one.
+  test("a claim back to one an older reply carried, under a newer one: replied again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+        in_reply_to_id: 900,
+      },
+      {
+        id: 902,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint("a third claim")} -->\nC`,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+  });
+
+  test("a claim back to the first comment's, under a reply for another: replied again", async () => {
+    const { spawnFn, calls } = run([
+      {
+        id: 901,
+        user: "pr-hero",
+        body: `<!-- crysk-claim-update head=${OLD_HEAD} c=${claimFingerprint(NEW_CLAIM)} -->\nB`,
+        in_reply_to_id: 900,
+      },
+    ]);
+    await post(spawnFn, OLD_CLAIM);
+    expect(
+      calls.filter(
+        (c) =>
+          c.argv.includes("in_reply_to=900") &&
+          c.stdin?.startsWith("<!-- crysk-claim-update "),
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("a failed reply degrades to a log line, never fails the paid run", async () => {
+    const { spawnFn, calls } = run(
+      [],
+      [
+        {
+          match: ["in_reply_to=900"],
+          response: { stderr: "HTTP 502", exitCode: 1 },
+        },
+      ],
+    );
+    const outcome = await post(spawnFn, NEW_CLAIM);
+    expect(claimReplies(calls)).toHaveLength(1);
+    expect(outcome.summary.action).toBe("updated");
   });
 });

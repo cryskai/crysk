@@ -504,7 +504,7 @@ describe("decidePublication — the pure table", () => {
           expect(p.rendered.annotation).not.toContain(credential);
           expect(p.rendered.annotation).toContain("Provider anthropic");
           expect(p.status?.description).toStartWith("CRYSK-CRED-REJECTED: ");
-          expect(texts(p)).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+          expect(texts(p)).not.toMatch(/[{}]|<(?!\/?sub>)[a-z][a-z-]*>/);
         },
       );
 
@@ -531,7 +531,7 @@ describe("decidePublication — the pure table", () => {
           expect(p.status?.description).toStartWith(
             `CRYSK-CRED-REJECTED: Provider ${provider} rejected the credential in ${secret}`,
           );
-          expect(texts(p)).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+          expect(texts(p)).not.toMatch(/[{}]|<(?!\/?sub>)[a-z][a-z-]*>/);
         },
       );
 
@@ -570,7 +570,7 @@ describe("decidePublication — the pure table", () => {
         expect(all).not.toContain(
           "wait for the limit to reset or raise the quota",
         );
-        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+        expect(all).not.toMatch(/[{}]|<(?!\/?sub>)[a-z][a-z-]*>/);
       });
 
       test("a subscription usage limit on OAuth quotes the reset time and offers an API key", () => {
@@ -595,7 +595,7 @@ describe("decidePublication — the pure table", () => {
         expect(all).toContain("put api_key first in `credentials.claude`");
         expect(all).toContain("CRYSK_CLAUDE_API_KEY");
         expect(all).not.toContain("raise the quota");
-        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+        expect(all).not.toMatch(/[{}]|<(?!\/?sub>)[a-z][a-z-]*>/);
       });
 
       // F001: the commit status is clipped at 140 characters, so the provider's words
@@ -750,7 +750,7 @@ describe("decidePublication — the pure table", () => {
         expect(all).toContain("max-changed-lines");
         expect(all).toContain(".cryskignore");
         expect(all).toContain(".prheroignore");
-        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+        expect(all).not.toMatch(/[{}]|<(?!\/?sub>)[a-z][a-z-]*>/);
       });
 
       test("a model the credential cannot reach (404) renders CRYSK-MODEL-UNAVAILABLE", () => {
@@ -826,7 +826,7 @@ describe("decidePublication — the pure table", () => {
       // WHY the fallback: the credential sentence names the backend, provider and step, and
       // this path knows none of them, so its own rendering would ship "<backend>/<provider>".
       expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
-      expect(plan.rendered.annotation).not.toMatch(/<[a-z][a-z-]*>/);
+      expect(plan.rendered.annotation).not.toMatch(/<(?!\/?sub>)[a-z][a-z-]*>/);
     });
 
     test("a mix of a missing provider record and model_unavailable stays CRYSK-HUNTERS-FAILED", () => {
@@ -877,7 +877,7 @@ describe("decidePublication — the pure table", () => {
       // WHY the fallback: "$ opencode models {provider}" and "a model that {provider} serves"
       // would name "<provider>" without a provider.
       expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
-      expect(plan.rendered.annotation).not.toMatch(/<[a-z][a-z-]*>/);
+      expect(plan.rendered.annotation).not.toMatch(/<(?!\/?sub>)[a-z][a-z-]*>/);
     });
 
     test("a mix of model_unavailable and another cause stays CRYSK-HUNTERS-FAILED", () => {
@@ -1281,7 +1281,8 @@ describe("decidePublication — the pure table", () => {
     const [first, blank, heading] = plan.commentBody.split("\n");
     expect(first).toBe(MARKER);
     expect(blank).toBe("");
-    expect(heading).toBe("### CRYSK-INSTALL-FAILED");
+    expect(heading).toBe("## ⏸ Review didn't run");
+    expect(plan.commentBody).toContain("<sub>CRYSK-INSTALL-FAILED · ");
   });
 
   test("a review whose PR could not be resolved is posted nowhere: annotation only", () => {
@@ -1995,7 +1996,7 @@ describe("runPublish — the shell", () => {
     expect(run.stdout).toContain(
       "::error title=crysk CRYSK-PROMPTSET-INVALID::",
     );
-    expect(run.summary).toContain("### CRYSK-PROMPTSET-INVALID");
+    expect(run.summary).toContain("<sub>CRYSK-PROMPTSET-INVALID · ");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
     expect(status?.args).toContain("state=error");
@@ -2071,7 +2072,7 @@ describe("runPublish — the shell", () => {
     expect(run.stdout).toContain(
       "Crysk stopped at the review before it reported an outcome",
     );
-    expect(run.summary).toContain("### CRYSK-UNCLASSIFIED");
+    expect(run.summary).toContain("<sub>CRYSK-UNCLASSIFIED · ");
     expect(statusReadEndpoints(run.calls)).toEqual([]);
     expect(statusCalls(run.calls)).toEqual([]);
     expect(commentPost(run.calls)?.args).toContain(
@@ -2408,7 +2409,7 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({ record: record() });
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain("::error title=crysk CRYSK-INSTALL-FAILED::");
-    expect(run.summary).toContain("### CRYSK-INSTALL-FAILED");
+    expect(run.summary).toContain("<sub>CRYSK-INSTALL-FAILED · ");
   });
 
   test("the commit status is posted before the comment", () => {
@@ -2644,7 +2645,7 @@ describe("runPublish — the shell", () => {
     expect(run.exitCode).toBe(0);
     expect(run.calls).toEqual([]);
     expect(run.stdout).toContain("CRYSK-CRED-MISSING");
-    expect(run.summary).toContain("### CRYSK-CRED-MISSING");
+    expect(run.summary).toContain("<sub>CRYSK-CRED-MISSING · ");
   });
 
   test("a failed status is retried once, and the retry's success is the result", () => {
@@ -2707,7 +2708,7 @@ describe("runPublish — the shell", () => {
     expect(run.exitCode).toBe(1);
     expect(run.calls).toEqual([]);
     expect(run.stdout).toContain("::error title=crysk CRYSK-UNCLASSIFIED::");
-    expect(run.summary).toContain("### CRYSK-UNCLASSIFIED");
+    expect(run.summary).toContain("<sub>CRYSK-UNCLASSIFIED · ");
   });
 
   test("an unreadable record after the CLI started is still the CLI's to report", () => {
@@ -3656,7 +3657,7 @@ describe("hunters-failed renders no placeholder for any cause", () => {
           plan.commentBody,
         ];
         for (const text of texts) {
-          expect(text).not.toMatch(/<[a-z][a-z-]*>/);
+          expect(text).not.toMatch(/<(?!\/?sub>)[a-z][a-z-]*>/);
           expect(text).not.toMatch(/[{}]/);
         }
       });
@@ -4286,5 +4287,27 @@ describe("runPublish — the override read gets one retry", () => {
     expect(statusReadEndpoints(run.calls)).toHaveLength(2);
     expect(statusCalls(run.calls)).toEqual([]);
     expect(run.stdout).not.toContain("::warning");
+  });
+});
+
+describe("runPublish — override notice titles", () => {
+  test("a landed override opens its body with a gate-overridden title under the marker", () => {
+    const run = runPublishIn({ record: overrideRecord() });
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body.split("\n")[0]).toBe(
+      `<!-- crysk-override head=${SHA} run=4242 attempt=1 -->`,
+    );
+    expect(body.split("\n")[1]).toBe("");
+    expect(body.split("\n")[2]).toBe("## ⚑ Gate overridden by @maintainer");
+    expect(body.split("\n")[3]).toBe("");
+  });
+
+  test("an override that did not land opens its body with an override-not-applied title", () => {
+    const run = runPublishIn({
+      record: overrideRecord({ head_sha: undefined }),
+    });
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body.split("\n")[2]).toBe("## ⚠️ Override not applied");
+    expect(body.split("\n")[3]).toBe("");
   });
 });

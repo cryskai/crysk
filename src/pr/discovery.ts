@@ -21,7 +21,7 @@ import type {
   fetchPrComments,
   fetchPrReviewComments,
 } from "#pr/pr";
-import { findMarkedCommentId } from "#pr/preflight";
+import { findTrustedMarkedCommentId } from "#pr/preflight";
 import { keepPrOwnedHunks, patchNumstat } from "#rereview/base-merge-filter";
 import {
   adjudicationQueue,
@@ -68,6 +68,7 @@ import { countedTriageReplies } from "#triage/reply";
 import { parsePrCommentMarker, summaryMarkerFields } from "#watch/preflight";
 import { CliError } from "../errors";
 import type { IgnoreFileReadResult } from "../ignore-read";
+import type { MarkerTrust } from "../trust/marker-trust";
 
 // Invariant 1 (rereview-coverage fix): the ONLY input that may gate which
 // hunters run for a re-review is `skipDiscovery` — never a hardcoded
@@ -221,6 +222,9 @@ export async function resolvePrDiscovery(params: {
   // Whether each author of a triage reply has write access (pr/ci-admission-gate.ts
   // lookUpReplyWriters): true, false, or null when the permission did not read.
   replyWriters: ReadonlyMap<string, boolean | null>;
+  // Who may have written the summary this run reads its last reviewed head from
+  // (src/trust/marker-trust.ts).
+  markerTrust: MarkerTrust;
   git: PrDiscoveryGit;
   log: (line?: string) => void;
 }): Promise<PrDiscoveryResult> {
@@ -239,6 +243,7 @@ export async function resolvePrDiscovery(params: {
     postedFindings,
     reviewComments,
     replyWriters,
+    markerTrust,
     git,
     log,
   } = params;
@@ -250,7 +255,10 @@ export async function resolvePrDiscovery(params: {
   // summaryComplete true and it is then ignored anyway, since
   // resolveLastReviewedHead only consults it when summaryHead itself is
   // non-null.
-  const existingSummaryId = findMarkedCommentId(issueComments);
+  const existingSummaryId = findTrustedMarkedCommentId(
+    issueComments,
+    markerTrust,
+  );
   const summaryMarker =
     existingSummaryId === null
       ? null

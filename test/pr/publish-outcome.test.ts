@@ -71,6 +71,7 @@ import type { CliOptions } from "#review/preflight";
 import { CliError } from "../../src/errors";
 import { prheroLayout } from "../../src/home-preflight";
 import { zeroUsage } from "../../src/usage";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 function baseOptions(over: Partial<CliOptions> = {}): CliOptions {
   return {
@@ -245,6 +246,7 @@ describe("publishRunOutcome", () => {
   ): PublishRunOutcomeInput {
     const { onPosted } = captureOnPosted();
     return {
+      markerTrust: FIXTURE_MARKER_TRUST,
       result: baseResult(),
       started: performance.now(),
       indexMs: 0,

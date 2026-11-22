@@ -26,7 +26,6 @@ import {
   renderCiAdmissionBlock,
   resolveCiAdmissionAttemptCount,
   resolveCiReviewPolicy,
-  resolveCiTrustedActors,
   resolveReviewAttemptCount,
   scanPostedFindingTiers,
   stateReviewCount,
@@ -859,30 +858,28 @@ describe("evaluateCiReviewAdmission — policy modes", () => {
   });
 });
 
-describe("resolveCiTrustedActors", () => {
-  test("includes GITHUB_ACTOR and repo-config extras", () => {
-    const actors = resolveCiTrustedActors({
-      githubActor: "pr-hero[bot]",
-      extra: ["custom-bot"],
-    });
-    expect(actors).toEqual(new Set(["pr-hero[bot]", "custom-bot"]));
-  });
-
-  test("includes the login the platform returned, and nothing when it is empty", () => {
+describe("scanPostedFindingTiers — an empty trusted set", () => {
+  test("reads bots only, never everyone", () => {
     expect(
-      resolveCiTrustedActors({
-        githubActor: "crysk-dev[bot]",
-        platformActor: "crysk-dev[bot]",
+      scanPostedFindingTiers({
+        summaryHead: HEAD_A,
+        comments: [
+          {
+            user: "github-actions[bot]",
+            body: postedFindingComment({ head: HEAD_A, tier: "blocking" }),
+          },
+          {
+            user: "pr-author",
+            body: postedFindingComment({
+              head: HEAD_A,
+              tier: "blocking",
+              c: "forged",
+            }),
+          },
+        ],
+        trustedActors: new Set(),
       }),
-    ).toEqual(new Set(["crysk-dev[bot]"]));
-    expect(
-      resolveCiTrustedActors({ githubActor: "dev", platformActor: "app[bot]" }),
-    ).toEqual(new Set(["dev", "app[bot]"]));
-    expect(resolveCiTrustedActors({ platformActor: "" })).toBeUndefined();
-  });
-
-  test("returns undefined when no actors are configured", () => {
-    expect(resolveCiTrustedActors({})).toBeUndefined();
+    ).toEqual({ blocking: 1, advisory: 0, matchedMarkers: 1, parsedTiers: 1 });
   });
 });
 

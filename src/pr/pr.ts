@@ -58,6 +58,8 @@ import type { Finding, FindingsDocument } from "#review/findings";
 import {
   type PrCommentDelta,
   parseFindingCommentBadge,
+  renderClaimUpdateReply,
+  renderFileLevelComment,
   renderInlineComment,
   renderIssueFindingComment,
   renderPrComment,
@@ -75,10 +77,16 @@ import {
   WORKFLOW_FILE_NAME,
 } from "../brand";
 import { CliError } from "../errors";
+import {
+  isTrustedMarkerAuthor,
+  type MarkerTrust,
+  markerAuthoredComments,
+} from "../trust/marker-trust";
 import { buildFindingStateRecord } from "./finding-state-record";
 import {
   buildPostPlan,
   computeDroppedFindingIds,
+  type FindingMatch,
   type InlinePostOutcome,
   matchPostedFindings,
   type PostedFindingComment,
@@ -94,8 +102,9 @@ import {
   type CommitStatusRequest,
   claimFingerprint,
   decideWorktree,
-  findMarkedCommentId,
+  findTrustedMarkedCommentId,
   parseFindingMarker,
+  threadShownFingerprint,
   type WorktreeDecision,
   worktreeDirty,
 } from "./preflight";
@@ -915,10 +924,13 @@ export async function initCodegraphIndex(
 // `timeoutMs` bounds the lookup and the write alike (F004). Its default is the
 // findings POST's bound, and both production callers are on that path; the
 // parameter exists so a test can prove a hang fails inside a few ms.
+// `trust` names who may have written the comment the lookup finds: a marked
+// comment from anyone else is never the one this run PATCHes.
 export async function postPrComment(
   operatorRoot: string,
   pr: number,
   body: string,
+  trust: MarkerTrust,
   spawnFn?: typeof Bun.spawn,
   knownCommentId?: number,
   markerPrefix?: string,
@@ -926,8 +938,9 @@ export async function postPrComment(
 ): Promise<{ action: "created" | "updated"; commentId: number }> {
   const existingId =
     knownCommentId ??
-    findMarkedCommentId(
+    findTrustedMarkedCommentId(
       await fetchPrComments(operatorRoot, pr, { spawnFn, timeoutMs }),
+      trust,
       markerPrefix,
     );
   const action = existingId === null ? "created" : "updated";
@@ -1288,9 +1301,12 @@ function postedTier(body: string): { tier?: "blocking" | "advisory" } {
 // summary comment's `<!-- pr-hero-report ` marker never parses as a
 // `<!-- pr-hero-finding ` one, so it drops out of this list without any
 // special-casing, and a human's reply (any shape) drops out the same way.
+// A marker counts only from a trusted author (src/trust/marker-trust.ts): anyone can type one, and a
+// typed one would otherwise stand in for the review's own finding everywhere this list is read.
 export async function fetchPostedFindingComments(
   operatorRoot: string,
   pr: number,
+  trust: MarkerTrust,
   options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<PostedFindingComment[]> {
   const [reviewComments, issueComments] = await Promise.all([
@@ -1300,13 +1316,23 @@ export async function fetchPostedFindingComments(
   const out: PostedFindingComment[] = [];
   for (const comment of reviewComments) {
     const marker = parseFindingMarker(comment.body);
-    if (marker === null) continue;
+    if (marker === null || !isTrustedMarkerAuthor(comment.user, trust)) {
+      continue;
+    }
     out.push({
       id: comment.id,
       channel: "review",
+      user: comment.user,
       marker,
       livePath: comment.path,
       liveLine: comment.line ?? undefined,
+      // A file-level comment has neither; an outdated inline one keeps its
+      // original_line, so this never mistakes one for the other.
+      ...((comment.line ?? null) === null &&
+      (comment.original_line ?? null) === null
+        ? { fileLevel: true }
+        : {}),
+      ...shownFingerprintField(comment.id, marker.c, reviewComments),
       ...postedTier(comment.body),
       ...(comment.created_at === undefined
         ? {}
@@ -1315,10 +1341,13 @@ export async function fetchPostedFindingComments(
   }
   for (const comment of issueComments) {
     const marker = parseFindingMarker(comment.body);
-    if (marker === null) continue;
+    if (marker === null || !isTrustedMarkerAuthor(comment.user, trust)) {
+      continue;
+    }
     out.push({
       id: comment.id,
       channel: "issue",
+      user: comment.user,
       marker,
       ...postedTier(comment.body),
       ...(comment.created_at === undefined
@@ -2020,6 +2049,8 @@ export async function postPrReview(input: {
   // see ReviewSubmissionOutcome's WHY above for the failure this closes.
   allFindings: PrHeroFindingRef[];
   webUrl?: string;
+  // Who may have written the finding comments the 422 recovery re-reads.
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   // Bounds the submission and its 422 recovery reads (F004). Defaults to the
   // posting bound; a timeout is NOT retried, because the submission may already
@@ -2088,6 +2119,7 @@ export async function postPrReview(input: {
   const posted = await fetchPostedFindingComments(
     input.operatorRoot,
     input.pr,
+    input.trust,
     {
       spawnFn: input.spawnFn,
       timeoutMs: input.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
@@ -2243,6 +2275,198 @@ export async function postReviewCommentReply(input: {
   return parsePostedCommentId(result.stdout, "triage review reply");
 }
 
+// Which un-anchorable findings post as file-level review comments: those whose
+// FILE is in the diff (only their line is not). Shared by the live post and the
+// `post --dry-run` preview, so the preview names the same split.
+export function fileLevelFindingIds(
+  issueComments: readonly { id: string; path: string }[],
+  diffPatch: string,
+): Set<string> {
+  const diffFiles = new Set(parseHunkAnchors(diffPatch).keys());
+  return new Set(
+    issueComments.filter((f) => diffFiles.has(f.path)).map((f) => f.id),
+  );
+}
+
+async function postClaimUpdateReplies(input: {
+  operatorRoot: string;
+  pr: number;
+  headSha: string;
+  persisting: FindingMatch[];
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<void> {
+  for (const { finding, posted } of input.persisting) {
+    if (posted.channel !== "review") continue;
+    const fingerprint = claimFingerprint(finding.claim);
+    // Reply only when the thread does not already show this claim: its newest
+    // claim update, else its first comment (PR #592 R004, R006), read when the
+    // plan fetched the comments, so this costs no extra call. A replay or a
+    // later head that still sees it posts nothing; a claim that comes back to
+    // an earlier text under a newer one is replied again.
+    if ((posted.shownFingerprint ?? posted.marker.c) === fingerprint) {
+      continue;
+    }
+    try {
+      const id = await postReviewCommentReply({
+        operatorRoot: input.operatorRoot,
+        pr: input.pr,
+        inReplyTo: posted.id,
+        body: renderClaimUpdateReply({
+          headSha: input.headSha,
+          path: finding.path,
+          line: finding.line,
+          claim: finding.claim,
+          fingerprint,
+        }),
+        spawnFn: input.spawnFn,
+        timeoutMs: input.timeoutMs,
+      });
+      log(`posted: claim update ${id} on thread ${posted.id}`);
+    } catch (error) {
+      log(
+        `claim update on thread ${posted.id} did not post ` +
+          `(${error instanceof Error ? error.message : String(error)})`,
+      );
+      continue;
+    }
+    // After the reply, so a reopened thread always shows why. Once, here, and
+    // never retried on a later run: by then a person may have resolved the
+    // thread on purpose, and a reopen would undo it (PR #593 R005). A thread
+    // left folded still reaches the agent through crysk status.
+    await reopenAfterClaimUpdate(input, posted.id);
+  }
+}
+
+// Best effort: a token that cannot reopen threads leaves the reply in a folded
+// thread, which status still hands to the agent. Every outcome but an open
+// thread is logged.
+async function reopenAfterClaimUpdate(
+  input: {
+    operatorRoot: string;
+    pr: number;
+    spawnFn?: typeof Bun.spawn;
+    timeoutMs?: number;
+  },
+  commentId: number,
+): Promise<void> {
+  try {
+    const reopened = await reopenReviewThreadForComment({
+      operatorRoot: input.operatorRoot,
+      pr: input.pr,
+      commentId,
+      spawnFn: input.spawnFn,
+      timeoutMs: input.timeoutMs,
+    });
+    if (reopened === "reopened") log(`reopened: thread ${commentId}`);
+    if (reopened === "not-found") {
+      log(
+        `thread ${commentId} not found among the review threads; not reopened`,
+      );
+    }
+  } catch (error) {
+    log(
+      `thread ${commentId} was not reopened after its claim update ` +
+        `(${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+}
+
+// Hides an issue comment as outdated. The REST id is all the caller has, and
+// the mutation takes the node id, hence the read first.
+async function minimizeIssueComment(input: {
+  operatorRoot: string;
+  commentId: number;
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<void> {
+  const node = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      `repos/{owner}/{repo}/issues/comments/${input.commentId}`,
+      "--jq",
+      ".node_id",
+    ],
+    undefined,
+    input.spawnFn,
+    input.timeoutMs,
+  );
+  const nodeId = node.stdout.trim();
+  if (!node.ok || nodeId === "") {
+    throw new Error(node.stderr.trim() || "no node id");
+  }
+  const hidden = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "graphql",
+      "-f",
+      "query=mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}",
+      "-f",
+      `id=${nodeId}`,
+    ],
+    undefined,
+    input.spawnFn,
+    input.timeoutMs,
+  );
+  if (!hidden.ok) throw new Error(hidden.stderr.trim() || "minimize failed");
+}
+
+// Only when a claim update moved it off the marker's, so an ordinary thread keeps
+// its shape.
+function shownFingerprintField(
+  rootId: number,
+  markerFingerprint: string,
+  comments: readonly PrReviewComment[],
+): { shownFingerprint?: string } {
+  const shown = threadShownFingerprint(rootId, markerFingerprint, comments);
+  return shown === markerFingerprint ? {} : { shownFingerprint: shown };
+}
+
+// A file-level review comment: POST pulls/<n>/comments with subject_type "file",
+// pinned to the reviewed commit like the batch review (GitHub #39). Never throws:
+// it returns the comment id, or why the post failed.
+export async function postFileLevelComment(input: {
+  operatorRoot: string;
+  pr: number;
+  headSha: string;
+  path: string;
+  body: string;
+  spawnFn?: typeof Bun.spawn;
+}): Promise<{ id: number } | { error: string }> {
+  const result = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "--method",
+      "POST",
+      `repos/{owner}/{repo}/pulls/${input.pr}/comments`,
+      "-F",
+      "body=@-",
+      "-f",
+      `commit_id=${input.headSha}`,
+      "-f",
+      `path=${input.path}`,
+      "-f",
+      "subject_type=file",
+    ],
+    input.body,
+    input.spawnFn,
+    POSTING_GH_TIMEOUT_MS,
+  );
+  if (!result.ok) {
+    return { error: result.stderr.trim().split("\n")[0] || "gh api failed" };
+  }
+  try {
+    return {
+      id: parsePostedCommentId(result.stdout, "file-level finding comment"),
+    };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 // Un-anchorable finding (#17 channel): GitHub issue comments have no
 // native thread, so the reply is another top-level issue comment. The
 // caller puts the permalink in the body; this function does not guess one.
@@ -2295,6 +2519,10 @@ const REVIEW_THREADS_QUERY =
 
 const RESOLVE_THREAD_MUTATION =
   "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){" +
+  "thread{isResolved}}}";
+
+const UNRESOLVE_THREAD_MUTATION =
+  "mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){" +
   "thread{isResolved}}}";
 
 // Fake-gh tests never send the document to GitHub, so they cannot catch a
@@ -2413,8 +2641,76 @@ export async function resolveReviewThreadForComment(input: {
   // graphql round trips. A bound on two of three still hangs on the third.
   timeoutMs?: number;
 }): Promise<ResolveThreadOutcome> {
-  assertBalancedGraphql(REVIEW_THREADS_QUERY, "reviewThreads");
   assertBalancedGraphql(RESOLVE_THREAD_MUTATION, "resolveReviewThread");
+  const thread = await findReviewThreadForComment(input);
+  if (thread === undefined) return "not-found";
+  if (thread.isResolved) return "already-resolved";
+  const mutated = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "graphql",
+      "-f",
+      `query=${RESOLVE_THREAD_MUTATION}`,
+      "-f",
+      `id=${thread.id}`,
+    ],
+    undefined,
+    input.spawnFn,
+    input.timeoutMs,
+  );
+  if (!mutated.ok) {
+    throw new CliError(
+      `gh api graphql (resolveReviewThread) failed: ${mutated.stderr.trim()}`,
+    );
+  }
+  return "resolved";
+}
+
+// Reopens the thread a review comment starts, for a thread that gets a claim
+// update: GitHub folds a resolved thread away, so the new claim would be hidden.
+async function reopenReviewThreadForComment(input: {
+  operatorRoot: string;
+  pr: number;
+  commentId: number;
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<"reopened" | "already-open" | "not-found"> {
+  assertBalancedGraphql(UNRESOLVE_THREAD_MUTATION, "unresolveReviewThread");
+  const thread = await findReviewThreadForComment(input);
+  if (thread === undefined) return "not-found";
+  if (!thread.isResolved) return "already-open";
+  const mutated = await gh(
+    input.operatorRoot,
+    [
+      "api",
+      "graphql",
+      "-f",
+      `query=${UNRESOLVE_THREAD_MUTATION}`,
+      "-f",
+      `id=${thread.id}`,
+    ],
+    undefined,
+    input.spawnFn,
+    input.timeoutMs,
+  );
+  if (!mutated.ok) {
+    throw new CliError(
+      `gh api graphql (unresolveReviewThread) failed: ${mutated.stderr.trim()}`,
+    );
+  }
+  return "reopened";
+}
+
+// The review thread whose first comment is `commentId`, or undefined.
+async function findReviewThreadForComment(input: {
+  operatorRoot: string;
+  pr: number;
+  commentId: number;
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<GraphQlThread | undefined> {
+  assertBalancedGraphql(REVIEW_THREADS_QUERY, "reviewThreads");
   const repo = await ghRepoOwnerName(
     input.operatorRoot,
     input.spawnFn,
@@ -2443,32 +2739,10 @@ export async function resolveReviewThreadForComment(input: {
       `gh api graphql (reviewThreads) failed: ${listed.stderr.trim()}`,
     );
   }
-  const thread = parseReviewThreads(listed.stdout).find((candidate) => {
+  return parseReviewThreads(listed.stdout).find((candidate) => {
     const first = candidate.comments?.nodes?.[0]?.fullDatabaseId;
     return graphqlDatabaseId(first) === input.commentId;
   });
-  if (thread === undefined) return "not-found";
-  if (thread.isResolved) return "already-resolved";
-  const mutated = await gh(
-    input.operatorRoot,
-    [
-      "api",
-      "graphql",
-      "-f",
-      `query=${RESOLVE_THREAD_MUTATION}`,
-      "-f",
-      `id=${thread.id}`,
-    ],
-    undefined,
-    input.spawnFn,
-    input.timeoutMs,
-  );
-  if (!mutated.ok) {
-    throw new CliError(
-      `gh api graphql (resolveReviewThread) failed: ${mutated.stderr.trim()}`,
-    );
-  }
-  return "resolved";
 }
 
 // Re-export for callers that already import check-run constants from pr.ts.
@@ -2780,6 +3054,8 @@ export async function resolveInlinePostPlan(input: {
   headSha: string;
   doc: FindingsDocument;
   diffPatch: string;
+  // Who may have written the summary, the closing comment and the finding comments this plan reads.
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   postMinSeverity?: PostMinSeverity;
 }): Promise<{
@@ -2799,12 +3075,18 @@ export async function resolveInlinePostPlan(input: {
   // resolved). See ReviewSubmissionOutcome's WHY in pr/pr.ts.
   findingRefs: PrHeroFindingRef[];
   posted: PostedFindingComment[];
+  // The newest re-review closing comment already on the PR, hidden once this
+  // run closes. Older ones were hidden by the runs that followed them.
+  priorClosingCommentId: number | null;
 }> {
   const issueComments = await fetchPrComments(input.operatorRoot, input.pr, {
     spawnFn: input.spawnFn,
     timeoutMs: POSTING_GH_TIMEOUT_MS,
   });
-  const existingSummaryId = findMarkedCommentId(issueComments);
+  const existingSummaryId = findTrustedMarkedCommentId(
+    issueComments,
+    input.trust,
+  );
   const summaryBody = summaryBodyForId(issueComments, existingSummaryId);
   const previousHeadSha =
     summaryBody === null
@@ -2813,6 +3095,7 @@ export async function resolveInlinePostPlan(input: {
   const posted = await fetchPostedFindingComments(
     input.operatorRoot,
     input.pr,
+    input.trust,
     { spawnFn: input.spawnFn, timeoutMs: POSTING_GH_TIMEOUT_MS },
   );
   const anchors = parseHunkAnchors(input.diffPatch);
@@ -2845,6 +3128,10 @@ export async function resolveInlinePostPlan(input: {
         .map((f) => f.id),
     ),
   });
+  const priorClosingCommentId =
+    markerAuthoredComments(issueComments, input.trust).findLast((c) =>
+      REREVIEW_CLOSED_MARKER.test(c.body),
+    )?.id ?? null;
   return {
     plan,
     previousHeadSha,
@@ -2852,8 +3139,12 @@ export async function resolveInlinePostPlan(input: {
     summaryBody,
     findingRefs,
     posted,
+    priorClosingCommentId,
   };
 }
+
+// Both spellings: comments posted before the rename carry `pr-hero-`.
+const REREVIEW_CLOSED_MARKER = /^<!-- (?:crysk|pr-hero)-rereview-closed /;
 
 function summaryBodyForId(
   comments: { id: number; body: string }[],
@@ -2992,6 +3283,8 @@ export async function postInlineFindings(input: {
   doc: FindingsDocument;
   diffPatch: string;
   webUrl: string | undefined;
+  // Who may have written the marker comments this post reads (src/trust/marker-trust.ts).
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   rereview?: RereviewProvenance;
   rereviewPriors?: readonly {
@@ -3044,7 +3337,7 @@ export async function postInlineFindings(input: {
   // `spawnFn`: production callers omit it and the writer reads the process environment.
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<InlinePostOutcome> {
-  const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
+  const { operatorRoot, pr, headSha, doc, webUrl, spawnFn, trust } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
   const {
     plan,
@@ -3053,6 +3346,7 @@ export async function postInlineFindings(input: {
     summaryBody,
     findingRefs,
     posted,
+    priorClosingCommentId,
   } = await resolveInlinePostPlan(input);
   const previousState =
     summaryBody === null ? null : parseStateBlock(summaryBody);
@@ -3167,7 +3461,15 @@ export async function postInlineFindings(input: {
   // bucket (field name unchanged this slice). Known before any write, so
   // the create-first POST already includes it — after the review, the
   // closing PATCH may grow it with 422-demoted findings.
-  const plannedOutsideDiff = findingsFor(plan.issueComments);
+  //
+  // Except the findings whose FILE is in the diff (only their line is not): those
+  // post as file-level review comments after the review, so they get a thread, a
+  // reply and the CI adjudicator like an inline finding. A finding whose file is
+  // not in the diff has nowhere to anchor and stays in the summary.
+  const fileLevelIds = fileLevelFindingIds(plan.issueComments, input.diffPatch);
+  const plannedOutsideDiff = findingsFor(
+    plan.issueComments.filter((f) => !fileLevelIds.has(f.id)),
+  );
 
   // The state block is merged ONCE, here, and both writes append the same
   // string, so the create-first POST and the closing PATCH cannot disagree
@@ -3177,7 +3479,7 @@ export async function postInlineFindings(input: {
   // plan posted from, so a fresh row's locs name the line the comment sits on.
   const lineById = new Map(findingRefs.map((ref) => [ref.id, ref.line]));
   const freshChannel = (id: string): FindingChannel =>
-    plan.issueComments.some((f) => f.id === id) ||
+    (plan.issueComments.some((f) => f.id === id) && !fileLevelIds.has(id)) ||
     plan.persisting.some(
       (match) => match.finding.id === id && match.posted.channel === "issue",
     )
@@ -3339,6 +3641,7 @@ export async function postInlineFindings(input: {
       // PATCH is authoritative, and the re-read belongs as close to the
       // ANCHOR-BEARING call as it can get, not one write earlier.
       renderBody(plannedDelta, plannedOutsideDiff, undefined),
+      trust,
       spawnFn,
     );
     summaryCommentId = created.commentId;
@@ -3387,6 +3690,7 @@ export async function postInlineFindings(input: {
     // fails if this is ever swapped back to `reviewFindings`.
     allFindings: findingRefs,
     webUrl,
+    trust,
     spawnFn,
   });
   // On 422, reviewResult.findings JOIN the Outside Diff set instead of
@@ -3409,6 +3713,76 @@ export async function postInlineFindings(input: {
     ];
   }
 
+  // The file-level comments, one POST each (the batch review endpoint takes no
+  // subject_type). A failed POST demotes the finding to the summary, the same
+  // recovery a 422 gives an inline finding, so nothing is lost.
+  const fileLevelUrls = new Map<string, string>();
+  const fileLevelPosted = (finding: Finding, commentId: number): void => {
+    reachedIds.add(finding.id);
+    if (webUrl !== undefined) {
+      fileLevelUrls.set(
+        finding.id,
+        findingCommentUrl(webUrl, pr, "review", commentId),
+      );
+    }
+  };
+  const fileLevelFailed: { finding: Finding; error: string }[] = [];
+  for (const finding of findingsFor(
+    plan.issueComments.filter((f) => fileLevelIds.has(f.id)),
+  )) {
+    const posted = await postFileLevelComment({
+      operatorRoot,
+      pr,
+      headSha,
+      body: renderFileLevelComment(finding, headSha, webUrl),
+      path: finding.path,
+      spawnFn,
+    });
+    if ("id" in posted) fileLevelPosted(finding, posted.id);
+    else fileLevelFailed.push({ finding, error: posted.error });
+  }
+  // WHY re-read before demoting: a POST that timed out may have landed, and
+  // demoting it too would show the finding twice (a thread and a summary entry).
+  // Same check as the batch review's CRIT-A recovery: match by marker. A failed
+  // re-read demotes them all, which never drops a finding.
+  if (fileLevelFailed.length > 0) {
+    let landed: PrReviewComment[] = [];
+    try {
+      landed = markerAuthoredComments(
+        await fetchPrReviewComments(operatorRoot, pr, {
+          spawnFn,
+          timeoutMs: POSTING_GH_TIMEOUT_MS,
+        }),
+        trust,
+      );
+    } catch {
+      landed = [];
+    }
+    for (const { finding, error } of fileLevelFailed) {
+      const fingerprint = claimFingerprint(finding.claim);
+      const match = landed.find((c) => {
+        const marker = parseFindingMarker(c.body);
+        return (
+          marker !== null &&
+          marker.path === finding.path &&
+          marker.line === finding.line &&
+          marker.headSha === headSha &&
+          marker.c === fingerprint
+        );
+      });
+      if (match !== undefined) {
+        fileLevelPosted(finding, match.id);
+        continue;
+      }
+      log(
+        `file-level comment for ${finding.path}:${finding.line} did not post (${error}) — listed in the summary instead`,
+      );
+      if (!outsideDiff.some((f) => f.id === finding.id)) {
+        outsideDiff = [...outsideDiff, finding];
+      }
+    }
+  }
+
   // Outside Diff findings reached the summary — they must not fire
   // droppedFindingIds. No rematch-before-POST: that block existed only to
   // prevent duplicate issue comments, and this slice posts none. Re-review
@@ -3423,17 +3797,22 @@ export async function postInlineFindings(input: {
     reachedIds,
   );
 
-  const commentUrlByFindingId = await buildCommentUrlMap({
+  const reviewUrlByFindingId = await buildCommentUrlMap({
     operatorRoot,
     pr,
     headSha,
     webUrl,
+    trust,
     spawnFn,
     persisting: plan.persisting,
     issueIdByFindingId: new Map(),
     freshlyPostedReview:
       reviewResult.outcome === "posted" ? reviewFindings : [],
   });
+  const commentUrlByFindingId =
+    fileLevelUrls.size === 0
+      ? reviewUrlByFindingId
+      : new Map([...(reviewUrlByFindingId ?? []), ...fileLevelUrls]);
 
   const delta: PrCommentDelta = { ...plan.delta, previousHeadSha };
   // S1 — the 422 demotion grew the Outside Diff after the POST-shaped merge,
@@ -3486,6 +3865,7 @@ export async function postInlineFindings(input: {
     operatorRoot,
     pr,
     patchBody,
+    trust,
     spawnFn,
     summaryCommentId ?? undefined,
   );
@@ -3582,6 +3962,20 @@ export async function postInlineFindings(input: {
     recordResolveThreads([...refusedResolves], input.env);
   }
 
+  // A kept thread whose finding's claim changed (the matcher binds by place):
+  // its first comment shows the earlier claim, and every reader, the loop's
+  // agent included, would judge that one. A reply carries the new claim. Caught
+  // and bounded: the review is already published, so a lost reply is a log
+  // line, never a failed run.
+  await postClaimUpdateReplies({
+    operatorRoot,
+    pr,
+    headSha,
+    persisting: plan.persisting,
+    spawnFn,
+    timeoutMs: ghTimeoutMs,
+  });
+
   // Closes a RE-review with a visible comment. Everything above only PATCHed
   // the existing summary, and an edit is invisible on GitHub: no
   // notification, no move down the timeline. With zero new findings no
@@ -3595,8 +3989,23 @@ export async function postInlineFindings(input: {
   // catch alone cannot stop a request that is accepted but never answered.
   // As the last await here, a hang would park the caller's receipt write
   // and teardown forever.
+  //
+  // WHY not when this pass posted review comments: those already notify and
+  // move the PR down the timeline, so a closing comment on top is noise. A
+  // finding that only reached the summary does not notify, so it still gets
+  // one, and so does a partial pass, whose warning must be seen.
+  const outsideIds = new Set(outsideDiff.map((finding) => finding.id));
+  const threadsPosted = [...reachedIds].filter(
+    (id) => !outsideIds.has(id),
+  ).length;
+  const closingNeeded = threadsPosted === 0 || doc.run_status !== "complete";
   let closingCommentId: number | undefined;
-  if (existingSummaryId !== null) {
+  if (existingSummaryId !== null && !closingNeeded) {
+    log(
+      `re-review closing comment skipped: ${threadsPosted} new review comment(s) already notify`,
+    );
+  }
+  if (existingSummaryId !== null && closingNeeded) {
     try {
       closingCommentId = await postIssueCommentBody(
         operatorRoot,
@@ -3621,6 +4030,34 @@ export async function postInlineFindings(input: {
         "re-review closing comment did not post " +
           `(${error instanceof Error ? error.message : String(error)}) ` +
           "— the summary was still updated",
+      );
+    }
+  }
+  // After the new one, so one closing comment is always visible. Caught and
+  // bounded like the post above: a stale receipt left visible is noise, never
+  // a reason to fail a paid run.
+  // Not when this run's own closing comment failed: hiding the old one then
+  // would leave the PR with no sign the re-review ran.
+  const closingVisible = !closingNeeded || closingCommentId !== undefined;
+  if (
+    priorClosingCommentId !== null &&
+    existingSummaryId !== null &&
+    closingVisible
+  ) {
+    try {
+      await minimizeIssueComment({
+        operatorRoot,
+        commentId: priorClosingCommentId,
+        spawnFn,
+        timeoutMs: ghTimeoutMs,
+      });
+      log(
+        `hidden: previous re-review closing comment ${priorClosingCommentId}`,
+      );
+    } catch (error) {
+      log(
+        `previous re-review closing comment ${priorClosingCommentId} was not hidden ` +
+          `(${error instanceof Error ? error.message : String(error)})`,
       );
     }
   }
@@ -3679,6 +4116,7 @@ async function buildCommentUrlMap(input: {
   pr: number;
   headSha: string;
   webUrl: string | undefined;
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   persisting: PostPlan["persisting"];
   issueIdByFindingId: Map<string, number>;
@@ -3697,10 +4135,13 @@ async function buildCommentUrlMap(input: {
     urls.set(findingId, findingCommentUrl(webUrl, pr, "issue", id));
   }
   if (input.freshlyPostedReview.length > 0) {
-    const freshReview = await fetchPrReviewComments(operatorRoot, pr, {
-      spawnFn,
-      timeoutMs: POSTING_GH_TIMEOUT_MS,
-    });
+    const freshReview = markerAuthoredComments(
+      await fetchPrReviewComments(operatorRoot, pr, {
+        spawnFn,
+        timeoutMs: POSTING_GH_TIMEOUT_MS,
+      }),
+      input.trust,
+    );
     for (const finding of input.freshlyPostedReview) {
       const fingerprint = claimFingerprint(finding.claim);
       const match = freshReview.find((c) => {
@@ -3740,6 +4181,7 @@ export async function postInlineIfEligible(input: {
   doc: FindingsDocument;
   diffPatch: string;
   webUrl: string | undefined;
+  trust: MarkerTrust;
   spawnFn?: typeof Bun.spawn;
   rereview?: RereviewProvenance;
   rereviewPriors?: readonly {

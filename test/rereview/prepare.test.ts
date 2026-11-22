@@ -1831,3 +1831,41 @@ describe("binding keeps working when the stored claim was sanitized", () => {
     expect(live[0]?.c).toBe(claimFingerprint(raw));
   });
 });
+
+// PR #592 R001: the review's own claim-update reply is not someone answering
+// the finding, so it must not queue a paid verification.
+describe("enrichPriorsFromThreads — the review's claim-update reply is not a new reply", () => {
+  test("a claim-update reply after the summary leaves newThreadReply false", () => {
+    const claim = "a live defect";
+    const after = enrichPriorsFromThreads({
+      priors: [
+        {
+          id: "R001",
+          sev: "CRITICAL" as const,
+          tier: "blocking" as const,
+          channel: "inline" as const,
+          locs: ["src/app.ts:10"],
+          claim,
+          triage: null,
+          newThreadReply: false,
+        },
+      ],
+      posted: [
+        {
+          id: 22,
+          channel: "review" as const,
+          marker: { path: "src/app.ts", line: 10, c: claimFingerprint(claim) },
+        },
+      ],
+      replies: [
+        {
+          in_reply_to_id: 22,
+          body: `<!-- crysk-claim-update head=${"a".repeat(40)} c=${claimFingerprint(claim)} -->\n🔄`,
+          created_at: "2026-08-21T12:00:00Z",
+        },
+      ],
+      summaryUpdatedAt: "2026-08-20T12:00:00Z",
+    });
+    expect(after[0]?.newThreadReply).toBe(false);
+  });
+});

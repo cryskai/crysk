@@ -12,6 +12,7 @@ import type { PostMinSeverity } from "#pr/post-floor";
 import {
   type CiMode,
   findingMarker,
+  PR_CLAIM_UPDATE_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
   PR_REREVIEW_CLOSED_MARKER_PREFIX,
   prCommentMarker,
@@ -485,35 +486,6 @@ function liveClaimText(claim: string): string {
   return text === "" ? CLAIM_UNAVAILABLE : text;
 }
 
-// The summary's one-line-per-finding index (Juanma's PR #2 feedback item 1:
-// the earlier "one finding, one place" decision stripped this list entirely,
-// leaving counts + delta + footer — on first contact that reads as empty).
-// This partially reverses that decision, but the coherence obligation it
-// reinstates is much smaller than the pre-B6 shape: a ONE-LINE index plus
-// links, not a duplicated claim/evidence body, and the delta already had to
-// be correct. `commentUrlByFindingId` is absent (or a finding's id is
-// missing from it) before ids exist — the FIRST render of a freshly created
-// summary, before any per-finding comment has been posted — in which case
-// the line renders without a link; the closing PATCH (cli.ts) supplies the
-// map once posting has happened.
-function findingIndexLines(
-  findings: Finding[],
-  commentUrlByFindingId: ReadonlyMap<string, string> | undefined,
-): string[] {
-  const sorted = [...findings].sort((a, b) => {
-    const rankDiff = severityRank(a.severity) - severityRank(b.severity);
-    if (rankDiff !== 0) return rankDiff;
-    if (a.path !== b.path) return a.path < b.path ? -1 : 1;
-    return a.line - b.line;
-  });
-  return sorted.map((f) => {
-    const loc = code(`${f.path}:${f.line}`);
-    const url = commentUrlByFindingId?.get(f.id);
-    const locRef = url === undefined ? loc : `[${loc}](${url})`;
-    return `${scanAidEmoji(f)} ${locRef} — ${leadIn(f.claim)}`;
-  });
-}
-
 // The PR-comment renderer (ROADMAP B2): the same findings document, shaped
 // for a public GitHub comment instead of a run artifact. Pure for the same
 // reason renderReport is — a posted comment must be re-renderable from the
@@ -655,7 +627,23 @@ export function renderPrComment(
   const out: string[] = [
     prCommentMarker(doc.head_sha, doc.run_status !== "partial"),
   ];
-  out.push("## Crysk review");
+  // The title answers the reader's first question, what this review found, and the
+  // subtitle names what was reviewed. The counts follow the same severity buckets the
+  // old counter line used, so a carried prior still counts.
+  const findingsCount = doc.findings.length + liveForHeadline.length;
+  out.push(
+    `## ${verdictTitle({ critical, warning, severityUnavailable, findingsCount, partial: doc.run_status === "partial", rereview: delta?.rereview, floor: notPosted?.floor })}`,
+  );
+  out.push("");
+  out.push(
+    [
+      ...(doc.summary === undefined
+        ? []
+        : [`Confidence ${doc.summary.score}/5`]),
+      `reviewed ${headRef}`,
+      `diff from ${code(doc.base_sha.slice(0, 8))}`,
+    ].join(" · "),
+  );
   out.push("");
   // GitHub #39, and it goes FIRST — above the #42 incompleteness notice and
   // therefore above everything. The two notices qualify different things and
@@ -729,18 +717,22 @@ export function renderPrComment(
     out.push(coverageSentence(doc, code));
     out.push("");
   }
-  out.push(
-    `🔴 ${critical} critical · 🟡 ${warning} warning` +
-      (severityUnavailable > 0
-        ? ` · ⚠️ ${severityUnavailable} severity unavailable`
-        : "") +
-      ` — ${headRef}, diff from ${code(doc.base_sha.slice(0, 8))}`,
-  );
-  out.push("");
   if (doc.summary !== undefined) {
-    out.push(...summaryLines(doc.summary));
+    out.push(oneLine(doc.summary.prose));
+    out.push("");
+    out.push(
+      `<sub>Why ${doc.summary.score}/5: ${oneLine(doc.summary.score_reason)}</sub>`,
+    );
     out.push("");
   }
+  const alert = cautionAlertLines(doc.findings, commentUrlByFindingId);
+  if (alert.length > 0) {
+    out.push(...alert);
+    out.push("");
+  }
+  const listedLive = (delta?.rereview?.live ?? []).filter(
+    (row) => row.status !== "suppressed",
+  );
   if (doc.findings.length === 0) {
     // The ✅ is a statement about COVERAGE, not about the findings array: it
     // claims every hunter looked and nobody found anything. On a partial run
@@ -752,16 +744,20 @@ export function renderPrComment(
     // remain live (carried / unconfirmed / deferred / suppressed) or this
     // run returned / re-tiered a prior. MatchResult.resolved cannot say so.
     const cleanBill = cleanBillLine(doc.run_status, delta?.rereview);
-    // The ✅ claims nothing was found. With findings held back by the floor
-    // that claim is false, so it narrows to what the floor let through.
-    out.push(
-      notPosted !== undefined && cleanBill === CLEAN_BILL
-        ? `No findings at or above ${code(notPosted.floor)} severity.`
-        : cleanBill,
-    );
-    out.push("");
-  } else {
-    out.push(...findingIndexLines(doc.findings, commentUrlByFindingId));
+    // A plain clean bill adds nothing to the ✅ title, so it is left out. With
+    // findings held back by the floor, the title itself narrows to the floor.
+    if (cleanBill !== CLEAN_BILL) {
+      out.push(cleanBill);
+      out.push("");
+    }
+  }
+  const table = findingTableLines(
+    doc.findings,
+    listedLive,
+    commentUrlByFindingId,
+  );
+  if (table.length > 0) {
+    out.push(...table);
     out.push("");
   }
   if (notPosted !== undefined) {
@@ -769,6 +765,35 @@ export function renderPrComment(
     out.push("");
   }
   out.push(...liveFindingLines(delta?.rereview));
+  const lostAgentKeys = agentRows(doc)
+    .filter((r) => r.status === "failed" || r.status === "unsettled")
+    .map((r) => r.key);
+  if (
+    findingsCount > 0 ||
+    doc.run_status === "partial" ||
+    movedHeadSha !== undefined ||
+    lostAgentKeys.length > 0
+  ) {
+    out.push(
+      ...mergeChecklistLines({
+        critical,
+        severityUnavailable,
+        partial: doc.run_status === "partial",
+        lostAgentKeys,
+        moved: movedHeadSha !== undefined,
+      }),
+    );
+    out.push("");
+  }
+  // Omit the "since <sha>" clause when the previous head equals the current
+  // one (Juanma's PR #2 feedback: "Δ since f933fda8" printed on head
+  // f933fda8 is noise) — a re-run on an unchanged head, not a genuinely
+  // absent prior state (which deltaLine already renders bare).
+  const normalizedDelta =
+    delta && delta.previousHeadSha === doc.head_sha
+      ? { ...delta, previousHeadSha: undefined }
+      : delta;
+  out.push(...reviewDetailsLines(doc, normalizedDelta));
   if (outsideDiffFindings.length > 0) {
     out.push(
       ...outsideDiffSection(
@@ -781,18 +806,6 @@ export function renderPrComment(
     );
     out.push("");
   }
-  // Omit the "since <sha>" clause when the previous head equals the current
-  // one (Juanma's PR #2 feedback: "Δ since f933fda8" printed on head
-  // f933fda8 is noise) — a re-run on an unchanged head, not a genuinely
-  // absent prior state (which deltaLine already renders bare).
-  const normalizedDelta =
-    delta && delta.previousHeadSha === doc.head_sha
-      ? { ...delta, previousHeadSha: undefined }
-      : delta;
-  if (normalizedDelta) {
-    out.push(deltaLine(normalizedDelta));
-    out.push("");
-  }
   out.push("---");
   out.push("");
   // The footer keeps the report's public register: a comment that says
@@ -800,9 +813,201 @@ export function renderPrComment(
   // tool's own contract. Comment voice: no em dashes in prose — the
   // disclaimer joins with a colon.
   out.push(
-    `<sub>run ${doc.run_status} · ${engineLabel(doc)} · ${commentDisclaimer(ciMode)}</sub>`,
+    `<sub>run ${doc.run_status} · ${engineLabel(doc)} · ${commentDisclaimer(ciMode)} · ${code("/crysk review")} asks for a new review</sub>`,
   );
   return `${out.join("\n").trimEnd()}\n`;
+}
+
+// The summary's title. Severity buckets, never tier: a tier-based "blocks merge"
+// would claim what only the commit status decides, and a carried prior has no tier.
+function verdictTitle(input: {
+  critical: number;
+  warning: number;
+  severityUnavailable: number;
+  findingsCount: number;
+  partial: boolean;
+  rereview: RereviewDelta | undefined;
+  // Set when post_min_severity held findings back: a bare ✅ would claim the PR
+  // has no issues while the body says some were not posted.
+  floor: PostMinSeverity | undefined;
+}): string {
+  const parts: string[] = [];
+  if (input.critical > 0)
+    parts.push(plural(input.critical, "critical finding"));
+  if (input.warning > 0) parts.push(plural(input.warning, "warning"));
+  if (input.severityUnavailable > 0)
+    parts.push(`${input.severityUnavailable} of unknown severity`);
+  if (parts.length === 0 && input.findingsCount > 0)
+    parts.push(plural(input.findingsCount, "suggestion"));
+  if (input.partial) {
+    return parts.length === 0
+      ? "⚠️ Review incomplete"
+      : `⚠️ Review incomplete: ${parts.join(" · ")}`;
+  }
+  if (input.critical > 0) return `🔴 ${parts.join(" · ")}`;
+  if (input.warning > 0 || input.severityUnavailable > 0)
+    return `🟡 ${parts.join(" · ")}`;
+  if (parts.length > 0) return `🔵 ${parts.join(" · ")}`;
+  // Item 7 C7: priors the delta counts as still open are not a clean bill, even
+  // when no live row lists them.
+  if (input.rereview !== undefined && !rereviewIsClean(input.rereview))
+    return `🟡 No new findings · ${liveBits(input.rereview).join(" · ")}`;
+  if (input.floor !== undefined)
+    return `✅ No findings at or above ${code(input.floor)} severity`;
+  return "✅ No issues found";
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+// GitHub renders `> [!CAUTION]` as a red callout. Only the first blocking finding
+// gets one: a callout per finding would turn the summary into a wall of red.
+function cautionAlertLines(
+  findings: Finding[],
+  commentUrlByFindingId: ReadonlyMap<string, string> | undefined,
+): string[] {
+  const first = sortBySeverity(findings).find((f) => f.tier === "blocking");
+  if (first === undefined) return [];
+  return [
+    "> [!CAUTION]",
+    `> **${leadIn(first.claim)}** ${findingLocRef(first, commentUrlByFindingId)}`,
+  ];
+}
+
+function sortBySeverity(findings: Finding[]): Finding[] {
+  return [...findings].sort((a, b) => {
+    const rankDiff = severityRank(a.severity) - severityRank(b.severity);
+    if (rankDiff !== 0) return rankDiff;
+    if (a.path !== b.path) return a.path < b.path ? -1 : 1;
+    return a.line - b.line;
+  });
+}
+
+function findingLocRef(
+  finding: Finding,
+  commentUrlByFindingId: ReadonlyMap<string, string> | undefined,
+): string {
+  const loc = code(`${finding.path}:${finding.line}`);
+  const url = commentUrlByFindingId?.get(finding.id);
+  return url === undefined ? loc : `[${loc}](${url})`;
+}
+
+// A pipe inside a table cell ends the cell, even inside a code span, so every
+// cell escapes it.
+function tableCell(text: string): string {
+  return text.replaceAll("|", "\\|");
+}
+
+// One table for every finding the reader still has to deal with: this review's
+// findings (state = their tier) and the priors still live (state = their re-review
+// status). Replaces the loose one-line index and the "Still live:" list.
+function findingTableLines(
+  findings: Finding[],
+  live: readonly RereviewLiveRow[],
+  commentUrlByFindingId: ReadonlyMap<string, string> | undefined,
+): string[] {
+  if (findings.length === 0 && live.length === 0) return [];
+  const rows: string[] = [];
+  for (const f of sortBySeverity(findings)) {
+    rows.push(
+      `| ${scanAidEmoji(f)} | ${tableCell(leadIn(f.claim))} | ${tableCell(findingLocRef(f, commentUrlByFindingId))} | ${f.tier} |`,
+    );
+  }
+  for (const row of live) {
+    // #206: an unrecoverable severity never borrows one of 🔴/🟡/🔵.
+    const badge =
+      row.sev === SEVERITY_UNRECOVERABLE ? "⚠️" : severityEmoji(row.sev);
+    const loc = code(row.locs[0] ?? row.id);
+    rows.push(
+      `| ${badge} | ${tableCell(`${liveClaimText(row.claim)} (${row.id})`)} | ${tableCell(loc)} | ${tableCell(row.status)} |`,
+    );
+  }
+  return [
+    "|  | Finding | Where | State |",
+    "| --- | --- | --- | --- |",
+    ...rows,
+  ];
+}
+
+// What a reader checks before merging, from facts this run knows. "Reviewed the
+// latest commit" is never claimed: an unmoved head and an unverifiable one look
+// the same here (see movedHeadSha).
+function mergeChecklistLines(input: {
+  critical: number;
+  // #206: a prior whose severity could not be recovered may be critical, so it
+  // never lets the critical line read green.
+  severityUnavailable: number;
+  partial: boolean;
+  // The agents whose status is failed or unsettled. A complete run can still have
+  // one (a failed summarizer, see incompleteReviewAnnotation).
+  lostAgentKeys: readonly string[];
+  moved: boolean;
+}): string[] {
+  const out = ["**Before merging**", ""];
+  if (input.critical > 0) {
+    out.push(`- ❌ ${plural(input.critical, "critical finding")} open`);
+  } else if (input.severityUnavailable === 0) {
+    out.push("- ✅ No critical findings open");
+  }
+  if (input.severityUnavailable > 0) {
+    out.push(
+      `- ⚠️ ${input.severityUnavailable} of unknown severity open, read ${input.severityUnavailable === 1 ? "it" : "them"} before merging`,
+    );
+  }
+  if (input.partial) {
+    out.push("- ⚠️ Some agents did not finish");
+  } else if (input.lostAgentKeys.length > 0) {
+    out.push(
+      `- ⚠️ Did not finish: ${input.lostAgentKeys.map((key) => code(key)).join(", ")}`,
+    );
+  } else {
+    out.push("- ✅ Every agent finished");
+  }
+  if (input.moved) out.push("- ⚠️ The PR moved after this review");
+  return out;
+}
+
+// The run's bookkeeping, folded: which agents ran and the delta counts. Agents read
+// the raw Markdown, so folding hides nothing from them. A delta whose every count is
+// zero says nothing and is left out.
+function reviewDetailsLines(
+  doc: FindingsDocument,
+  delta: PrCommentDelta | undefined,
+): string[] {
+  const items: string[] = [];
+  const rows = agentRows(doc);
+  if (rows.length > 0) {
+    items.push(
+      `- Agents: ${rows.map((r) => `${r.key} ${r.status}`).join(" · ")}`,
+    );
+  }
+  if (delta !== undefined && !deltaIsEmpty(delta)) {
+    items.push(`- ${deltaLine(delta)}`);
+  }
+  if (items.length === 0) return [];
+  return [
+    "<details><summary>Review details</summary>",
+    "",
+    ...items,
+    "",
+    "</details>",
+    "",
+  ];
+}
+
+function deltaIsEmpty(delta: PrCommentDelta): boolean {
+  const r = delta.rereview;
+  if (r !== undefined) {
+    return (
+      r.verifiedGone === 0 &&
+      r.unconfirmed === 0 &&
+      r.carried === 0 &&
+      r.deferred === 0 &&
+      r.new === 0
+    );
+  }
+  return delta.resolved === 0 && delta.new === 0 && delta.persist === 0;
 }
 
 function liveFindingLines(rereview: RereviewDelta | undefined): string[] {
@@ -812,28 +1017,6 @@ function liveFindingLines(rereview: RereviewDelta | undefined): string[] {
     for (const hit of rereview.worsened) {
       out.push(
         `returned ${hit.priorId}: ${hit.priorSev} → ${hit.discoverySev}`,
-      );
-    }
-    out.push("");
-  }
-  const listed = (rereview.live ?? []).filter(
-    (row) => row.status !== "suppressed",
-  );
-  if (listed.length > 0) {
-    out.push("Still live:");
-    for (const row of listed) {
-      const loc = row.locs[0] ?? row.id;
-      // #206: never run an unrecoverable severity through severityEmoji —
-      // its 4-case switch has no branch for the sentinel, and reusing 🟡 by
-      // accident is exactly the silent downgrade this issue is about. A
-      // distinct glyph AND word, never one of 🔴/🟡/🔵, so the row cannot be
-      // mistaken for a real (if low) severity.
-      const badge =
-        row.sev === SEVERITY_UNRECOVERABLE
-          ? "⚠️ severity unavailable"
-          : severityEmoji(row.sev);
-      out.push(
-        `- \`${row.status}\` ${badge} ${code(loc)} — ${liveClaimText(row.claim)} (${row.id})`,
       );
     }
     out.push("");
@@ -910,10 +1093,7 @@ function discoverySkipSentence(rereview: RereviewDelta): string {
 //   is a resolution, and erasing it would repeat the same class of false
 //   clean bill #166 reported in the first place.
 function skippedDiscoveryCleanBillLine(rereview: RereviewDelta): string {
-  const sentences: string[] = [
-    discoverySkipSentence(rereview),
-    "No discovery hunter ran this pass.",
-  ];
+  const sentences: string[] = [discoverySkipSentence(rereview)];
   if (rereview.verifiedGone > 0) {
     sentences.push(
       `${rereview.verifiedGone} prior finding${rereview.verifiedGone === 1 ? "" : "s"} ` +
@@ -924,7 +1104,7 @@ function skippedDiscoveryCleanBillLine(rereview: RereviewDelta): string {
   if (bits.length > 0) {
     sentences.push(`Still live: ${bits.join(" · ")}.`);
   }
-  if (sentences.length === 2) {
+  if (sentences.length === 1) {
     sentences.push("No live findings are carried from the previous review.");
   }
   return sentences.join(" ");
@@ -990,6 +1170,26 @@ function deltaLine(delta: PrCommentDelta): string {
 // re-review looked exactly like a run that never happened. The delta line is
 // the summary's own `deltaLine`, so the two comments cannot disagree on the
 // numbers.
+// The reply in a kept thread whose finding's claim changed. The new claim in
+// full: an agent reading the thread judges this, not the comment above it.
+export function renderClaimUpdateReply(input: {
+  headSha: string;
+  path: string;
+  line: number;
+  claim: string;
+  fingerprint: string;
+}): string {
+  return [
+    `${PR_CLAIM_UPDATE_MARKER_PREFIX}head=${input.headSha} c=${input.fingerprint} -->`,
+    `🔄 **The review of ${code(input.headSha.slice(0, 8))} reports a different claim on this thread**`,
+    "",
+    `${code(`${input.path}:${input.line}`)} — ${oneLine(input.claim)}`,
+    "",
+    "<sub>This is the finding to judge and answer now. The comment that opens this thread is from an earlier review.</sub>",
+    "",
+  ].join("\n");
+}
+
 export function renderRereviewClosedComment(input: {
   headSha: string;
   delta: PrCommentDelta;
@@ -1215,25 +1415,8 @@ function materialityReason(reason: string): string {
     : `${flat.slice(0, MATERIALITY_REASON_MAX - 1).trimEnd()}…`;
 }
 
-// Item "Prompt to fix with AI" (Juanma's PR #2 feedback): a copy-pasteable
-// prompt, not a deep link — Greptile's equivalent hands off to a hosted IDE
-// integration this project does not have, and inventing a link to a service
-// that does not exist would be worse than omitting the feature.
-function promptToFixBlock(finding: Finding): string[] {
-  return [
-    "",
-    "<details><summary>Prompt to fix with AI</summary>",
-    "",
-    "```",
-    `Fix this issue in ${oneLine(finding.path)} at line ${finding.line}:`,
-    "",
-    oneLine(finding.claim),
-    "```",
-    "",
-    "</details>",
-  ];
-}
-
+// No "Prompt to fix with AI" block: it repeated the claim word for word inside
+// a code fence, and the agents that fix findings read the claim itself.
 function findingBodyLines(
   finding: Finding,
   headSha: string,
@@ -1252,7 +1435,6 @@ function findingBodyLines(
     out.push(...tierLines);
   }
   out.push(...evidenceBlock(finding, headSha, webUrl));
-  out.push(...promptToFixBlock(finding));
   return out;
 }
 
@@ -1331,6 +1513,29 @@ export function renderInlineComment(
     // the diff line itself, so a self-referential link would be redundant —
     // unlike the un-anchorable twin below, which has no anchor to point at.
     ...findingBodyLines(finding, headSha, webUrl, false),
+  ];
+  return `${out.join("\n").trimEnd()}\n`;
+}
+
+// A finding whose line is outside the diff but whose file is in it, posted as a
+// file-level review comment: it gets a thread like an inline finding. GitHub does
+// not anchor it to the line, so the location line links to it, unlike
+// renderInlineComment. The marker carries the finding's real line, the only line
+// anchor a re-run can match on (a file-level comment's own `line` is null).
+export function renderFileLevelComment(
+  finding: Finding,
+  headSha: string,
+  webUrl?: string,
+): string {
+  const out: string[] = [
+    findingMarker({
+      path: finding.path,
+      line: finding.line,
+      headSha,
+      claim: finding.claim,
+    }),
+    "",
+    ...findingBodyLines(finding, headSha, webUrl, true),
   ];
   return `${out.join("\n").trimEnd()}\n`;
 }
@@ -1678,8 +1883,8 @@ function closing(doc: FindingsDocument, ciMode: CiMode): string[] {
 // voice: no em dashes, the disclaimer joins with a colon.
 function commentDisclaimer(ciMode: CiMode): string {
   return ciMode === "gate"
-    ? "Assistant report backing the crysk commit status, the required check in gate mode: every line above is a claim to verify."
-    : "Assistant report, not a merge gate: every line above is a claim to verify.";
+    ? "AI review backing the required crysk check: verify each claim"
+    : "AI review, not a merge gate: verify each claim";
 }
 
 // Hunter-authored text lands inside code spans and list items. A stray

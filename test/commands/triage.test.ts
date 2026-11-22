@@ -19,6 +19,7 @@ import {
   triageMarker,
 } from "#triage/triage";
 import { CliError, CliUsageError } from "../../src/errors";
+import { markerTrust } from "../../src/trust/marker-trust";
 
 interface ScriptedResponse {
   stdout?: string;
@@ -1028,6 +1029,8 @@ describe("runTriageReplyCommand — with a run directory, a reply already at the
         bodyFile,
         dryRun: answer.dryRun ?? false,
         spawnFn,
+        // The machine's own gh login, as resolveMarkerTrust reads it for a local run.
+        markerTrust: markerTrust(["local-operator"]),
       });
       return { exitCode, calls, written: written.join("") };
     } finally {
@@ -1109,6 +1112,44 @@ describe("runTriageReplyCommand — with a run directory, a reply already at the
     expect(exitCode).toBe(0);
     expect(postsOf(calls)).toHaveLength(0);
     expect(written).toContain("skip post");
+  });
+
+  // S2 (odd/tasks/marker-trust.md): --from binds only a trusted author's finding comment.
+  function withForgedFinding(
+    script: ScriptEntry[],
+    rewrite: (rows: { id: number; user: string }[]) => unknown[],
+  ): ScriptEntry[] {
+    return script.map((entry) => {
+      if (entry.match[0] !== "pulls/42/comments") return entry;
+      const rows = (entry.response?.stdout ?? "")
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line));
+      return {
+        match: entry.match,
+        response: { stdout: ndjson(rewrite(rows)) },
+      };
+    });
+  }
+
+  test("a forged copy of the finding comment posted after it does not make the match ambiguous", async () => {
+    const script = withForgedFinding(replyScript("dev", "write"), (rows) => {
+      const real = rows.find((row) => row.id === 22);
+      return [...rows, { ...real, id: 99, user: "mallory" }];
+    });
+    const { exitCode, calls, written } = await replyFromRunDir(script);
+    expect(exitCode).toBe(0);
+    expect(postsOf(calls)).toHaveLength(0);
+    expect(written).toContain("skip post");
+  });
+
+  test("a finding comment only an outsider posted is not bound", async () => {
+    const script = withForgedFinding(replyScript("dev", "write"), (rows) =>
+      rows.map((row) => (row.id === 22 ? { ...row, user: "mallory" } : row)),
+    );
+    await expect(replyFromRunDir(script)).rejects.toThrow(
+      /no posted <!-- crysk-finding/,
+    );
   });
 
   // The documented retry: the reply is on GitHub, resolve failed, the same command runs again.
@@ -1284,7 +1325,7 @@ describe("runTriageReplyCommand — anchor.patch is the anchoring diff", () => {
 // summary's state block names it, the posted
 // finding comment carries its head, and the reply binds to that comment.
 describe("runTriageReplyCommand — without a run directory", () => {
-  function prScript(): ScriptEntry[] {
+  function prScript(tier: "blocking" | "advisory" = "blocking"): ScriptEntry[] {
     const summaryBody = [
       `<!-- pr-hero-report head=${RUN_HEAD} -->`,
       "",
@@ -1293,8 +1334,8 @@ describe("runTriageReplyCommand — without a run directory", () => {
         [
           stateFinding({
             id: "R001",
-            sev: "CRITICAL",
-            tier: "blocking",
+            sev: tier === "blocking" ? "CRITICAL" : "WARNING",
+            tier,
             channel: "inline",
             locs: [`${F001_PATH}:144`],
             claim: F001_CLAIM,
@@ -1328,6 +1369,62 @@ describe("runTriageReplyCommand — without a run directory", () => {
       cleanup: () => rm(dir, { recursive: true, force: true }),
     };
   }
+
+  // An advisory finding answered deferred or misclassified needs no adjudicator:
+  // neither tag ever clears the gate, and advisory never blocks it.
+  test("an advisory finding is deferred without --verdict", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(prScript("advisory"));
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "deferred",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const post = calls.find(
+        (call) =>
+          call.argv.includes("--method") &&
+          call.argv.join(" ").includes("pulls/42/comments"),
+      );
+      expect(post?.stdin).toContain(
+        `<!-- crysk-triage tag=deferred head=${RUN_HEAD} actor=agent -->`,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a blocking finding still needs --verdict for deferred, and nothing is posted", async () => {
+    const { bodyFile, cleanup } = await bodyOnly();
+    try {
+      const { spawnFn, calls } = makeFakeGh(prScript("blocking"));
+      await expect(
+        runTriageReplyCommand({
+          operatorRoot: OPERATOR_ROOT,
+          pr: 42,
+          findingId: "R001",
+          tag: "misclassified",
+          bodyFile,
+          dryRun: false,
+          spawnFn,
+        }),
+      ).rejects.toThrow(/R001 is blocking.*--verdict/);
+      expect(
+        calls.some(
+          (call) =>
+            call.argv.includes("--method") &&
+            call.argv.join(" ").includes("pulls/42/comments"),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
 
   test("binds R001 from the PR and writes the finding's head into the marker", async () => {
     const { bodyFile, cleanup } = await bodyOnly();

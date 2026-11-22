@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { postFindingsIfEnabled } from "#pr/posting";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 const OPERATOR_ROOT = "/repo";
 const HEAD = "b".repeat(40);
@@ -146,6 +147,7 @@ describe("postFindingsIfEnabled — postEnabled gate", () => {
   test("post disabled: makes no gh call and reports nothing posted", async () => {
     const runDir = await tmpRunDir();
     const result = await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       ciMode: "advisory",
       postEnabled: false,
       sessionFailed: false,
@@ -175,6 +177,7 @@ describe("postFindingsIfEnabled — sessionFailed suppression", () => {
       },
     ]);
     const result = await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       ciMode: "advisory",
       postEnabled: true,
       sessionFailed: true,
@@ -208,6 +211,7 @@ describe("postFindingsIfEnabled — repo web url resolution", () => {
       ...emptyCommentScript(),
     ]);
     const result = await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,
@@ -235,6 +239,7 @@ describe("postFindingsIfEnabled — real posting writes the post.json receipt", 
       ...emptyCommentScript(),
     ]);
     const result = await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,
@@ -286,6 +291,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     let calls = 0;
     let receiptAtDelivery: boolean | undefined;
     const result = await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,
@@ -315,6 +321,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     let calls = 0;
     await expect(
       postFindingsIfEnabled({
+        markerTrust: FIXTURE_MARKER_TRUST,
         ciMode: "advisory",
         postEnabled: true,
         sessionFailed: false,
@@ -345,6 +352,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     let calls = 0;
     await expect(
       postFindingsIfEnabled({
+        markerTrust: FIXTURE_MARKER_TRUST,
         ciMode: "advisory",
         postEnabled: true,
         sessionFailed: false,
@@ -368,6 +376,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     const { spawnFn } = makeFakeGh(cleanRunScripts());
     let calls = 0;
     const result = await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       ciMode: "advisory",
       postEnabled: true,
       sessionFailed: true,
@@ -390,6 +399,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     const runDir = await tmpRunDir();
     let calls = 0;
     const result = await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       ciMode: "advisory",
       postEnabled: false,
       sessionFailed: false,
@@ -422,6 +432,7 @@ describe("postFindingsIfEnabled — the CI gate mode reaches the PR comment (S4)
       ...emptyCommentScript(),
     ]);
     await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       postEnabled: true,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -439,16 +450,14 @@ describe("postFindingsIfEnabled — the CI gate mode reaches the PR comment (S4)
   test("a gate run's summary comment backs the required status, and never disclaims a merge gate", async () => {
     const summary = await postedSummary("gate");
     expect(summary).toContain(
-      "Assistant report backing the crysk commit status, the required check in gate mode: every line above is a claim to verify.",
+      "AI review backing the required crysk check: verify each claim",
     );
     expect(summary).not.toContain("not a merge gate");
   });
 
-  test("an advisory run's summary comment keeps today's disclaimer", async () => {
+  test("an advisory run's summary comment keeps the advisory disclaimer", async () => {
     const summary = await postedSummary("advisory");
-    expect(summary).toContain(
-      "Assistant report, not a merge gate: every line above is a claim to verify.",
-    );
+    expect(summary).toContain("AI review, not a merge gate: verify each claim");
   });
 });
 
@@ -466,6 +475,7 @@ describe("postFindingsIfEnabled — findings anchor on the diff they are handed"
       { match: ["pulls/42/reviews"], response: { stdout: "" } },
     ]);
     const result = await postFindingsIfEnabled({
+      markerTrust: FIXTURE_MARKER_TRUST,
       ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,

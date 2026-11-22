@@ -71,6 +71,7 @@ import type { Finding } from "#review/findings";
 import { renderIssueFindingComment } from "#review/report";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { CliError } from "../../src/errors";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 // ---------------------------------------------------------------------------
 // FakeSpawn: scripted {stdout, stderr, exitCode} per call, in call order.
@@ -941,9 +942,14 @@ describe("fetchPostedFindingComments — marker prefix disjointness", () => {
         },
       },
     ]);
-    const posted = await fetchPostedFindingComments(OPERATOR_ROOT, 42, {
-      spawnFn,
-    });
+    const posted = await fetchPostedFindingComments(
+      OPERATOR_ROOT,
+      42,
+      FIXTURE_MARKER_TRUST,
+      {
+        spawnFn,
+      },
+    );
     expect(posted).toHaveLength(1);
     expect(posted[0]?.id).toBe(2);
     expect(posted[0]?.channel).toBe("issue");
@@ -972,13 +978,19 @@ describe("fetchPostedFindingComments — marker prefix disjointness", () => {
       },
       { match: ["issues/42/comments"], response: { stdout: ndjson([]) } },
     ]);
-    const posted = await fetchPostedFindingComments(OPERATOR_ROOT, 42, {
-      spawnFn,
-    });
+    const posted = await fetchPostedFindingComments(
+      OPERATOR_ROOT,
+      42,
+      FIXTURE_MARKER_TRUST,
+      {
+        spawnFn,
+      },
+    );
     expect(posted).toEqual([
       {
         id: 9,
         channel: "review",
+        user: "pr-hero",
         marker: {
           path: "src/a.ts",
           line: 10,
@@ -1018,9 +1030,14 @@ describe("fetchPostedFindingComments — marker prefix disjointness", () => {
           },
         },
       ]);
-      const posted = await fetchPostedFindingComments(OPERATOR_ROOT, 42, {
-        spawnFn,
-      });
+      const posted = await fetchPostedFindingComments(
+        OPERATOR_ROOT,
+        42,
+        FIXTURE_MARKER_TRUST,
+        {
+          spawnFn,
+        },
+      );
       expect(posted).toHaveLength(1);
       return posted[0];
     }
@@ -1274,6 +1291,7 @@ describe("postPrReview", () => {
   test("zero anchorable findings never reaches gh at all", async () => {
     const { spawnFn, calls } = makeFakeGh([]);
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1297,6 +1315,7 @@ describe("postPrReview", () => {
       finding({ id: "F002", path: "src/b.ts", line: 20 }),
     ];
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1341,6 +1360,7 @@ describe("postPrReview", () => {
       finding({ id: "F002", path: "src/b.ts", line: 20 }),
     ];
     await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1368,6 +1388,7 @@ describe("postPrReview", () => {
     ]);
     const findings = [finding({ id: "F001", path: "src/a.ts", line: 10 })];
     await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1406,6 +1427,7 @@ describe("postPrReview", () => {
       { match: ["issues/42/comments"], response: { stdout: ndjson([]) } },
     ]);
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1490,6 +1512,7 @@ describe("postPrReview", () => {
       { match: ["issues/42/comments"], response: { stdout: ndjson([]) } },
     ]);
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1572,6 +1595,7 @@ describe("postPrReview", () => {
       { match: ["issues/42/comments"], response: { stdout: ndjson([]) } },
     ]);
     const outcome = await postPrReview({
+      trust: FIXTURE_MARKER_TRUST,
       operatorRoot: OPERATOR_ROOT,
       pr: 42,
       headSha: HEAD,
@@ -1600,6 +1624,7 @@ describe("postPrReview", () => {
     const f001 = finding({ id: "F001" });
     await expect(
       postPrReview({
+        trust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         headSha: HEAD,
@@ -1755,6 +1780,7 @@ describe("postPrComment — custom marker prefix (ROADMAP Pillar 3 CI skip comme
       OPERATOR_ROOT,
       42,
       `${SKIP_SIZE_COMMENT_MARKER}\nsize skip`,
+      FIXTURE_MARKER_TRUST,
       spawnFn,
       undefined,
       SKIP_SIZE_COMMENT_MARKER,
@@ -1792,6 +1818,7 @@ describe("postPrComment — custom marker prefix (ROADMAP Pillar 3 CI skip comme
       OPERATOR_ROOT,
       42,
       `${SKIP_SIZE_COMMENT_MARKER}\nnew size skip`,
+      FIXTURE_MARKER_TRUST,
       spawnFn,
       undefined,
       SKIP_SIZE_COMMENT_MARKER,
@@ -1830,6 +1857,7 @@ describe("postPrComment — custom marker prefix (ROADMAP Pillar 3 CI skip comme
       OPERATOR_ROOT,
       42,
       `${SKIP_SIZE_COMMENT_MARKER}\nsize skip`,
+      FIXTURE_MARKER_TRUST,
       spawnFn,
       undefined,
       SKIP_SIZE_COMMENT_MARKER,
@@ -1865,6 +1893,7 @@ describe("postPrComment — custom marker prefix (ROADMAP Pillar 3 CI skip comme
       OPERATOR_ROOT,
       42,
       `${PR_COMMENT_MARKER_PREFIX}head=${"a".repeat(40)} -->\nupdated summary`,
+      FIXTURE_MARKER_TRUST,
       spawnFn,
     );
     expect(result).toEqual({ action: "updated", commentId: 94 });
@@ -3199,6 +3228,7 @@ describe("the findings POST bounds every gh call (F004)", () => {
     headSha: HEAD,
     findings: [oneFinding],
     allFindings: [toRef(oneFinding)],
+    trust: FIXTURE_MARKER_TRUST,
     spawnFn,
   });
 
@@ -3209,6 +3239,7 @@ describe("the findings POST bounds every gh call (F004)", () => {
         OPERATOR_ROOT,
         42,
         "body",
+        FIXTURE_MARKER_TRUST,
         hangOn(base.spawnFn, (argv) => argv.includes("POST")),
         undefined,
         undefined,
@@ -3224,6 +3255,7 @@ describe("the findings POST bounds every gh call (F004)", () => {
         OPERATOR_ROOT,
         42,
         "body",
+        FIXTURE_MARKER_TRUST,
         hangOn(base.spawnFn, (argv) => argv.includes("PATCH")),
         77,
         undefined,
@@ -3262,7 +3294,14 @@ describe("the findings POST bounds every gh call (F004)", () => {
       },
     ]);
     const rec = recordTimeouts(base.spawnFn);
-    await postPrComment(OPERATOR_ROOT, 42, "body", rec.spawnFn, 77);
+    await postPrComment(
+      OPERATOR_ROOT,
+      42,
+      "body",
+      FIXTURE_MARKER_TRUST,
+      rec.spawnFn,
+      77,
+    );
     await postPrReview(reviewInput(rec.spawnFn));
     await ghPrHeadSha(OPERATOR_ROOT, 42, { spawnFn: rec.spawnFn });
     await ghRepoWebUrl(OPERATOR_ROOT, { spawnFn: rec.spawnFn });

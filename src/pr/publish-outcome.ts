@@ -57,6 +57,7 @@ import { log, styleEnabled } from "#ui/primitives";
 import { type ResultLinks, renderResult } from "#ui/result";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
+import type { MarkerTrust } from "../trust/marker-trust";
 
 export interface PublishRunOutcomeInput {
   result: PipelineResult | undefined;
@@ -77,6 +78,8 @@ export interface PublishRunOutcomeInput {
   home: string;
   repoId: string | null;
   postEnabled: boolean;
+  // Who may have written the marker comments the post reads (src/trust/marker-trust.ts).
+  markerTrust: MarkerTrust;
   rereview: PrDiscoveryResult["rereview"];
   phaseB: PrDiscoveryResult["phaseB"];
   gitDirOwner: string;
@@ -215,6 +218,7 @@ export async function publishRunOutcome(
       doc,
       diffPatch: input.diffPatch,
       runDir: input.runDir,
+      markerTrust: input.markerTrust,
       rereview: input.rereview,
       rereviewPriors: input.phaseB?.priors,
       // A comment-triggered run: its summary counter stays where it was.

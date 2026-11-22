@@ -25,6 +25,10 @@ import type { SelfInvocation } from "../assets";
 import { MARKER_BRAND_PATTERN, matchMarkerPrefix } from "../brand";
 import { CliUsageError } from "../errors";
 import { type PrheroLayout, prheroLayout } from "../home-preflight";
+import {
+  type MarkerTrust,
+  markerAuthoredComments,
+} from "../trust/marker-trust";
 
 // ---------------------------------------------------------------------------
 // ~/.prhero/ layout — one source for every path the watcher owns, so the
@@ -616,9 +620,14 @@ export function summaryMarkerFields(marker: PrCommentMarkerFields | null): {
 // see evaluateCiReviewAdmission), or a new push; each forces a full
 // re-review via `lastComplete` (rereview/plan.ts). Never the watcher noticing
 // coverage=partial and retrying on its own.
-export function markerDeclaredHeads(comments: { body: string }[]): string[] {
+// Only a trusted author's marker counts (src/trust/marker-trust.ts): a summary-shaped comment from
+// anyone else must not settle a head no review read.
+export function markerDeclaredHeads(
+  comments: readonly { body: string; user?: string }[],
+  trust: MarkerTrust,
+): string[] {
   const heads: string[] = [];
-  for (const comment of comments) {
+  for (const comment of markerAuthoredComments(comments, trust)) {
     const head = parseMarkerHead(comment?.body);
     if (head !== null) heads.push(head);
   }
@@ -631,8 +640,11 @@ export function markerDeclaredHeads(comments: { body: string }[]): string[] {
 // it does prove the PR was reviewed at some point, which is exactly what
 // the one-review-per-PR default (on_push: false) needs to know. Same
 // never-throw contract as parseMarkerHead: bodies are foreign text.
-export function markerCommentSeen(comments: { body: string }[]): boolean {
-  return comments.some(
+export function markerCommentSeen(
+  comments: readonly { body: string; user?: string }[],
+  trust: MarkerTrust,
+): boolean {
+  return markerAuthoredComments(comments, trust).some(
     (comment) =>
       typeof comment?.body === "string" &&
       matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined,

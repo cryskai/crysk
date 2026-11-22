@@ -11,6 +11,7 @@ import {
   SKIP_COVERAGE_COMMENT_MARKER,
   SKIP_SIZE_COMMENT_MARKER,
 } from "#ci/gates";
+import { OUTCOME_MARKER_PREFIX } from "#ci/outcome";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
 import { renderCiAdmissionBlock } from "#ci/review-admission";
 import {
@@ -30,6 +31,7 @@ import {
 import {
   COMMIT_STATUS_CONTEXT,
   type CommitStatusFact,
+  claimFingerprint,
   findingMarker,
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
@@ -166,7 +168,8 @@ function withAuthor<T extends { user?: string; body: string }>(comment: T): T {
   if (comment.user !== undefined) return comment;
   const engine =
     matchMarkerPrefix(comment.body, PR_FINDING_MARKER_PREFIX) !== undefined ||
-    matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined;
+    matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined ||
+    matchMarkerPrefix(comment.body, OUTCOME_MARKER_PREFIX) !== undefined;
   return { ...comment, user: engine ? CI_ADJUDICATOR_LOGIN : "dev" };
 }
 
@@ -640,6 +643,10 @@ describe("buildPrStatus: findings", () => {
         ci_verdict: null,
         needs_reply: false,
         inconclusive_heads: 0,
+        claim: null,
+        locs: [],
+        claim_matches_comment: null,
+        claim_head: null,
       },
     ]);
   });
@@ -4036,17 +4043,20 @@ describe("buildPrStatus — forced_runs_on_head", () => {
 // S3: an advisory repository's size or cost skip writes no status, so the notice is the only trace of it,
 // and a forced review would walk past the limit.
 describe("buildPrStatus: a deliberate skip with no gate status", () => {
-  const SIZE_NOTICE = `${SKIP_SIZE_COMMENT_MARKER}\n## Crysk review skipped`;
-  const BUDGET_NOTICE = `${SKIP_BUDGET_COMMENT_MARKER}\n## Crysk review skipped`;
+  const SIZE_NOTICE = `${SKIP_SIZE_COMMENT_MARKER}\n## ⏸ Review skipped: this pull request is too large`;
+  const BUDGET_NOTICE = `${SKIP_BUDGET_COMMENT_MARKER}\n## ⏸ Review skipped: spend limit reached`;
 
   test.each([
     ["size", SIZE_NOTICE],
     ["cost", BUDGET_NOTICE],
     [
       "stopped or covered",
-      `${SKIP_COVERAGE_COMMENT_MARKER}\n## Crysk review skipped`,
+      `${SKIP_COVERAGE_COMMENT_MARKER}\n## ⏸ Review skipped for this push`,
     ],
-    ["manual review", `${MANUAL_REQUIRED_COMMENT_MARKER}\n## Crysk`],
+    [
+      "manual review",
+      `${MANUAL_REQUIRED_COMMENT_MARKER}\n## ⏹ Automatic reviews are done for this pull request`,
+    ],
   ])("a bot's %s notice asks instead of forcing a review", (_kind, body) => {
     const status = buildPrStatus(
       input({
@@ -4267,5 +4277,221 @@ describe("skillsReloadCommand", () => {
     ["the CLI version is not a plain version", "0.10.0", "0.9.5-dev"],
   ])("names nothing when %s", (_case, recorded, cli) => {
     expect(skillsReloadCommand(recorded, cli)).toBeNull();
+  });
+});
+
+// A re-review can bind a different claim to an existing thread: the comment
+// then shows the old text, and an agent reading it judges the wrong finding.
+// The row's claim is what the review found, so status hands it over.
+describe("buildPrStatus — the claim the review found", () => {
+  test("a row bound to its own comment: claim, locs, and the comment matches", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const finding = status.findings[0];
+    expect(finding?.id).toBe("R001");
+    expect(finding?.claim).toBe(CLAIM);
+    expect(finding?.locs).toEqual(["src/a.ts:10"]);
+    expect(finding?.claim_matches_comment).toBe(true);
+  });
+
+  test("a row bound to a comment with another claim: the row's claim, flagged", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 1,
+            body: summary(CURRENT, [stateRow("R004", "a different defect")]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const finding = status.findings[0];
+    expect(finding?.id).toBe("R004");
+    expect(finding?.comment_id).toBe(41);
+    expect(finding?.claim).toBe("a different defect");
+    expect(finding?.claim_matches_comment).toBe(false);
+  });
+
+  test("a comment with no row: no claim, the comment is the only text", () => {
+    const status = buildPrStatus(
+      input({
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const finding = status.findings[0];
+    expect(finding?.claim).toBeNull();
+    expect(finding?.locs).toEqual([]);
+    expect(finding?.claim_matches_comment).toBeNull();
+  });
+
+  test("a row no comment carries: its claim, and nothing to match", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R002", CLAIM)]) },
+        ],
+      }),
+    );
+    const finding = status.findings[0];
+    expect(finding?.comment_id).toBeNull();
+    expect(finding?.claim).toBe(CLAIM);
+    expect(finding?.claim_matches_comment).toBeNull();
+  });
+});
+
+// PR #592 round 1. R002: once the review replied with the new claim, the thread
+// shows it, so the flag must not stay false for the thread's whole life.
+// R003: a row whose claim could not be read carries no claim to compare.
+describe("buildPrStatus — the claim a thread shows", () => {
+  const NEW = "a different defect";
+  const update = (c: string, user = CI_ADJUDICATOR_LOGIN) => ({
+    id: 42,
+    user,
+    body: `<!-- crysk-claim-update head=${CURRENT} c=${c} -->\n🔄 new claim`,
+    in_reply_to_id: 41,
+  });
+  const read = (reply: ReturnType<typeof update>) =>
+    buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R004", NEW)]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          reply,
+        ],
+      }),
+    ).findings.find((f) => f.comment_id === 41);
+
+  test("a claim-update reply from the review carrying this claim: the thread matches", () => {
+    expect(read(update(claimFingerprint(NEW)))?.claim_matches_comment).toBe(
+      true,
+    );
+  });
+
+  test("a claim-update reply for an older claim: still does not match", () => {
+    expect(
+      read(update(claimFingerprint("yet another")))?.claim_matches_comment,
+    ).toBe(false);
+  });
+
+  test("a claim-update reply typed by someone else does not count", () => {
+    expect(
+      read(update(claimFingerprint(NEW), "dev"))?.claim_matches_comment,
+    ).toBe(false);
+  });
+
+  test("a row whose claim could not be read: no claim and nothing to match", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R005", "")]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const finding = status.findings.find((f) => f.id === "R005");
+    expect(finding?.claim).toBeNull();
+    expect(finding?.claim_matches_comment).toBeNull();
+  });
+});
+
+// The head whose review wrote the claim the thread shows: the claim-update
+// reply's when there is one, else the first comment's. Unknown (null) when the
+// thread does not show the claim, or there is none.
+describe("buildPrStatus — claim_head", () => {
+  const NEW = "a different defect";
+  const base = (
+    extra: {
+      id: number;
+      user?: string;
+      body: string;
+      in_reply_to_id: number | null;
+    }[],
+  ) =>
+    buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R004", NEW)]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          ...extra,
+        ],
+      }),
+    ).findings.find((f) => f.comment_id === 41);
+
+  test("a claim-update reply carries it: its head", () => {
+    const finding = base([
+      {
+        id: 42,
+        user: CI_ADJUDICATOR_LOGIN,
+        body: `<!-- crysk-claim-update head=${CURRENT} c=${claimFingerprint(NEW)} -->\nnew`,
+        in_reply_to_id: 41,
+      },
+    ]);
+    expect(finding?.claim_head).toBe(CURRENT);
+    expect(finding?.head).toBe(EARLIER);
+  });
+
+  test("the thread does not show the claim: null", () => {
+    expect(base([])?.claim_head).toBeNull();
+  });
+
+  test("the first comment carries the claim: its head", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 1, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings[0]?.claim_head).toBe(EARLIER);
   });
 });

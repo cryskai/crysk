@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-22
+
+### Security
+
+- **Crysk's marker comments are now read only from trusted authors.** The summary, finding, claim-update and outcome comments a review reads back count only when the review's own authors wrote them, and `ci_trusted_actors` is read from the default branch. If reviews on your repository are posted from a person's account (a local `crysk review --pr` or `crysk post`) and CI should recognise them, list that login in `ci_trusted_actors` on the default branch; otherwise CI starts its own summary. See "Who the gate trusts" in docs/github-actions.md.
+
+### Changed
+
+- **An advisory finding can be deferred or misclassified without an adjudicator.** `crysk triage reply --tag deferred` (or `misclassified`) no longer needs `--verdict` on an advisory finding: neither tag ever clears the gate, so the ruling decided nothing and the agent had to run an adjudicator or leave the finding unanswered. A blocking finding still needs it.
+- **A finding thread that gets a new claim is reopened, and status says which review wrote it.** When a re-review posts a `claim-update` reply in a thread that was already resolved, it now reopens the thread, so GitHub does not fold the new claim away. `crysk status --json` adds `claim_head`, the head of the review that wrote the claim the thread shows (`head` stays the head the thread was first posted on).
+- **A finding whose claim changed on a kept thread is no longer read as the old one.** A re-review keeps an existing thread for a finding near the same lines, and the thread's first comment then shows the earlier claim. On a sample of recent pull requests this happened to about one finding in seven, and the agent answering findings judged the old text. The review now replies in that thread with the new claim, and `crysk status --json` gives each finding its `claim`, `locs` and `claim_matches_comment`, so the loop judges what the review found. The loop's playbook no longer repeats an earlier answer when the claim changed.
+- **One re-review closing comment stays visible, and only when it is needed.** A re-review that posts new review comments no longer adds a "re-review complete" comment, since those comments already notify. One is still posted when nothing new reached a thread (a clean pass, or findings that only land in the summary) or when the pass was partial. Each new closing comment hides the previous one as outdated.
+- **A file-level finding comment is not posted twice when the code moves.** On a later push, a finding whose claim matches an existing file-level comment on the same file keeps that comment, however far its line moved.
+- **A finding outside the diff lines of a changed file gets its own thread.** When the file is in the pull request but the finding's line is not, Crysk posts it as a file-level review comment on that file (Files changed), pinned to the reviewed commit, instead of printing its full text in the summary. It can be replied to, resolved and ruled on by the CI adjudicator like an inline finding, and the summary table links to it. A finding in a file the pull request does not change stays in the summary's "Comments Outside Diff" section. If the file-level comment cannot be posted, the finding falls back to the summary.
+- **The PR summary comment answers "what did this review find?" first.** Its title is the verdict (`🔴 1 critical finding · 2 warnings`, `🟡 …`, `✅ No issues found`, `⚠️ Review incomplete`), followed by the confidence score, the reviewed commit and the PR summary. A blocking finding is called out in a red `[!CAUTION]` box, every finding still to deal with (this review's and the priors still live) is one row of a table with its location and state, a short "Before merging" checklist follows, and the agents and delta counts fold into "Review details". All-zero delta lines and the "No discovery hunter ran this pass" sentence are gone, and the footer is one short line. Finding comments no longer carry the "Prompt to fix with AI" block, which repeated the claim word for word.
+- **Skip, stop and override notices open with what happened.** Each notice now has a one-line title (for example "⏸ Review skipped: this pull request is too large" or "⚑ Gate overridden by @login"), and the command to ask for a review is a highlighted tip. The "automatic reviews are done" notice folds its rules and gate explanation into a collapsible section.
+- **Error comments open with what happened, not with a code.** A run that could not review now posts `## ⏸ Review didn't run` (or the case's own sentence, such as `## ⏸ Not reviewed` for a cancelled run), and the `CRYSK-*` code and the docs link move to a footer line. `crysk status` reads the code from both the new footer and the `### CRYSK-*` heading of comments posted before.
+
 ## [0.10.0] - 2026-11-19
 
 ### Added
@@ -1348,7 +1366,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/cryskai/crysk/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cryskai/crysk/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cryskai/crysk/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.1

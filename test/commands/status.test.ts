@@ -9,7 +9,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
 import { renderCiAdmissionBlock } from "#ci/review-admission";
-import { runStatusCommand, statusCommand } from "#commands/status";
+import {
+  readPrStatus,
+  runStatusCommand,
+  statusCommand,
+} from "#commands/status";
 import { carriedBlockingDescription } from "#pr/admission";
 import { CommentsTruncatedError, GRAPHQL_COMMENT_MAX_PAGES } from "#pr/pr";
 import { COMMIT_STATUS_CONTEXT, findingMarker } from "#pr/preflight";
@@ -18,6 +22,7 @@ import { parseArgs } from "#review/preflight";
 import { triageMarker } from "#triage/triage";
 import { CliError, CliUsageError } from "../../src/errors";
 import { readEngineVersion, recordEngineVersion } from "../../src/skills-cache";
+import { resetDefaultBranchTrustCache } from "../../src/trust/resolve";
 
 type ScriptEntry = {
   match: string[];
@@ -1601,5 +1606,72 @@ describe("runStatusCommand: whose markers it reads", () => {
         expect(status.findings).toEqual([]);
       });
     });
+  });
+});
+
+// PR #595 R003: a --wait run keeps a read of the default branch's ci_trusted_actors only when the
+// read worked. A failed read leaves this poll on bots only and is tried again on the next one.
+describe("readPrStatus — the default branch's trusted actors across polls", () => {
+  const read = (
+    script: ScriptEntry[],
+    memo: {
+      writers: Map<string, boolean>;
+      trustedActors?: ReadonlySet<string>;
+    },
+  ) =>
+    readPrStatus({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      nowMs: NOW,
+      spawnFn: makeFakeGh(script).spawnFn,
+      sleepFn: async () => {},
+      memo,
+      countForcedRuns: false,
+    });
+
+  test("a failed read is not kept for the next poll", async () => {
+    resetDefaultBranchTrustCache();
+    const memo: {
+      writers: Map<string, boolean>;
+      trustedActors?: ReadonlySet<string>;
+    } = {
+      writers: new Map(),
+    };
+    const first = await read(happyScript, memo);
+    expect([...first.trustedActors]).toEqual([]);
+    expect(memo.trustedActors).toBeUndefined();
+  });
+
+  test("a read that worked is kept", async () => {
+    resetDefaultBranchTrustCache();
+    const memo: {
+      writers: Map<string, boolean>;
+      trustedActors?: ReadonlySet<string>;
+    } = {
+      writers: new Map(),
+    };
+    try {
+      await read(
+        [
+          ...happyScript,
+          {
+            match: ["repo", "view", "defaultBranchRef"],
+            response: { stdout: "main\n" },
+          },
+          {
+            match: ["contents/.crysk/config.json"],
+            response: {
+              stdout: Buffer.from(
+                JSON.stringify({ ci_trusted_actors: ["configured-actor"] }),
+              ).toString("base64"),
+            },
+          },
+        ],
+        memo,
+      );
+      expect(memo.trustedActors).toEqual(new Set(["configured-actor"]));
+    } finally {
+      resetDefaultBranchTrustCache();
+    }
   });
 });

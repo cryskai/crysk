@@ -30,6 +30,7 @@ import {
   type SizeGateConfig,
   type SizeGateVerdict,
 } from "#review/size-gate";
+import { isBotLogin } from "#triage/adjudication";
 import {
   canonicalStatusText,
   isLegacyStatusContext,
@@ -40,6 +41,10 @@ import {
   STATUS_CONTEXT,
 } from "../brand";
 import { CliError, CliUsageError } from "../errors";
+import {
+  type MarkerTrust,
+  markerAuthoredComments,
+} from "../trust/marker-trust";
 
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
 
@@ -450,6 +455,81 @@ export const PR_COMMENT_MARKER_PREFIX = `${MARKER_OPEN}report `;
 // (prefix `pr-hero-report `) can never mistake it for the summary.
 export const PR_REREVIEW_CLOSED_MARKER_PREFIX = `${MARKER_OPEN}rereview-closed `;
 
+// A reply a re-review posts in a kept thread whose finding now has another
+// claim (pr/pr.ts's postInlineFindings): the thread's first comment still shows
+// the earlier text. `head` and `c` make it idempotent per head and claim.
+export const PR_CLAIM_UPDATE_MARKER_PREFIX = `${MARKER_OPEN}claim-update `;
+
+// The claim a finding thread shows now: the newest claim-update reply its own
+// author (the review) posted, else its first comment. `head` is the head of
+// the review that wrote it. The poster and `crysk status` both read it here,
+// so they never disagree (PR #592 R006/R007).
+export function threadShownClaim(
+  rootId: number,
+  root: { fingerprint: string; head: string },
+  comments: readonly {
+    id: number;
+    user?: string;
+    in_reply_to_id: number | null;
+    body: string;
+  }[],
+): { fingerprint: string; head: string } {
+  const author = comments.find((c) => c.id === rootId)?.user;
+  let newest: { id: number; fingerprint: string; head: string } | undefined;
+  for (const reply of comments) {
+    // The root's author or a bot: a pull request can switch from the workflow
+    // token to the Crysk App partway through. A person's typed marker never counts.
+    if (
+      reply.in_reply_to_id !== rootId ||
+      (reply.user !== author && !isBotLogin(reply.user))
+    ) {
+      continue;
+    }
+    const update = parseClaimUpdate(reply.body);
+    if (
+      update !== undefined &&
+      (newest === undefined || reply.id > newest.id)
+    ) {
+      newest = { id: reply.id, ...update };
+    }
+  }
+  return newest === undefined
+    ? root
+    : { fingerprint: newest.fingerprint, head: newest.head };
+}
+
+export function threadShownFingerprint(
+  rootId: number,
+  rootFingerprint: string,
+  comments: Parameters<typeof threadShownClaim>[2],
+): string {
+  return threadShownClaim(
+    rootId,
+    { fingerprint: rootFingerprint, head: "" },
+    comments,
+  ).fingerprint;
+}
+
+// The head and claim fingerprint a claim-update reply carries, or undefined
+// when the body is not one. Every reader goes through this: the poster, the
+// status flag and the re-review's new-reply check must agree on what it is.
+export function parseClaimUpdate(
+  body: string,
+): { head: string; fingerprint: string } | undefined {
+  const prefix = matchMarkerPrefix(body, PR_CLAIM_UPDATE_MARKER_PREFIX);
+  if (prefix === undefined) return undefined;
+  const m = /^head=([0-9a-f]{40}) c=([0-9a-f]+) -->/.exec(
+    body.slice(prefix.length),
+  );
+  return m === null
+    ? undefined
+    : { head: m[1] as string, fingerprint: m[2] as string };
+}
+
+export function parseClaimUpdateFingerprint(body: string): string | undefined {
+  return parseClaimUpdate(body)?.fingerprint;
+}
+
 // Rereview-coverage fix (GitHub #42's re-review half, MusiveTech/musive
 // #1823): a PARTIAL run (some hunters or the refuter failed, but not all —
 // `sessionFailed` false) used to post the exact same marker a COMPLETE run
@@ -498,6 +578,17 @@ export function findMarkedCommentId(
     found = comment.id;
   }
   return found;
+}
+
+// The newest marked comment a trusted author wrote (src/trust/marker-trust.ts). Every reader of the
+// review's own summary goes through this: a summary-shaped comment from anyone else is never found,
+// so it can neither stand in for the review nor become the comment a run PATCHes.
+export function findTrustedMarkedCommentId(
+  comments: readonly { id: number; body: string; user?: string }[],
+  trust: MarkerTrust,
+  prefix: string = PR_COMMENT_MARKER_PREFIX,
+): number | null {
+  return findMarkedCommentId(markerAuthoredComments(comments, trust), prefix);
 }
 
 // ---------------------------------------------------------------------------

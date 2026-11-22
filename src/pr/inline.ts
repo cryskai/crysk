@@ -176,6 +176,9 @@ export const FINDING_LINE_WINDOW = 5;
 export interface PostedFindingComment {
   id: number;
   channel: "review" | "issue";
+  // The login GitHub says posted it. Only a trusted author's comment is listed
+  // (src/trust/marker-trust.ts). Absent only in fixtures built by hand.
+  user?: string;
   marker: ParsedFindingMarker;
   // GitHub's live location for a REVIEW comment. Preferred over the marker's
   // stored path/line because it follows renames and reflects the ACTUAL
@@ -186,6 +189,13 @@ export interface PostedFindingComment {
   // unreadable; absent means unknown, and the matcher then behaves as before.
   tier?: "blocking" | "advisory";
   created_at?: string;
+  // A file-level review comment (subject_type "file"). GitHub gives it no
+  // line, so the marker's line is only where the finding sat at post time.
+  fileLevel?: boolean;
+  // The claim fingerprint the thread shows now (pr/preflight.ts
+  // threadShownFingerprint): its newest claim-update reply, else the marker's.
+  // Absent means the marker's.
+  shownFingerprint?: string;
 }
 
 export interface FindingMatch {
@@ -231,9 +241,26 @@ function candidatesFor(
 ): Candidate[] {
   const exact: Candidate[] = [];
   const windowed: Candidate[] = [];
+  let newestFileLevel: PostedFindingComment | undefined;
   for (const posted of available) {
     const path = posted.livePath ?? posted.marker.path;
     if (path !== finding.path) continue;
+    // WHY a file-level comment matches on its claim alone: it has no line on
+    // GitHub, so a push that moves the code more than the window away would
+    // repost the same finding as a second thread. The claim fingerprint keeps
+    // this from swallowing a different defect in the same file; a reworded
+    // claim falls through to the window below, as before. Only the newest
+    // such comment is a candidate: two of them (an advisory one escalated to
+    // blocking leaves both) would tie and post a fresh one on every push.
+    if (
+      posted.fileLevel === true &&
+      posted.marker.c === claimFingerprint(finding.claim)
+    ) {
+      if (newestFileLevel === undefined || posted.id > newestFileLevel.id) {
+        newestFileLevel = posted;
+      }
+      continue;
+    }
     const sameHead = posted.marker.headSha === headSha;
     // WHY the fingerprint is consulted here too, not just in resolveWinner's
     // tie-break: this branch used to treat same-head path+line alone as
@@ -272,6 +299,9 @@ function candidatesFor(
   // candidate for this finding, even one that happens to also sit at
   // distance 0 on the live line — the exact branch is authoritative, not
   // merely a tiebreak, per design D2's ordering ("exact first, THEN window").
+  if (newestFileLevel !== undefined) {
+    exact.push({ posted: newestFileLevel, distance: 0 });
+  }
   return exact.length > 0 ? exact : windowed;
 }
 

@@ -567,11 +567,14 @@ The platform's own `message` is included in the error. No token is ever printed.
 
 Two consequences follow from the posting identity and from the token's life:
 
-- **Who the gate trusts.** The answered-findings gate trusts a finding or summary only from
-  `github-actions[bot]`, the run's actor (`GITHUB_ACTOR`), a login in `ci_trusted_actors`, and, in platform
-  mode, the login the platform returned in the exchange reply (`github_actor`, the Crysk App's bot). The
-  step hands it to `Run Crysk` as `CRYSK_PLATFORM_ACTOR`; a standalone run never sets it, and a reply
-  without a plausible login adds nothing.
+- **Who the gate trusts.** The gate and the review read a summary, finding or outcome comment only from a
+  bot login (`github-actions[bot]` or a GitHub App's bot, such as the Crysk App's), a login in
+  `ci_trusted_actors` as the default branch lists it, and, in platform mode, the login the platform returned
+  in the exchange reply (`github_actor`, the Crysk App's bot). The step hands it to `Run Crysk` as
+  `CRYSK_PLATFORM_ACTOR`; a standalone run never sets it, and a reply without a plausible login adds
+  nothing. The run's actor (`GITHUB_ACTOR`, whoever triggered the event) is not a marker author: a marker
+  they type counts for nothing. Their triage replies and `/crysk` commands count as before, judged by their
+  permission on the repository.
 - **The token's life.** GitHub App installation tokens last about an hour, and a review may run up to 75
   minutes. So the publish step and the cancel-settle step do not reuse the first token: a `Refresh the Crysk
   token` step runs the same script again right before each. Every run of the script requests a NEW OIDC
@@ -1009,7 +1012,7 @@ exclusions, see [Exclude files](https://crysk.dev/docs/reviews/exclude-files/)):
 | `ci_rereview_min_score` | `4` | Prior findings score at or above this triggers re-review (`blocking×weight + advisory×weight`). |
 | `ci_blocking_weight` | `2` | Score weight for blocking-tier findings. |
 | `ci_advisory_weight` | `1` | Score weight for advisory-tier findings. |
-| `ci_trusted_actors` | `[]` (+ `GITHUB_ACTOR`) | GitHub logins whose finding markers count as authoritative. |
+| `ci_trusted_actors` | `[]` | GitHub logins, besides bots, whose Crysk marker comments (summary, findings) count as the review's. Read from the default branch, never from the pull request's checkout. |
 | `materiality_gate` | `false` | When `true`, an extra judge checks each blocking finding and posts it as advisory if it is not material under normal use. A safety guard keeps findings about security, credentials, isolation or data loss away from the judge, so they are never demoted. One judge call per blocking finding the guard does not protect, on the profile's judge model (Claude Sonnet or Opus on `claude`, OpenAI Terra on `openai`); on any other route findings stay blocking. It is on only when no config layer turns it off: a repo file cannot switch it on over a global `false`. |
 | `ci_admission_observe_only` | `false` | When `true`, admission still evaluates and emits a `::notice::` with the would-be decision but **always runs** the review. Use during rollout. A `/crysk stop` still skips: it is a maintainer's decision, not an automatic one. |
 
@@ -1498,7 +1501,9 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
     { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
       "severity": "CRITICAL", "tier": "blocking", "blocking": true, "live_on_head": true,
       "triage": { "tag": "dismissed", "verdict": "upheld", "actor": "agent", "head": "<40-hex>" },
-      "ci_verdict": null, "needs_reply": true, "inconclusive_heads": 0 }
+      "ci_verdict": null, "needs_reply": true, "inconclusive_heads": 0,
+      "claim": "<what the latest review found>", "locs": ["src/a.ts:10"], "claim_matches_comment": true,
+      "claim_head": "<40-hex>" }
   ],
   "unresolved_blocking": 1,
   "next_action": "triage",
@@ -1512,9 +1517,13 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 - `gate` is Crysk's own commit status on the head. `state: "none"` means no `crysk` status is on it.
 - Finding and summary comments are read only from a bot login (`github-actions[bot]` or a GitHub App) or a login in
   `ci_trusted_actors`, because anyone who can comment can type those markers. `ci_trusted_actors` is read from the
-  default branch through local git (`origin/HEAD`), never from the checkout, which may be the pull request itself.
-  When it cannot be read, only bots count. A review posted under a person's account that is not listed there is not
-  read.
+  default branch, never from the checkout, which may be the pull request itself. The branch is `origin/HEAD`,
+  else the one the Actions event names, else the one `gh repo view` reports. The file is read with git plumbing
+  when the clone has that branch's ref, and through the GitHub contents API when it does not; the clone itself is
+  never fetched into. Through the API, "no config file" counts only when the branch itself can be read. When it
+  cannot be read, only bots count and one line says so. A review posted
+  under a person's account that is not listed there is not read. A local `crysk review --pr` or `crysk post`
+  also reads the comments of the gh account it posts under, so its own re-review finds its summary.
 - `findings` covers every posted `<!-- crysk-finding` comment, on every head. `channel` is `inline` for a review
   thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread that the gate
   counts: from a login with write access, and not older than the review's verdict unless it names the reviewed head;
@@ -1534,6 +1543,18 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   when some finding has it. `inconclusive_heads` counts the heads in a row, newest first, whose newest reply to this
   finding carries the verdict `inconclusive`. It reads replies from earlier reviews too, and counts only logins with
   write access: a reply whose author's permission cannot be read is left out.
+- `claim` and `locs` are what the latest review found, from the finding's state-block row. A re-review can keep an
+  existing thread for a finding whose claim changed, so these, not the thread's first comment, say what to judge.
+  The review then replies in the thread with a `claim-update` comment carrying the new claim.
+  `claim_matches_comment` is `true` when the thread shows this claim (its first comment, or the newest `claim-update`
+  reply from the same author), `false` when it does not, and `null` when there is no row or its claim could not be
+  read (then `claim` is `null`, `locs` is empty and the comment is the only text) or no comment. `claim_head` is the
+  head of the review that wrote the claim the thread shows (its newest `claim-update` reply, else its first comment)
+  when that is this claim, and `null` otherwise; `head` stays the head the thread was first posted on. `locs` are
+  where the review that last saw the finding placed it, not positions as of `claim_head`: a re-found finding's
+  lines move with the code, a carried one keeps its older lines. A thread that
+  gets a `claim-update` reply while resolved is reopened, so GitHub does not fold the new claim away (best effort: a
+  token that cannot reopen threads only logs it).
 - `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
   live blocking findings in `findings`.
 - `report.outcome_code` is the `CRYSK-*` code of the newest outcome comment, when that comment has one. A comment

@@ -15,6 +15,7 @@ import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { triageMarker } from "#triage/triage";
 import { CliError } from "../../src/errors";
 import { parseIgnoreFile } from "../../src/ignore-file";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 const HUNTER_A: AgentSpec = {
   key: "hunter-a",
@@ -123,6 +124,7 @@ const POSTED_FINDING = {
 describe("resolvePrDiscovery — rereview-coverage fix (invariants 2 & 3)", () => {
   test("a partial last review forces verifyAll and queues an untouched prior for re-verification", async () => {
     const result = await resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -146,6 +148,7 @@ describe("resolvePrDiscovery — rereview-coverage fix (invariants 2 & 3)", () =
 
   test("a complete last review does not force verifyAll, and the same untouched prior is carried instead", async () => {
     const result = await resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -196,6 +199,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
   test("skips discovery, marks the provenance, and logs a one-line operator notice", async () => {
     const logs: string[] = [];
     const result = await resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -248,6 +252,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
   test("a case-B reply queues a prior for verification, and the notice says so", async () => {
     const logs: string[] = [];
     const result = await resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -320,6 +325,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       1,
     )}`;
     const result = await resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -394,6 +400,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
       },
     };
     const result = await resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -431,6 +438,7 @@ describe("resolvePrDiscovery — case B same-head re-review (GitHub #166)", () =
 
   test("goal 1 — a live prior is carried through Phase B, never silently dropped", async () => {
     const result = await resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -526,6 +534,7 @@ describe("resolvePrDiscovery — #206 body recovery keys by comment kind", () =>
       "\n" +
       "an unrelated issue comment that happens to share the id\n";
     const result = await resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -603,6 +612,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
     options: RunOptions = {},
   ) {
     return resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -705,6 +715,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
       1,
     )}`;
     return resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,
@@ -1006,6 +1017,7 @@ function discoveryFor(
   overrides: Partial<Parameters<typeof resolvePrDiscovery>[0]>,
 ) {
   return resolvePrDiscovery({
+    markerTrust: FIXTURE_MARKER_TRUST,
     diffFromSha: B,
     headSha: H,
     full: false,
@@ -1126,6 +1138,7 @@ describe("resolvePrDiscovery — a first review with every file excluded (#317)"
 
   test("throws AllExcludedError naming the excluded paths, with the existing message", async () => {
     const run = resolvePrDiscovery({
+      markerTrust: FIXTURE_MARKER_TRUST,
       diffFromSha: B,
       headSha: H,
       full: false,

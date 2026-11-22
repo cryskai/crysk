@@ -7,6 +7,7 @@ import { claimFingerprint } from "#pr/preflight";
 import { parseStateBlock } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import { CliUsageError } from "../../src/errors";
+import { FIXTURE_MARKER_TRUST } from "../trust/fixtures";
 
 interface ScriptedResponse {
   stdout?: string;
@@ -259,6 +260,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
     try {
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -278,6 +280,41 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
     }
   });
 
+  test("dry-run names a finding in a diff file, but off its lines, as file-level", async () => {
+    const { dir, cleanup } = await writeRunDir({
+      findings: [finding({ id: "F001", path: "src/a.ts", line: 500 })],
+    });
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
+      const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        dryRun: true,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const logged = chunks.join("");
+      expect(logged).toContain("1 file-level, 0 outside diff");
+      expect(logged).toContain("file    src/a.ts:500 F001");
+      for (const call of calls) {
+        expect(call.argv).not.toContain("--method");
+      }
+    } finally {
+      process.stderr.write = origWrite;
+      await cleanup();
+    }
+  });
+
   test("dry-run lists un-anchorable findings as outside, not issue", async () => {
     const { dir, cleanup } = await writeRunDir({
       findings: [finding({ id: "F001", path: "src/never.ts", line: 1 })],
@@ -293,6 +330,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
     try {
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -324,6 +362,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
         { match: ["pulls/42/reviews"], response: { stdout: "" } },
       ]);
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -366,6 +405,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 18,
           from: dir,
@@ -387,6 +427,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
     try {
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -405,6 +446,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
     try {
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -434,6 +476,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
         { match: ["pulls/42/reviews"], response: { stdout: "" } },
       ]);
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -460,6 +503,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
     try {
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -508,6 +552,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
       );
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -550,6 +595,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
         { match: ["pulls/42/reviews"], response: { stdout: "" } },
       ]);
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -703,6 +749,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
     try {
       const { spawnFn, calls } = makeFakeGh(priorSummaryScript());
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -726,8 +773,8 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       expect(body).toContain("the prior nobody touched");
       // C7: zero new findings is not a clean bill while priors are live.
       expect(body).not.toContain("found nothing to report");
-      expect(body).toContain("`carried`");
-      expect(body).toContain("`unconfirmed`");
+      expect(body).toContain("| carried |");
+      expect(body).toContain("| unconfirmed |");
       // Nothing was verified gone, so nothing is collapsed.
       expect(
         calls.filter((c) => c.argv.join(" ").includes("reviewThreads")),
@@ -748,6 +795,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const { spawnFn, calls } = makeFakeGh(priorSummaryScript());
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: dir,
@@ -779,6 +827,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: dir,
@@ -810,6 +859,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const { spawnFn } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: dir,
@@ -830,6 +880,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const { spawnFn, calls } = makeFakeGh(priorSummaryScript());
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: dir,
@@ -858,6 +909,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const { spawnFn, calls } = makeFakeGh(priorSummaryScript());
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: dir,
@@ -884,6 +936,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const first = makeFakeGh(priorSummaryScript());
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: missing.dir,
@@ -898,6 +951,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const second = makeFakeGh(priorSummaryScript());
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: verifiedGone.dir,
@@ -925,6 +979,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const { spawnFn, calls } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: dir,
@@ -952,6 +1007,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const { spawnFn, calls } = makeFakeGh(priorSummaryScript());
       expect(
         await runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: dir,
@@ -974,6 +1030,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       const { spawnFn, calls } = makeFakeGh(priorSummaryScript());
       await expect(
         runPostCommand({
+          markerTrust: FIXTURE_MARKER_TRUST,
           operatorRoot: OPERATOR_ROOT,
           pr: 42,
           from: dir,
@@ -1000,6 +1057,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
         { match: ["pulls/42/reviews"], response: { stdout: "" } },
       ]);
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -1047,6 +1105,7 @@ describe("runPostCommand — anchor.patch is the anchoring diff", () => {
     try {
       const { spawnFn } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,
@@ -1076,6 +1135,7 @@ describe("runPostCommand — anchor.patch is the anchoring diff", () => {
     try {
       const { spawnFn } = makeFakeGh(emptyCommentScript(RUN_HEAD));
       const exitCode = await runPostCommand({
+        markerTrust: FIXTURE_MARKER_TRUST,
         operatorRoot: OPERATOR_ROOT,
         pr: 42,
         from: dir,

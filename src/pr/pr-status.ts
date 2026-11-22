@@ -40,6 +40,7 @@ import {
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
   parseFindingMarker,
+  threadShownClaim,
 } from "#pr/preflight";
 import {
   type RecoveredTier,
@@ -79,6 +80,11 @@ import {
   isStatusContext,
   matchMarkerPrefix,
 } from "../brand";
+import {
+  isTrustedMarkerAuthor,
+  markerAuthoredComments,
+  markerTrust,
+} from "../trust/marker-trust";
 
 export const PR_STATUS_SCHEMA = "pr-hero.status/v1" as const;
 
@@ -179,6 +185,19 @@ export interface PrStatusFinding {
   needs_reply: boolean;
   // How many heads in a row, newest first, have a newest reply whose verdict is `inconclusive`.
   inconclusive_heads: number;
+  // What the latest review found, from its state row. Null when the finding has no row: the
+  // comment is then the only text. A re-review can bind a different claim to an existing thread,
+  // so this, not the comment, is what to judge.
+  claim: string | null;
+  // The row's locations (path:line or path:a-b). Empty when the finding has no row.
+  locs: string[];
+  // False when the thread's comment carries another claim than the row (its fingerprint differs),
+  // so the comment text is not this finding. Null when there is no row or no comment.
+  claim_matches_comment: boolean | null;
+  // The head of the review that wrote the claim the thread shows (its newest claim-update reply,
+  // else its first comment), when that is this claim. Null when the thread does not show it, or
+  // there is no claim or comment. `head` stays the head the thread was first posted on.
+  claim_head: string | null;
 }
 
 export interface PrStatusJson {
@@ -278,14 +297,12 @@ interface AnalyzedFinding {
 export function trustedMarkerComments<
   T extends { body: string; user?: string },
 >(comments: readonly T[], trustedActors?: ReadonlySet<string>): T[] {
+  const trust = markerTrust(trustedActors);
   return comments.filter((comment) => {
     const engineMarker =
       matchMarkerPrefix(comment.body, PR_FINDING_MARKER_PREFIX) !== undefined ||
       matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined;
-    if (!engineMarker || isBotLogin(comment.user)) return true;
-    return (
-      comment.user !== undefined && trustedActors?.has(comment.user) === true
-    );
+    return !engineMarker || isTrustedMarkerAuthor(comment.user, trust);
   });
 }
 
@@ -337,7 +354,7 @@ export function buildPrStatus(unfiltered: PrStatusInput): PrStatusJson {
       head: summary.head,
       complete: summary.complete,
       reviews: summary.reviews,
-      outcome_code: outcomeCodeOf(input.issueComments),
+      outcome_code: outcomeCodeOf(input.issueComments, input.trustedActors),
       engine_version: summary.engine,
     },
     findings: analyzed.map((a) => a.finding),
@@ -363,11 +380,10 @@ function hasLimitSkipNotice(
   comments: readonly PrStatusComment[],
   trustedActors: ReadonlySet<string> | undefined,
 ): boolean {
+  const trust = markerTrust(trustedActors);
   return comments.some(
     (comment) =>
-      (isBotLogin(comment.user) ||
-        (comment.user !== undefined &&
-          trustedActors?.has(comment.user) === true)) &&
+      isTrustedMarkerAuthor(comment.user, trust) &&
       [
         SKIP_SIZE_COMMENT_MARKER,
         SKIP_BUDGET_COMMENT_MARKER,
@@ -590,9 +606,17 @@ function readSummary(comments: PrStatusComment[]): {
 
 // The newest outcome comment's code. Only the newest is read: an older run's code says
 // nothing about the run the gate now reflects. Null when the newest has no catalogued code.
-function outcomeCodeOf(comments: PrStatusComment[]): string | null {
+// Only a trusted author's outcome comment is read (src/trust/marker-trust.ts): the workflow posts it,
+// and one typed by anyone else would name a run that never happened.
+function outcomeCodeOf(
+  comments: PrStatusComment[],
+  trustedActors: ReadonlySet<string> | undefined,
+): string | null {
   let newest: PrStatusComment | null = null;
-  for (const comment of comments) {
+  for (const comment of markerAuthoredComments(
+    comments,
+    markerTrust(trustedActors),
+  )) {
     if (matchMarkerPrefix(comment.body, OUTCOME_MARKER_PREFIX) === undefined) {
       continue;
     }
@@ -706,6 +730,9 @@ function readFindings(
             : null,
         needs_reply: false,
         inconclusive_heads: inconclusiveHeads(repliesTo(source, raw), writers),
+        claim: rowClaim(row),
+        locs: row?.locs ?? [],
+        ...threadClaimFields(row, source.id, marker, input),
       },
       // The newest reply the gate counts decides, as at the gate (triage/reply.ts).
       answersReview:
@@ -752,6 +779,34 @@ function readFindings(
   return out;
 }
 
+// Whether the thread shows the row's claim, and the head of the review that wrote what it shows.
+function threadClaimFields(
+  row: StateFinding | undefined,
+  commentId: number,
+  marker: ParsedFindingMarker,
+  input: PrStatusRead,
+): { claim_matches_comment: boolean | null; claim_head: string | null } {
+  if (row === undefined || rowClaim(row) === null) {
+    return { claim_matches_comment: null, claim_head: null };
+  }
+  const shown = threadShownClaim(
+    commentId,
+    { fingerprint: marker.c, head: marker.headSha },
+    input.reviewComments,
+  );
+  const matches = shown.fingerprint === row.c;
+  return {
+    claim_matches_comment: matches,
+    claim_head: matches ? shown.head : null,
+  };
+}
+
+// A row's claim, or null when it has none to judge: no row, or one whose claim
+// could not be read (the engine stores it empty, PR #592 R003).
+function rowClaim(row: StateFinding | undefined): string | null {
+  return row === undefined || row.claim === "" ? null : row.claim;
+}
+
 // A state row with no comment: its anchor is the first of its locs (path:line or path:a-b, the
 // start line), read with the same parser the binder uses. A row with no parseable loc keeps its raw
 // text and line 0, so it still blocks and still reports. Its newest reply is the newest top-level
@@ -790,6 +845,10 @@ function unthreadedFinding(
     ci_verdict: ciVerdict,
     needs_reply: false,
     inconclusive_heads: inconclusiveHeadCount,
+    claim: rowClaim(row),
+    locs: row.locs,
+    claim_matches_comment: null,
+    claim_head: null,
   };
 }
 

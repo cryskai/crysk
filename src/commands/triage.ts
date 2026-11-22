@@ -13,8 +13,11 @@ import {
   postReviewCommentReply,
   resolveReviewThreadForComment,
 } from "#pr/pr";
-import { type PrStatusFinding, trustedMarkerComments } from "#pr/pr-status";
-import { findMarkedCommentId, resolveCurrentPrNumber } from "#pr/preflight";
+import type { PrStatusFinding } from "#pr/pr-status";
+import {
+  findTrustedMarkedCommentId,
+  resolveCurrentPrNumber,
+} from "#pr/preflight";
 import { validateFindingsDocument } from "#review/findings";
 import type { CliOptions } from "#review/preflight";
 import { openProductStore, recordFindingTriage } from "#store/store";
@@ -35,6 +38,8 @@ import { matchMarkerPrefix } from "../brand";
 import { CliError, CliUsageError } from "../errors";
 import { tryOriginRepoId } from "../home";
 import { prheroLayout } from "../home-preflight";
+import { type MarkerTrust, markerTrust } from "../trust/marker-trust";
+import { resolveMarkerTrust } from "../trust/resolve";
 import { readPrStatus } from "./status";
 
 // `crysk triage reply --pr <n> [--from <run-dir>] --finding <id> ...`: the
@@ -145,6 +150,7 @@ async function postedFindingFromPr(
   target: ReplyTarget;
   headSha: string;
   answeredTag: TriageTag | null;
+  blocking: boolean;
 }> {
   // The read `crysk status` makes, so the reply is decided on the replies the gate counts.
   const read = await readPrStatus({
@@ -186,11 +192,13 @@ async function postedFindingFromPr(
       },
       headSha,
       answeredTag: answeredTagAt(finding, headSha),
+      blocking: finding.blocking,
     };
   }
   // The summary status read: a summary-shaped comment from anyone else is not linked to.
-  const summaryId = findMarkedCommentId(
-    trustedMarkerComments(issueComments, read.trustedActors),
+  const summaryId = findTrustedMarkedCommentId(
+    issueComments,
+    markerTrust(read.trustedActors),
   );
   if (
     summaryId === null ||
@@ -213,6 +221,7 @@ async function postedFindingFromPr(
     headSha,
     // A summary-row reply is answered by the newest counted reply that names the row, at this head.
     answeredTag: answeredTagAt(finding, headSha),
+    blocking: finding.blocking,
   };
 }
 
@@ -270,11 +279,13 @@ async function postedFindingFromRunDir(input: {
   bodyFile: string;
   spawnFn: typeof Bun.spawn | undefined;
   sleepFn: (ms: number) => Promise<void>;
+  markerTrust: MarkerTrust | undefined;
 }): Promise<{
   target: ReplyTarget;
   headSha: string;
   reasoning: string;
   answeredTag: TriageTag | null;
+  blocking: boolean;
 }> {
   const { operatorRoot, prNumber, runDir, spawnFn } = input;
   const findingsPath = path.join(runDir, "findings.json");
@@ -315,9 +326,18 @@ async function postedFindingFromRunDir(input: {
     proof_refs: finding.proof_refs,
     diffPatch,
   });
-  const posted = await fetchPostedFindingComments(operatorRoot, prNumber, {
-    spawnFn,
-  });
+  // Only a trusted author's finding comment can be bound (src/trust/marker-trust.ts), so the poster
+  // `trustPosterOf` adds below is never someone who typed the marker by hand.
+  const trust =
+    input.markerTrust ?? (await resolveMarkerTrust({ operatorRoot, spawnFn }));
+  const posted = await fetchPostedFindingComments(
+    operatorRoot,
+    prNumber,
+    trust,
+    {
+      spawnFn,
+    },
+  );
   const match = matchPostedFindingExact({
     finding: identity,
     headSha: doc.head_sha,
@@ -378,6 +398,8 @@ async function postedFindingFromRunDir(input: {
     headSha: doc.head_sha,
     reasoning,
     answeredTag: answeredTagAt(postedRow, doc.head_sha),
+    // The status row's tier when there is one, else the run's own: unknown blocks (fail closed).
+    blocking: postedRow?.blocking ?? finding.tier !== "advisory",
   };
 }
 
@@ -395,6 +417,9 @@ export async function runTriageReplyCommand(input: {
   spawnFn?: typeof Bun.spawn;
   // The wait between the two permission asks. Tests pass an immediate one.
   sleepFn?: (ms: number) => Promise<void>;
+  // Who may have written the finding comment `--from` binds to. A seam, like `spawnFn`: absent, it
+  // is resolved (src/trust/resolve.ts), the signed-in gh login included.
+  markerTrust?: MarkerTrust;
 }): Promise<number> {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
   // WHY refused: `rejected` says the dismissal does not hold, yet the reply would still read as an
@@ -428,9 +453,23 @@ export async function runTriageReplyCommand(input: {
             bodyFile: input.bodyFile,
             spawnFn,
             sleepFn: input.sleepFn ?? Bun.sleep,
+            markerTrust: input.markerTrust,
           })),
         };
   const { target: replyTarget, headSha, reasoning, answeredTag } = found;
+  // WHY only on a blocking finding: deferred and misclassified never clear the gate, so on an
+  // advisory finding an adjudicator rules on nothing. On a blocking one the ruling is the record a
+  // maintainer reads before overriding. A finding whose tier cannot be read counts as blocking.
+  if (
+    (input.tag === "deferred" || input.tag === "misclassified") &&
+    input.verdict === undefined &&
+    found.blocking
+  ) {
+    throw new CliUsageError(
+      `${input.findingId} is blocking, so --tag ${input.tag} requires --verdict ` +
+        "(upheld, rejected, or inconclusive) from the isolated adjudicator, and nothing was posted",
+    );
+  }
   // WHY refused rather than skipped: the skip below is the retry path of the same answer, and a changed
   // answer dropped there exits 0 while GitHub keeps the old one. A dry run reports the same refusal.
   if (answeredTag !== null && answeredTag !== input.tag) {

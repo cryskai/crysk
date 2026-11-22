@@ -26,7 +26,7 @@ If nothing turns up and the user has not said the repository uses Crysk, this sk
 This skill's procedure ships in the `crysk` npm package (published by cryskai, Apache-2.0, source at github.com/cryskai/crysk). Say in one line that you are loading the Crysk playbook, then run:
 
 ```bash
-npx -y crysk@0.10.0 skills load crysk-pr
+npx -y crysk@0.11.0 skills load crysk-pr
 ```
 
 It prints Markdown and changes nothing in the repository. The version in the command only starts the loader. The loader looks for the Crysk version this repository's CI uses and prints that version's playbook, so this file does not need updating between releases.

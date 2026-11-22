@@ -2,16 +2,16 @@
 
 Load this to add Crysk to a repository's CI or change its CI settings. For a running repository (a skipped
 review, a red gate, an error code), load `references/ci-operations.md` instead. Companion files come from
-`npx -y crysk@0.10.0 skills load crysk-ci-setup <file>`.
+`npx -y crysk@0.11.0 skills load crysk-ci-setup <file>`.
 
 ## Hard rules
 
 - **Never print, `cat`, commit or log a key, a token or an OpenCode `auth.json` record.** Refer to
   `${{ secrets.* }}` names only, and inspect `auth.json` keys and `type` only.
-- **Nothing to install.** Run every command as `npx -y crysk@0.10.0 <command>`. Node is enough. CI itself needs no
+- **Nothing to install.** Run every command as `npx -y crysk@0.11.0 <command>`. Node is enough. CI itself needs no
   local CLI: the workflow file is the whole install.
 - **Never write the workflow from memory.** `setup --ci` (the same as `ci init`) writes it. Fallback:
-  `npx -y crysk@0.10.0 skills load crysk-ci-setup assets/workflow.yml`. It keeps `fetch-depth: 0`, the six permissions
+  `npx -y crysk@0.11.0 skills load crysk-ci-setup assets/workflow.yml`. It keeps `fetch-depth: 0`, the six permissions
   (`contents: read`, `pull-requests: write`, `issues: write`, `statuses: write`, `checks: write`, `actions: read`) and
   the `crysk-secrets` block, which names each secret and never passes `toJSON(secrets)`.
 - **Commit to a branch and open a same-repository test pull request.** Commit to the default branch only if the user
@@ -22,7 +22,7 @@ review, a red gate, an error code), load `references/ci-operations.md` instead. 
   supported in the Action: it needs the Crysk GitHub App, so never store a ChatGPT login.
 - **Models are public variables:** `CRYSK_MODELS` (role to model list), `CRYSK_CREDENTIALS` and
   `CRYSK_OPENCODE_PROVIDERS`. Unset `CRYSK_MODELS` means Claude. For OpenCode, DeepSeek, OpenAI or a mix, follow
-  `npx -y crysk@0.10.0 skills load crysk-ci-setup references/opencode-ci.md` first.
+  `npx -y crysk@0.11.0 skills load crysk-ci-setup references/opencode-ci.md` first.
 - **`.crysk/config.json` refuses `models` and `credentials`.** Those live in the variables above.
 
 ## First: what is already there
@@ -46,7 +46,7 @@ ls .github/workflows/
    and its summary says nobody chose them):
 
    ```bash
-   npx -y crysk@0.10.0 setup --ci --level <minimal|balanced|thorough|manual> --ci-mode <gate|advisory> --max-changed-lines <n>
+   npx -y crysk@0.11.0 setup --ci --level <minimal|balanced|thorough|manual> --ci-mode <gate|advisory> --max-changed-lines <n>
    ```
 
    It writes `.github/workflows/crysk.yml`, merges the level's keys into `.crysk/config.json`, and prints the
@@ -54,7 +54,7 @@ ls .github/workflows/
    `gh secret set` asks for each value, so it never reaches the chat.
 3. **Advanced answers** go into `.crysk/config.json` and `.cryskignore` by hand, keeping every other key.
 4. **Review instructions (recommended).** If the repository has neither `REVIEW.md` nor `.crysk/gotchas.md`, run
-   `npx -y crysk@0.10.0 init`, then write real facts from the code: the oddity that looks like a bug, the invariant
+   `npx -y crysk@0.11.0 init`, then write real facts from the code: the oddity that looks like a bug, the invariant
    enforced elsewhere, the ownership rule a newcomer would break. Delete the `human-attention-required` line: Crysk
    refuses to review while it is there. With no file at all, reviews use the default guidance.
 5. **Verify,** as below, then commit to a branch and open a same-repository test pull request (pushes from forks skip).
@@ -80,7 +80,7 @@ runs that bill an API key.
 
 `setup --ci` over an existing workflow without `--force` exits 1 and writes nothing, neither the workflow nor the config.
 
-- **To change settings only,** first show the current values (`npx -y crysk@0.10.0 config`), then edit
+- **To change settings only,** first show the current values (`npx -y crysk@0.11.0 config`), then edit
   `.crysk/config.json`, keeping every other key.
 - **To refresh the workflow,** ask first, because `--force` replaces the file and hand edits are lost. `--force` alone
   keeps the settings: the old `mode` and size inputs carry over, and config keys are only filled in where absent. Adding
@@ -95,7 +95,7 @@ runs that bill an API key.
 - The workflow has `checks: write`, `actions: read`, the `pull_request` and `issue_comment` triggers, the `crysk-secrets`
   block and the `models` and `credentials` lines, with no removed input left.
 - `gh secret list` and `gh variable list` show the expected names. Never read values.
-- `npx -y crysk@0.10.0 config` shows the settings you meant, and `.crysk/config.json` has no `models` or `credentials` key.
+- `npx -y crysk@0.11.0 config` shows the settings you meant, and `.crysk/config.json` has no `models` or `credentials` key.
 - For OpenCode, every model id in `CRYSK_MODELS` is one `opencode models <provider>` lists, and each provider's token is
   in `CRYSK_OPENCODE_PROVIDERS`.
 - `git status` shows only what you intended, with no secret.
