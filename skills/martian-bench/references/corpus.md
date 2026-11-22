@@ -72,6 +72,21 @@ Arm `dev-default` is injected into a **copy** (`benchmarks/martian/martian-injec
 
 Surface B = bucket our `martian-review.json` against those stored comments. Status: **not run**.
 
+## 9. Arm `dev-2026-11-22` and the v0.12.0 fixes (2026-11-22)
+
+`dev` at `c78c075c` (the v0.11.0 review path) scored **H+C 43/66, TP 91, FP 162, precision 36.0%**. It ranks #7 among the 66-H+C tools.
+- **Part of the drop is noise.** The Cal.com 10 replicate spread is about 2 H+C and 4 TP.
+- **Part is two pipeline bugs, fixed in v0.12.0.** Dedupe folded distinct contract claims together, and consolidation repair rules dropped claims.
+- **Replay evidence:** the same stored drafts through the fixed pipeline on 9 PRs gave TP 17 → 23 and H+C 9 → 15 of 20.
+
+Read the README section of that name before comparing a new arm against `dev-2026-11-13` or `dev-2026-11-22`. Lab: `bench/experiments/2026-11-22-martian-50-dev-2026-11-22/investigation/CONCLUSIONS.md`.
+
+Lessons that change how to run an arm:
+- **One 50-PR run cannot carry a delta under about 3 H+C.** Pair a new arm with a replicate control.
+- **Test a post-hunter change without hunter noise.** Replay the stored drafts (lab `investigation/gate.ts` and `investigation/replay/`).
+- **Redo one PR with `run --all` from the arm's own frozen worktree.** `run --only` refuses a frozen schedule, and `--all` skips a review only when its whole identity matches: engine commit, every tracked and untracked file, prompts, config and the `claude` binary. From any other checkout, `--all` moves every verified review to `incomplete-attempts/` and re-reviews the whole corpus.
+- **Never edit the worktree an arm runs from.** A review that starts mid-edit loads the edited engine.
+
 ## Comparison recipe (new arm)
 
 1. Re-read §1 numbers. Copy the High+Critical 13/19 as the control.
