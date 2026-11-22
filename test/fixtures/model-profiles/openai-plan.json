@@ -1,5 +1,5 @@
 {
-  "routeFingerprint": "d5080de9ba4b1c5b011738b533b0a67aac4b2abcc5cdc45841ebbc8c65a2c4e9",
+  "routeFingerprint": "8786d7bfabddcaa412d337e345a737de263b1aaba22aaf5e94d86eef0718e4f3",
   "steps": [
     {
       "stepKey": "hunter-reliability",
@@ -46,16 +46,16 @@
     {
       "stepKey": "refuter",
       "role": "refuter",
-      "logicalIdentity": "opencode:openai/gpt-6.1-sol",
+      "logicalIdentity": "opencode:openai/gpt-6.2-sol",
       "route": {
         "backend": "opencode",
         "provider": "openai",
-        "modelFamily": "gpt-6.1-sol",
-        "modelSnapshot": "gpt-6.1-sol",
+        "modelFamily": "gpt-6.2-sol",
+        "modelSnapshot": "gpt-6.2-sol",
         "modelVariant": "high"
       },
       "effort": "high",
-      "routeFingerprint": "c2ae20daef944ff5981fee67ff34050166b98aff3d3f60fa2fd2b65187139a85"
+      "routeFingerprint": "cc3644f662cc54cb6f9e3bca0bae2ea790cb6854cf7dd03ec4cedf5b8a6fe865"
     },
     {
       "stepKey": "summarizer",

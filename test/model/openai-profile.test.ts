@@ -63,7 +63,7 @@ describe("the openai profile (S2)", () => {
       "opencode:openai/gpt-6.1-terra",
       "xhigh",
     ]);
-    expect(pick("refuter")).toEqual(["opencode:openai/gpt-6.1-sol", "high"]);
+    expect(pick("refuter")).toEqual(["opencode:openai/gpt-6.2-sol", "high"]);
     expect(pick("consolidate")).toEqual([
       "opencode:openai/gpt-6.1-terra",
       "high",
@@ -100,7 +100,7 @@ describe("a zero-config openai plan (S4, S5, S9)", () => {
         expect(step.route.modelVariant).toBe("xhigh");
       }
       if (step.role === "refuter") {
-        expect(step.route.modelSnapshot).toBe("gpt-6.1-sol");
+        expect(step.route.modelSnapshot).toBe("gpt-6.2-sol");
         expect(step.route.modelVariant).toBe("high");
       }
     }
