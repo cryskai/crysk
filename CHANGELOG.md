@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An `applied` triage reply must say what the fix swept.** `crysk triage reply --tag applied` now refuses, and posts nothing, unless the reasoning contains a line like `Class: <the rule the finding broke>. Swept <N> sites, fixed <M>.` (or, when the pull request's diff could not be read, `Class: <the rule>. Not swept: <why>.`) Most findings after the first review are bugs the previous round's fix wrote at another site of the same class, and the loop playbook asked for this sweep without anything checking it. The playbook now lists the sweep steps in place instead of only pointing at a companion file.
 
+### Fixed
+
+- **Two different defects on the same lines are no longer merged into one finding.** The hunters write every claim as Fact, Trigger and Consequence, so two defects that quote the same code shared most of their words and the duplicate filter kept only one of them. A real defect could disappear inside a finding about something else, and when the refuter rejected that other finding, both were gone. Claims are now compared on their consequence. On a 50-pull-request benchmark this kept 10 of the 14 defects that had been merged away; findings written without the three links are compared as before. Some duplicates now reach the consolidation step as two findings, where they are merged.
+- **The consolidation step no longer drops a defect when its plan lists a finding twice.** If the model listed a blocking finding both in its own group and in another defect's group, the engine's repair rules moved the other group under the blocking finding and discarded it, together with its claim. Each finding now stays in the group it leads, and the other defect is posted.
+
 ## [0.11.0] - 2026-11-22
 
 ### Security
