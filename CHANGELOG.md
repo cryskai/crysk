@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-22
+
 ### Security
 
-- **Crysk's marker comments are now read only from trusted authors.** The summary, finding, claim-update and outcome comments a review reads back count only when the review's own authors wrote them, and `ci_trusted_actors` is read from the default branch. See "Who the gate trusts" in docs/github-actions.md.
+- **Crysk's marker comments are now read only from trusted authors.** The summary, finding, claim-update and outcome comments a review reads back count only when the review's own authors wrote them, and `ci_trusted_actors` is read from the default branch. If reviews on your repository are posted from a person's account (a local `crysk review --pr` or `crysk post`) and CI should recognise them, list that login in `ci_trusted_actors` on the default branch; otherwise CI starts its own summary. See "Who the gate trusts" in docs/github-actions.md.
 
 ### Changed
 
-- **An advisory finding can be deferred or misclassified without an adjudicator.** `crysk triage reply --tag deferred` (or `misclassified`) no longer needs `--verdict` on an advisory finding: neither tag ever clears the gate, so the ruling decided nothing and the agent had to run an adjudicator or leave the finding unanswered. A blocking finding still needs it. Requires a platform that reads these markers (cryskai/platform#50).
+- **An advisory finding can be deferred or misclassified without an adjudicator.** `crysk triage reply --tag deferred` (or `misclassified`) no longer needs `--verdict` on an advisory finding: neither tag ever clears the gate, so the ruling decided nothing and the agent had to run an adjudicator or leave the finding unanswered. A blocking finding still needs it.
 - **A finding thread that gets a new claim is reopened, and status says which review wrote it.** When a re-review posts a `claim-update` reply in a thread that was already resolved, it now reopens the thread, so GitHub does not fold the new claim away. `crysk status --json` adds `claim_head`, the head of the review that wrote the claim the thread shows (`head` stays the head the thread was first posted on).
 - **A finding whose claim changed on a kept thread is no longer read as the old one.** A re-review keeps an existing thread for a finding near the same lines, and the thread's first comment then shows the earlier claim. On a sample of recent pull requests this happened to about one finding in seven, and the agent answering findings judged the old text. The review now replies in that thread with the new claim, and `crysk status --json` gives each finding its `claim`, `locs` and `claim_matches_comment`, so the loop judges what the review found. The loop's playbook no longer repeats an earlier answer when the claim changed.
 - **One re-review closing comment stays visible, and only when it is needed.** A re-review that posts new review comments no longer adds a "re-review complete" comment, since those comments already notify. One is still posted when nothing new reached a thread (a clean pass, or findings that only land in the summary) or when the pass was partial. Each new closing comment hides the previous one as outdated.
@@ -1364,7 +1366,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/cryskai/crysk/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cryskai/crysk/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cryskai/crysk/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/cryskai/crysk/compare/v0.7.0...v0.8.1
