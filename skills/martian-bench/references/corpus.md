@@ -84,7 +84,7 @@ Read the README section of that name before comparing a new arm against `dev-202
 Lessons that change how to run an arm:
 - **One 50-PR run cannot carry a delta under about 3 H+C.** Pair a new arm with a replicate control.
 - **Test a post-hunter change without hunter noise.** Replay the stored drafts (lab `investigation/gate.ts` and `investigation/replay/`).
-- **Redo one PR with `run --all`.** `run --only` refuses a frozen schedule, and `--all` skips the reviews that are already verified.
+- **Redo one PR with `run --all` from the arm's own frozen worktree.** `run --only` refuses a frozen schedule, and `--all` skips a review only when its whole identity matches: engine commit, every tracked and untracked file, prompts, config and the `claude` binary. From any other checkout, `--all` moves every verified review to `incomplete-attempts/` and re-reviews the whole corpus.
 - **Never edit the worktree an arm runs from.** A review that starts mid-edit loads the edited engine.
 
 ## Comparison recipe (new arm)
