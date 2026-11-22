@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-22
+
 ### Changed
 
 - **An `applied` triage reply must say what the fix swept.** `crysk triage reply --tag applied` now refuses, and posts nothing, unless the reasoning contains a line like `Class: <the rule the finding broke>. Swept <N> sites, fixed <M>.` (or, when the pull request's diff could not be read, `Class: <the rule>. Not swept: <why>.`) Most findings after the first review are bugs the previous round's fix wrote at another site of the same class, and the loop playbook asked for this sweep without anything checking it. The playbook now lists the sweep steps in place instead of only pointing at a companion file.
@@ -1376,7 +1378,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/cryskai/crysk/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cryskai/crysk/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cryskai/crysk/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cryskai/crysk/compare/v0.8.1...v0.9.0

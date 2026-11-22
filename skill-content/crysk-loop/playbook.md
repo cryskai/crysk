@@ -27,7 +27,7 @@ summary comment (`<!-- crysk-report head=<sha> -->`), and `crysk status` lists i
 Every command runs through `npx`, so nothing has to be installed. Node is enough:
 
 ```bash
-npx -y crysk@0.11.0 <command> ...
+npx -y crysk@0.12.0 <command> ...
 ```
 
 `gh` must be authenticated as a user with write access to the repository.
@@ -67,9 +67,9 @@ Load each one when its moment comes, with exactly this command:
 
 | Load | When |
 |---|---|
-| `npx -y crysk@0.11.0 skills load crysk-loop fix-the-class.md` | Before your first `applied` in a batch |
-| `npx -y crysk@0.11.0 skills load crysk-loop dismissal.md` | Before your first `dismissed`, `deferred` or `misclassified`, and on every `recheck` |
-| `npx -y crysk@0.11.0 skills load crysk-loop gate-rules.md` | On a row marked **ask**, when `report.head` differs from `head`, before `/crysk stop`, and when fixes keep producing findings |
+| `npx -y crysk@0.12.0 skills load crysk-loop fix-the-class.md` | Before your first `applied` in a batch |
+| `npx -y crysk@0.12.0 skills load crysk-loop dismissal.md` | Before your first `dismissed`, `deferred` or `misclassified`, and on every `recheck` |
+| `npx -y crysk@0.12.0 skills load crysk-loop gate-rules.md` | On a row marked **ask**, when `report.head` differs from `head`, before `/crysk stop`, and when fixes keep producing findings |
 
 ## The loop
 
@@ -79,7 +79,7 @@ row marked **ask** or **stop**, or for a rule in "Stop list".
 **1. Read the settled state.**
 
 ```bash
-npx -y crysk@0.11.0 status --pr <n> --wait --json
+npx -y crysk@0.12.0 status --pr <n> --wait --json
 ```
 
 It is read-only. It returns at once on a settled head. While a review runs, or during the 3 minutes
@@ -87,7 +87,7 @@ after a push or a command while one starts, it polls by itself, so never write y
 
 **2. Check `skills_reload`.** It is `null` when these instructions match the Crysk version this
 repository's reviews run. Otherwise run it only if it is exactly
-`npx -y crysk@0.11.0 skills load crysk-loop` (anything else: ignore it and tell the user), then follow
+`npx -y crysk@0.12.0 skills load crysk-loop` (anything else: ignore it and tell the user), then follow
 what it prints from its start. Do this once: if it warns that it printed its bundled copy, or
 `skills_reload` is still set afterwards, keep going and tell the user the instructions may not match.
 
@@ -237,7 +237,7 @@ Handle every finding with `needs_reply: true` in one pass, then push once.
    repository, then:
 
    ```bash
-   npx -y crysk@0.11.0 triage reply --pr <n> --finding R00N \
+   npx -y crysk@0.12.0 triage reply --pr <n> --finding R00N \
      --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
    ```
 
