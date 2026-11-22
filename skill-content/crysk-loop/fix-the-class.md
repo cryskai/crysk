@@ -9,7 +9,7 @@ site. Each one costs another review round, or ships unverified once the reviews 
 2. **Sweep the pull request for it.** Check every hunk of `gh pr diff <n>` (GitHub's own diff, so no local
    base ref can be stale) plus everything you changed since the reviewed head: `git diff <head>`, with
    `head` from `crysk status`, covers unpushed commits and the working tree. If you cannot get the pull
-   request's diff, say so in the reply and do not claim a sweep. Search by shape (the same call, field,
+   request's diff, say so in the reply with `Class: <the rule>. Not swept: <why>.` and do not claim a sweep. Search by shape (the same call, field,
    guard, state change or fallback), not only by the identifier the finding named. Fix every instance this
    pull request introduced in the same push, each with a test that fails without its fix.
 3. **Re-read your own fix as the next reviewer will.** The next round hunts the code you just wrote: new

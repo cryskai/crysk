@@ -522,7 +522,10 @@ Options:
   --tag <tag>         triage reply only: applied, dismissed, deferred, or
                       misclassified
   --body-file <path>  triage reply only: reasoning prose. The driver prepends
-                      the triage marker and the visible badge
+                      the triage marker and the visible badge. With --tag
+                      applied it must contain a sweep line:
+                      Class: <the rule>. Swept <N> sites, fixed <M>.
+                      (or Class: <the rule>. Not swept: <why>.)
   --verdict <word>    triage reply only: upheld, rejected, or inconclusive.
                       Required for dismissed, and for deferred or
                       misclassified on a blocking finding; optional for

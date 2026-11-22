@@ -225,6 +225,19 @@ async function postedFindingFromPr(
   };
 }
 
+// A line that names the defect class and either the sweep with its counts
+// (`Class: ... Swept N ..., fixed M.`) or, when the pull request's diff could not
+// be read, why there was none (`Class: ... Not swept: <reason>.`), as
+// fix-the-class.md asks: an agent that could not sweep says so, never claims it.
+const SWEPT_LINE = /^\s*Class:\s*\S.*\bSwept\s+\d+\b.*\bfixed\s+\d+\b/i;
+const NOT_SWEPT_LINE = /^\s*Class:\s*\S.*\bNot swept:\s*\S/i;
+
+function hasSweepLine(reasoning: string): boolean {
+  return reasoning
+    .split("\n")
+    .some((line) => SWEPT_LINE.test(line) || NOT_SWEPT_LINE.test(line));
+}
+
 async function readReasoning(bodyFile: string): Promise<string> {
   const bodyPath = path.resolve(bodyFile);
   if (!existsSync(bodyPath)) {
@@ -457,6 +470,19 @@ export async function runTriageReplyCommand(input: {
           })),
         };
   const { target: replyTarget, headSha, reasoning, answeredTag } = found;
+  // WHY applied must carry a sweep line: nothing adjudicates an applied fix, only the next review,
+  // and most findings after the first review are bugs the previous round's fix wrote at another site
+  // of the same class. The line is the agent's record that it named the class and checked the pull
+  // request for it (crysk-loop playbook, step 4). A dry run is refused the same way.
+  if (input.tag === "applied" && !hasSweepLine(reasoning)) {
+    throw new CliUsageError(
+      "--tag applied needs a sweep line, and nothing was posted. End the reasoning with one line: " +
+        "`Class: <the rule the finding showed broken>. Swept <N> sites, fixed <M>.` " +
+        "Name the defect class, check the whole pull request for it, and fix every instance it introduced. " +
+        "If the pull request's diff could not be read, write `Class: <the rule>. Not swept: <why>.` instead " +
+        "(crysk-loop playbook, step 4)",
+    );
+  }
   // WHY only on a blocking finding: deferred and misclassified never clear the gate, so on an
   // advisory finding an adjudicator rules on nothing. On a blocking one the ruling is the record a
   // maintainer reads before overriding. A finding whose tier cannot be read counts as blocking.
