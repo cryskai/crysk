@@ -1489,6 +1489,42 @@ describe("runTriageReplyCommand — without a run directory", () => {
     }
   });
 
+  // PR #602 R001/R002: the line must carry the counts the messages promise, and
+  // an agent that could not get the diff says so instead of claiming a sweep.
+  async function appliedWith(body: string, posts: boolean) {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-sweep-"));
+    const bodyFile = path.join(dir, "body.md");
+    await Bun.write(bodyFile, `Fixed.\n${body}\n`);
+    try {
+      const { spawnFn } = makeFakeGh(prScript());
+      const run = runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        findingId: "R001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      if (posts) expect(await run).toBe(0);
+      else await expect(run).rejects.toThrow(/sweep line/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a sweep line without counts is refused", async () => {
+    await appliedWith("Class: a latch left set. Swept sites, fixed.", false);
+  });
+
+  test("a \"Not swept\" line is not a sweep, but its stated reason is accepted", async () => {
+    await appliedWith("Class: a latch left set. Not swept.", false);
+    await appliedWith(
+      "Class: a latch left set. Not swept: the pull request diff was unavailable.",
+      true,
+    );
+  });
+
   test("the sweep line is asked of applied only: a deferral posts without one", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "crysk-triage-sweep-"));
     const bodyFile = path.join(dir, "body.md");
