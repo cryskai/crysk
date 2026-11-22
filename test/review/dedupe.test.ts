@@ -567,6 +567,109 @@ describe("#153 claim-similarity gate — the calibration corpus", () => {
   });
 });
 
+// The bundled hunters write every claim as Fact / Trigger / Consequence. Two
+// different defects on the same lines then share the Fact (the code they both
+// quote) and often the Trigger (the same caller), so whole-claim overlap clears
+// 0.35 and the dedupe discards a real defect (Martian 50 arm of 2026-11-22: an
+// AND-for-OR permission bug folded into a security claim on the same handler,
+// which the refuter then refuted, losing both). What a defect IS is its
+// consequence, so contract claims are compared on that link alone.
+describe("contract claims — identity is the Consequence link", () => {
+  const PERMISSION_AND =
+    "Fact: lines 46-48 compute `isTeamAdminOrOwner` as `isTeamAdmin(userId, teamId) && isTeamOwner(userId, teamId)`; " +
+    "I read both helpers in teams.ts, and isTeamAdmin already matches the ADMIN and OWNER roles. " +
+    "Trigger: a team admin who is not the owner calls addGuests on a booking of a team event. " +
+    "Consequence: the admin is refused with FORBIDDEN although the variable name says admin or owner, " +
+    "so team admins can no longer add guests to their team's bookings.";
+  const ATTENDEE_ACCESS =
+    "Fact: lines 46-56 authorize the caller of addGuests inside the handler: `isTeamAdminOrOwner` from " +
+    "`isTeamAdmin(userId, teamId)` and `isTeamOwner(userId, teamId)`, then the booking organizer check, then an " +
+    "attendee check that admits any caller whose email string-equals an attendee email; I read the handler and " +
+    "teams.ts. Trigger: a user who is an attendee of a booking of a team event calls addGuests. " +
+    "Consequence: that caller writes an attacker-chosen attendee list into the organizer's external calendar " +
+    "event with the organizer's credential, which the caller is not entitled to do.";
+  const PERMISSION_AND_AGAIN =
+    "Fact: `isTeamAdminOrOwner` (lines 46-48) is `isTeamAdmin && isTeamOwner`; isTeamAdmin matches ADMIN or " +
+    "OWNER and isTeamOwner matches OWNER only. Trigger: any team admin without the owner role adding guests to " +
+    "a team booking. Consequence: team admins are refused with FORBIDDEN and cannot add guests, so the admin " +
+    "or owner check behaves as owner only.";
+
+  test("two defects that quote the same code do not score as one", () => {
+    expect(claimSimilarity(PERMISSION_AND, ATTENDEE_ACCESS)).toBeLessThan(
+      DEDUPE_CLAIM_OVERLAP_THRESHOLD,
+    );
+  });
+
+  test("one defect written by two hunters still scores as one", () => {
+    expect(
+      claimSimilarity(PERMISSION_AND, PERMISSION_AND_AGAIN),
+    ).toBeGreaterThanOrEqual(DEDUPE_CLAIM_OVERLAP_THRESHOLD);
+  });
+
+  test("the richer claim leads and the different defect still posts", () => {
+    const logic = draft({
+      id: "LOG-1",
+      hunter: "logic",
+      category: 15,
+      line: 46,
+      severity: "CRITICAL",
+      claim: PERMISSION_AND,
+      dedupe_key: "handler.ts:addGuests:15",
+    });
+    const security = draft({
+      id: "SEC-1",
+      hunter: "security",
+      category: 4,
+      line: 54,
+      severity: "BLOCKER",
+      proof_refs: ["handler.ts:46", "handler.ts:54", "router.ts:79"],
+      claim: ATTENDEE_ACCESS,
+      dedupe_key: "handler.ts:addGuests:4",
+    });
+    const { survivors, deduped } = mergeAndDedupe([logic, security]);
+    expect(deduped).toHaveLength(0);
+    expect(survivors.map((s) => s.claim)).toEqual([
+      PERMISSION_AND,
+      ATTENDEE_ACCESS,
+    ]);
+  });
+
+  test("the same defect from two hunters folds into one survivor", () => {
+    const logic = draft({
+      id: "LOG-1",
+      hunter: "logic",
+      line: 46,
+      severity: "CRITICAL",
+      claim: PERMISSION_AND,
+      dedupe_key: "handler.ts:addGuests:15",
+    });
+    const reliability = draft({
+      id: "VC-1",
+      hunter: "reliability",
+      line: 47,
+      severity: "WARNING",
+      claim: PERMISSION_AND_AGAIN,
+      dedupe_key: "handler.ts:addGuests:3",
+    });
+    const { survivors, deduped } = mergeAndDedupe([logic, reliability]);
+    expect(survivors).toHaveLength(1);
+    expect(deduped.map((d) => d.id)).toEqual(["VC-1"]);
+  });
+
+  test("a claim without the contract keeps whole-claim scoring", () => {
+    // A plain claim (a custom prompt set, or an older draft) has no
+    // Consequence link, so both sides are scored whole, as before the
+    // contract. This plain claim shares only the Fact's vocabulary: scored on
+    // the Consequence link alone it would score 0 and never fold.
+    const plainFact =
+      "lines 46-48 compute isTeamAdminOrOwner as isTeamAdmin(userId, teamId) && isTeamOwner(userId, teamId); " +
+      "isTeamAdmin already matches the ADMIN and OWNER roles in teams.ts";
+    expect(claimSimilarity(plainFact, PERMISSION_AND)).toBeGreaterThanOrEqual(
+      DEDUPE_CLAIM_OVERLAP_THRESHOLD,
+    );
+  });
+});
+
 describe("#153 claim-similarity gate — the gate itself", () => {
   // A short claim scores high overlap against anything that happens to
   // contain its handful of tokens, so overlap stops discriminating. The

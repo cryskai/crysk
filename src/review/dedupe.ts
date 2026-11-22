@@ -81,6 +81,31 @@ function claimTokens(claim: string): Set<string> {
   return tokens;
 }
 
+// The hunters' finding contract writes a claim as Fact / Trigger / Consequence.
+// Two different defects on the same lines share the Fact (the code both quote)
+// and often the Trigger (the same caller), and with claims that long the
+// whole-claim overlap clears the threshold: on the Martian 50 arm of
+// 2026-11-22, 14 known different-defect folds scored 0.35-0.52, one of them a
+// Critical permission bug folded into a security claim that the refuter then
+// refuted. A defect is what goes wrong, so when BOTH claims carry the
+// Consequence link, only that link is compared. A claim without it (a custom
+// prompt set, an older draft) is scored whole, exactly as before, so the #153
+// calibration below is unchanged. Measured on the stored drafts of both arms:
+// the old arm's 271 folds stay identical, and the new arm's 236 fall to 147,
+// releasing 10 of the 14 known false folds. Some of the released pairs are true
+// duplicates; they post as two findings until consolidation merges them,
+// which is the under-merge direction this file prefers.
+const CONSEQUENCE_LABEL = /\bconsequences?\b[^:\n]{0,80}:/i;
+
+function consequenceLink(claim: string): string | undefined {
+  const match = CONSEQUENCE_LABEL.exec(claim);
+  if (match === null) return undefined;
+  const link = claim.slice(match.index + match[0].length);
+  // A link too short to score falls back to the whole claim rather than
+  // refusing to score: the contract did not shorten what the claim says.
+  return claimTokens(link).size >= DEDUPE_CLAIM_MIN_TOKENS ? link : undefined;
+}
+
 // OVERLAP COEFFICIENT, |A n B| / min(|A|,|B|) — deliberately not Jaccard.
 // Jaccard does not separate on this corpus: same-defect pairs score
 // 0.143-0.417 and different-defect pairs 0.049-0.156, ranges that CROSS, so no
@@ -92,6 +117,15 @@ function claimTokens(claim: string): Set<string> {
 // Returns 0 when either claim is under DEDUPE_CLAIM_MIN_TOKENS: refusing to
 // score is refusing permission to discard.
 export function claimSimilarity(a: string, b: string): number {
+  const linkA = consequenceLink(a);
+  const linkB = consequenceLink(b);
+  if (linkA !== undefined && linkB !== undefined) {
+    return overlapCoefficient(linkA, linkB);
+  }
+  return overlapCoefficient(a, b);
+}
+
+function overlapCoefficient(a: string, b: string): number {
   const left = claimTokens(a);
   const right = claimTokens(b);
   const smaller = Math.min(left.size, right.size);
