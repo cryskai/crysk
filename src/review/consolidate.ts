@@ -155,6 +155,30 @@ export function enforcePlanInvariants(
   );
   let repairs = 0;
 
+  // Rule H — one home per source, before any other rule reads the sources. A
+  // model plan can list a finding in two non-split entries: its own and another
+  // defect's. Rules 1 and 2 then read that as "the other entry merged a
+  // blocking finding": they promoted it to that finding and folded it away,
+  // and the other defect, with its claim, was posted nowhere (Martian 50,
+  // 2026-11-22, cal-8330). A source stays in the entry it leads, or in the
+  // first entry naming it when it leads none; every other entry drops it.
+  // Entries that share a primary keep it (Rule 2 still folds those), and
+  // splits are left alone because applyPlan builds them from their primary.
+  const ledBy = new Set(plan.filter((e) => !e.split).map((e) => e.primary));
+  const placed = new Set<string>();
+  const oneHome = plan.map((e) => {
+    if (e.split) return e;
+    const sources = e.sources.filter((s) => {
+      if (s === e.primary) return true;
+      if (ledBy.has(s) || placed.has(s)) return false;
+      placed.add(s);
+      return true;
+    });
+    if (sources.length === e.sources.length) return e;
+    repairs += 1;
+    return { ...e, sources };
+  });
+
   // Rule 0 — primary first: applyPlan pools proof_refs in sources order, and
   // clusterByRootCause keys on proof_refs[0] ("where the defect lives",
   // root-cause.ts), so the primary's own refs must lead, as the dedupe fold
@@ -171,7 +195,7 @@ export function enforcePlanInvariants(
   // Rule 1 — promotion: a merge whose primary is not blocking would post the
   // merged finding off the blocking tier, so the first blocking source leads.
   // Promotion changes the primary, so Rule 0 runs again on its output.
-  const promoted = plan
+  const promoted = oneHome
     .map(primaryFirst)
     .map((e) => {
       if (e.split || blocking.has(e.primary)) return e;
