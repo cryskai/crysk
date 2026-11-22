@@ -91,19 +91,27 @@ function claimTokens(claim: string): Set<string> {
 // Consequence link, only that link is compared. A claim without it (a custom
 // prompt set, an older draft) is scored whole, exactly as before, so the #153
 // calibration below is unchanged. Measured on the stored drafts of both arms:
-// the old arm's 271 folds stay identical, and the new arm's 236 fall to 147,
+// the old arm's 271 folds stay identical, and the new arm's 236 fall to 145,
 // releasing 10 of the 14 known false folds. Some of the released pairs are true
 // duplicates; they post as two findings until consolidation merges them,
 // which is the under-merge direction this file prefers.
 const CONSEQUENCE_LABEL = /\bconsequences?\b[^:\n]{0,80}:/i;
 
+// The smallest Consequence link that may license a discard. The threshold and
+// the 8-token floor were calibrated on whole claims, whose observed minimum is
+// 14 distinct tokens; a shorter link could clear 0.35 on generic outcome words
+// alone ("the caller receives an error response"). Falling back to the whole
+// claim would bring back the shared Fact this gate exists to ignore, so two
+// contract claims with a link this short are refused as a fold, the same way
+// the short-claim guard refuses: a duplicate posts, a defect is not lost. On
+// the stored drafts, 2 of 736 links are this short and no fold involved one.
+export const DEDUPE_LINK_MIN_TOKENS = 14;
+
 function consequenceLink(claim: string): string | undefined {
   const match = CONSEQUENCE_LABEL.exec(claim);
-  if (match === null) return undefined;
-  const link = claim.slice(match.index + match[0].length);
-  // A link too short to score falls back to the whole claim rather than
-  // refusing to score: the contract did not shorten what the claim says.
-  return claimTokens(link).size >= DEDUPE_CLAIM_MIN_TOKENS ? link : undefined;
+  return match === null
+    ? undefined
+    : claim.slice(match.index + match[0].length);
 }
 
 // OVERLAP COEFFICIENT, |A n B| / min(|A|,|B|) — deliberately not Jaccard.
@@ -120,6 +128,8 @@ export function claimSimilarity(a: string, b: string): number {
   const linkA = consequenceLink(a);
   const linkB = consequenceLink(b);
   if (linkA !== undefined && linkB !== undefined) {
+    const shorter = Math.min(claimTokens(linkA).size, claimTokens(linkB).size);
+    if (shorter < DEDUPE_LINK_MIN_TOKENS) return 0;
     return overlapCoefficient(linkA, linkB);
   }
   return overlapCoefficient(a, b);

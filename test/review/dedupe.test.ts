@@ -3,6 +3,7 @@ import {
   claimSimilarity,
   DEDUPE_CLAIM_MIN_TOKENS,
   DEDUPE_CLAIM_OVERLAP_THRESHOLD,
+  DEDUPE_LINK_MIN_TOKENS,
   DEDUPE_SYMBOL_LINE_WINDOW,
   type DedupeLoser,
   mergeAndDedupe,
@@ -587,12 +588,14 @@ describe("contract claims — identity is the Consequence link", () => {
     "attendee check that admits any caller whose email string-equals an attendee email; I read the handler and " +
     "teams.ts. Trigger: a user who is an attendee of a booking of a team event calls addGuests. " +
     "Consequence: that caller writes an attacker-chosen attendee list into the organizer's external calendar " +
-    "event with the organizer's credential, which the caller is not entitled to do.";
+    "event with the organizer's OAuth credential and adds those people to the booking record, an action only " +
+    "the organizer or a team administrator is entitled to take.";
   const PERMISSION_AND_AGAIN =
     "Fact: `isTeamAdminOrOwner` (lines 46-48) is `isTeamAdmin && isTeamOwner`; isTeamAdmin matches ADMIN or " +
     "OWNER and isTeamOwner matches OWNER only. Trigger: any team admin without the owner role adding guests to " +
-    "a team booking. Consequence: team admins are refused with FORBIDDEN and cannot add guests, so the admin " +
-    "or owner check behaves as owner only.";
+    "a team booking. Consequence: team admins are refused with FORBIDDEN and cannot add guests to their " +
+    "team's bookings any more, so the admin or owner check behaves as owner only and admins lose an action " +
+    "the variable name says they have.";
 
   test("two defects that quote the same code do not score as one", () => {
     expect(claimSimilarity(PERMISSION_AND, ATTENDEE_ACCESS)).toBeLessThan(
@@ -654,6 +657,26 @@ describe("contract claims — identity is the Consequence link", () => {
     const { survivors, deduped } = mergeAndDedupe([logic, reliability]);
     expect(survivors).toHaveLength(1);
     expect(deduped.map((d) => d.id)).toEqual(["VC-1"]);
+  });
+
+  test("contract claims whose Consequence link is too short to stand for a defect never fold", () => {
+    // Two different defects whose short links state the same generic outcome.
+    // Scored on the links they are identical; scored whole they share the
+    // contract's boilerplate and still clear 0.35. Neither may license a
+    // discard, so the pair is refused, as the short-claim guard refuses.
+    const outcome =
+      "Consequence: the caller receives an error response and the whole request fails with status 500.";
+    const cacheKey =
+      "Fact: the cache key in cache.go:31 joins name and folder with an underscore, so two different pairs " +
+      "produce the same key; I read the key builder. Trigger: two dashboards whose names and folders " +
+      "contain underscores. " +
+      outcome;
+    const timeout =
+      "Fact: the HTTP client in client.go:88 is built without a timeout and is shared by every upstream " +
+      "call; I read the constructor. Trigger: an upstream that accepts the connection and never answers. " +
+      outcome;
+    expect(DEDUPE_LINK_MIN_TOKENS).toBe(14);
+    expect(claimSimilarity(cacheKey, timeout)).toBe(0);
   });
 
   test("a claim without the contract keeps whole-claim scoring", () => {
