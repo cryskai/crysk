@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A review whose hunters start in parallel is no longer rejected for a missing executable hash.** Each attempt re-read the claude binary (about 274 MB) to record its hash under a 100 ms limit, and when several hunters started together some lost that race, recorded no hash, and the run was rejected as an executable identity mismatch. Attempts now record the hash the executable check already verified, so nothing is read again.
+
 ## [0.11.0] - 2026-11-22
 
 ### Security

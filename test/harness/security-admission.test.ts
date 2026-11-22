@@ -384,6 +384,9 @@ describe("Security authorization and admission ordering", () => {
     expect(
       receivedRequest?.isolation.verifiedBinaryPath.length,
     ).toBeGreaterThan(0);
+    // The hash the executable authority verified travels with the path, so the
+    // attempt evidence never has to read the binary again.
+    expect(receivedRequest?.isolation.verifiedBinarySha256).toBe(binarySha256);
   });
 
   test("transport request receives the canonicalized path when step.cwd traverses a symlinked subdir", async () => {

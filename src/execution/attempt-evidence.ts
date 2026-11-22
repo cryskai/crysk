@@ -341,13 +341,21 @@ export async function freezeAttemptEvidenceIdentity(
       }),
     );
   } catch {}
-  try {
-    frozen.executableSha256 = evidenceSha256(
-      await readFile(request.isolation.verifiedBinaryPath, {
-        signal: AbortSignal.timeout(100),
-      }),
-    );
-  } catch {}
+  // The hash the executable authority verified, when it ran: reading the
+  // ~274 MB binary again per attempt raced the abort below while parallel
+  // hunters started, and the losers recorded no hash. The read stays only for
+  // a path no authority verified (test fakes).
+  if (request.isolation.verifiedBinarySha256 !== undefined) {
+    frozen.executableSha256 = request.isolation.verifiedBinarySha256;
+  } else {
+    try {
+      frozen.executableSha256 = evidenceSha256(
+        await readFile(request.isolation.verifiedBinaryPath, {
+          signal: AbortSignal.timeout(100),
+        }),
+      );
+    } catch {}
+  }
   const file = attemptEvidencePath(
     step.outPath,
     step.name,

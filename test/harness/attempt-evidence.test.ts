@@ -726,3 +726,39 @@ test("the evidence points at the request plan even when the freeze timer wins th
     sha256: evidenceSha256(await readFile(planFile)),
   });
 });
+
+// Parallel hunters each re-read the ~274 MB claude binary under a 100 ms abort;
+// the losers recorded no executable hash and the run was rejected as an
+// executable identity mismatch (2026-11-22). The hash the executable authority
+// already verified is used instead, so no read can lose that race.
+test("the frozen identity takes the verified executable hash without reading the binary", async () => {
+  const x = await setup();
+  const request: TransportRequest = {
+    sessionId: "verified-hash-1",
+    attempt: 1,
+    route: {
+      backend: "claude-code",
+      provider: "anthropic",
+      modelFamily: "claude",
+      modelSnapshot: "claude-sonnet",
+    },
+    executionModel: "claude-sonnet",
+    systemPromptPath: x.step.systemPromptPath,
+    systemPromptSha256: "deadbeef",
+    userPrompt: "review",
+    cwd: x.dir,
+    tools: [],
+    effort: "high",
+    isolation: {
+      credentialProjectionId: "operator-env-fallback",
+      env: {},
+      syntheticHome: x.dir,
+      syntheticConfigHome: x.dir,
+      syntheticTmp: x.dir,
+      verifiedBinaryPath: path.join(x.dir, "no-such-binary"),
+      verifiedBinarySha256: "a".repeat(64),
+    },
+  };
+  const frozen = await freezeAttemptEvidenceIdentity(request, x.step);
+  expect(frozen.executableSha256).toBe("a".repeat(64));
+});
