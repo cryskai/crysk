@@ -74,7 +74,7 @@ describe("the doctor's route plan (S6)", () => {
     ]);
     expect(routes).toEqual([
       ["opencode", "openai", "gpt-6.1-terra", "xhigh"],
-      ["opencode", "openai", "gpt-6.1-sol", "high"],
+      ["opencode", "openai", "gpt-6.2-sol", "high"],
     ]);
   });
 

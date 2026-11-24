@@ -712,7 +712,7 @@ describe("platform review configuration", () => {
     ],
     [
       "openai with a Claude fallback",
-      { refuter: ["opencode:openai/gpt-6.1-sol", "claude:opus-latest"] },
+      { refuter: ["opencode:openai/gpt-6.2-sol", "claude:opus-latest"] },
       "openai",
       true,
     ],

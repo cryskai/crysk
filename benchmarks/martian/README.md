@@ -591,6 +591,34 @@ consolidation was built for. Discourse is still the weak corpus.
 
 Raw data: lab `bench/experiments/2026-11-13-martian-50-dev-2026-11-13/`.
 
+## Martian 50, arm `dev-2026-11-22`, Opus 4.5 judge (2026-11-22, Martian's own pipeline)
+
+The same 50 PRs and judge as the two rows above, on `dev` at `c78c075c`, which is the review path of v0.11.0. The variable is the engine: the hunter redesign with a shared finding contract (Fact / Trigger / Consequence), the `security` hunter on every review (four hunters), and parity and scout removed. The model snapshots are unchanged (`claude-sonnet-5-5` hunters at xhigh, `claude-opus-5-5` refuter).
+
+- **Qualification.** All 50 qualified. Four reviews were redone after the harness rejected them for "executable identity mismatch": the engine hashes the `claude` binary under a 100 ms timeout and loses that race when hunters start in parallel. This affects the benchmark only.
+- **Judge.** Upstream `e616e849`, steps 2/2.5/3, Opus 4.5 through the shim, with the same two disclosed deviations. 0 errors, 0 fallbacks, 0 abandoned calls.
+- **Cost.** $0 cash (subscription). The engine records tokens, not dollars: 97.4M tokens for the 50 kept reviews.
+- Unreplicated. Surface B: **not run**.
+
+| | H+C recall | recall | precision | F1 | tp | fp |
+|---|---|---|---|---|---|---|
+| `dev-2026-11-13` | 80.3% (53/66) | 61.8% | 31.2% | 41.5% | 107 | 236 |
+| **`dev-2026-11-22`** | **65.2% (43/66)** | 52.6% | 36.0% | 42.7% | 91 | 162 |
+
+**What the drop was** (investigation in the lab, `bench/experiments/2026-11-22-martian-50-dev-2026-11-22/investigation/CONCLUSIONS.md`):
+
+1. **Run-to-run noise is larger than assumed.** A replicate of the same engine on Cal.com 10 gave 14 and 16 H+C, and re-judging an arm moves it by 1.
+2. **Two pipeline bugs that the new claim format exposed.**
+   - The dedupe's 0.35 overlap gate was calibrated on short free-text claims. Contract claims share their Fact and Trigger wording, so distinct defects on the same lines folded together, often into a security survivor.
+   - Consolidation repair rules discarded a distinct defect's claim.
+   - 9 of the 21 lost true positives were drafted by a hunter and then lost here.
+   - Both were fixed in v0.12.0 (#603, #604). Replaying the same stored drafts through the fixed pipeline on 9 PRs took TP from 17 to 23 and H+C from 9/20 to 15/20, and recovered all 8 drafted goldens that had been lost.
+3. **The hunters report less by design.** The new contract cuts drafts by 20-25% and raised precision. Restoring the old reporting licence on Cal.com 10 gave +1 TP for +13 FP, so it was not adopted.
+
+**Cal.com 10 arms judged in one session** (H+C / TP / FP): old 17/28/71; new 14/21/38; replicate 16/25/36; licence restored 15/26/49; fixes 15/24/44.
+
+No v0.12.0 number exists yet. A full 50-PR run on it, ideally replicated, is the next measurement.
+
 ## Benchmark qualification gates and metrics (Unit 7)
 
 Only **schema-valid, attributable completed attempts** qualify for resume and

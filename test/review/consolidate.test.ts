@@ -258,7 +258,10 @@ test("enforcePlanInvariants rule 1: a WARNING primary absorbing a blocking sourc
   expect(stats.repairs).toBe(1);
 });
 
-test("enforcePlanInvariants rule 2: two non-split entries with one primary fold into the first", () => {
+test("enforcePlanInvariants rule 2: an entry repeating a primary but carrying its own source is led by that source", () => {
+  // The second entry names F001 again but brings F003, which no other entry
+  // carries: it describes F003's defect under the wrong primary. Folding it
+  // would discard its claim, so F003 leads it.
   const findings = [blockingF("F001"), advisoryF("F002"), advisoryF("F003")];
   const stats = { repairs: 0 };
   const out = enforcePlanInvariants(
@@ -283,11 +286,126 @@ test("enforcePlanInvariants rule 2: two non-split entries with one primary fold 
   expect(out).toEqual([
     {
       primary: "F001",
-      sources: ["F001", "F002", "F003"],
+      sources: ["F001", "F002"],
       split: false,
       claim: "one",
     },
+    { primary: "F003", sources: ["F003"], split: false, claim: "two" },
     { primary: "F001", sources: ["F001"], split: true, claim: "aside" },
+  ]);
+  expect(stats.repairs).toBe(1);
+});
+
+test("enforcePlanInvariants rule 2: an entry repeating a primary with nothing of its own folds into the first", () => {
+  const findings = [blockingF("F001"), advisoryF("F002")];
+  const stats = { repairs: 0 };
+  const out = enforcePlanInvariants(
+    [
+      {
+        primary: "F001",
+        sources: ["F001", "F002"],
+        split: false,
+        claim: "one",
+      },
+      {
+        primary: "F001",
+        sources: ["F001", "F002"],
+        split: false,
+        claim: "two",
+      },
+    ],
+    findings,
+    stats,
+  );
+  expect(out).toEqual([
+    { primary: "F001", sources: ["F001", "F002"], split: false, claim: "one" },
+  ]);
+  // One home per source drops the repeated F002, then the fold: two repairs.
+  expect(stats.repairs).toBe(2);
+});
+
+// Martian 50 follow-up, 2026-11-22, cal-7232: two entries led by blocking F003,
+// the second describing F004's defect (the immediate delete keeps the row)
+// while F004 also had its own aside. Rule 2 folded the second entry and its
+// claim was posted nowhere.
+test("enforcePlanInvariants rule 2: a second entry under a taken primary keeps its claim when it carries a finding with only an aside", () => {
+  const findings = [blockingF("F001"), blockingF("F003"), advisoryF("F004")];
+  const stats = { repairs: 0 };
+  const out = enforcePlanInvariants(
+    [
+      {
+        primary: "F003",
+        sources: ["F001", "F003"],
+        split: false,
+        claim: "cron loop",
+      },
+      {
+        primary: "F003",
+        sources: ["F001", "F003", "F004"],
+        split: false,
+        claim: "immediate delete keeps the row",
+      },
+      {
+        primary: "F004",
+        sources: ["F004"],
+        split: true,
+        claim: "no retry marker",
+      },
+    ],
+    findings,
+    stats,
+  );
+  expect(out).toContainEqual({
+    primary: "F004",
+    sources: ["F004"],
+    split: false,
+    claim: "immediate delete keeps the row",
+  });
+  expect(out.filter((e) => !e.split && e.primary === "F003")).toHaveLength(1);
+});
+
+// A model plan can list one finding as a source of two entries: its own, and
+// another defect's (Martian 50, 2026-11-22, cal-8330: F001 blocking in its own
+// entry and again in F003's). Rule 1 then promoted F003's entry to F001 and
+// Rule 2 folded it into F001's entry, so F003's distinct defect and its claim
+// were posted nowhere. A source has one home: the entry it leads.
+test("enforcePlanInvariants: a source listed in another defect's entry stays in its own, and both defects post", () => {
+  const findings = [blockingF("F001"), advisoryF("F003")];
+  const stats = { repairs: 0 };
+  const out = enforcePlanInvariants(
+    [
+      { primary: "F001", sources: ["F001"], split: false, claim: "gate" },
+      {
+        primary: "F003",
+        sources: ["F003", "F001"],
+        split: false,
+        claim: "end bound",
+      },
+    ],
+    findings,
+    stats,
+  );
+  expect(out).toEqual([
+    { primary: "F001", sources: ["F001"], split: false, claim: "gate" },
+    { primary: "F003", sources: ["F003"], split: false, claim: "end bound" },
+  ]);
+  expect(stats.repairs).toBe(1);
+});
+
+test("enforcePlanInvariants: a source two entries share but neither leads stays in the first", () => {
+  const findings = [advisoryF("F001"), advisoryF("F002"), advisoryF("F003")];
+  const stats = { repairs: 0 };
+  const out = enforcePlanInvariants(
+    [
+      { primary: "F001", sources: ["F001", "F003"], split: false, claim: "a" },
+      { primary: "F002", sources: ["F002", "F003"], split: false, claim: "b" },
+    ],
+    findings,
+    stats,
+  );
+  expect(out).toEqual([
+    { primary: "F001", sources: ["F001", "F003"], split: false, claim: "a" },
+    { primary: "F002", sources: ["F002"], split: false, claim: "b" },
   ]);
   expect(stats.repairs).toBe(1);
 });
