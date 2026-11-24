@@ -1442,6 +1442,30 @@ describe("ClaudeCodeCliTransport prompt delivery and isolation argv (#314)", () 
     ).toHaveLength(1);
   });
 
+  // The CLI adds a git status snapshot (branch, recent commit subjects) to the
+  // context of every session started in a repository. Commit subjects are
+  // author-written text, and the refuter must not receive author text; a
+  // hunter also read "disable sql expressions" as proof a stub was intended
+  // (lab ledger 2026-11-24, grafana 94942). The env var is the documented
+  // switch; `--setting-sources ""` does not reach it.
+  test("the child env turns off the CLI's git status snapshot and keeps the isolation env", async () => {
+    const base = makeRequest();
+    const { opts } = await captureSpawn(
+      makeRequest({
+        isolation: {
+          ...base.isolation,
+          env: {
+            HOME: "/tmp/pr-hero-test/home",
+            CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "0",
+          },
+        },
+      }),
+    );
+    const env = opts.env as Record<string, string | undefined>;
+    expect(env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS).toBe("1");
+    expect(env.HOME).toBe("/tmp/pr-hero-test/home");
+  });
+
   test("each spawn names its own session with a fresh UUID", async () => {
     const uuid =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
