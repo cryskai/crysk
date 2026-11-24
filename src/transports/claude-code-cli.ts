@@ -685,13 +685,13 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       claudeCliModel(request.route),
       "--effort",
       request.effort,
-      // Moves the per-machine sections (cwd, env info, git status) out of the
-      // system prompt into the first user message. Without it every worktree
-      // path changes the system prompt, so no spawn could reuse the cached
-      // tools + base prompt another review wrote: measured 2026-10-21 (lab
-      // ledger, prompt-cache layout probe), a second repo wrote 6.6k cache
-      // tokens without the flag and 1.4k with it. Nothing leaves the context;
-      // isolation is unchanged.
+      // Moves the per-machine sections (cwd, env info) out of the system
+      // prompt into the first user message. Without it every worktree path
+      // changes the system prompt, so no spawn could reuse the cached tools +
+      // base prompt another review wrote: measured 2026-10-21 (lab ledger,
+      // prompt-cache layout probe), a second repo wrote 6.6k cache tokens
+      // without the flag and 1.4k with it. Nothing leaves the context with
+      // this flag; the git status snapshot is removed by the child env below.
       "--exclude-dynamic-system-prompt-sections",
     );
 
@@ -745,7 +745,19 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
     try {
       proc = this.spawnFn(args, {
         cwd: request.cwd,
-        env: request.isolation.env,
+        // The CLI adds a git status snapshot (branch, recent commit subjects)
+        // to every session started in a repository, and
+        // `--exclude-dynamic-system-prompt-sections` only moves it into the
+        // first user message. Commit subjects are author-written text outside
+        // the engine's tagged data blocks: the refuter must never receive
+        // author text, and a hunter dismissed a real stub as intended because
+        // a commit said "disable sql expressions" (lab ledger 2026-11-24,
+        // grafana 94942). This env var is the documented switch; set last so
+        // nothing in the isolation env can turn the snapshot back on.
+        env: {
+          ...request.isolation.env,
+          CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+        },
         stdin: new TextEncoder().encode(request.userPrompt),
         stdout: "pipe",
         stderr: "pipe",
