@@ -319,6 +319,13 @@ export interface FrozenAttemptIdentity {
   >;
 }
 
+// How long a freeze read may take before it is given up. Parallel hunters each
+// hash the claude binary synchronously during their executable check, which can
+// hold the event loop for a few hundred milliseconds; a 100 ms abort then fired
+// before small reads finished and left the evidence without its hashes (#601).
+// The bound only keeps a hung disk from holding the spawn forever.
+const FREEZE_READ_TIMEOUT_MS = 10_000;
+
 export async function freezeAttemptEvidenceIdentity(
   request: TransportRequest,
   step: StepSpec,
@@ -335,19 +342,27 @@ export async function freezeAttemptEvidenceIdentity(
         mcp: request.mcpConfigPath
           ? await readFile(request.mcpConfigPath, {
               encoding: "utf8",
-              signal: AbortSignal.timeout(100),
+              signal: AbortSignal.timeout(FREEZE_READ_TIMEOUT_MS),
             })
           : null,
       }),
     );
   } catch {}
-  try {
-    frozen.executableSha256 = evidenceSha256(
-      await readFile(request.isolation.verifiedBinaryPath, {
-        signal: AbortSignal.timeout(100),
-      }),
-    );
-  } catch {}
+  // The hash the executable authority verified, when it ran: reading the
+  // ~274 MB binary again per attempt raced the abort below while parallel
+  // hunters started, and the losers recorded no hash. The read stays only for
+  // a path no authority verified (test fakes).
+  if (request.isolation.verifiedBinarySha256 !== undefined) {
+    frozen.executableSha256 = request.isolation.verifiedBinarySha256;
+  } else {
+    try {
+      frozen.executableSha256 = evidenceSha256(
+        await readFile(request.isolation.verifiedBinaryPath, {
+          signal: AbortSignal.timeout(FREEZE_READ_TIMEOUT_MS),
+        }),
+      );
+    } catch {}
+  }
   const file = attemptEvidencePath(
     step.outPath,
     step.name,

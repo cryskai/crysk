@@ -62,6 +62,11 @@ export interface IsolationProjection {
   readonly syntheticConfigHome: string;
   readonly syntheticTmp: string;
   readonly verifiedBinaryPath: string;
+  // The sha256 the executable authority verified for that path, when it ran.
+  // Attempt evidence records it instead of reading the binary again: parallel
+  // hunters re-reading a ~274 MB binary under a short abort lost the race and
+  // left their evidence without a hash (rejected as an identity mismatch).
+  readonly verifiedBinarySha256?: string;
 }
 
 export interface TransportRequest {

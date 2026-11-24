@@ -932,6 +932,7 @@ export class StepExecutionHarness implements StepRunner {
 
     // 2. Executable authorization
     let verifiedBinaryPath: string;
+    let verifiedBinarySha256: string | undefined;
 
     if (this.allowlist !== undefined) {
       const candidate = this.binaryPath ?? admissionIdentity.executable;
@@ -958,6 +959,7 @@ export class StepExecutionHarness implements StepRunner {
         };
       }
       verifiedBinaryPath = execResult.executable.verifiedExecutionPath;
+      verifiedBinarySha256 = execResult.executable.sha256;
     } else if (this.isTestFake) {
       // Offline unit test runner with fake spawn
       verifiedBinaryPath = this.binaryPath ?? admissionIdentity.executable;
@@ -997,6 +999,7 @@ export class StepExecutionHarness implements StepRunner {
         admissionIdentity,
         canonicalCwd,
         verifiedBinaryPath,
+        verifiedBinarySha256,
       });
     } finally {
       releaseExecutionSnapshot(verifiedBinaryPath);
@@ -1012,6 +1015,7 @@ export class StepExecutionHarness implements StepRunner {
     };
     readonly canonicalCwd: string;
     readonly verifiedBinaryPath: string;
+    readonly verifiedBinarySha256?: string;
   }): Promise<StepResult> {
     const {
       step,
@@ -1019,6 +1023,7 @@ export class StepExecutionHarness implements StepRunner {
       admissionIdentity,
       canonicalCwd,
       verifiedBinaryPath,
+      verifiedBinarySha256,
     } = args;
 
     // #150: a transport that declares "server-lifetime" owns its OWN
@@ -1109,6 +1114,7 @@ export class StepExecutionHarness implements StepRunner {
         step,
         canonicalCwd,
         verifiedBinaryPath,
+        verifiedBinarySha256,
         childEnv,
         projection,
         projectionDegraded,
@@ -1672,6 +1678,7 @@ export class StepExecutionHarness implements StepRunner {
     readonly step: StepSpec;
     readonly canonicalCwd: string;
     readonly verifiedBinaryPath: string;
+    readonly verifiedBinarySha256?: string;
     readonly childEnv: Readonly<Record<string, string>>;
     readonly projection?: CredentialProjection;
     // #279: whether THIS run's projection degraded onto the unstripped
@@ -1693,6 +1700,7 @@ export class StepExecutionHarness implements StepRunner {
       step,
       canonicalCwd,
       verifiedBinaryPath,
+      verifiedBinarySha256,
       childEnv,
       projection,
       projectionDegraded,
@@ -1844,6 +1852,9 @@ export class StepExecutionHarness implements StepRunner {
               syntheticConfigHome: projection.syntheticConfigHome,
               syntheticTmp: projection.syntheticTmp,
               verifiedBinaryPath,
+              ...(verifiedBinarySha256 === undefined
+                ? {}
+                : { verifiedBinarySha256 }),
             }
           : {
               // Must describe what ACTUALLY ran, not claim a synthetic
@@ -1862,6 +1873,9 @@ export class StepExecutionHarness implements StepRunner {
                 path.join(childEnv.HOME ?? "", ".claude"),
               syntheticTmp: childEnv.TMPDIR ?? "",
               verifiedBinaryPath,
+              ...(verifiedBinarySha256 === undefined
+                ? {}
+                : { verifiedBinarySha256 }),
             },
       };
       pendingFormatPrompt = undefined;

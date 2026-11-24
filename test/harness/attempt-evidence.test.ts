@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import * as fsPromises from "node:fs/promises";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { StepSpec } from "#review/step-runner";
@@ -725,4 +726,99 @@ test("the evidence points at the request plan even when the freeze timer wins th
     relativePath: path.basename(planFile),
     sha256: evidenceSha256(await readFile(planFile)),
   });
+});
+
+// Parallel hunters each re-read the ~274 MB claude binary under a 100 ms abort;
+// the losers recorded no executable hash and the run was rejected as an
+// executable identity mismatch (2026-11-22). The hash the executable authority
+// already verified is used instead, so no read can lose that race.
+test("the frozen identity takes the verified executable hash without reading the binary", async () => {
+  const x = await setup();
+  const request: TransportRequest = {
+    sessionId: "verified-hash-1",
+    attempt: 1,
+    route: {
+      backend: "claude-code",
+      provider: "anthropic",
+      modelFamily: "claude",
+      modelSnapshot: "claude-sonnet",
+    },
+    executionModel: "claude-sonnet",
+    systemPromptPath: x.step.systemPromptPath,
+    systemPromptSha256: "deadbeef",
+    userPrompt: "review",
+    cwd: x.dir,
+    tools: [],
+    effort: "high",
+    isolation: {
+      credentialProjectionId: "operator-env-fallback",
+      env: {},
+      syntheticHome: x.dir,
+      syntheticConfigHome: x.dir,
+      syntheticTmp: x.dir,
+      verifiedBinaryPath: path.join(x.dir, "no-such-binary"),
+      verifiedBinarySha256: "a".repeat(64),
+    },
+  };
+  const frozen = await freezeAttemptEvidenceIdentity(request, x.step);
+  expect(frozen.executableSha256).toBe("a".repeat(64));
+});
+
+// PR #601 R001: the MCP config read had the same 100 ms abort. A hunter whose
+// read is held past it (the event loop busy with another step) recorded no
+// toolsConfigSha256, and the completed review was rejected. A read slower than
+// the old abort must still produce the hash.
+test("a slow MCP config read still records the tools config hash", async () => {
+  const x = await setup();
+  const mcpPath = path.join(x.dir, "mcp.json");
+  const original = fsPromises.readFile;
+  const slow = spyOn(fsPromises, "readFile").mockImplementation(((
+    file: Parameters<typeof original>[0],
+    options?: { signal?: AbortSignal } & Record<string, unknown>,
+  ) => {
+    if (String(file) !== mcpPath) return original(file, options as never);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => resolve(original(file, { encoding: "utf8" })),
+        300,
+      );
+      options?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(options.signal?.reason);
+      });
+    });
+  }) as typeof original);
+  try {
+    const request: TransportRequest = {
+      sessionId: "slow-mcp-1",
+      attempt: 1,
+      route: {
+        backend: "claude-code",
+        provider: "anthropic",
+        modelFamily: "claude",
+        modelSnapshot: "claude-sonnet",
+      },
+      executionModel: "claude-sonnet",
+      systemPromptPath: x.step.systemPromptPath,
+      systemPromptSha256: "deadbeef",
+      userPrompt: "review",
+      cwd: x.dir,
+      tools: ["Read"],
+      effort: "high",
+      mcpConfigPath: mcpPath,
+      isolation: {
+        credentialProjectionId: "operator-env-fallback",
+        env: {},
+        syntheticHome: x.dir,
+        syntheticConfigHome: x.dir,
+        syntheticTmp: x.dir,
+        verifiedBinaryPath: x.binary,
+        verifiedBinarySha256: "b".repeat(64),
+      },
+    };
+    const frozen = await freezeAttemptEvidenceIdentity(request, x.step);
+    expect(frozen.toolsConfigSha256).toBeDefined();
+  } finally {
+    slow.mockRestore();
+  }
 });
