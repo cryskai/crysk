@@ -617,7 +617,29 @@ The same 50 PRs and judge as the two rows above, on `dev` at `c78c075c`, which i
 
 **Cal.com 10 arms judged in one session** (H+C / TP / FP): old 17/28/71; new 14/21/38; replicate 16/25/36; licence restored 15/26/49; fixes 15/24/44.
 
-No v0.12.0 number exists yet. A full 50-PR run on it, ideally replicated, is the next measurement.
+The v0.12.0 number is the next section.
+
+## Martian 50, arm `dev-2026-11-24`, Opus 4.5 judge (2026-11-24, Martian's own pipeline)
+
+The same 50 PRs, judge and routes as `dev-2026-11-22`, on `dev` at `2dc9e080`. The variable is the post-hunter pipeline: the dedupe and consolidation fixes of v0.12.0 (#603, #604). #601 is also in, but it changes run qualification only: attempts record the executable hash the check already verified.
+
+- **Qualification.** All 50 qualified on the first attempt, with no executable-identity mismatch and no attempt cut by the usage limit.
+- **Judge.** Upstream `e616e849`, steps 2/2.5/3, Opus 4.5 through the shim, with the same two disclosed deviations. 0 errors, 0 fallbacks, 0 abandoned calls.
+- **Cost.** $0 cash (subscription). The reviews recorded 97.3M tokens.
+- Unreplicated. Surface B: **not run**.
+
+| | H+C recall | recall | precision | F1 | tp | fp |
+|---|---|---|---|---|---|---|
+| `dev-2026-11-13` | 80.3% (53/66) | 61.8% | 31.2% | 41.5% | 107 | 236 |
+| `dev-2026-11-22` | 65.2% (43/66) | 52.6% | 36.0% | 42.7% | 91 | 162 |
+| **`dev-2026-11-24`** | **74.2% (49/66)** | 54.9% | 33.5% | 41.6% | 95 | 189 |
+
+Reading:
+
+- The gain of +6 H+C is larger than the run-to-run spread of about 2-3, but it has no replicate.
+- The gain comes from Cal.com (+2), Keycloak (+2) and Discourse (+2), the corpora where the stored-draft replay had found the false folds.
+- FP rose by 27. More distinct findings now reach the report, so precision fell 2.5 points.
+- Among the tools judged on 66 H+C issues, the arm ties for first with `qodo-extended-v2` and `augment`, both at 61-68% precision. It remains 4 H+C below `dev-2026-11-13`.
 
 ## Benchmark qualification gates and metrics (Unit 7)
 
