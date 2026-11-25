@@ -159,6 +159,42 @@ describe("scoreRun — the gate", () => {
     }
   });
 
+  // Lever D (2026-11-25): a deterministic severe finding never reaches the
+  // refuter, so it lands `not_submitted` and blocking on its own evidence. Not
+  // counting it would score a real catch as a refuter gap.
+  test("a deterministic not_submitted finding that lands blocking is a hit", () => {
+    const [score] = scoreRun(
+      doc(1717, [
+        finding({
+          evidence_class: "deterministic",
+          refuter_verdict: "not_submitted",
+          tier: "blocking",
+        }),
+      ]),
+      [floorCase()],
+    );
+    expect(score?.hit).toBe(true);
+    expect(score?.found).toBe(true);
+  });
+
+  // The same pair landing advisory was demoted (a truncated run cut short a
+  // check its folded group was owed, or the PR did not cause it): nothing
+  // vouched for it, so it is found, never hit.
+  test("a deterministic not_submitted finding that lands advisory is found, never hit", () => {
+    const [score] = scoreRun(
+      doc(1717, [
+        finding({
+          evidence_class: "deterministic",
+          refuter_verdict: "not_submitted",
+          tier: "advisory",
+        }),
+      ]),
+      [floorCase()],
+    );
+    expect(score?.hit).toBe(false);
+    expect(score?.found).toBe(true);
+  });
+
   test("the ±25 window is compare.ts's, inclusive on both sides", () => {
     const c = floorCase({ start_line: 140, end_line: 142 });
     const at = (line: number) =>

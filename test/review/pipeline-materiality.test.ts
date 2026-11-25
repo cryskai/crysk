@@ -5,6 +5,7 @@ import path from "node:path";
 import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
 import type { PriorRecord } from "#rereview/classify";
 import type { RereviewProvenance } from "#rereview/prepare";
+import { unresolvedBlockingCount } from "#rereview/state";
 import type { DraftFinding, HunterDraft } from "#review/drafts";
 import {
   mergeRunEnvelope,
@@ -1199,6 +1200,53 @@ describe("materiality gate: a re-review records the priors it released", () => {
     ]);
     expect(rereview.materiality_released_ids).toEqual(["R001"]);
     expect(plan.rereview?.materiality_released_ids).toEqual(["R001"]);
+  });
+
+  // PR #610 R003: the state merge's release and the gate count read the same
+  // folded drafts. A pre-existing deterministic BLOCKER whose group (two
+  // hunters, both deterministic) never reached the refuter releases the prior
+  // in BOTH, so the state block the next run reads agrees with this count.
+  test("a unanimous deterministic pre-existing group releases the prior in the count and the state merge alike", async () => {
+    const rereview = rereviewBlock();
+    const input = await makeInput({
+      rereview,
+      phaseB: {
+        priors: [priorAtSpot(CLAIMS.exporter)],
+        settled: [
+          {
+            id: "R001",
+            status: "carried",
+            locs: ["src/app.ts:10"],
+            renamed: false,
+          },
+        ],
+      },
+    });
+    const pre = draft({ causal_disposition: "pre-existing" });
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            { ...pre, proof_refs: ["src/app.ts:10", "src/app.ts:12"] },
+          ],
+        }),
+      "hunter-resilience": (spec) =>
+        ok(spec, { findings: [{ ...pre, id: "RES-1", hunter: "resilience" }] }),
+      refuter: corroborate,
+    });
+    const result = await runPipeline(input, { runner });
+    expect(result.skillOutput.debug.deduped).toHaveLength(1);
+    const [finding] = result.skillOutput.findings;
+    expect(finding?.refuter_verdict).toBe("not_submitted");
+    expect(finding?.tier).toBe("advisory");
+    expect(
+      unresolvedBlockingCount(
+        result.skillOutput.findings,
+        result.gatePriors ?? [],
+        result.skillOutput.debug.deduped ?? [],
+      ),
+    ).toBe(0);
+    expect(rereview.materiality_released_ids).toEqual(["R001"]);
   });
 
   test("a prior the safety guard protects is not released, and the field stays absent", async () => {

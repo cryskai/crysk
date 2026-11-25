@@ -144,9 +144,17 @@ export async function publishRunOutcome(
   // same-head forced re-review and on any re-review that carried a blocking
   // prior. Computed once here, and fired the moment the doc exists, so a later
   // throw still leaves the gate a count to read.
+  //
+  // The run's debug.deduped[] goes in too (PR #610, R003). A finding stores
+  // only its dedupe winner's evidence_class, but the refuter's admission reads
+  // the whole folded group, so a deterministic `not_submitted` survivor may be
+  // a group that WAS owed the check and lost it on a ceiling-truncated run.
+  // With the folded drafts the gate releases a prior only for a group that is
+  // unanimously deterministic; without them it fails closed.
   const blockingCount = unresolvedBlockingCount(
     doc.findings,
     result.gatePriors ?? [],
+    doc.debug.deduped ?? [],
   );
   input.onBlockingCount(
     blockingCount,

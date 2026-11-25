@@ -195,6 +195,37 @@ describe("renderPlan", () => {
     expect(text).not.toContain("estimate");
   });
 
+  // PR #610 R001: the refuter's trigger phrase must fit the value column at
+  // 80 columns beside an `opus` model, or row() wraps it onto a second line.
+  for (const [name, render] of [
+    [
+      "renderPlan",
+      () =>
+        renderPlan(planContext({ options: options({ model: "opus" }) }), false),
+    ],
+    [
+      "renderPrPlan",
+      () =>
+        renderPrPlan(
+          prPlanContext({ options: options({ model: "opus" }) }),
+          false,
+        ),
+    ],
+  ] as const) {
+    test(`${name}: the refuter row renders on one line at width 80 with model opus`, () => {
+      const lines = render().map(stripAnsi);
+      const at = lines.findIndex((l) => l.includes("per severe finding"));
+      expect(at).toBeGreaterThan(-1);
+      expect(lines[at]).toContain("opus");
+      expect(lines[at]).toContain(
+        "per severe finding not marked deterministic",
+      );
+      expect(lines[at]?.length).toBeLessThanOrEqual(PINNED_WIDTH);
+      // A wrapped value would continue on an indented line below.
+      expect(lines[at + 1]).not.toMatch(/^ {3,}deterministic/);
+    });
+  }
+
   test('every hunter reads "always" and the card has no parity row or line', () => {
     const text = joined(renderPlan(planContext(), false));
     expect(text).not.toContain("will not fire");

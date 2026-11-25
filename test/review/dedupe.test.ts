@@ -6,6 +6,7 @@ import {
   DEDUPE_LINK_MIN_TOKENS,
   DEDUPE_SYMBOL_LINE_WINDOW,
   type DedupeLoser,
+  groupEvidenceClass,
   mergeAndDedupe,
 } from "#review/dedupe";
 import type { DraftFinding } from "#review/drafts";
@@ -871,5 +872,82 @@ describe("#153 claim-similarity gate — the gate itself", () => {
     expect(claimSimilarity(a, b)).toBe(claimSimilarity(b, a));
     expect(claimSimilarity("", a)).toBe(0);
     expect(claimSimilarity("", "")).toBe(0);
+  });
+});
+
+// PR #610 R003: the refuter's admission reads the folded group, not the winner.
+describe("groupEvidenceClass", () => {
+  const loser = (
+    merged_into: string,
+    evidence_class: DraftFinding["evidence_class"],
+  ) => ({ merged_into, evidence_class });
+
+  test("a deterministic winner with nothing folded in is deterministic", () => {
+    expect(
+      groupEvidenceClass({ id: "F001", evidence_class: "deterministic" }, []),
+    ).toBe("deterministic");
+  });
+
+  test("a deterministic winner with only deterministic partners is deterministic", () => {
+    expect(
+      groupEvidenceClass({ id: "F001", evidence_class: "deterministic" }, [
+        loser("F001", "deterministic"),
+        loser("F002", "inferential"),
+      ]),
+    ).toBe("deterministic");
+  });
+
+  test("one folded partner that is not deterministic makes the group that class", () => {
+    expect(
+      groupEvidenceClass({ id: "F001", evidence_class: "deterministic" }, [
+        loser("F001", "deterministic"),
+        loser("F001", "insufficient"),
+      ]),
+    ).toBe("insufficient");
+  });
+
+  test("a winner that is not deterministic keeps its own class", () => {
+    expect(
+      groupEvidenceClass({ id: "F001", evidence_class: "inferential" }, [
+        loser("F001", "deterministic"),
+      ]),
+    ).toBe("inferential");
+  });
+
+  // End to end through mergeAndDedupe: the loser's `merged_into` is the final
+  // survivor id, which is what the pipeline hands this function.
+  test("reads a real fold: the survivor stays deterministic, the group does not", () => {
+    const base: DraftFinding = {
+      id: "REL-1",
+      category: 1,
+      path: "src/app.ts",
+      line: 10,
+      symbol: "run",
+      severity: "BLOCKER",
+      evidence_class: "deterministic",
+      causal_disposition: "introduced",
+      claim:
+        "the width value is scaled by the device pixel ratio twice along the " +
+        "cached branch, so the rendered element ends up at double its size",
+      proof_refs: ["src/app.ts:10", "src/app.ts:12"],
+      hunter: "reliability",
+      hops_used: 0,
+      hop_trail: [],
+      dedupe_key: "src/app.ts:run:1",
+    };
+    const { survivors, deduped } = mergeAndDedupe([
+      base,
+      {
+        ...base,
+        id: "RES-1",
+        hunter: "resilience",
+        evidence_class: "inferential",
+        proof_refs: ["src/app.ts:10"],
+      },
+    ]);
+    expect(survivors).toHaveLength(1);
+    const [survivor] = survivors as [DraftFinding];
+    expect(survivor.evidence_class).toBe("deterministic");
+    expect(groupEvidenceClass(survivor, deduped)).toBe("inferential");
   });
 });

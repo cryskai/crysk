@@ -2,7 +2,7 @@
 // duplicates, renumber survivors. Deterministic — same input, same output.
 
 import type { DraftFinding } from "./drafts";
-import { isNotCausedByPr, type Severity } from "./findings";
+import { type EvidenceClass, isNotCausedByPr, type Severity } from "./findings";
 import { isSafetyProtected } from "./materiality-gate";
 
 // A survivor is a draft whose id has been renumbered to the canonical
@@ -453,4 +453,31 @@ export function mergeAndDedupe(drafts: DraftFinding[]): {
   }
 
   return { survivors, deduped };
+}
+
+// The evidence a survivor's GROUP stands on, as the refuter's admission reads
+// it (PR #610, R003). A survivor keeps its winner's `evidence_class`, and
+// pickRichest chooses that winner by severity and proof_refs, never by
+// evidence. So when two hunters report one defect and only the winner says
+// `deterministic`, the survivor reads as proven though a folded draft said it
+// was reasoned. Lever D skips the refuter only for proven findings, so this
+// answers `deterministic` only when the winner AND every draft folded into it
+// say so; otherwise it returns the first other class, winner first. It reads
+// debug.deduped[] (each loser's `merged_into` is its final survivor id), the
+// record an auditor sees of exactly what was folded, and adds no field to the
+// survivor, which is spread verbatim into findings[]. The artifact keeps the
+// winner's class, and tiering still reads that.
+export function groupEvidenceClass(
+  survivor: Pick<DedupedSurvivor, "id" | "evidence_class">,
+  deduped: readonly Pick<DedupeLoser, "merged_into" | "evidence_class">[],
+): EvidenceClass {
+  if (survivor.evidence_class !== "deterministic") {
+    return survivor.evidence_class;
+  }
+  const dissent = deduped.find(
+    (loser) =>
+      loser.merged_into === survivor.id &&
+      loser.evidence_class !== "deterministic",
+  );
+  return dissent?.evidence_class ?? "deterministic";
 }

@@ -512,7 +512,7 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
   for (const agent of ctx.spec.agents) {
     const fires =
       agent.role === "refuter"
-        ? "per severe finding whose evidence is not deterministic"
+        ? "per severe finding not marked deterministic"
         : "always";
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
@@ -777,7 +777,7 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
   for (const agent of ctx.spec.agents) {
     const fires =
       agent.role === "refuter"
-        ? "per severe finding whose evidence is not deterministic"
+        ? "per severe finding not marked deterministic"
         : "always";
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";

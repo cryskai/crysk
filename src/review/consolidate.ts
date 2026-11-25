@@ -66,6 +66,17 @@ export function validatePlan(
   return out;
 }
 
+// A split aside's id: its primary's id, `s`, and the split's ordinal
+// (`F001s1`), exactly as applyPlan writes it below. Owned here so the format
+// has one definition. The re-review gate reads it (rereview/state.ts): a split
+// is forced advisory and `not_submitted` and copies its primary's evidence
+// class and disposition, so it cannot vouch for anything a refuter skipped.
+const SPLIT_ID = /^F\d+s\d+$/;
+
+export function isConsolidationSplit(id: string): boolean {
+  return SPLIT_ID.test(id);
+}
+
 // One output finding per plan entry. A merge keeps the primary's location,
 // severity, tier and verdict, and pools the evidence. A split aside was never
 // refuted on its own, so it posts advisory with `not_submitted`.

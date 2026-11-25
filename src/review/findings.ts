@@ -621,7 +621,9 @@ export function isCausallyExempt(
 // (src/review/pipeline.ts Step 6). Every reader that has to know whether a
 // `not_submitted` verdict means a lost check reads THIS predicate — the
 // refuter leg, `finish()`'s `refuterCutShort` and the re-review gate's
-// release rule (src/rereview/state.ts) — so they cannot drift apart.
+// release rule (src/rereview/state.ts) — so they cannot drift apart. The
+// pipeline passes a survivor's GROUP class (groupEvidenceClass in
+// src/review/dedupe.ts), because a survivor keeps only its winner's class.
 export function owesRefuterCheck(
   finding: Pick<Finding, "severity" | "evidence_class">,
 ): boolean {

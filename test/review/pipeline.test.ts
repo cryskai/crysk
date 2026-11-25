@@ -1901,6 +1901,83 @@ describe("refuter", () => {
     expect(result.perAgent.refuter?.tokens_total).toBe(116);
   });
 
+  // R003 (PR #610): a survivor's own evidence_class is its dedupe winner's
+  // alone. Two hunters reporting one defect, the winner `deterministic` and a
+  // folded partner `inferential`, are not a unanimous proof, so the group is
+  // still owed the refuter's check, exactly as on base: submitted, and tiered
+  // from the winner's class and the verdict that comes back.
+  const foldedPair = (partnerClass: "deterministic" | "inferential") => ({
+    "hunter-reliability": (spec: StepSpec) =>
+      ok(spec, {
+        findings: [
+          draft({
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            proof_refs: ["src/app.ts:10", "src/app.ts:12"],
+          }),
+        ],
+      }),
+    "hunter-resilience": (spec: StepSpec) =>
+      ok(spec, {
+        findings: [
+          draft({
+            id: "RES-1",
+            hunter: "resilience",
+            severity: "BLOCKER",
+            evidence_class: partnerClass,
+          }),
+        ],
+      }),
+  });
+
+  test("a mixed-evidence group (deterministic winner, inferential partner) still reaches the refuter", async () => {
+    const runner = new FakeStepRunner({
+      ...foldedPair("inferential"),
+      refuter: (spec) =>
+        ok(spec, {
+          results: [
+            {
+              finding_id: "F001",
+              outcome: "downgraded-latent",
+              proof_refs: ["src/app.ts:1 nothing calls this yet"],
+            },
+          ],
+        } satisfies RefuterResult),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.skillOutput.debug.deduped).toHaveLength(1);
+    expect(runner.specs.map((s) => s.name)).toContain("refuter-F001");
+    const [finding] = result.skillOutput.findings;
+    // The winner's class is what the artifact keeps and what tiering reads.
+    expect(finding?.evidence_class).toBe("deterministic");
+    expect(finding?.refuter_verdict).toBe("downgraded-latent");
+    expect(finding?.tier).toBe("advisory");
+  });
+
+  test("a unanimously deterministic group skips the refuter", async () => {
+    const runner = new FakeStepRunner({
+      ...foldedPair("deterministic"),
+      refuter: (spec) =>
+        ok(spec, {
+          results: [
+            {
+              finding_id: "F001",
+              outcome: "downgraded-latent",
+              proof_refs: [],
+            },
+          ],
+        } satisfies RefuterResult),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.skillOutput.debug.deduped).toHaveLength(1);
+    expect(
+      runner.specs.filter((s) => s.name.startsWith("refuter")),
+    ).toHaveLength(0);
+    const [finding] = result.skillOutput.findings;
+    expect(finding?.refuter_verdict).toBe("not_submitted");
+    expect(finding?.tier).toBe("blocking");
+  });
+
   // The zero-refuter spec end to end, through the re-review gate. A
   // deterministic BLOCKER the PR did not cause lands advisory (#457) with
   // `not_submitted`, the only verdict it can have here. That verdict no longer
@@ -1940,9 +2017,13 @@ describe("refuter", () => {
       status: "carried",
       claim: "the width value is scaled by the device pixel ratio twice",
     };
-    expect(unresolvedBlockingCount(result.skillOutput.findings, [prior])).toBe(
-      0,
-    );
+    expect(
+      unresolvedBlockingCount(
+        result.skillOutput.findings,
+        [prior],
+        result.skillOutput.debug.deduped ?? [],
+      ),
+    ).toBe(0);
   });
 
   test("refuter duration_ms is the leg's elapsed time, not summed step wall_ms", async () => {
@@ -4301,6 +4382,53 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
   test("§13 — a ceiling-truncated run keeps its deterministic BLOCKER blocking — no check was owed", async () => {
     const finding = await truncatedRun("deterministic");
     expect(finding?.tier).toBe("blocking");
+  });
+
+  // R003 (PR #610): a deterministic winner with an inferential partner folded
+  // in was owed the check the ceiling cut short, so it is demoted exactly as on
+  // base, though the artifact keeps the winner's `deterministic` class.
+  test("§13 — a ceiling-truncated run demotes a mixed-evidence group's deterministic winner", async () => {
+    const runner = new SlowStepRunner(
+      {
+        "hunter-reliability": (spec) =>
+          ok(spec, {
+            findings: [
+              draft({
+                severity: "BLOCKER",
+                evidence_class: "deterministic",
+                proof_refs: ["src/app.ts:10", "src/app.ts:12"],
+              }),
+            ],
+          }),
+        "hunter-resilience": (spec) =>
+          ok(spec, {
+            findings: [
+              draft({
+                id: "RES-1",
+                hunter: "resilience",
+                severity: "BLOCKER",
+                evidence_class: "inferential",
+              }),
+            ],
+          }),
+      },
+      300,
+    );
+    const input = await makeInput({
+      pipelineTimeoutMs: 50,
+      ceilingGraceMs: AMPLE_GRACE_MS,
+    });
+    const result = await runPipeline(input, { runner });
+    expect(result.skillOutput.run_status).toBe("partial");
+    expect(runner.specs.map((s) => s.name)).toEqual([
+      "hunter-reliability",
+      "hunter-resilience",
+    ]);
+    expect(result.skillOutput.debug.deduped).toHaveLength(1);
+    const [finding] = result.skillOutput.findings;
+    expect(finding?.evidence_class).toBe("deterministic");
+    expect(finding?.refuter_verdict).toBe("not_submitted");
+    expect(finding?.tier).toBe("advisory");
   });
 
   // The guard on the test above. `state.partial` is true here too — a failed

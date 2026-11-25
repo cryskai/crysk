@@ -622,6 +622,55 @@ describe("publishRunOutcome", () => {
       expect(await unresolvedCountFor(baseResult({ gatePriors }))).toBe(1);
     });
 
+    // PR #610 R003 at the gate, through the real caller: the count must read
+    // the run's own debug.deduped[]. A ceiling-truncated run refused the
+    // refuter leg; its one survivor is a deterministic BLOCKER the PR did not
+    // cause, advisory and `not_submitted`, at the carried prior's spot.
+    const truncatedRun = (
+      partnerClass: "deterministic" | "inferential",
+    ): PipelineResult => {
+      const survivor = {
+        ...findingFixture("F001", "advisory"),
+        path: "src/app.ts",
+        line: 10,
+        severity: "BLOCKER",
+        evidence_class: "deterministic",
+        refuter_verdict: "not_submitted",
+        causal_disposition: "pre-existing",
+        claim: "the cached width is scaled twice",
+      } as Finding;
+      const partner = {
+        ...survivor,
+        id: "RES-1",
+        hunter: "resilience",
+        evidence_class: partnerClass,
+        merged_into: "F001",
+      };
+      return baseResult({
+        gatePriors: gateRowsOf(
+          [blockingPrior("R001", ["src/app.ts:10"])],
+          caseC,
+        ),
+        skillOutput: {
+          ...baseSkillOutput(),
+          run_status: "partial",
+          findings: [survivor],
+          debug: {
+            refuted: [],
+            deduped: [partner] as NonNullable<SkillOutput["debug"]["deduped"]>,
+          },
+        },
+      });
+    };
+
+    test("a truncated run's mixed-evidence group keeps its blocking prior counted", async () => {
+      expect(await unresolvedCountFor(truncatedRun("inferential"))).toBe(1);
+    });
+
+    test("a truncated run's unanimously deterministic group releases its blocking prior", async () => {
+      expect(await unresolvedCountFor(truncatedRun("deterministic"))).toBe(0);
+    });
+
     test("case C with an untouched blocking prior counts it beside this run's own survivor", async () => {
       const gatePriors = gateRowsOf(
         [blockingPrior("R001", ["src/old.ts:4"])],

@@ -81,6 +81,7 @@ import {
 import {
   type DedupedSurvivor,
   type DedupeLoser,
+  groupEvidenceClass,
   mergeAndDedupe,
 } from "#review/dedupe";
 import {
@@ -2473,9 +2474,9 @@ async function execute(
       : adjudicationQueue.map((subject) => failedOutcome(subject));
   }
 
-  // Step 6 — one refuter batch: every BLOCKER/CRITICAL survivor whose
-  // evidence_class is not `deterministic` (owesRefuterCheck in
-  // src/review/findings.ts). Severity decides whether a finding can reach
+  // Step 6 — one refuter batch: every BLOCKER/CRITICAL survivor unless it and
+  // every draft folded into it are `deterministic` (groupOwesRefuterCheck,
+  // below). Severity decides whether a finding can reach
   // blocking tier at all; evidence_class decides whether the refuter is what
   // earns it that tier. (Blocking tier is what gate mode turns the commit
   // status red on — see deriveTier in src/review/findings.ts.)
@@ -2493,7 +2494,10 @@ async function execute(
   // check where it earns its keep. A deterministic severe finding keeps
   // `not_submitted` and blocks on the hunter's evidence alone, which the
   // hunter prompts now say in so many words.
-  const batch = survivors.filter(owesRefuterCheck);
+  // A survivor's own class is its dedupe winner's alone, so eligibility reads
+  // the whole folded group (groupEvidenceClass, PR #610 R003): a mixed group
+  // is submitted exactly as before lever D.
+  const batch = survivors.filter((s) => groupOwesRefuterCheck(s, deduped));
   // A spec with no refuter (allowed: "at most one") skips the leg entirely —
   // configured absence, not failure: every finding stays not_submitted (so
   // inferential BLOCKER/CRITICAL findings can never reach blocking tier) and
@@ -2508,7 +2512,7 @@ async function execute(
   // closed on 2026-08-27: it may not, WHEN a refuter was configured and the
   // finding was owed its check, because then a check really was lost.
   // `finish()` conjoins exactly that (`ceilingFired && refuterConfigured &&
-  // owesRefuterCheck(survivor)`) and hands it to `deriveTier`
+  // groupOwesRefuterCheck(survivor, deduped)`) and hands it to `deriveTier`
   // (src/review/findings.ts) as `refuterCutShort`, which demotes only the
   // cut-short + `not_submitted` pair, so skipping THIS leg can never dress an
   // unchecked finding in the report's loudest register. A verdict that DID
@@ -3771,6 +3775,19 @@ interface TieredFindings {
     | { kind: "applied"; repairs: number; findingsOut: number };
 }
 
+// owesRefuterCheck over a survivor's folded group rather than its winner
+// alone (groupEvidenceClass in src/review/dedupe.ts). The submission filter and
+// `refuterCutShort` both read this, so a mixed group is owed the check in both.
+function groupOwesRefuterCheck(
+  survivor: DedupedSurvivor,
+  deduped: readonly DedupeLoser[],
+): boolean {
+  return owesRefuterCheck({
+    severity: survivor.severity,
+    evidence_class: groupEvidenceClass(survivor, deduped),
+  });
+}
+
 function tierFindings(
   state: RunState,
   survivors: readonly DedupedSurvivor[],
@@ -3820,12 +3837,14 @@ function tierFindings(
         // Pinned by "a CEILING-truncated run with NO refuter configured still
         // blocks" below.
         //
-        // AND `owesRefuterCheck(survivor)`, because a configured refuter is
-        // owed only to the findings its leg submits. A `deterministic` severe
-        // finding never reaches it (lever D), so on a truncated run it lost no
-        // check and keeps the tier its evidence earns. Pinned by "§13 — a
-        // ceiling-truncated run keeps its deterministic BLOCKER blocking"
-        // below. For an inferential or insufficient finding this conjunct is
+        // AND `groupOwesRefuterCheck(survivor, …)`, because a configured
+        // refuter is owed only to the findings its leg submits, and this reads
+        // the same predicate the leg did. A severe group whose every draft is
+        // `deterministic` never reaches it (lever D), so on a truncated run it
+        // lost no check and keeps the tier its evidence earns. Pinned by "§13 —
+        // a ceiling-truncated run keeps its deterministic BLOCKER blocking"
+        // below; a mixed group was owed the check and is demoted as before
+        // lever D ("… demotes a mixed-evidence group's deterministic winner"). For an inferential or insufficient finding this conjunct is
         // true and the run is demoted as before — though deriveTier already
         // makes either advisory without a corroborated verdict.
         //
@@ -3839,7 +3858,7 @@ function tierFindings(
           refuterCutShort:
             state.ceilingFired &&
             state.refuterConfigured &&
-            owesRefuterCheck(survivor),
+            groupOwesRefuterCheck(survivor, state.deduped ?? []),
         },
       ),
     });
@@ -4243,10 +4262,14 @@ function fillRereviewProvenance(
   // The priors the gate count releases through a materiality demotion, read
   // off the same findings and gate rows the count reads. Recorded here so both
   // posting roads re-tier them in the state block: --pr --post reads this
-  // object, and post --from reads it back from pipeline.json.
+  // object, and post --from reads it back from pipeline.json. The folded
+  // drafts go in too, the same list the count reads as debug.deduped[]
+  // (src/pr/publish-outcome.ts), so a deterministic `not_submitted` survivor
+  // releases here exactly when it releases there (PR #610, R003).
   const released = materialityReleasedIds(
     state.finalFindings ?? [],
     assembled.gateRows,
+    state.deduped ?? [],
   );
   const filled: RereviewProvenance = {
     ...base,

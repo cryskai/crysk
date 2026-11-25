@@ -6,6 +6,7 @@ import {
   applyPlan,
   consolidationPrompt,
   enforcePlanInvariants,
+  isConsolidationSplit,
   type MergedDraft,
   type PlanEntry,
   validatePlan,
@@ -173,6 +174,13 @@ test("applyPlan split posts advisory, not_submitted, with the primary's location
   const out = applyPlan([primary], plan, []);
   const splits = out.slice(1);
   expect(splits.map((f) => f.id)).toEqual(["F001s1", "F001s2"]);
+  // The re-review gate fails closed on a split (rereview/state.ts), so the
+  // helper must recognise exactly the ids applyPlan writes, and no primary.
+  expect(out.map((f) => isConsolidationSplit(f.id))).toEqual([
+    false,
+    true,
+    true,
+  ]);
   for (const f of splits) {
     expect(f.tier).toBe("advisory");
     expect(f.refuter_verdict).toBe("not_submitted");
@@ -491,4 +499,13 @@ test("applyPlan over the repaired plan posts every input finding", () => {
   );
   const out = applyPlan(findings, repaired, []);
   expect(out.map((f) => f.id)).toContain("F002");
+});
+
+test("isConsolidationSplit names split ids only, never a survivor id", () => {
+  for (const id of ["F001s1", "F012s3", "F1000s12"]) {
+    expect(isConsolidationSplit(id)).toBe(true);
+  }
+  for (const id of ["F001", "F1000", "F001s", "s1", "REL-1", "F001x1"]) {
+    expect(isConsolidationSplit(id)).toBe(false);
+  }
 });

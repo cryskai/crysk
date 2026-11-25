@@ -264,6 +264,95 @@ describe("unresolvedBlockingCount — a causally demoted survivor releases its b
       unresolvedBlockingCount(
         [
           causallyDemoted(10, {
+            id: "F001",
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            refuter_verdict: "not_submitted",
+          }),
+        ],
+        [row("R001", { status: "carried" })],
+        [],
+      ),
+    ).toBe(0);
+  });
+
+  // PR #610 R003 at the gate. A survivor stores only its dedupe winner's
+  // class. On a ceiling-truncated run that refused the refuter leg, a group
+  // whose deterministic winner absorbed an inferential draft was OWED the
+  // check (the pipeline reads the folded group) and lost it; the gate must not
+  // read it as a unanimous proof and release the prior. It stays counted,
+  // exactly as it did before lever D.
+  test("a mixed-evidence group stored as deterministic not_submitted releases nothing", () => {
+    expect(
+      unresolvedBlockingCount(
+        [
+          causallyDemoted(10, {
+            id: "F001",
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            refuter_verdict: "not_submitted",
+          }),
+        ],
+        [row("R001", { status: "carried" })],
+        [{ merged_into: "F001", evidence_class: "inferential" }],
+      ),
+    ).toBe(1);
+  });
+
+  test("a unanimously deterministic group stored as not_submitted releases its prior", () => {
+    expect(
+      unresolvedBlockingCount(
+        [
+          causallyDemoted(10, {
+            id: "F001",
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            refuter_verdict: "not_submitted",
+          }),
+        ],
+        [row("R001", { status: "carried" })],
+        [
+          { merged_into: "F001", evidence_class: "deterministic" },
+          { merged_into: "F002", evidence_class: "inferential" },
+        ],
+      ),
+    ).toBe(0);
+  });
+
+  // A consolidation split (review/consolidate.ts applyPlan) is forced
+  // advisory and `not_submitted` and copies its primary's class and
+  // disposition; no folded draft names its id. It is not the group's proof,
+  // so it releases nothing, while its primary still does.
+  test("a consolidation split of a deterministic pre-existing primary releases nothing", () => {
+    const pre = {
+      severity: "BLOCKER" as const,
+      evidence_class: "deterministic" as const,
+      refuter_verdict: "not_submitted" as const,
+    };
+    expect(
+      unresolvedBlockingCount(
+        [causallyDemoted(10, { ...pre, id: "F001s1" })],
+        [row("R001", { status: "carried" })],
+        [],
+      ),
+    ).toBe(1);
+    expect(
+      unresolvedBlockingCount(
+        [causallyDemoted(10, { ...pre, id: "F001" })],
+        [row("R001", { status: "carried" })],
+        [],
+      ),
+    ).toBe(0);
+  });
+
+  // A caller that does not say what was folded cannot vouch that the group was
+  // unanimous, so a deterministic `not_submitted` survivor fails closed there.
+  test("without the folded drafts, a deterministic not_submitted survivor releases nothing", () => {
+    expect(
+      unresolvedBlockingCount(
+        [
+          causallyDemoted(10, {
+            id: "F001",
             severity: "BLOCKER",
             evidence_class: "deterministic",
             refuter_verdict: "not_submitted",
@@ -271,7 +360,7 @@ describe("unresolvedBlockingCount — a causally demoted survivor releases its b
         ],
         [row("R001", { status: "carried" })],
       ),
-    ).toBe(0);
+    ).toBe(1);
   });
 
   // An inferential `not_submitted` survivor was owed a refuter check that never
@@ -418,6 +507,24 @@ describe("unresolvedBlockingCount — a materiality-demoted survivor releases it
 });
 
 describe("materialityReleasedIds — the ids the count released, for the state merge", () => {
+  // The state merge re-tiers what the count released, so it reads the folded
+  // drafts the same way: a mixed group never, a unanimous one when told.
+  test("agrees with the count on a deterministic not_submitted survivor's folded group", () => {
+    const pre = causallyDemoted(10, {
+      id: "F001",
+      severity: "BLOCKER",
+      evidence_class: "deterministic",
+      refuter_verdict: "not_submitted",
+    });
+    const rows = [row("R001", { status: "carried" })];
+    const mixed = [
+      { merged_into: "F001", evidence_class: "inferential" as const },
+    ];
+    expect(materialityReleasedIds([pre], rows, mixed)).toEqual([]);
+    expect(materialityReleasedIds([pre], rows, [])).toEqual(["R001"]);
+    expect(materialityReleasedIds([pre], rows)).toEqual([]);
+  });
+
   test("names the blocking prior a demoted survivor released", () => {
     expect(
       materialityReleasedIds(
