@@ -9,6 +9,8 @@
 
 > **Superseded in part (2026-11-17, platform-owned-cost):** the dollar parts of this design no longer exist in the engine. There are no cash or notional cost fields, no rate-table pricing, no dollar reservation or settlement and no budget enforcement (§§8–9 and the accounting rows elsewhere describe the design as written, not the code). The engine reports usage facts (models, credential kind, token counts) and the Crysk platform prices them and owns the cost limits; the credential fence, which needs no amount, stays. See `docs/github-actions.md` ("Spend controls") and the `CHANGELOG.md` entry "Dollar figures and the dollar ceiling".
 
+> **Superseded in part (2026-11-25, lever D):** the "Refuter authority" invariant in §1 no longer holds as written. A severe finding whose `evidence_class` is `deterministic` is not submitted to the refuter; it keeps `not_submitted` and blocks on the hunter's evidence. Across seven Martian benchmark arms the refuter changed the outcome of 3 of 146 such findings, none correctly. Inferential and insufficient severe findings are still challenged. See the `CHANGELOG.md` entry "Deterministic severe findings skip the refuter".
+
 ## Review path
 
 Review lifecycle ownership and settlement first (§§3–5), then isolation and failure policy (§§6–7), accounting (§§8–9), and finally the D3 consensus algebra (§10). Implementation order and acceptance evidence are in §§12–13.

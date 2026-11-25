@@ -80,8 +80,10 @@ the consequence is the most common way a finding turns out to be wrong.
 
 How sure you are, how large the change is and how many other findings you have do not move severity. Being
 unsure that a trigger happens is not a named condition: certainty belongs in `evidence_class`. Only `BLOCKER`
-and `CRITICAL` findings are checked by a second reviewer and can block a merge; a `WARNING` is posted as an
-advisory comment that nothing verifies, so a severe consequence reported as `WARNING` is never checked.
+and `CRITICAL` findings can block a merge. An `inferential` one is first checked by a second reviewer; a
+`deterministic` one blocks on your evidence alone, so mark it `deterministic` only when you read every link
+with a tool. A `WARNING` is posted as an advisory comment that nothing verifies, so a severe consequence
+reported as `WARNING` is never checked.
 
 **`evidence_class` is how much of the claim you verified, not how bad it is.**
 

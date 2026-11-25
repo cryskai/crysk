@@ -255,13 +255,35 @@ describe("unresolvedBlockingCount — a causally demoted survivor releases its b
     ).toBe(1);
   });
 
-  test("a not_submitted survivor releases nothing: a cut-short run may have demoted it already", () => {
+  // Lever D (2026-11-25): a deterministic severe finding never reaches the
+  // refuter, so `not_submitted` is its normal verdict and no truncated run can
+  // have demoted it for a lost check. Introduced, it would block, so re-found
+  // as pre-existing it releases its prior exactly as a corroborated one does.
+  test("a pre-existing deterministic BLOCKER the refuter never saw releases its prior", () => {
     expect(
       unresolvedBlockingCount(
         [
           causallyDemoted(10, {
             severity: "BLOCKER",
             evidence_class: "deterministic",
+            refuter_verdict: "not_submitted",
+          }),
+        ],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(0);
+  });
+
+  // An inferential `not_submitted` survivor was owed a refuter check that never
+  // ran (no refuter configured, or the ceiling cut it short), so it would not
+  // have blocked as introduced either, and it releases nothing.
+  test("a pre-existing inferential BLOCKER the refuter never saw releases nothing", () => {
+    expect(
+      unresolvedBlockingCount(
+        [
+          causallyDemoted(10, {
+            severity: "BLOCKER",
+            evidence_class: "inferential",
             refuter_verdict: "not_submitted",
           }),
         ],

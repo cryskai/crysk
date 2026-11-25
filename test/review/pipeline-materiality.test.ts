@@ -219,7 +219,7 @@ async function makeInput(
 
 const GATE_ON = { materiality: { promptPath: BUNDLED_MATERIALITY_PROMPT } };
 
-// One refuter step per severe finding; each answers for its own id.
+// One refuter step per severe inferential finding; each answers for its own id.
 const corroborate = (spec: StepSpec): StepResult =>
   ok(spec, {
     results: [
@@ -305,7 +305,9 @@ describe("materiality gate: the judge's verdict (S5, S6)", () => {
 
     const [finding] = result.skillOutput.findings;
     expect(finding?.tier).toBe("advisory");
-    expect(finding?.refuter_verdict).toBe("corroborated");
+    // The fixture is deterministic, so it never reached the refuter; the gate
+    // leaves that verdict as it found it.
+    expect(finding?.refuter_verdict).toBe("not_submitted");
     expect(finding?.materiality).toEqual({
       label: "immaterial",
       reason: "rule 7 speculative hardening",

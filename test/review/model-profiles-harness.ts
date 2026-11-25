@@ -99,6 +99,8 @@ const PATCH = [
   "",
 ].join("\n");
 
+// Inferential, not deterministic: only a severe inferential finding reaches
+// the refuter, and the refuter step's routing is part of what these cases pin.
 function finding(): DraftFinding {
   return {
     id: "REL-1",
@@ -107,7 +109,7 @@ function finding(): DraftFinding {
     line: 1,
     symbol: "run",
     severity: "BLOCKER",
-    evidence_class: "deterministic",
+    evidence_class: "inferential",
     causal_disposition: "introduced",
     claim:
       "the cached width is scaled by the device pixel ratio twice, so the " +

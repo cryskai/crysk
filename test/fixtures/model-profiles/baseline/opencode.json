@@ -28,7 +28,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "a825bb7f6f82f234b785ce029f4a2ade064efda7ae9a468084735b67b26c6ab8",
+      "systemPromptSha256": "071a2c6d0778691d86a87fabb66c4190209a850f81168f04116b0b98a9478053",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
@@ -44,7 +44,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "197d95844fc8c7603f1e87eeef8127efe249afc0361548e3dfb502d7983ccbf5",
+      "systemPromptSha256": "308f58f753ec22dfdb1db0227ec181a9ca0924b7cc4f2c11b55fdeb64ba3c094",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
@@ -60,7 +60,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "c7caae508135a03de10d5cdfd92893240913307ba4b503eb476f81c133ab2402",
+      "systemPromptSha256": "17b5d27af28b24b52201b23693557303ae116ed08735ccd27b3f8cb411f0e46b",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
@@ -76,7 +76,7 @@
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "5eaf8812360217a8d09a7f8f61df12be7e4d506350206454b6ad31d0a3788581",
+      "systemPromptSha256": "56dd17bf00ff4ecef4e428ede0b6ea435e36977dae96e23d7234314691827e5b",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
@@ -92,7 +92,7 @@
       "fallbackEfforts": null,
       "effortApplied": false,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "c3185e34557d426675aef38940fc61ac0c318552c5856ea3e5572e09a0ec9601",
+      "systemPromptSha256": "52612c12687b851efde7002c0048ba5ed16a8213dd884651cba206af8e5bc484",
       "promptSha256": "82a74d242804c5b876f6441d3c560d8fa368b459357bb60f735c3ca550ddb8cf",
       "cliModel": null,
       "argv": null

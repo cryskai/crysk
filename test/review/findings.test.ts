@@ -592,12 +592,20 @@ describe("tier derivation (full table)", () => {
     // work that DID happen or a configuration that never asked for a refuter.
     //
     // Note what this table can and cannot see. `deriveTier` takes ONE boolean,
-    // deliberately: truncation and zero-refuter configuration are orthogonal,
-    // and the caller must conjoin them before calling (src/review/pipeline.ts
-    // `finish()`). So "the ceiling fired but no refuter was configured"
-    // appears here as `refuterCutShort: false` — cases 5 and 6 below spell out
-    // both ways of arriving at that false, because they are different
-    // statements and both must land on blocking.
+    // deliberately: truncation, zero-refuter configuration and the finding's
+    // own entitlement are orthogonal, and the caller must conjoin them before
+    // calling (src/review/pipeline.ts `finish()`). So "the ceiling fired but no
+    // refuter was configured" appears here as `refuterCutShort: false` — cases
+    // 5 and 6 below spell out both ways of arriving at that false, because
+    // they are different statements and both must land on blocking.
+    //
+    // Since lever D (2026-11-25) the pipeline never submits a deterministic
+    // finding to the refuter, so it never passes `refuterCutShort: true` for
+    // one either: the deterministic + `true` rows below are states the
+    // pipeline no longer produces. They stay as the contract of `deriveTier`
+    // itself — a caller that says a check was lost gets no blocking tier —
+    // and the pipeline-level pin is "§13 — a ceiling-truncated run keeps its
+    // deterministic BLOCKER blocking" in test/review/pipeline.test.ts.
     [
       "a cut-short refuter demotes an unsubmitted deterministic BLOCKER",
       {
