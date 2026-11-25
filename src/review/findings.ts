@@ -392,7 +392,7 @@ export function validateFinding(candidate: unknown, index: number): Finding {
   return f as unknown as Finding;
 }
 
-function validateFindingV11(candidate: unknown, index: number): Finding {
+export function validateFindingV11(candidate: unknown, index: number): Finding {
   must(
     typeof candidate === "object" && candidate !== null,
     `findings[${index}] must be an object`,

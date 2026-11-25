@@ -8,7 +8,7 @@
 // pipeline input the run gets, so the fixture's haiku agents, the summarizer's
 // frontmatter and `--model` route exactly as they did with no plan.
 import path from "node:path";
-import { validateFinding } from "#review/findings";
+import { validateFindingV11 } from "#review/findings";
 import { runPipeline } from "#review/pipeline";
 import {
   buildPlantedFixture,
@@ -76,7 +76,10 @@ const { skillOutput } = result;
 if (Array.isArray(skillOutput.findings)) {
   for (const [i, finding] of skillOutput.findings.entries()) {
     try {
-      validateFinding(finding, i);
+      // v1.1, the schema the engine writes: its hunter is an open slug, so
+      // the general hunter validates. The v1.0 validator's closed hunter enum
+      // only ever passed because this fixture ran reliability and resilience.
+      validateFindingV11(finding, i);
     } catch (error) {
       failures.push(`findings[${i}] invalid: ${(error as Error).message}`);
     }
