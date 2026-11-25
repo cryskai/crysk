@@ -508,6 +508,38 @@ describe("exam.ts refuses instead of guessing", () => {
     expect(code).toBe(0);
   });
 
+  // `--hunter all` expands to the bundled set's hunters, which is the general
+  // hunter alone; it must reach the case selection, not die resolving a key the
+  // spec no longer has.
+  test("--hunter all resolves against the bundled set", async () => {
+    const { stderr, code } = await exam([
+      "plan",
+      "--hunter",
+      "all",
+      "--project",
+      "no-such-project",
+    ]);
+    expect(stderr).not.toMatch(/unknown hunter/);
+    expect(code).toBe(64);
+    expect(stderr).toMatch(/no case matches this selection/);
+  });
+
+  // The four specialists left the bundled set: naming one without its file is
+  // the unknown-hunter error, pointing at the `key:file.md` form.
+  test("--hunter logic against the bundled set is an unknown hunter", async () => {
+    const { stderr, code } = await exam([
+      "plan",
+      "--hunter",
+      "logic",
+      "--project",
+      "no-such-project",
+    ]);
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(
+      /unknown hunter "logic": not in the local review spec; name a new one as key:file\.md/,
+    );
+  });
+
   // An empty selection used to exit 0 with pass: true.
   test.each([
     [["score", "--hunter", "general", "--project", "no-such-project"]],
@@ -721,6 +753,14 @@ describe("resolveHunter", () => {
       file: "deep-review-general.md",
       role: "hunter",
     });
+  });
+
+  test("no longer knows the four specialists the general hunter replaced", () => {
+    for (const key of ["logic", "reliability", "resilience", "security"]) {
+      expect(() => resolveHunter(key)).toThrow(
+        new RegExp(`unknown hunter "${key}"`),
+      );
+    }
   });
 
   test("names a candidate hunter by key and file", () => {

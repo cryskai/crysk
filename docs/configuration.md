@@ -40,7 +40,9 @@ review runs, no more and no fewer, so a hunter is never dropped or left unused i
 `deep-review-general.md`, still runs: the general hunter uses the bundled prompt, every other prompt still comes
 from the directory, and one warning says so (`<dir> has no deep-review-general.md: the general hunter runs the
 bundled prompt. To use your own, copy prompts/default/deep-review-general.md from the crysk package into that
-directory and edit it`). The four old files may stay; each one is
+directory and edit it`). A custom directory routes each agent by its prompt's frontmatter, the bundled general
+prompt it falls back to included, so that hunter runs `claude:opus-latest` at `high` whatever the profile, unless
+`--model` or `models` (`hunter.general` or `default`) names another model. The four old files may stay; each one is
 ignored with one warning (`deep-review-logic.md is ignored: the general hunter replaced the logic, reliability,
 resilience and security hunters`), as is a leftover `deep-review-parity.md`. To keep running one of the old
 hunters beside the general one, keep your own copy of its prompt in the directory and name it with
@@ -352,7 +354,8 @@ still present at the current head, which is not the refuter's question. A custom
 no longer changes the verifier's instructions, only its model, effort and tools. There is no CLI flag or
 environment variable that overrides effort, and the child process never inherits `CLAUDE_CODE_EFFORT_LEVEL`
 from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, measured on past runs. The general hunter
-replaced four such hunters; on the Martian benchmark it cost about a third of what the four did. The engine
+replaced four such hunters; on a 13-pull-request Martian subset it cost about a third of what the four did,
+with higher precision and fewer severe defects caught (CHANGELOG has the numbers). The engine
 prints no estimate, and the Crysk platform shows what a review actually cost.
 
 **Consolidation.** After the refuter, one more step reads the findings about to be posted and rewrites the

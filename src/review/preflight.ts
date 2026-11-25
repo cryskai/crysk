@@ -2226,9 +2226,7 @@ export async function withBundledGeneralPrompt(
       ...agents,
       kind: "bundled",
       files,
-      promptSet:
-        agents.promptSet ??
-        (agents.dir.replace(/\/+$/, "").split("/").pop() || agents.dir),
+      promptSet: agents.promptSet ?? (path.basename(agents.dir) || agents.dir),
     },
     warnings: [
       `${agents.dir} has no ${GENERAL_AGENT_FILE}: the general hunter runs ` +
@@ -2306,8 +2304,9 @@ function parseExtraHunters(read: BrandEnvValue | undefined): AgentSpec[] {
 
 // Local mode's wiring: the one general hunter and the refuter. It replaced
 // the four specialist hunters (logic, reliability, resilience, security) on
-// 2026-11-26: measured on the Martian benchmark at about a third of their cost
-// with higher precision (single-hunter-integration S1). Deliberately NOT
+// 2026-11-26: on the Martian benchmark it costs about a third and is more
+// precise, and catches fewer severe defects (numbers in CHANGELOG.md;
+// single-hunter-integration S1). Deliberately NOT
 // defaultReviewSpec() — that one keeps the lab's legacy wiring (two of the
 // specialists and the conditional parity hunter), no longer part of the
 // product. Hunter keys stay inside the findings-schema v1.1.0 specialty set,

@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { assertPlatformPerson } from "#ci/platform-config";
 import { loadEffectiveConfig } from "#config/config";
-import { FALLBACK_PROFILE } from "#model/profiles";
+import { FALLBACK_PROFILE, resolveProfile } from "#model/profiles";
 import {
   buildResolvedRoutePlan,
   InvalidModelError,
@@ -28,8 +28,11 @@ import {
 import {
   agentFilePath,
   agentsDirProblems,
+  type CliOptions,
   localReviewSpec,
+  withBundledGeneralPrompt,
 } from "#review/preflight";
+import { buildCliRoutePlan, isBundledAgentsDir } from "#review/route-preflight";
 import { resolvePromptSet } from "#review/run";
 import type { AgentSpec } from "#review/spec";
 import { BUNDLED_AGENT_FILES } from "../src/asset-manifest";
@@ -264,6 +267,17 @@ describe("the four old prompts in a custom agents_dir", () => {
     expect(result.promptSet.name).toBe("agents");
   });
 
+  test("the fallback names the prompt set after the directory, trailing separator or not", async () => {
+    for (const dir of [agentsDir, `${agentsDir}${path.sep}`]) {
+      const { agents } = await withBundledGeneralPrompt(
+        { dir, source: "flag", kind: "dir" },
+        ["deep-review-general.md", "review-refuter.md"],
+        "/bundled/deep-review-general.md",
+      );
+      expect(agents.promptSet).toBe("agents");
+    }
+  });
+
   test("a missing general prompt does not hide another unreferenced file", async () => {
     writeFileSync(path.join(agentsDir, "deep-review-extra.md"), "x");
     const error = await resolve().catch((e) => e);
@@ -336,5 +350,125 @@ describe("an old hunter kept with CRYSK_EXTRA_HUNTERS and the user's own prompt"
     ).toEqual([
       'the spec references "deep-review-logic.md" but the dir does not have it',
     ]);
+  });
+});
+
+// Regressions over the two seams the swap moved: a stored profile meeting the
+// `openai` profile, and a custom directory's frontmatter routing.
+describe("stored profiles and custom directories after the swap", () => {
+  const OPENAI = resolveProfile("openai");
+  let root: string;
+  let home: string;
+  const savedExtra = process.env.CRYSK_EXTRA_HUNTERS;
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "gen-reg-"));
+    home = path.join(root, "home");
+    mkdirSync(path.join(home, ".crysk"), { recursive: true });
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    if (savedExtra === undefined) delete process.env.CRYSK_EXTRA_HUNTERS;
+    else process.env.CRYSK_EXTRA_HUNTERS = savedExtra;
+  });
+
+  async function planWith(input: {
+    models?: Record<string, string[]>;
+    agentsDir?: string;
+    profile: ReturnType<typeof resolveProfile>;
+  }) {
+    writeFileSync(
+      path.join(home, ".crysk", "config.json"),
+      JSON.stringify(
+        input.models === undefined ? {} : { models: input.models },
+      ),
+    );
+    const loaded = await loadEffectiveConfig({ root, home });
+    const warnings: string[] = [];
+    const result = await resolvePromptSet(
+      input.agentsDir === undefined ? {} : { agents: input.agentsDir },
+      loaded,
+      { profile: input.profile },
+      (line) => warnings.push(line),
+    );
+    const plan = await buildCliRoutePlan({
+      spec: result.spec,
+      options: {} as CliOptions,
+      agentFiles: result.agentFiles,
+      bundledAgents: isBundledAgentsDir(result.agents),
+      models: loaded.effective.models,
+      summary: { enabled: false },
+      consolidateEnabled: false,
+      profile: input.profile,
+    });
+    const hunters = plan.steps.filter((s) => s.role === "hunter");
+    return { warnings, result, hunters };
+  }
+
+  test("openai: a stored profile naming two specialists runs one general hunter on Sol 6.2 at high, with two warnings", async () => {
+    const { warnings, hunters } = await planWith({
+      models: {
+        "hunter.logic": ["opencode:openai/gpt-6.1-terra"],
+        "hunter.security": ["opencode:openai/gpt-6.1-terra"],
+      },
+      profile: OPENAI,
+    });
+    expect(warnings).toEqual([
+      `models.hunter.logic ${TAIL}`,
+      `models.hunter.security ${TAIL}`,
+    ]);
+    expect(hunters.map((s) => s.stepKey)).toEqual(["hunter-general"]);
+    expect(hunters[0]?.route).toMatchObject({
+      backend: "opencode",
+      provider: "openai",
+      modelSnapshot: "gpt-6.2-sol",
+      modelVariant: "high",
+    });
+  });
+
+  // A custom directory routes by its prompts' frontmatter, so the bundled
+  // general prompt it falls back to brings its own: Claude Opus at high, even
+  // on the openai profile. Pinned as it resolves today
+  // (docs/configuration.md says so).
+  test("openai: a custom directory without the general prompt runs the bundled one on its frontmatter route", async () => {
+    const agentsDir = path.join(root, "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(path.join(agentsDir, "review-refuter.md"), AGENT);
+    const { warnings, result, hunters } = await planWith({
+      agentsDir,
+      profile: OPENAI,
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("has no deep-review-general.md");
+    expect(isBundledAgentsDir(result.agents)).toBe(false);
+    expect(hunters.map((s) => [s.stepKey, s.logicalIdentity])).toEqual([
+      ["hunter-general", "claude:opus-latest"],
+    ]);
+    expect(hunters[0]?.route.backend).toBe("claude-code");
+    expect(result.agentFiles.get("general")?.effort).toBe("high");
+  });
+
+  test("a retired role re-added with CRYSK_EXTRA_HUNTERS and the user's own prompt runs on its model, with no retirement warning", async () => {
+    const agentsDir = path.join(root, "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    for (const file of [
+      "deep-review-general.md",
+      "review-refuter.md",
+      "deep-review-logic.md",
+    ]) {
+      writeFileSync(path.join(agentsDir, file), AGENT);
+    }
+    process.env.CRYSK_EXTRA_HUNTERS = "logic:deep-review-logic.md";
+    const { warnings, hunters } = await planWith({
+      models: { "hunter.logic": ["claude:haiku-latest"] },
+      agentsDir,
+      profile: FALLBACK_PROFILE,
+    });
+    expect(warnings).toEqual([]);
+    expect(hunters.map((s) => s.stepKey)).toEqual([
+      "hunter-general",
+      "hunter-logic",
+    ]);
+    const logic = hunters.find((s) => s.stepKey === "hunter-logic");
+    expect(logic?.logicalIdentity).toBe("claude:haiku-latest");
   });
 });
