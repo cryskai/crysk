@@ -327,6 +327,25 @@ describe("materiality gate: the judge's verdict (S5, S6)", () => {
     });
   });
 
+  // The ordering the deterministic fixture above no longer exercises: a
+  // finding the refuter corroborated still reaches the judge, and an immaterial
+  // verdict demotes it without rewriting the refuter's verdict.
+  test("immaterial demotes a refuter-corroborated inferential BLOCKER and keeps its verdict", async () => {
+    const input = await makeInput(GATE_ON);
+    const runner = new FakeStepRunner({
+      ...hunters([draft({ evidence_class: "inferential" })]),
+      materiality: (spec) => parsed(spec, verdict("immaterial")),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(runner.specs.map((s) => s.name)).toContain("refuter-F001");
+    const [finding] = result.skillOutput.findings;
+    expect(finding?.tier).toBe("advisory");
+    expect(finding?.refuter_verdict).toBe("corroborated");
+    expect(finding?.materiality?.label).toBe("immaterial");
+  });
+
   test("material keeps the finding blocking and unmarked", async () => {
     const input = await makeInput(GATE_ON);
     const runner = new FakeStepRunner({

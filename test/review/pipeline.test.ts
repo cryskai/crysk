@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PriorRecord } from "#rereview/classify";
 import type { RereviewProvenance } from "#rereview/prepare";
-import { unresolvedBlockingCount } from "#rereview/state";
+import { type GateRow, unresolvedBlockingCount } from "#rereview/state";
 import type { DraftFinding, HunterDraft, RefuterResult } from "#review/drafts";
 import {
   mergeRunEnvelope,
@@ -1899,6 +1899,50 @@ describe("refuter", () => {
     // one, because a failed attempt costs real money too.
     expect(result.perAgent.refuter?.status).toBe("failed");
     expect(result.perAgent.refuter?.tokens_total).toBe(116);
+  });
+
+  // The zero-refuter spec end to end, through the re-review gate. A
+  // deterministic BLOCKER the PR did not cause lands advisory (#457) with
+  // `not_submitted`, the only verdict it can have here. That verdict no longer
+  // means a lost check (owesRefuterCheck), so the gate recomputes it as
+  // introduced, sees blocking, and releases the blocking prior at its spot.
+  test("zero-refuter spec: a pre-existing deterministic BLOCKER releases its re-found prior", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            draft({
+              severity: "BLOCKER",
+              evidence_class: "deterministic",
+              causal_disposition: "pre-existing",
+            }),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+    });
+    const base = defaultReviewSpec();
+    const input = await makeInput({
+      spec: {
+        ...base,
+        agents: base.agents.filter((a) => a.role !== "refuter"),
+      },
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    const [finding] = result.skillOutput.findings;
+    expect(finding?.refuter_verdict).toBe("not_submitted");
+    expect(finding?.tier).toBe("advisory");
+    const prior: GateRow = {
+      id: "R001",
+      tier: "blocking",
+      locs: ["src/app.ts:10"],
+      status: "carried",
+      claim: "the width value is scaled by the device pixel ratio twice",
+    };
+    expect(unresolvedBlockingCount(result.skillOutput.findings, [prior])).toBe(
+      0,
+    );
   });
 
   test("refuter duration_ms is the leg's elapsed time, not summed step wall_ms", async () => {

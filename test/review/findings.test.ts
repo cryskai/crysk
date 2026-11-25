@@ -8,6 +8,7 @@ import {
   type Finding,
   type FindingsDocument,
   mergeRunEnvelope,
+  owesRefuterCheck,
   type RunSummary,
   SCHEMA_VERSION,
   SCHEMA_VERSION_V1_1,
@@ -783,5 +784,36 @@ describe("tier derivation (causal disposition, #457)", () => {
     test(name, () => {
       expect(deriveTier(input)).toBe(expected);
     });
+  }
+});
+
+// Lever D (2026-11-25): the one predicate the refuter leg, `refuterCutShort`
+// and the re-review gate's release rule all read. Every severity crossed with
+// every evidence class, so a widened or narrowed rule cannot pass unseen.
+describe("owesRefuterCheck", () => {
+  const owed = new Set([
+    "BLOCKER/inferential",
+    "BLOCKER/insufficient",
+    "CRITICAL/inferential",
+    "CRITICAL/insufficient",
+  ]);
+  for (const severity of [
+    "BLOCKER",
+    "CRITICAL",
+    "WARNING",
+    "SUGGESTION",
+  ] as const) {
+    for (const evidence_class of [
+      "deterministic",
+      "inferential",
+      "insufficient",
+    ] as const) {
+      const key = `${severity}/${evidence_class}`;
+      test(`${key} is ${owed.has(key) ? "" : "not "}owed a refuter check`, () => {
+        expect(owesRefuterCheck({ severity, evidence_class })).toBe(
+          owed.has(key),
+        );
+      });
+    }
   }
 });
