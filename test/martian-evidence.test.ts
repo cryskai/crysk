@@ -533,12 +533,7 @@ test("positive OpenCode frozen identity supplies the actual installed SDK reader
   expect({ code: await proc.exited, stderr }).toMatchObject({ code: 0 });
   const result = JSON.parse(stdout);
   expect(result.runtime[0].sdkVersion).toBe("1.18.25");
-  expect(result.requiredSteps).toEqual([
-    "hunter-reliability",
-    "hunter-resilience",
-    "hunter-logic",
-    "hunter-security",
-  ]);
+  expect(result.requiredSteps).toEqual(["hunter-general"]);
 });
 
 // L47 / S2: a benchmark that routes through the config's `models` must freeze

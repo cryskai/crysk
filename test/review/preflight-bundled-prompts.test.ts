@@ -116,7 +116,8 @@ describe("Repo hygiene and O-15 productization scan", () => {
       (f) => f.endsWith(".md") && f !== "PROVENANCE.md",
     );
 
-    expect(files.length).toBe(5);
+    // The general hunter and the refuter.
+    expect(files.length).toBe(2);
 
     const forbiddenPatterns = [
       /deep-review/i,
@@ -165,7 +166,10 @@ describe("bundled prompts carry no tool-injected content", () => {
 });
 
 describe("the claude profile holds the intended model split", () => {
-  // Hunters are Sonnet at `xhigh`; the refuter is Opus at `high`. The `claude`
+  // The general hunter, the product's only one, is Opus at `high`: the route it
+  // was measured on (single-hunter-integration S1). A hunter a spec adds
+  // (CRYSK_EXTRA_HUNTERS) takes the profile's hunter role, Sonnet at `xhigh`;
+  // the refuter is Opus at `high`. The `claude`
   // profile (src/model/profiles.ts) is where this is decided now (model-profiles
   // S1-S2): a bundled set marked `bundledAgents` takes its routing from it,
   // so a one-line profile edit moves it and nothing else would notice. While the bundled prompts
@@ -206,7 +210,7 @@ describe("the claude profile holds the intended model split", () => {
     });
   });
 
-  test("every bundled hunter runs sonnet at xhigh effort", () => {
+  test("the bundled general hunter runs opus at high effort, any other hunter sonnet at xhigh", () => {
     // Pinned against the spec so the loop below cannot pass vacuously: a glob
     // that matched nothing, or a hunter renamed out of the prefix, would
     // otherwise leave it asserting over an empty or shrunken list.
@@ -217,12 +221,17 @@ describe("the claude profile holds the intended model split", () => {
     );
     expect(specHunters().length).toBeGreaterThan(0);
 
+    expect(specHunters().map((a) => a.key)).toEqual(["general"]);
     for (const hunter of specHunters()) {
       expect(
         profileRoute(CLAUDE_PROFILE, `hunter.${resolveSpecialty(hunter)}`),
         `${hunter.key} route`,
-      ).toEqual({ model: "claude:sonnet-latest", effort: "xhigh" });
+      ).toEqual({ model: "claude:opus-latest", effort: "high" });
     }
+    expect(profileRoute(CLAUDE_PROFILE, "hunter.lifecycle")).toEqual({
+      model: "claude:sonnet-latest",
+      effort: "xhigh",
+    });
   });
 
   // The engine mandates a codegraph_explore call whenever the run's registry
@@ -288,10 +297,7 @@ const EMBEDDED_ROOT = "/$bunfs/root";
 function compiledAssets(
   bundledAgentFiles: Record<string, string> = {
     "review-refuter.md": `${EMBEDDED_ROOT}/review-refuter-qkhw7k00.md`,
-    "deep-review-logic.md": `${EMBEDDED_ROOT}/deep-review-logic-zz11xx00.md`,
-    "deep-review-security.md": `${EMBEDDED_ROOT}/deep-review-security-s3c9kk00.md`,
-    "deep-review-resilience.md": `${EMBEDDED_ROOT}/deep-review-resilience-mm41xx00.md`,
-    "deep-review-reliability.md": `${EMBEDDED_ROOT}/deep-review-reliability-7bq9dd00.md`,
+    "deep-review-general.md": `${EMBEDDED_ROOT}/deep-review-general-g3n9kk00.md`,
   },
 ): EngineAssets {
   return {
@@ -505,6 +511,6 @@ describe("the cli shell over a bundled resolution", () => {
         resolution,
         localReviewSpec().agents.map((a) => a.file),
       ),
-    ).rejects.toThrow(/deep-review-reliability\.md/);
+    ).rejects.toThrow(/deep-review-general\.md/);
   });
 });

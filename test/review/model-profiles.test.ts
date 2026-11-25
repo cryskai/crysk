@@ -5,6 +5,7 @@
 // injected through PipelineInput.modelProfile.
 import { describe, expect, test } from "bun:test";
 import type { ModelProfile } from "#model/profiles";
+import { localReviewSpec } from "#review/preflight";
 import {
   BASELINE_CASES,
   type Baseline,
@@ -21,8 +22,14 @@ const FIXTURE_PROFILE: ModelProfile = {
     refuter: { model: "claude:haiku-latest", effort: "low" },
     judge: { model: "claude:opus-latest", effort: "medium" },
   },
-  hunters: { logic: { model: "claude:haiku-latest", effort: "max" } },
+  hunters: { general: { model: "claude:haiku-latest", effort: "max" } },
 };
+
+// The product spec has one hunter, so a second one (same prompt, another key)
+// keeps the profile's hunter role observable beside the per-hunter override.
+const TWO_HUNTERS = localReviewSpec({
+  CRYSK_EXTRA_HUNTERS: "second:deep-review-general.md",
+});
 
 function caseNamed(name: string) {
   const found = BASELINE_CASES.find((c) => c.name === name);
@@ -60,13 +67,12 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
     const baseline = await captureBaseline(caseNamed("zero-config"), {
       bundledAgents: true,
       modelProfile: FIXTURE_PROFILE,
+      spec: TWO_HUNTERS,
     });
     expect(routing(baseline)).toEqual({
       // Per-hunter override, then the profile's hunter role.
-      "hunter-logic": ["haiku", "haiku", "max", "haiku", "max"],
-      "hunter-reliability": ["opus", "opus", "medium", "opus", "medium"],
-      "hunter-resilience": ["opus", "opus", "medium", "opus", "medium"],
-      "hunter-security": ["opus", "opus", "medium", "opus", "medium"],
+      "hunter-general": ["haiku", "haiku", "max", "haiku", "max"],
+      "hunter-second": ["opus", "opus", "medium", "opus", "medium"],
       "refuter-F001": ["haiku", "haiku", "low", "haiku", "low"],
       // The judge reads the profile, still held to the measured list.
       "materiality-F001": ["opus", "opus", "medium", "opus", "medium"],
@@ -78,7 +84,9 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
       consolidate: ["sonnet", "sonnet", "high", "sonnet", "high"],
       summarizer: ["haiku", "haiku", "high", "haiku", "high"],
     });
-    const plan = baseline.plan?.steps.find((s) => s.stepKey === "hunter-logic");
+    const plan = baseline.plan?.steps.find(
+      (s) => s.stepKey === "hunter-general",
+    );
     expect(plan?.logicalIdentity).toBe("claude:haiku-latest");
   });
 
@@ -87,17 +95,21 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
       {
         name: "fixture-models",
         models: {
-          "hunter.logic": ["claude:sonnet-latest"],
+          "hunter.general": ["claude:sonnet-latest"],
           default: ["claude:sonnet-latest"],
         },
       },
-      { bundledAgents: true, modelProfile: FIXTURE_PROFILE },
+      { bundledAgents: true, modelProfile: FIXTURE_PROFILE, spec: TWO_HUNTERS },
     );
     const r = routing(baseline);
     // The model is the entry's; with no entry effort the step keeps the
     // effort its prompt seat holds, which on the bundled set is the profile's.
-    expect(r["hunter-logic"]?.slice(0, 3)).toEqual(["sonnet", "haiku", "max"]);
-    expect(r["hunter-security"]?.[0]).toBe("sonnet");
+    expect(r["hunter-general"]?.slice(0, 3)).toEqual([
+      "sonnet",
+      "haiku",
+      "max",
+    ]);
+    expect(r["hunter-second"]?.[0]).toBe("sonnet");
     expect(r["refuter-F001"]?.[0]).toBe("sonnet");
     expect(r.scout).toBeUndefined();
   });
@@ -106,9 +118,10 @@ describe("a fixture profile on the bundled set (S1, S3)", () => {
     const baseline = await captureBaseline(caseNamed("cli-model"), {
       bundledAgents: true,
       modelProfile: FIXTURE_PROFILE,
+      spec: TWO_HUNTERS,
     });
     const r = routing(baseline);
-    for (const step of ["hunter-logic", "hunter-security", "refuter-F001"]) {
+    for (const step of ["hunter-general", "hunter-second", "refuter-F001"]) {
       expect(r[step]?.[0]).toBe("haiku");
     }
   });
@@ -120,30 +133,16 @@ describe("a user prompt set's frontmatter outranks the profile (S3)", () => {
       modelProfile: FIXTURE_PROFILE,
     });
     const r = routing(baseline);
-    expect(r["hunter-logic"]).toEqual([
+    expect(r["hunter-general"]).toEqual([
       "haiku",
       "haiku",
       "medium",
       "haiku",
       "medium",
     ]);
-    expect(r["hunter-resilience"]?.slice(0, 3)).toEqual([
-      "sonnet",
-      "sonnet",
-      "max",
-    ]);
-    expect(r["refuter-F001"]?.slice(0, 3)).toEqual([
-      "sonnet",
-      "sonnet",
-      "medium",
-    ]);
-    // `model: haiku` with no `effort:`: the active profile's hunter effort,
-    // where the `claude` profile gives xhigh (the baseline fixture).
-    expect(r["hunter-reliability"]?.slice(0, 3)).toEqual([
-      "haiku",
-      "haiku",
-      "medium",
-    ]);
+    // `model: sonnet` with no `effort:`: the active profile's refuter effort,
+    // where the `claude` profile gives high (the baseline fixture).
+    expect(r["refuter-F001"]?.slice(0, 3)).toEqual(["sonnet", "sonnet", "low"]);
   });
 
   test("the unmarked bundled directory is read as a user set: its frontmatter wins", async () => {
@@ -151,11 +150,7 @@ describe("a user prompt set's frontmatter outranks the profile (S3)", () => {
       modelProfile: FIXTURE_PROFILE,
     });
     const r = routing(baseline);
-    expect(r["hunter-security"]?.slice(0, 3)).toEqual([
-      "sonnet",
-      "sonnet",
-      "xhigh",
-    ]);
+    expect(r["hunter-general"]?.slice(0, 3)).toEqual(["opus", "opus", "high"]);
     expect(r["refuter-F001"]?.slice(0, 3)).toEqual(["opus", "opus", "high"]);
   });
 });

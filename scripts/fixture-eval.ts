@@ -118,11 +118,7 @@ if (!hit) {
 
 // (3) Run-dir artifacts: every hunter that ran must have left its templated
 // system prompt and its delivered draft next to each other in steps/.
-const hunters = [
-  "reliability",
-  "resilience",
-  ...(skillOutput.parity_hunter_fired ? ["parity"] : []),
-];
+const hunters = ["general"];
 for (const hunter of hunters) {
   for (const suffix of ["system.md", "draft.json"]) {
     const artifact = path.join(
@@ -166,7 +162,7 @@ for (const hunter of hunters) {
 let routeFingerprint: string | null = null;
 try {
   routeFingerprint = (
-    await readPipelineRouteIdentity(fixture.runDir, "hunter-reliability")
+    await readPipelineRouteIdentity(fixture.runDir, "hunter-general")
   ).routeFingerprint;
 } catch (error) {
   failures.push(`no route identity: ${(error as Error).message}`);

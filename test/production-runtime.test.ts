@@ -1873,11 +1873,11 @@ describe("production runtime PR1", () => {
         env: { PATH: tmpDir },
       });
 
-      // The doctor plan's two default Claude steps, plus one per model
+      // The doctor plan's two default Claude steps, which share one binding
+      // (the general hunter and the refuter both run opus), plus one per model
       // `models` names (production-runtime.ts buildDoctorRoutePlan).
-      expect(reports.length).toBe(3);
+      expect(reports.length).toBe(2);
       expect([...reports].map((report) => report.backend).sort()).toEqual([
-        "claude-code",
         "claude-code",
         "opencode",
       ]);

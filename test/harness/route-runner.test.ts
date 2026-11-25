@@ -114,10 +114,10 @@ describe("buildHarnessRoutePlan", () => {
 
   test("a full config's hunter.<key> roles do not refuse a refuter-only plan", () => {
     const models = {
-      "hunter.logic": ["claude:haiku-latest"],
+      "hunter.general": ["claude:haiku-latest"],
       refuter: ["claude:sonnet-latest"],
     };
-    // Production refuses this for a plan without the logic hunter.
+    // Production refuses this for a plan without the general hunter.
     expect(() =>
       buildResolvedRoutePlan({
         agents: [REFUTER],

@@ -34,10 +34,17 @@ resolves against the directory of the file that named it, so a global `./prompts
 then the bundled prompts.
 
 **A custom `agents_dir` mirrors the default set.** The directory has to hold exactly the prompt files the
-review runs, no more and no fewer, so a hunter is never dropped or left unused in silence. When a hunter joins
-the default set, a directory copied from an older default stops with
-`the spec references "deep-review-security.md" but the dir does not have it`: copy that file from
-`prompts/default/` of the installed package into the directory. The security hunter joined on 2026-11-15.
+review runs, no more and no fewer, so a hunter is never dropped or left unused in silence. The default set is
+`deep-review-general.md` and `review-refuter.md`: one general hunter replaced the four specialist hunters
+(logic, reliability, resilience, security) on 2026-11-26. A directory copied from an older default, with no
+`deep-review-general.md`, still runs: the general hunter uses the bundled prompt, every other prompt still comes
+from the directory, and one warning says so (`<dir> has no deep-review-general.md: the general hunter runs the
+bundled prompt. To use your own, copy prompts/default/deep-review-general.md from the crysk package into that
+directory and edit it`). The four old files may stay; each one is
+ignored with one warning (`deep-review-logic.md is ignored: the general hunter replaced the logic, reliability,
+resilience and security hunters`), as is a leftover `deep-review-parity.md`. To keep running one of the old
+hunters beside the general one, keep your own copy of its prompt in the directory and name it with
+`CRYSK_EXTRA_HUNTERS=logic:deep-review-logic.md`; the package no longer ships those prompts.
 
 **Old directory names.** The directories used to be `~/.prhero/` and `<repo>/.prhero/`, and the ignore file
 `.prheroignore`. Those are still read, for one version, when the new name does not exist. Nothing is moved for
@@ -99,10 +106,14 @@ A **profile** is a ready-made set of models for every role. Pick one in your per
 { "profile": "openai" }
 ```
 
-| Profile | Hunters | Refuter | Consolidate | Summary | Judge |
-| --- | --- | --- | --- | --- | --- |
-| `claude` (the default) | `claude:sonnet-latest`, `xhigh` | `claude:opus-latest`, `high` | `claude:sonnet-latest`, `high` | `claude:haiku-latest` | `claude:sonnet-latest` |
-| `openai` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.2-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6-luna` | `opencode:openai/gpt-6.1-terra` |
+| Profile | General hunter | Other hunters | Refuter | Consolidate | Summary | Judge |
+| --- | --- | --- | --- | --- | --- | --- |
+| `claude` (the default) | `claude:opus-latest`, `high` | `claude:sonnet-latest`, `xhigh` | `claude:opus-latest`, `high` | `claude:sonnet-latest`, `high` | `claude:haiku-latest` | `claude:sonnet-latest` |
+| `openai` | `opencode:openai/gpt-6.2-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `xhigh` | `opencode:openai/gpt-6.2-sol`, `high` | `opencode:openai/gpt-6.1-terra`, `high` | `opencode:openai/gpt-6-luna` | `opencode:openai/gpt-6.1-terra` |
+
+The general hunter is the only hunter a review runs; "other hunters" are the ones you add with
+`CRYSK_EXTRA_HUNTERS`. On `claude` it runs the model it was measured on. On `openai` Sol 6.2 is a choice made
+without a measurement: no OpenAI run of the general hunter has been measured yet.
 
 - `profile` is person-only, like `models`: it chooses the model and the bill, so a repo file cannot set it. An
   unknown value is refused and the message names the known profiles.
@@ -132,7 +143,7 @@ it runs on, in the order to try them:
 {
   "models": {
     "default": ["claude:sonnet-latest"],
-    "hunter.logic": ["opencode:deepseek/deepseek-v4-flash", "claude:sonnet-latest"],
+    "hunter.general": ["opencode:deepseek/deepseek-v4-flash", "claude:opus-latest"],
     "refuter": [{ "model": "claude:opus-latest", "effort": "max" }],
     "summary": ["claude:haiku-latest"]
   }
@@ -143,19 +154,19 @@ it runs on, in the order to try them:
 
 | Role | Steps | When the role is not listed |
 | --- | --- | --- |
-| `hunter.<key>` | one hunter: `hunter.logic`, `hunter.reliability`, `hunter.resilience`, `hunter.security`, or the key of a hunter in your own prompt set | `default` |
+| `hunter.<key>` | one hunter: `hunter.general`, the review's only bundled hunter, or the key of a hunter you add (`CRYSK_EXTRA_HUNTERS`) | `default` |
 | `refuter` | the refuter, and the re-review verifier and the CI adjudicator, which run as its agent | `default` |
 | `consolidate` | the consolidation pass after the refuter | `default` |
 | `summary` | the summarizer | `default` |
 | `judge` | the materiality judge (`materiality_gate`) | the profile's judge (`claude:sonnet-latest` on `claude`), never `default` |
 | `default` | every role above that is not listed, the judge excepted | the model the step's prompt declares |
 
-`models.scout` is still accepted and ignored, with a warning (`models.scout is ignored: the scout stage was removed`): the scout stage no longer exists, so no step runs under that role. `models.hunter.parity` is accepted and ignored the same way, with one warning (`models.hunter.parity is ignored: the parity hunter was removed`), because no review has a parity hunter.
+`models.scout` is still accepted and ignored, with a warning (`models.scout is ignored: the scout stage was removed`): the scout stage no longer exists, so no step runs under that role. `models.hunter.parity` is accepted and ignored the same way, with one warning (`models.hunter.parity is ignored: the parity hunter was removed`), because no review has a parity hunter. So are `models.hunter.logic`, `hunter.reliability`, `hunter.resilience` and `hunter.security`, one warning each (`models.hunter.logic is ignored: the general hunter replaced the logic, reliability, resilience and security hunters`): a stored profile that still names them keeps working, and the general hunter takes `models.hunter.general`.
 
 With no `models` at all, each step runs its [profile](#profiles)'s model. Under `claude`, the default, that is the model its prompt declares, as `claude:<alias>-latest`: the
-bundled hunters and the consolidation pass declare `sonnet`, the refuter `opus`, the summarizer
+general hunter declares `opus`, the consolidation pass `sonnet`, the refuter `opus`, the summarizer
 `haiku`. A `hunter.<key>` that no hunter of the review declares fails when the plan is built, so a typo never
-goes unnoticed (`hunter.parity` is the one exception, above).
+goes unnoticed (the roles of removed hunters, above, are the exception).
 
 **Which model a step runs on**, highest first: `--model` (one model for every step but the judge, no
 fallbacks); `models[role]`; `models.default`; the prompt's own model.
@@ -206,7 +217,7 @@ it. Without `models.judge` it runs on the profile's judge: `claude:sonnet-latest
 `routing` is gone. A config that still has it, in either file, is refused with the form that replaces it:
 
 ```
-~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`
+~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`
 ```
 
 There is no `logical`, `gateway`, `modelSnapshot`, `disabled` or `allowSpend` any more: the role says which
@@ -234,7 +245,7 @@ the **provider** fails it, the step moves to the next one:
 ```json
 {
   "models": {
-    "hunter.logic": ["opencode:openai/gpt-5", "claude:sonnet-latest"],
+    "hunter.general": ["opencode:openai/gpt-5", "claude:opus-latest"],
     "default": ["claude:sonnet-latest", "claude:opus-latest"]
   }
 }
@@ -330,18 +341,19 @@ prompt set still runs at an explicit level:
 
 | Role | Default | Why |
 | --- | --- | --- |
-| Hunter | `xhigh` | Measured on a real 280-line PR (Sonnet 5.5, 4 hunters x 2 replicates): `medium` found something in 0 of 8 runs, `high` in 6 of 8, `xhigh` in 8 of 8 and all 4 known bugs, `max` in 7 of 8 at about four times the wall time. |
+| Hunter | `xhigh` | Measured on a real 280-line PR (Sonnet 5.5, 4 hunters x 2 replicates): `medium` found something in 0 of 8 runs, `high` in 6 of 8, `xhigh` in 8 of 8 and all 4 known bugs, `max` in 7 of 8 at about four times the wall time. The bundled general hunter is the exception: it declares `effort: high` on Opus, the route it was measured on. |
 | Refuter | `high` | `medium` refuted a pre-labeled known blocker in 3 of 4 verdicts on real findings, which deletes it; `high` kept it as latent in 3 of 4. |
 | Summarizer, rereview verifier | `high` | Unmeasured, so they keep what every model ran at before the 5.5 family. |
 
-The bundled prompts declare `effort: xhigh` on the hunters and `effort: high` on the refuter. The rereview
+The bundled prompts declare `effort: high` on the general hunter and on the refuter. The rereview
 verifier runs as the refuter's agent, so it follows the refuter's frontmatter for model, effort and tools.
 What it is told is the engine's own text, not the refuter's: it answers whether an earlier finding's defect is
 still present at the current head, which is not the refuter's question. A custom `review-refuter.md` therefore
 no longer changes the verifier's instructions, only its model, effort and tools. There is no CLI flag or
 environment variable that overrides effort, and the child process never inherits `CLAUDE_CODE_EFFORT_LEVEL`
-from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, measured on past runs; the
-engine prints no estimate, and the Crysk platform shows what a review actually cost.
+from your shell. `xhigh` hunters cost roughly three times what `high` did per hunter, measured on past runs. The general hunter
+replaced four such hunters; on the Martian benchmark it cost about a third of what the four did. The engine
+prints no estimate, and the Crysk platform shows what a review actually cost.
 
 **Consolidation.** After the refuter, one more step reads the findings about to be posted and rewrites the
 list so each comment states one defect: findings that describe the same defect are merged into one
@@ -497,7 +509,7 @@ $ crysk config
   agents_dir                default (unset)
   ...
   models                    global default=claude:sonnet-latest,
-                            hunter.logic=opencode:deepseek/deepseek-v4-flash,claude:opus-latest
+                            hunter.general=opencode:deepseek/deepseek-v4-flash,claude:opus-latest
                             (effort high)
   credentials               global  claude=subscription,api_key
   max_changed_lines         global  3000

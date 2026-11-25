@@ -9,7 +9,6 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PipelineInput } from "#review/pipeline";
-import { AGENT_NAMES } from "#review/prompt-set";
 import type { ReviewSpec } from "#review/spec";
 
 export interface PlantedFixture {
@@ -127,47 +126,28 @@ export function main(volume: number): string {
 // Bodies keep the {{PRIORS}}/{{GOTCHAS}} anchors so the driver-side
 // templating path is exercised for real.
 
-const RELIABILITY_AGENT = `---
-name: deep-review-reliability
-description: Fixture reliability hunter — value-contract tracing across the diff.
+// One hunter, as the product runs one: the general hunter. Its mandate keeps
+// the planted defect in reach (a value whose contract changed across the
+// diff, and the edge handling that hides it).
+const GENERAL_AGENT = `---
+name: deep-review-general
+description: Fixture general hunter — value contracts and edge handling in the diff.
 model: haiku
 tools: Read, Grep, Glob
 ---
 
-# Fixture Reliability Hunter
+# Fixture General Hunter
 
-You review one diff in a small TypeScript repo. Your single mandate: trace
-every VALUE that crosses the diff boundary — where it originates, its units,
-and its numeric domain — and follow it to every consumer in the repo.
+You review one diff in a small TypeScript repo. Trace every VALUE that crosses
+the diff boundary — where it originates, its units, and its numeric domain —
+and follow it to every consumer in the repo. Also check error and edge
+handling: inputs outside the expected domain (negative, NaN, out of range),
+silent clamps that hide bad data, and failure paths that swallow a wrong value.
 
 Report a finding whenever a producer and a consumer disagree about a value's
 contract (units, scale, or range), even when each side looks locally correct.
 State the contradiction concretely: what the producer now emits, and what the
 consumer still assumes.
-
-Codebase gotchas (authoritative):
-{{GOTCHAS}}
-
-Suspicion priors — start here:
-{{PRIORS}}
-
-You are read-only: inspect, never edit. If no value crosses the diff with a
-contract mismatch, report no findings.
-`;
-
-const RESILIENCE_AGENT = `---
-name: deep-review-resilience
-description: Fixture resilience hunter — error and edge handling in the diff.
-model: haiku
-tools: Read, Grep, Glob
----
-
-# Fixture Resilience Hunter
-
-You review one diff in a small TypeScript repo. Your mandate: error and edge
-handling only — inputs outside the expected domain (negative, NaN, out of
-range), silent clamps that hide bad data, and failure paths that swallow a
-wrong value instead of surfacing it.
 
 Codebase gotchas (authoritative):
 {{GOTCHAS}}
@@ -198,10 +178,10 @@ code, never against the claim's own confidence. Return the mandated results
 JSON with exactly one verdict per submitted finding id.
 `;
 
-const AGENT_SOURCES: Record<(typeof AGENT_NAMES)[number], string> = {
-  "deep-review-reliability": RELIABILITY_AGENT,
-  "deep-review-resilience": RESILIENCE_AGENT,
-  "review-refuter": REFUTER_AGENT,
+// Basename -> source: the files FIXTURE_SPEC names, and nothing else.
+const AGENT_SOURCES: Record<string, string> = {
+  "deep-review-general.md": GENERAL_AGENT,
+  "review-refuter.md": REFUTER_AGENT,
 };
 
 export const GOTCHAS = `- Volume values are 0-1 gain fractions everywhere in this codebase.
@@ -248,8 +228,8 @@ export async function buildPlantedFixture(): Promise<PlantedFixture> {
   const diffPath = path.join(base, "diff.patch");
   await writeFile(diffPath, await git(repoDir, ["diff", baseSha, headSha]));
 
-  for (const name of AGENT_NAMES) {
-    await writeFile(path.join(agentsDir, `${name}.md`), AGENT_SOURCES[name]);
+  for (const [file, source] of Object.entries(AGENT_SOURCES)) {
+    await writeFile(path.join(agentsDir, file), source);
   }
 
   const gotchasPath = path.join(base, "gotchas.md");
@@ -284,13 +264,14 @@ export async function buildPlantedFixture(): Promise<PlantedFixture> {
 
 const PROMPTS_DIR = path.join(import.meta.dir, "..", "prompts");
 
-// The two hunters and the refuter this fixture writes a prompt for. Passed
+// The product's agents: the general hunter and the refuter, the files this
+// fixture writes a prompt for and the ones `--agents prompts/default` carries,
+// so the eval runs the product prompts when pointed at them. Passed
 // explicitly: without a spec the pipeline wires the lab's legacy default, which
-// names a parity hunter whose prompt this fixture no longer carries.
+// names hunters whose prompts neither set carries.
 const FIXTURE_SPEC: ReviewSpec = {
   agents: [
-    { key: "reliability", file: "deep-review-reliability.md", role: "hunter" },
-    { key: "resilience", file: "deep-review-resilience.md", role: "hunter" },
+    { key: "general", file: "deep-review-general.md", role: "hunter" },
     { key: "refuter", file: "review-refuter.md", role: "refuter" },
   ],
 };
@@ -325,7 +306,7 @@ export function fixtureEvalPipelineInput(
     ...(options.model ? { model: options.model } : {}),
     summarizer: { promptPath: path.join(PROMPTS_DIR, "summarizer.md") },
     spec: FIXTURE_SPEC,
-    parityTriggerPaths: [], // 2 hunters, cheapest run
+    parityTriggerPaths: [], // the spec has no conditional hunter
     suspicionPriors: [
       {
         path: "src/volume.ts",

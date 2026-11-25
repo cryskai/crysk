@@ -50,7 +50,7 @@ describe("resolveEngineAssets", () => {
     expect(existsSync(assets.verifierPromptPath)).toBe(true);
 
     // Bundled agent files all exist on disk
-    expect(Object.keys(assets.bundledAgentFiles).length).toBe(5);
+    expect(Object.keys(assets.bundledAgentFiles).length).toBe(2);
     for (const [logicalName, filePath] of Object.entries(
       assets.bundledAgentFiles,
     )) {
@@ -173,7 +173,7 @@ describe("resolveEngineAssets", () => {
     }
   });
 
-  test("manifest-loaded set satisfies localReviewSpec() (all six logical names, nothing extra)", () => {
+  test("manifest-loaded set satisfies localReviewSpec() (every logical name, nothing extra)", () => {
     const assets = resolveEngineAssets();
     const spec = localReviewSpec();
     const specFiles = spec.agents.map((a) => a.file).sort();

@@ -139,11 +139,13 @@ describe("models by role (S1)", () => {
   });
 
   test("a hunter role the spec does not declare is refused, naming its hunters", () => {
+    // Not `hunter.security`: that role belongs to a hunter the general hunter
+    // replaced, so it is ignored with a warning instead (S3).
     expect(() =>
-      plan({ models: { "hunter.security": ["claude:opus-latest"] } }),
+      plan({ models: { "hunter.nonesuch": ["claude:opus-latest"] } }),
     ).toThrow(
       new InvalidModelError(
-        "models.hunter.security names no hunter in this review: its hunters are reliability, logic, parity",
+        "models.hunter.nonesuch names no hunter in this review: its hunters are reliability, logic, parity",
       ),
     );
   });

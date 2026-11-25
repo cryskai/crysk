@@ -2,19 +2,19 @@
 
 **[crysk.dev](https://crysk.dev)** · [docs](https://crysk.dev/docs/) · [npm](https://www.npmjs.com/package/crysk) · [skills](https://skills.sh/cryskai/crysk)
 
-A multi-agent PR-review engine. Specialty hunter agents fan out in parallel over a repo checkout and
-its diff, a mechanical dedupe merges their drafts, an adversarial refuter challenges every severe
-finding whose evidence is inferred rather than read end to end, and deterministic code — never a
-model — assigns blocking/advisory tiers.
+A multi-agent PR-review engine. A hunter agent sweeps every hunk of a repo checkout and its diff, a
+mechanical dedupe merges its drafts, an adversarial refuter challenges every severe finding whose
+evidence is inferred rather than read end to end, and deterministic code — never a model — assigns
+blocking/advisory tiers.
 
 Its measured profile, stated up front: **high precision, narrow coverage**. What it reports is
-almost always real (13% false positives measured). Its hunters check value contracts across the diff
-(units, domain, conversions, what consumers assume), resilience (lookup and dedupe keys, retries and
-locks, CI guards, test isolation), local logic errors, and trust boundaries (outside input reaching a
-query, command, file path or server-side request; missing or misplaced permission checks; a hunter
-added 2026-11-15, after that measurement);
-stale state, races and component lifecycle have no dedicated hunter since 2026-11-08. It says nothing
-about style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
+almost always real (13% false positives measured, with the earlier specialist hunters). Since
+2026-11-26 one general hunter does the sweep: local logic errors, state and failure handling (races,
+retries, swallowed errors, stale derived state), contracts between parts (shapes, units, lookup keys,
+shared components) and trust boundaries (outside input reaching a query, command, file path or
+server-side request; missing or misplaced permission checks), following each changed value to its
+callers and consumers. On the Martian benchmark it cost about a third of the four specialist hunters
+it replaced, with higher precision. It says nothing about style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
 disclaimer, and nothing it prints blocks a merge. In CI its commit status is a gate by default: require the
 `crysk` check in branch protection, and blocking findings block the merge. `mode: advisory` keeps that check
 green.

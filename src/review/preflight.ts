@@ -645,6 +645,31 @@ const SCOUT_REMOVED = "is ignored: the scout stage was removed";
 // custom prompt directory are still accepted, do nothing, and say so once.
 export const PARITY_REMOVED = "is ignored: the parity hunter was removed";
 
+// The four specialist hunters left the product the same way, replaced by the
+// one general hunter (single-hunter-integration S3): a `models.hunter.<key>`
+// role a stored profile still carries and a leftover prompt in a custom prompt
+// directory are accepted, do nothing, and say so once. The platform sends
+// stored profiles and `v0` floats, so an error here would fail every review
+// of a profile that still names one of them.
+export const SPECIALISTS_REPLACED =
+  "is ignored: the general hunter replaced the logic, reliability, resilience and security hunters";
+
+// What a removed hunter's leftovers print after their own name, by hunter key.
+const REMOVED_HUNTER_NOTES: Readonly<Record<string, string>> = {
+  parity: PARITY_REMOVED,
+  logic: SPECIALISTS_REPLACED,
+  reliability: SPECIALISTS_REPLACED,
+  resilience: SPECIALISTS_REPLACED,
+  security: SPECIALISTS_REPLACED,
+};
+
+// The one warning line for a removed hunter's `models` role (routing.ts,
+// removedHunterRoles returns only those roles).
+export function removedHunterRoleWarning(role: string): string {
+  const note = REMOVED_HUNTER_NOTES[role.slice("hunter.".length)];
+  return `models.${role} ${note ?? PARITY_REMOVED}`;
+}
+
 // The dollar limits moved to the Crysk platform (platform-owned-cost S7), so
 // the flags that set them are retired the same way: `--budget-usd` set a
 // ceiling, and `--billing` only chose whether setup wrote one.
@@ -2051,21 +2076,22 @@ const RETIRED_AGENT_HINTS: Record<string, string> = {
     "CRYSK_EXTRA_HUNTERS=lifecycle:deep-review-lifecycle.md",
 };
 
-// The other direction: a hunter that JOINED the default spec. A custom set
-// copied from an older default lacks its file, and "the dir does not have it"
-// alone reads as a broken install after an upgrade.
-const ADDED_AGENT_HINTS: Record<string, string> = {
-  "deep-review-security.md":
-    "; the security hunter was added to the default spec: copy " +
-    "prompts/default/deep-review-security.md from the crysk package into " +
-    "this directory",
-};
+// A hunter that JOINS the default spec needs no hint here: a custom set copied
+// from an older default that lacks the general hunter's file runs the bundled
+// one with a warning instead (withBundledGeneralPrompt), so the missing-file
+// problem below never names it on a review.
 
 // Prompt files of a removed hunter that a custom set copied from an older
-// default may still carry. Not a problem and never used: the directory check
-// lets them pass and says so once instead (ignoredAgentFileWarnings).
-const IGNORED_AGENT_FILES: ReadonlySet<string> = new Set([
-  "deep-review-parity.md",
+// default may still carry, with the note each one prints. Not a problem and
+// never used: the directory check lets them pass and says so once instead
+// (ignoredAgentFileWarnings). A spec that names one of them (an old hunter
+// kept with CRYSK_EXTRA_HUNTERS and the user's own copy) uses it instead.
+const IGNORED_AGENT_FILES: ReadonlyMap<string, string> = new Map([
+  ["deep-review-parity.md", PARITY_REMOVED],
+  ["deep-review-logic.md", SPECIALISTS_REPLACED],
+  ["deep-review-reliability.md", SPECIALISTS_REPLACED],
+  ["deep-review-resilience.md", SPECIALISTS_REPLACED],
+  ["deep-review-security.md", SPECIALISTS_REPLACED],
 ]);
 
 // One warning per ignored file that is present and that no agent of the spec
@@ -2076,8 +2102,10 @@ function ignoredAgentFileWarnings(
   presentFiles: readonly string[],
 ): string[] {
   return [...IGNORED_AGENT_FILES]
-    .filter((file) => presentFiles.includes(file) && !specFiles.includes(file))
-    .map((file) => `${file} ${PARITY_REMOVED}`);
+    .filter(
+      ([file]) => presentFiles.includes(file) && !specFiles.includes(file),
+    )
+    .map(([file, note]) => `${file} ${note}`);
 }
 
 export function agentsDirProblems(
@@ -2090,8 +2118,7 @@ export function agentsDirProblems(
   for (const file of named) {
     if (!present.has(file)) {
       problems.push(
-        `the spec references "${file}" but the dir does not have it` +
-          (ADDED_AGENT_HINTS[file] ?? ""),
+        `the spec references "${file}" but the dir does not have it`,
       );
     }
   }
@@ -2153,29 +2180,80 @@ export function resolveAgentsDir(
   return resolution;
 }
 
+// The agent files a directory holds, by basename.
+async function scanAgentFiles(dir: string): Promise<Set<string>> {
+  const present = new Set<string>();
+  for (const pattern of AGENT_FILE_PATTERNS) {
+    for await (const entry of new Bun.Glob(pattern).scan({ cwd: dir })) {
+      present.add(entry);
+    }
+  }
+  return present;
+}
+
+// The general hunter's prompt file, the one hunter of the product spec.
+export const GENERAL_AGENT_FILE = "deep-review-general.md";
+
+// A custom directory copied from a default older than the general hunter has
+// no `deep-review-general.md`. Warn, never error (single-hunter-integration
+// S3, as the parity retirement did): the platform's stored setups and a
+// floating `v0` would otherwise fail every review of such a directory. The
+// general hunter runs the bundled prompt; every other agent file still comes
+// from the directory, and the two-way check (preflightAgentsDir) still runs
+// over everything the directory holds. The resolution becomes a file map, the
+// form agentFilePath and the pipeline already read for the bundled set; its
+// `source` is unchanged, so the directory's frontmatter still routes its own
+// agents, and its prompt set keeps the directory's name.
+export async function withBundledGeneralPrompt(
+  agents: AgentsDirResolution,
+  specFiles: readonly string[],
+  bundledGeneralPath: string | undefined,
+): Promise<{ agents: AgentsDirResolution; warnings: string[] }> {
+  if (
+    agents.kind !== "dir" ||
+    bundledGeneralPath === undefined ||
+    !specFiles.includes(GENERAL_AGENT_FILE)
+  ) {
+    return { agents, warnings: [] };
+  }
+  const present = await scanAgentFiles(agents.dir);
+  if (present.has(GENERAL_AGENT_FILE)) return { agents, warnings: [] };
+  const files: Record<string, string> = {};
+  for (const file of present) files[file] = path.join(agents.dir, file);
+  files[GENERAL_AGENT_FILE] = bundledGeneralPath;
+  return {
+    agents: {
+      ...agents,
+      kind: "bundled",
+      files,
+      promptSet:
+        agents.promptSet ??
+        (agents.dir.replace(/\/+$/, "").split("/").pop() || agents.dir),
+    },
+    warnings: [
+      `${agents.dir} has no ${GENERAL_AGENT_FILE}: the general hunter runs ` +
+        "the bundled prompt. To use your own, copy " +
+        `prompts/default/${GENERAL_AGENT_FILE} from the crysk package into ` +
+        "that directory and edit it",
+    ],
+  };
+}
+
 // Returns the warnings of the check that passed (ignoredAgentFileWarnings), for
 // the caller to print: this function is pure of any output channel.
 export async function preflightAgentsDir(
   agents: Pick<AgentsDirResolution, "kind" | "dir" | "files">,
   specFiles: string[],
 ): Promise<string[]> {
-  const present = new Set<string>();
-  if (agents.kind === "bundled") {
-    // The manifest's keys ARE the present set, and there is nothing to scan:
-    // Bun.Glob().scan() over the embedded root THROWS ENOENT rather than
-    // yielding nothing, so a bundled set reaching the glob below is not a
-    // degraded check but a crash. Key ORDER is irrelevant here — unlike the
-    // fingerprint, agentsDirProblems compares sets bidirectionally.
-    for (const file of Object.keys(agents.files ?? {})) present.add(file);
-  } else {
-    for (const pattern of AGENT_FILE_PATTERNS) {
-      for await (const entry of new Bun.Glob(pattern).scan({
-        cwd: agents.dir,
-      })) {
-        present.add(entry);
-      }
-    }
-  }
+  // A bundled set: the manifest's keys ARE the present set, and there is
+  // nothing to scan: Bun.Glob().scan() over the embedded root THROWS ENOENT
+  // rather than yielding nothing, so a bundled set reaching the glob is not a
+  // degraded check but a crash. Key ORDER is irrelevant here — unlike the
+  // fingerprint, agentsDirProblems compares sets bidirectionally.
+  const present =
+    agents.kind === "bundled"
+      ? new Set(Object.keys(agents.files ?? {}))
+      : await scanAgentFiles(agents.dir);
   const problems = agentsDirProblems(specFiles, [...present]);
   if (problems.length > 0) {
     throw new CliError(
@@ -2226,11 +2304,14 @@ function parseExtraHunters(read: BrandEnvValue | undefined): AgentSpec[] {
   });
 }
 
-// Local mode's wiring: the four unconditional hunters and the refuter.
-// Deliberately NOT defaultReviewSpec() — that one omits the logic and security
-// hunters and keeps the conditional parity hunter, which is the lab's legacy
-// wiring and no longer part of the product. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
-// set, which validateReviewSpec enforces.
+// Local mode's wiring: the one general hunter and the refuter. It replaced
+// the four specialist hunters (logic, reliability, resilience, security) on
+// 2026-11-26: measured on the Martian benchmark at about a third of their cost
+// with higher precision (single-hunter-integration S1). Deliberately NOT
+// defaultReviewSpec() — that one keeps the lab's legacy wiring (two of the
+// specialists and the conditional parity hunter), no longer part of the
+// product. Hunter keys stay inside the findings-schema v1.1.0 specialty set,
+// which validateReviewSpec enforces.
 //
 // `env` is injectable (defaults to `process.env`) so PRHERO_EXTRA_HUNTERS can
 // be exercised offline without mutating the real environment — same pattern
@@ -2241,14 +2322,7 @@ export function localReviewSpec(
 ): ReviewSpec {
   return {
     agents: [
-      {
-        key: "reliability",
-        file: "deep-review-reliability.md",
-        role: "hunter",
-      },
-      { key: "resilience", file: "deep-review-resilience.md", role: "hunter" },
-      { key: "logic", file: "deep-review-logic.md", role: "hunter" },
-      { key: "security", file: "deep-review-security.md", role: "hunter" },
+      { key: "general", file: "deep-review-general.md", role: "hunter" },
       // The boundary, not the three throws: assertBasenameOnly inside
       // parseExtraHunters is a fourth usage throw of the same parse (T2d-1).
       ...withUsageClass({ kind: "config-parse", source: "extra-hunters" }, () =>
@@ -2489,7 +2563,7 @@ export function parseGlobalConfig(
 // per-person checks, so a repo file gets this message too and not "routing is
 // a per-person key", which would send the operator to move a dead key.
 export const REMOVED_ROUTING_MESSAGE =
-  '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`';
+  '`routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`';
 
 // `summary.model` is gone too (L6 item 1), except for the one value `crysk
 // init` used to write, which is accepted with a warning (parseSummaryConfig).

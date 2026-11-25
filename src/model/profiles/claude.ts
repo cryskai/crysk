@@ -23,6 +23,13 @@ export const CLAUDE_PROFILE: ModelProfile = Object.freeze({
     summary: Object.freeze({ model: "claude:haiku-latest", effort: "high" }),
     judge: Object.freeze({ model: "claude:sonnet-latest", effort: "high" }),
   }),
+  // The general hunter, the product's only one, runs Opus at high effort: the
+  // route it was measured on (Martian benchmark, 2026-11-24..25), read off its
+  // prompt's frontmatter. `roles.hunter` stays as it was, so a hunter the spec
+  // adds (CRYSK_EXTRA_HUNTERS) and ROLE_EFFORT (catalog.ts) keep their route.
+  hunters: Object.freeze({
+    general: Object.freeze({ model: "claude:opus-latest", effort: "high" }),
+  }),
   // The judge was measured on Claude sonnet and opus through the Claude Code
   // CLI (same bundled prompt, same bar; both passed, lab bench/METRICS.md
   // 2026-11-01); sonnet was chosen because it costs half for a difference

@@ -61,7 +61,8 @@ export interface BaselineCase {
 
 // The six inputs S8 names. The custom set differs from the bundled values on
 // purpose, and one of its files names a model but no effort, so "a user set's
-// frontmatter still wins over the profile" is observable.
+// frontmatter still wins over the profile" and "an omitted effort falls to the
+// profile" are both observable.
 export const BASELINE_CASES: readonly BaselineCase[] = [
   { name: "zero-config" },
   { name: "models-default", models: { default: ["claude:opus-latest"] } },
@@ -69,10 +70,8 @@ export const BASELINE_CASES: readonly BaselineCase[] = [
   {
     name: "custom-agents-dir",
     customFrontmatter: {
-      "deep-review-logic.md": { model: "haiku", effort: "medium" },
-      "deep-review-reliability.md": { model: "haiku" },
-      "deep-review-resilience.md": { model: "sonnet", effort: "max" },
-      "review-refuter.md": { model: "sonnet", effort: "medium" },
+      "deep-review-general.md": { model: "haiku", effort: "medium" },
+      "review-refuter.md": { model: "sonnet" },
     },
   },
   {
@@ -103,7 +102,7 @@ const PATCH = [
 // the refuter, and the refuter step's routing is part of what these cases pin.
 function finding(): DraftFinding {
   return {
-    id: "REL-1",
+    id: "GEN-1",
     category: 1,
     path: "src/app.ts",
     line: 1,
@@ -115,7 +114,7 @@ function finding(): DraftFinding {
       "the cached width is scaled by the device pixel ratio twice, so the " +
       "rendered element ends up at double its intended size on retina screens",
     proof_refs: ["src/app.ts:1"],
-    hunter: "reliability",
+    hunter: "general",
     hops_used: 0,
     hop_trail: [],
     dedupe_key: "src/app.ts:run:1",
@@ -211,7 +210,7 @@ class RecordingRunner implements StepRunner {
       spec,
       system: await readFile(spec.systemPromptPath, "utf8").catch(() => ""),
     });
-    if (spec.name === "hunter-reliability") {
+    if (spec.name === "hunter-general") {
       return ok(spec, { findings: [finding()] });
     }
     if (spec.name.startsWith("hunter-")) return ok(spec, { findings: [] });
@@ -219,7 +218,7 @@ class RecordingRunner implements StepRunner {
       return ok(spec, {
         results: [
           {
-            finding_id: spec.name.replace(/^refuter-?/, "") || "REL-1",
+            finding_id: spec.name.replace(/^refuter-?/, "") || "GEN-1",
             outcome: "corroborated",
             proof_refs: [],
           },
@@ -295,15 +294,17 @@ function rewriteFrontmatter(
   return `${head.join("\n")}${raw.slice(end)}`;
 }
 
-// `extra` reaches PipelineInput as is: the profile tests set `bundledAgents`
-// and `modelProfile` through it, and the prompt-set tests (S4) the agent file
-// map and the engine-owned stage inputs. The baseline fixtures never use it.
+// `extra` reaches PipelineInput as is: the profile tests set `bundledAgents`,
+// `modelProfile` and a spec with a second hunter through it, and the
+// prompt-set tests (S4) the agent file map and the engine-owned stage inputs.
+// The baseline fixtures never use it.
 export async function captureBaseline(
   c: BaselineCase,
   extra: Pick<
     PipelineInput,
     | "bundledAgents"
     | "modelProfile"
+    | "spec"
     | "agentFiles"
     | "summarizer"
     | "consolidate"

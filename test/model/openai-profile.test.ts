@@ -14,7 +14,7 @@ import {
   planRoutes,
   type ResolvedRoutePlan,
 } from "#model/routing";
-import type { CliOptions } from "#review/preflight";
+import { type CliOptions, localReviewSpec } from "#review/preflight";
 import {
   buildCliRoutePlan,
   claudeAuthorityRequired,
@@ -62,6 +62,12 @@ describe("the openai profile (S2)", () => {
     expect(pick("hunter.logic")).toEqual([
       "opencode:openai/gpt-6.1-terra",
       "xhigh",
+    ]);
+    // The general hunter runs Sol 6.2 at high, by Juanma's choice, not a
+    // measurement ("no utilices terra, usa sol 6.2").
+    expect(pick("hunter.general")).toEqual([
+      "opencode:openai/gpt-6.2-sol",
+      "high",
     ]);
     expect(pick("refuter")).toEqual(["opencode:openai/gpt-6.2-sol", "high"]);
     expect(pick("consolidate")).toEqual([
@@ -111,6 +117,18 @@ describe("a zero-config openai plan (S4, S5, S9)", () => {
     expect(byKey.has("scout")).toBe(false);
     expect(byKey.get("summarizer")?.modelSnapshot).toBe("gpt-6-luna");
     expect(byKey.get("summarizer")?.modelVariant).toBeUndefined();
+  });
+
+  test("the product spec's general hunter runs Sol 6.2 at high, not Terra", async () => {
+    const plan = await openaiPlan({ spec: localReviewSpec({}) });
+    const hunters = plan.steps.filter((s) => s.role === "hunter");
+    expect(hunters.map((s) => s.stepKey)).toEqual(["hunter-general"]);
+    expect(hunters[0]?.route).toMatchObject({
+      backend: "opencode",
+      provider: "openai",
+      modelSnapshot: "gpt-6.2-sol",
+      modelVariant: "high",
+    });
   });
 
   test("the judge joins on Terra, Juanma's choice without measurement (S9, L8)", async () => {

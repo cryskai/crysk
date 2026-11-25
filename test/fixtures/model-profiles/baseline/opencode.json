@@ -13,70 +13,22 @@
       "effortApplied": true,
       "tools": [],
       "systemPromptSha256": "a51e3b718bff5625db54b8eae43d913618d21c38e3c163be2dae4f33e22136a8",
-      "promptSha256": "0231a5d9fc6810a4c8b69eebd5d53404e6432825c28db77cafd107dce2902c0d",
+      "promptSha256": "72b0eb2c4a5f153c12eb313ee14b7fcd4dc96e852590c4ccc379f1dbcb2d82da",
       "cliModel": null,
       "argv": null
     },
     {
-      "name": "hunter-logic",
+      "name": "hunter-general",
       "backend": "opencode",
       "provider": "openai",
-      "model": "sonnet",
+      "model": "opus",
       "modelSnapshot": "gpt-x",
       "modelVariant": "high",
-      "effort": "xhigh",
+      "effort": "high",
       "fallbackEfforts": null,
       "effortApplied": true,
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "071a2c6d0778691d86a87fabb66c4190209a850f81168f04116b0b98a9478053",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": null,
-      "argv": null
-    },
-    {
-      "name": "hunter-reliability",
-      "backend": "opencode",
-      "provider": "openai",
-      "model": "sonnet",
-      "modelSnapshot": "gpt-x",
-      "modelVariant": "high",
-      "effort": "xhigh",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "308f58f753ec22dfdb1db0227ec181a9ca0924b7cc4f2c11b55fdeb64ba3c094",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": null,
-      "argv": null
-    },
-    {
-      "name": "hunter-resilience",
-      "backend": "opencode",
-      "provider": "openai",
-      "model": "sonnet",
-      "modelSnapshot": "gpt-x",
-      "modelVariant": "high",
-      "effort": "xhigh",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "17b5d27af28b24b52201b23693557303ae116ed08735ccd27b3f8cb411f0e46b",
-      "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
-      "cliModel": null,
-      "argv": null
-    },
-    {
-      "name": "hunter-security",
-      "backend": "opencode",
-      "provider": "openai",
-      "model": "sonnet",
-      "modelSnapshot": "gpt-x",
-      "modelVariant": "high",
-      "effort": "xhigh",
-      "fallbackEfforts": null,
-      "effortApplied": true,
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
-      "systemPromptSha256": "56dd17bf00ff4ecef4e428ede0b6ea435e36977dae96e23d7234314691827e5b",
+      "systemPromptSha256": "d56b1f86f40bd36bd66e171e34894f6268482c5a4ea0cf60a72501a9d1f1ba0a",
       "promptSha256": "94a088aa10142a75923c1183f30be1e8e51a3b485885afcda91dd58b7df47176",
       "cliModel": null,
       "argv": null
@@ -115,55 +67,10 @@
     }
   ],
   "plan": {
-    "routeFingerprint": "fe1d505b1dd93a842fbb05c4b6e11de22e47f120915643985c49138e861e0f18",
+    "routeFingerprint": "e02ed9c8bb7fde0effdc43cf4a033ba11a2414785d94fc97e1274d3d8bffcda2",
     "steps": [
       {
-        "stepKey": "hunter-reliability",
-        "role": "hunter",
-        "logicalIdentity": "opencode:openai/gpt-x",
-        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
-        "effort": "high",
-        "route": {
-          "backend": "opencode",
-          "provider": "openai",
-          "modelFamily": "gpt-x",
-          "modelSnapshot": "gpt-x",
-          "modelVariant": "high"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "hunter-resilience",
-        "role": "hunter",
-        "logicalIdentity": "opencode:openai/gpt-x",
-        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
-        "effort": "high",
-        "route": {
-          "backend": "opencode",
-          "provider": "openai",
-          "modelFamily": "gpt-x",
-          "modelSnapshot": "gpt-x",
-          "modelVariant": "high"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "hunter-logic",
-        "role": "hunter",
-        "logicalIdentity": "opencode:openai/gpt-x",
-        "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
-        "effort": "high",
-        "route": {
-          "backend": "opencode",
-          "provider": "openai",
-          "modelFamily": "gpt-x",
-          "modelSnapshot": "gpt-x",
-          "modelVariant": "high"
-        },
-        "fallbacks": null
-      },
-      {
-        "stepKey": "hunter-security",
+        "stepKey": "hunter-general",
         "role": "hunter",
         "logicalIdentity": "opencode:openai/gpt-x",
         "routeFingerprint": "977476b70c9d0ee36a3d97d43d4bff162973a43523bb3e38c3df0b89cc59c50e",
@@ -233,33 +140,9 @@
       "tools": []
     },
     {
-      "name": "hunter-logic",
+      "name": "hunter-general",
       "model": "gpt-x",
-      "effort": "xhigh",
-      "effort_applied": true,
-      "variant": "high",
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "hunter-reliability",
-      "model": "gpt-x",
-      "effort": "xhigh",
-      "effort_applied": true,
-      "variant": "high",
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "hunter-resilience",
-      "model": "gpt-x",
-      "effort": "xhigh",
-      "effort_applied": true,
-      "variant": "high",
-      "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]
-    },
-    {
-      "name": "hunter-security",
-      "model": "gpt-x",
-      "effort": "xhigh",
+      "effort": "high",
       "effort_applied": true,
       "variant": "high",
       "tools": ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"]

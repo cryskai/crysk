@@ -41,7 +41,7 @@ const INPUT_MODELS = JSON.stringify({
   default: ["opencode:openai/gpt-5"],
 });
 const ROUTING_GONE =
-  '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`';
+  '`routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`';
 
 interface Fixture {
   root: string;

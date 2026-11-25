@@ -288,8 +288,7 @@ describe("resolvePrPromptSetAndBudget — CI size limits", () => {
     });
     expect(step2.ciBillingMode).toBe("metered");
     expect(step2.ciRoleBilling?.get("refuter")).toBe(true);
-    expect(step2.ciRoleBilling?.get("hunter.logic")).toBe(false);
-    expect(step2.ciRoleBilling?.get("hunter.reliability")).toBe(false);
+    expect(step2.ciRoleBilling?.get("hunter.general")).toBe(false);
     expect(step2.ciRoleBilling?.get("summary")).toBe(false);
   });
 

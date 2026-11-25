@@ -1,21 +1,18 @@
-// The four bundled hunters carry one finding contract: what a finding
-// consists of, and what `severity`, `evidence_class` and `causal_disposition`
-// mean. It decides which findings are verified and which can block, so it
-// must say the same thing in every hunter. Until 2026-11-15 each prompt had
-// its own wording, and the copies had drifted into contradicting the engine
-// and each other.
+// The bundled hunter carries the finding contract: what a finding consists
+// of, and what `severity`, `evidence_class` and `causal_disposition` mean. It
+// decides which findings are verified and which can block. Until 2026-11-15
+// each of the four specialist hunters had its own wording, and the copies had
+// drifted into contradicting the engine and each other; the general hunter
+// that replaced them carries the same text byte for byte, and this file keeps
+// any hunter added to the bundle on it.
 
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const DIR = path.join(import.meta.dir, "..", "..", "prompts", "default");
-const HUNTERS = [
-  "deep-review-logic.md",
-  "deep-review-reliability.md",
-  "deep-review-resilience.md",
-  "deep-review-security.md",
-];
+const HUNTERS = ["deep-review-general.md"];
 
 // The section's body: from its heading to the first line that is not part of
 // the shared text (the next heading, or the hunter's own addendum).
@@ -31,9 +28,37 @@ async function contractOf(file: string): Promise<string> {
 }
 
 describe("the bundled hunters' finding contract", () => {
-  test("is the same text in all four hunters", async () => {
+  test("is the same text in every bundled hunter", async () => {
     const [first, ...rest] = await Promise.all(HUNTERS.map(contractOf));
     for (const other of rest) expect(other).toBe(first as string);
+  });
+
+  // The digest of the text the four specialist hunters carried after lever D,
+  // byte for byte. A change anywhere in the contract turns this red: change it
+  // on purpose, in every bundled hunter, and record it in PROVENANCE.md.
+  test("is the contract the four specialist hunters carried", async () => {
+    for (const file of HUNTERS) {
+      const digest = createHash("sha256")
+        .update(await contractOf(file))
+        .digest("hex");
+      expect(digest, file).toBe(
+        "1c3ee87c50166671e4cff6815d2f8ef7ae57116509785519ebfaac47ad4c1ccf",
+      );
+    }
+  });
+
+  // Lever D: a `deterministic` severe finding no longer reaches the refuter,
+  // so the contract says so, and the sentence it replaced is gone.
+  test("says which severe findings the second reviewer checks", async () => {
+    const contract = await contractOf(HUNTERS[0] as string);
+    expect(contract).toContain(
+      "Only `BLOCKER`\nand `CRITICAL` findings can block a merge. An `inferential` one is first checked by a second reviewer; a\n`deterministic` one blocks on your evidence alone, so mark it `deterministic` only when you read every link\nwith a tool.",
+    );
+    expect(contract).not.toContain("are checked by a second reviewer and");
+    for (const file of HUNTERS) {
+      const text = await readFile(path.join(DIR, file), "utf8");
+      expect(text).not.toContain("finding goes to an\nindependent reviewer");
+    }
   });
 
   test("defines every value the engine's tier rule reads", async () => {
