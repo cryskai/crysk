@@ -4,7 +4,8 @@
 
 A multi-agent PR-review engine. Specialty hunter agents fan out in parallel over a repo checkout and
 its diff, a mechanical dedupe merges their drafts, an adversarial refuter challenges every severe
-finding, and deterministic code — never a model — assigns blocking/advisory tiers.
+finding whose evidence is inferred rather than read end to end, and deterministic code — never a
+model — assigns blocking/advisory tiers.
 
 Its measured profile, stated up front: **high precision, narrow coverage**. What it reports is
 almost always real (13% false positives measured). Its hunters check value contracts across the diff

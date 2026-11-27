@@ -1321,8 +1321,9 @@ function findingHeaderLine(finding: Finding): string {
 }
 
 // `not_submitted` is the engine's word for "the refuter never saw this
-// finding" (every WARNING/SUGGESTION, and blockers on a truncated run). On a
-// PR comment that reads as a submission failure, so it renders as `unchecked`.
+// finding" (every WARNING/SUGGESTION, every deterministic BLOCKER/CRITICAL
+// since lever D, and the other blockers on a truncated run). On a PR comment
+// that reads as a submission failure, so it renders as `unchecked`.
 // Every other verdict renders verbatim, matching the ledger's vocabulary.
 function refuterLabel(verdict: RefuterVerdict): string {
   return verdict === "not_submitted" ? "unchecked" : verdict;

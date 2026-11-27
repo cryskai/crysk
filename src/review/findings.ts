@@ -614,6 +614,25 @@ export function isCausallyExempt(
   );
 }
 
+// Whether a finding is owed a refuter check: BLOCKER/CRITICAL and not
+// `deterministic`. Lever D (lab ledger, 2026-11-25): across seven Martian
+// benchmark arms the refuter changed the outcome of 3 of 146 deterministic
+// severe findings and none correctly, so the pipeline submits only these
+// (src/review/pipeline.ts Step 6). Every reader that has to know whether a
+// `not_submitted` verdict means a lost check reads THIS predicate — the
+// refuter leg, `finish()`'s `refuterCutShort` and the re-review gate's
+// release rule (src/rereview/state.ts) — so they cannot drift apart. The
+// pipeline passes a survivor's GROUP class (groupEvidenceClass in
+// src/review/dedupe.ts), because a survivor keeps only its winner's class.
+export function owesRefuterCheck(
+  finding: Pick<Finding, "severity" | "evidence_class">,
+): boolean {
+  return (
+    (finding.severity === "BLOCKER" || finding.severity === "CRITICAL") &&
+    finding.evidence_class !== "deterministic"
+  );
+}
+
 export function deriveTier(
   finding: Pick<
     Finding,
@@ -627,12 +646,14 @@ export function deriveTier(
   options: {
     // Whether a refuter check this finding was ENTITLED TO never got to
     // submit its verdict. NOT a synonym for "the run was truncated": the
-    // caller must have already established BOTH halves of that entitlement —
-    // a refuter was configured for this run AND the run ended early (pipeline
-    // ceiling / `run_status: "partial"`) rather than completing its legs.
-    // Those two are orthogonal, and the name says the conjunction so no future
-    // caller can satisfy it with truncation alone (src/review/pipeline.ts `finish()`
-    // is where the conjunction is computed, and says why).
+    // caller must have already established every part of that entitlement —
+    // a refuter was configured for this run, the finding is one the refuter
+    // leg submits (BLOCKER/CRITICAL and not `deterministic`, since lever D),
+    // AND the run ended early (pipeline ceiling / `run_status: "partial"`)
+    // rather than completing its legs. Those are orthogonal, and the name says
+    // the conjunction so no future caller can satisfy it with truncation alone
+    // (src/review/pipeline.ts `finish()` is where the conjunction is computed,
+    // and says why).
     // Defaults to FALSE on purpose: a caller that knows nothing about the
     // refuter's fate must never be able to demote by accident, so the fallback
     // is exactly today's behaviour.
@@ -655,7 +676,11 @@ export function deriveTier(
   // needed: the 2026-07-29 AudioTrimmer runs put 26 of 26 blocking findings in
   // that class, so the gate had nothing to act on. Only a POSITIVE downgrade
   // gets this power — `inconclusive` still blocks, mirroring the rule that
-  // `refuted` requires positive disproof. Silence is not a demotion.
+  // `refuted` requires positive disproof. Silence is not a demotion. Since
+  // lever D the pipeline no longer submits deterministic findings, so this
+  // ordering now matters only for a deterministic finding that carries a
+  // verdict from elsewhere (an artifact written before lever D, read back by
+  // re-review); it is kept so such a verdict still counts for what it says.
   if (finding.refuter_verdict === "downgraded-latent") return "advisory";
   // The blocking tier does not change the job's exit code: reviewExitCode
   // never reads findings (src/review/exit-code.ts, spec 2.1), and
@@ -663,13 +688,17 @@ export function deriveTier(
   // gate mode (the CI default, S4): there that status, which is the required
   // check, goes red on blocking findings. In advisory mode the tier buys only
   // the report's loudest register: the red badge, the "Blocking" section, and
-  // the headline count a human reads first. Either way the tier claims that an
-  // adversary looked and failed to knock the claim down, so the obligation is
-  // honesty about what was checked, and a gate may act on it.
+  // the headline count a human reads first. Either way the tier claims the
+  // defect is established: for an inferential finding, by an adversary that
+  // looked and failed to knock it down; for a deterministic one, by the
+  // hunter's own tool-read evidence, which since lever D (2026-11-25) the
+  // refuter no longer re-checks. The obligation is honesty about what was
+  // checked, and a gate may act on it.
   //
   // The demotion below
   // fires on a THREE-part condition, and every part is load-bearing:
-  //   1. a refuter was CONFIGURED for this run, so an adversarial check was
+  //   1. a refuter was CONFIGURED for this run and this finding is one its
+  //      leg submits (not `deterministic`), so an adversarial check was
   //      genuinely owed to this finding;
   //   2. the run was truncated, so that leg was refused admission
   //      (src/review/pipeline.ts §5.3) and never spawned; and
@@ -692,10 +721,18 @@ export function deriveTier(
   //     cut nothing short, because nothing was ever going to submit. Demoting
   //     it would empty blocking tier for every such user and undo the
   //     AudioTrimmer fix, which is exactly why part 1 exists.
-  //   - `not_submitted` on a COMPLETE run with a refuter configured cannot
-  //     occur — the leg either ran or was refused admission by truncation.
-  // An `inferential` finding needs no branch here: unrefuted, it is already
-  // advisory two lines down.
+  //   - `not_submitted` on a deterministic finding is the designed steady
+  //     state since lever D: the refuter leg never submits it, so no check was
+  //     owed and the caller passes false even on a truncated run. It blocks on
+  //     its own evidence, complete run or not.
+  //   - `not_submitted` on a COMPLETE run for a finding that WAS owed a check
+  //     cannot occur — the leg either ran or was refused admission by
+  //     truncation.
+  // With deterministic findings excluded by the caller, this branch decides no
+  // outcome the lines below would not: `insufficient` returned advisory above,
+  // and an unrefuted `inferential` finding is advisory on the last line. It
+  // stays as the explicit statement that a lost check never earns blocking
+  // tier, whatever a future caller passes.
   // Recording WHY the check is missing IN the artifact needs a new
   // `refuter_verdict` value, and that is a coordinated schema v1.1 bump with
   // the sibling lab (ROADMAP C2) — deliberately not this fix.

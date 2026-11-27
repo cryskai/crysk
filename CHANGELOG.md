@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Deterministic severe findings skip the refuter.** A `BLOCKER` or `CRITICAL` finding is no longer sent to the refuter when it and every duplicate merged into it have `evidence_class: "deterministic"`: it keeps `refuter_verdict: "not_submitted"` and is `blocking` on the hunter's evidence, also on a run the pipeline ceiling cut short. Across seven Martian benchmark arms the refuter changed the outcome of 3 of 146 such findings and none of the three correctly, while its correct refutations were all of inferential findings, which are still checked. This removes about half of the refuter steps, roughly 13% of a review's cost. The four bundled hunter prompts now say that a `deterministic` severe finding blocks on its evidence alone, and the refuter prompt says which findings reach it. On a re-review, such a finding re-found as pre-existing releases the earlier blocking finding at its spot, as a refuter-checked one did. On a run the pipeline ceiling cut short, such a finding now keeps `blocking` even though neither the refuter nor the materiality judge ran on it; before, it was demoted to advisory.
 - **The `openai` profile's refuter runs on `gpt-6.2-sol`.** It ran on `gpt-6.1-sol`, which GPT-6.2 Sol replaces. The other roles already run the newest Terra and Luna. To keep the previous model, set `models.refuter` to `opencode:openai/gpt-6.1-sol`.
 
 ### Fixed

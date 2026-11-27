@@ -81,6 +81,7 @@ import {
 import {
   type DedupedSurvivor,
   type DedupeLoser,
+  groupEvidenceClass,
   mergeAndDedupe,
 } from "#review/dedupe";
 import {
@@ -98,6 +99,7 @@ import {
   deriveTier,
   type Finding,
   type Hunter,
+  owesRefuterCheck,
   type RefuterVerdict,
   type RunSummary,
   type SkillOutput,
@@ -2472,66 +2474,66 @@ async function execute(
       : adjudicationQueue.map((subject) => failedOutcome(subject));
   }
 
-  // Step 6 — one refuter batch: every BLOCKER/CRITICAL survivor, whatever its
-  // evidence_class. Severity alone is the test, because severity alone decides
-  // whether a finding can reach blocking tier, and the refuter is what earns
-  // that tier its credibility. (Blocking tier gates no merge — see deriveTier
-  // in src/review/findings.ts. It is the report's loudest register, which is exactly
-  // why an unchecked claim must not wear it.)
+  // Step 6 — one refuter batch: every BLOCKER/CRITICAL survivor unless it and
+  // every draft folded into it are `deterministic` (groupOwesRefuterCheck,
+  // below). Severity decides whether a finding can reach
+  // blocking tier at all; evidence_class decides whether the refuter is what
+  // earns it that tier. (Blocking tier is what gate mode turns the commit
+  // status red on — see deriveTier in src/review/findings.ts.)
   //
-  // This used to also require `evidence_class === "inferential"`, on the theory
-  // that a code-provable claim needs no adversary. The 2026-07-29 AudioTrimmer
-  // runs killed that theory with data: 26 of 26 blocking findings across six
-  // reviews were `deterministic`, so the batch was empty every single time and
-  // the refuter never ran — the loudest tier in the report had no adversarial
-  // check behind it at all. The label was not wrong (those defects
-  // really were locally provable); the filter was.
-  const batch = survivors.filter(
-    (s) => s.severity === "BLOCKER" || s.severity === "CRITICAL",
-  );
+  // The filter has swung both ways, each time on data. It first required
+  // `evidence_class === "inferential"`; the 2026-07-29 AudioTrimmer runs put
+  // 26 of 26 blocking findings in the deterministic class, so the batch was
+  // always empty and severity alone became the test. Lever D (lab ledger,
+  // 2026-11-25) measured what that bought: across seven Martian benchmark
+  // arms the refuter changed the outcome of 3 of 146 deterministic
+  // BLOCKER/CRITICAL findings, none of them correctly (it deleted two real
+  // bugs the human goldens confirm and downgraded a third), while its correct
+  // refutations were all inferential. Skipping the deterministic class removes
+  // roughly half of the refuter steps, about 13% of a run's cost, and keeps the
+  // check where it earns its keep. A deterministic severe finding keeps
+  // `not_submitted` and blocks on the hunter's evidence alone, which the
+  // hunter prompts now say in so many words.
+  // A survivor's own class is its dedupe winner's alone, so eligibility reads
+  // the whole folded group (groupEvidenceClass, PR #610 R003): a mixed group
+  // is submitted exactly as before lever D.
+  const batch = survivors.filter((s) => groupOwesRefuterCheck(s, deduped));
   // A spec with no refuter (allowed: "at most one") skips the leg entirely —
   // configured absence, not failure: every finding stays not_submitted (so
   // inferential BLOCKER/CRITICAL findings can never reach blocking tier) and
   // the run stays complete.
   // §5.3 admission for the refuter leg — say what it actually leaves standing.
   // `finish()` reads a survivor missing from `state.verdicts` as
-  // `not_submitted`, so on a ceiling-truncated run EVERY severe survivor
-  // carries that verdict with no adversarial refutation behind it. This used
-  // to ship at blocking tier — the dominant case, not a corner: the
-  // AudioTrimmer data in the batch comment above put 26 of 26 blocking
-  // findings in the deterministic class, which `deriveTier` blocked on unless
-  // the refuter POSITIVELY returned `downgraded-latent`.
+  // `not_submitted`, so on a ceiling-truncated run every survivor this leg
+  // would have submitted carries that verdict with no adversarial refutation
+  // behind it.
   //
-  // The open product question — whether a truncated run may report blocking
-  // tier at all — is CLOSED as of 2026-08-27, and in two halves.
-  //
-  // Half one, mechanical: it may not, WHEN a refuter was configured and
-  // therefore a check really was lost. `finish()` conjoins exactly that
-  // (`ceilingFired && refuterConfigured`) and hands it to `deriveTier`
-  // (src/review/findings.ts) as `refuterCutShort`, which demotes only the cut-short +
-  // `not_submitted` pair, so skipping THIS leg can no longer dress an
+  // Whether a truncated run may report blocking tier for such a finding was
+  // closed on 2026-08-27: it may not, WHEN a refuter was configured and the
+  // finding was owed its check, because then a check really was lost.
+  // `finish()` conjoins exactly that (`ceilingFired && refuterConfigured &&
+  // groupOwesRefuterCheck(survivor, deduped)`) and hands it to `deriveTier`
+  // (src/review/findings.ts) as `refuterCutShort`, which demotes only the
+  // cut-short + `not_submitted` pair, so skipping THIS leg can never dress an
   // unchecked finding in the report's loudest register. A verdict that DID
   // arrive before the ceiling still counts for what it says, and a spec that
   // never configured a refuter is untouched by any of it — the ceiling firing
   // on its hunters cut nothing short.
   //
-  // Half two, the judgement call that was left hanging: a `deterministic`
-  // finding on a truncated run KEEPS blocking tier. It is locally provable, so
-  // it is true whether or not the clock ran out; the report already states the
-  // run was partial; and suppressing real signal because of a timer would cost
-  // more than the badge is worth. The decision rests on blocking tier gating
-  // no merge — the question read as far weightier while the surrounding
-  // comments wrongly claimed it stopped one, which is the whole reason it sat
-  // open. Revisit this only if that ever stops being true.
+  // A `deterministic` severe finding on a truncated run KEEPS blocking tier.
+  // Since lever D it is never owed a refuter check, so the ceiling cut nothing
+  // of its short: it blocks on the hunter's evidence exactly as it would on a
+  // complete run, and the report already states the run was partial.
+  // (Before lever D the same finding WAS owed a check and was demoted here.)
   //
   // Still true, and still not closed by any of it: the run is marked `partial`
   // so a consumer can see it was truncated, and the artifact records only the
   // fallback verdict, never WHY the check is missing. Distinguishing "no
-  // refuter configured" from "the refuter never got to run" in the artifact
-  // needs a new `refuter_verdict` value — a coordinated schema v1.1 bump with
-  // the sibling lab (ROADMAP C2), not this gate's to make.
-  // Pinned by "§13 — a ceiling-truncated run demotes its unrefuted
-  // deterministic BLOCKER to advisory" in test/pipeline.test.ts.
+  // refuter configured", "not owed a check" and "the refuter never got to
+  // run" in the artifact needs a new `refuter_verdict` value — a coordinated
+  // schema bump with the sibling lab (ROADMAP C2), not this gate's to make.
+  // Pinned by the two "§13 — a ceiling-truncated run ..." tests in
+  // test/review/pipeline.test.ts.
   if (batch.length > 0 && refuterAgent && !ceilingAborted(deps, state)) {
     emit(deps, {
       kind: "refuter-started",
@@ -3773,6 +3775,19 @@ interface TieredFindings {
     | { kind: "applied"; repairs: number; findingsOut: number };
 }
 
+// owesRefuterCheck over a survivor's folded group rather than its winner
+// alone (groupEvidenceClass in src/review/dedupe.ts). The submission filter and
+// `refuterCutShort` both read this, so a mixed group is owed the check in both.
+function groupOwesRefuterCheck(
+  survivor: DedupedSurvivor,
+  deduped: readonly DedupeLoser[],
+): boolean {
+  return owesRefuterCheck({
+    severity: survivor.severity,
+    evidence_class: groupEvidenceClass(survivor, deduped),
+  });
+}
+
 function tierFindings(
   state: RunState,
   survivors: readonly DedupedSurvivor[],
@@ -3822,12 +3837,29 @@ function tierFindings(
         // Pinned by "a CEILING-truncated run with NO refuter configured still
         // blocks" below.
         //
-        // Both values are settled by the time finish() reads them: the ceiling
-        // sets its flag inside its own timer callback, before aborting and
-        // before this function is reached, precisely so a run mid-`finish()`
-        // cannot read it as false; `refuterConfigured` is set at spec
-        // validation, before any leg and long before a survivor exists.
-        { refuterCutShort: state.ceilingFired && state.refuterConfigured },
+        // AND `groupOwesRefuterCheck(survivor, …)`, because a configured
+        // refuter is owed only to the findings its leg submits, and this reads
+        // the same predicate the leg did. A severe group whose every draft is
+        // `deterministic` never reaches it (lever D), so on a truncated run it
+        // lost no check and keeps the tier its evidence earns. Pinned by "§13 —
+        // a ceiling-truncated run keeps its deterministic BLOCKER blocking"
+        // below; a mixed group was owed the check and is demoted as before
+        // lever D ("… demotes a mixed-evidence group's deterministic winner"). For an inferential or insufficient finding this conjunct is
+        // true and the run is demoted as before — though deriveTier already
+        // makes either advisory without a corroborated verdict.
+        //
+        // All three values are settled by the time finish() reads them: the
+        // ceiling sets its flag inside its own timer callback, before aborting
+        // and before this function is reached, precisely so a run
+        // mid-`finish()` cannot read it as false; `refuterConfigured` is set at
+        // spec validation, before any leg and long before a survivor exists;
+        // the survivor's class is fixed at dedupe.
+        {
+          refuterCutShort:
+            state.ceilingFired &&
+            state.refuterConfigured &&
+            groupOwesRefuterCheck(survivor, state.deduped ?? []),
+        },
       ),
     });
   }
@@ -4230,10 +4262,14 @@ function fillRereviewProvenance(
   // The priors the gate count releases through a materiality demotion, read
   // off the same findings and gate rows the count reads. Recorded here so both
   // posting roads re-tier them in the state block: --pr --post reads this
-  // object, and post --from reads it back from pipeline.json.
+  // object, and post --from reads it back from pipeline.json. The folded
+  // drafts go in too, the same list the count reads as debug.deduped[]
+  // (src/pr/publish-outcome.ts), so a deterministic `not_submitted` survivor
+  // releases here exactly when it releases there (PR #610, R003).
   const released = materialityReleasedIds(
     state.finalFindings ?? [],
     assembled.gateRows,
+    state.deduped ?? [],
   );
   const filled: RereviewProvenance = {
     ...base,

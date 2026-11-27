@@ -14,6 +14,11 @@
 // step's entries and the plan's route fingerprint (a plan with one step fewer)
 // moved; every other step's request and route are byte-identical.
 //
+// Re-captured on 2026-11-25 after lever D edited the four hunter prompts and
+// the refuter's eligibility sentence: only the system prompt hashes of those
+// five steps moved; the harness finding became inferential so the refuter
+// step it pins still runs, and its request is byte-identical.
+//
 // To re-capture (only on purpose, and only on a commit whose behavior is the
 // intended baseline): CRYSK_WRITE_PROFILES_BASELINE=1 bun test <this file>,
 // then `./node_modules/.bin/biome format --write` over the fixture directory.

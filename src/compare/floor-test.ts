@@ -139,15 +139,36 @@ export interface CaseScore {
   case_id: number;
   pr: number;
   type: FloorCaseType;
-  // THE GATE (§3.11): a refuter-CORROBORATED finding at the site.
+  // THE GATE (§3.11): a finding at the site that survived scrutiny — one the
+  // refuter CORROBORATED, or, since lever D (2026-11-25), a `deterministic`
+  // one the refuter never saw (`not_submitted`) that still lands in the
+  // blocking tier on the hunter's own evidence (isHit).
   hit: boolean;
   // The diagnostic beside it: any finding at the site, whatever the refuter
   // said. Reported separately and never folded into `hit`, because the gap
   // between the two is a statement about the REFUTER, and an arm that finds
   // the defect and then refutes it away has failed differently from an arm
-  // that never looked. A result it cannot see cannot be attributed.
+  // that never looked. A result it cannot see cannot be attributed. A
+  // deterministic finding the refuter never saw is not such a gap, which is
+  // why it counts as a hit when it blocks.
   found: boolean;
   hits: FloorHit[];
+}
+
+// The gate for one finding. `corroborated` is §3.11 as written, with no tier
+// condition, as before. A deterministic severe finding is not submitted to the
+// refuter (lever D), so its `not_submitted` is a catch, not a gap — but only
+// when it still blocks: advisory means something demoted it (a ceiling cut
+// short the check its folded group was owed, or the PR did not cause it).
+function isHit(
+  finding: Pick<Finding, "refuter_verdict" | "evidence_class" | "tier">,
+): boolean {
+  if (finding.refuter_verdict === "corroborated") return true;
+  return (
+    finding.refuter_verdict === "not_submitted" &&
+    finding.evidence_class === "deterministic" &&
+    finding.tier === "blocking"
+  );
 }
 
 function atSite(
@@ -181,21 +202,20 @@ export function scoreRun(
   return cases
     .filter((c) => c.pr === doc.pr)
     .map((floorCase) => {
-      const hits = findings
-        .filter((f) => atSite(f, floorCase, window))
-        .map((f) => ({
-          finding_id: f.id,
-          path: f.path,
-          line: f.line,
-          severity: f.severity,
-          ...(f.tier === undefined ? {} : { tier: f.tier }),
-          refuter_verdict: f.refuter_verdict,
-        }));
+      const atThisSite = findings.filter((f) => atSite(f, floorCase, window));
+      const hits = atThisSite.map((f) => ({
+        finding_id: f.id,
+        path: f.path,
+        line: f.line,
+        severity: f.severity,
+        ...(f.tier === undefined ? {} : { tier: f.tier }),
+        refuter_verdict: f.refuter_verdict,
+      }));
       return {
         case_id: floorCase.id,
         pr: floorCase.pr,
         type: floorCase.type,
-        hit: hits.some((h) => h.refuter_verdict === "corroborated"),
+        hit: atThisSite.some(isHit),
         found: hits.length > 0,
         hits,
       };

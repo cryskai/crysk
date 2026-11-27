@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PriorRecord } from "#rereview/classify";
 import type { RereviewProvenance } from "#rereview/prepare";
-import { unresolvedBlockingCount } from "#rereview/state";
+import { type GateRow, unresolvedBlockingCount } from "#rereview/state";
 import type { DraftFinding, HunterDraft, RefuterResult } from "#review/drafts";
 import {
   mergeRunEnvelope,
@@ -1031,7 +1031,7 @@ describe("engine-owned effort", () => {
     "hunter-reliability": (spec) =>
       ok(spec, {
         findings: [
-          draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+          draft({ severity: "BLOCKER", evidence_class: "inferential" }),
         ],
       }),
     refuter: (spec) =>
@@ -1388,7 +1388,7 @@ describe("the removed scout stage", () => {
           spec,
           {
             findings: [
-              draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+              draft({ severity: "BLOCKER", evidence_class: "inferential" }),
             ],
           },
           {},
@@ -1449,7 +1449,7 @@ describe("the removed scout stage", () => {
           spec,
           {
             findings: [
-              draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+              draft({ severity: "BLOCKER", evidence_class: "inferential" }),
             ],
           },
           {},
@@ -1559,7 +1559,8 @@ describe("refuter", () => {
 
   test("skips entirely when nothing reaches BLOCKER/CRITICAL", async () => {
     // WARNING + SUGGESTION: neither can reach blocking tier, so neither needs the
-    // gate. Severity is now the whole eligibility test (ROADMAP A2).
+    // gate. Severity is the first half of the eligibility test (ROADMAP A2);
+    // the evidence class is the second (lever D, the tests below).
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) =>
         ok(spec, {
@@ -1585,18 +1586,18 @@ describe("refuter", () => {
     expect(result.skillOutput.run_status).toBe("complete");
   });
 
-  // ROADMAP A2, and the reason the whole item was re-scoped. Under the old
-  // `inferential`-only filter this finding sailed into blocking tier with zero
-  // adversarial scrutiny — and on the 2026-07-29 AudioTrimmer runs that was
-  // not an edge case but the entire population: 26 of 26 blocking findings
-  // were deterministic, so the refuter never ran once across six reviews.
-  test("submits a deterministic BLOCKER — the gate sees everything that can block", async () => {
-    let submitted: Array<Record<string, unknown>> = [];
+  // Lever D (lab ledger, 2026-11-25): across seven Martian benchmark arms the
+  // refuter changed the outcome of 3 of 146 deterministic severe findings and
+  // none of the three correctly, so a deterministic BLOCKER/CRITICAL no longer
+  // reaches it. The refuter script below would corroborate anything, so a
+  // `refuter-F001` step, or a verdict other than `not_submitted`, is exactly
+  // what a regressed filter would produce.
+  test("a deterministic CRITICAL skips the refuter and blocks on its own evidence", async () => {
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) =>
         ok(spec, {
           findings: [
-            draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+            draft({ severity: "CRITICAL", evidence_class: "deterministic" }),
           ],
         }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
@@ -1607,28 +1608,126 @@ describe("refuter", () => {
           ],
         } satisfies RefuterResult),
     });
-    const input = await makeInput();
-    const result = await runPipeline(input, { runner });
-    expect(runner.specs.map((s) => s.name)).toContain("refuter-F001");
-    submitted = (await Bun.file(
-      path.join(input.runDir, "steps", "refuter-batch.json"),
-    ).json()) as Array<Record<string, unknown>>;
-    expect(submitted.length).toBe(1);
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(
+      runner.specs.filter((s) => s.name.startsWith("refuter")),
+    ).toHaveLength(0);
+    expect(result.perAgent.refuter).toBeUndefined();
+    expect(result.skillOutput.run_status).toBe("complete");
+    expect(result.skillOutput.findings).toHaveLength(1);
     expect(result.skillOutput.findings[0]?.refuter_verdict).toBe(
-      "corroborated",
+      "not_submitted",
     );
     expect(result.skillOutput.findings[0]?.tier).toBe("blocking");
   });
 
-  // The unwired-code answer: a real defect nothing can execute yet is neither
-  // deleted (that was the G6 mistake) nor merge-blocking. It lands advisory,
-  // and it survives in findings[] where a human can still read it.
-  test("downgraded-latent keeps a deterministic BLOCKER but demotes it to advisory", async () => {
+  // The other side of the same filter: an inferential severe finding is where
+  // the refuter's refutations were right, so it still gets one step, and its
+  // tier follows the verdict that step returns.
+  for (const [outcome, tier] of [
+    ["corroborated", "blocking"],
+    ["inconclusive", "advisory"],
+  ] as const) {
+    test(`an inferential CRITICAL still reaches the refuter — ${outcome} lands ${tier}`, async () => {
+      const runner = new FakeStepRunner({
+        "hunter-reliability": (spec) =>
+          ok(spec, {
+            findings: [
+              draft({ severity: "CRITICAL", evidence_class: "inferential" }),
+            ],
+          }),
+        "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+        refuter: (spec) =>
+          ok(spec, {
+            results: [{ finding_id: "F001", outcome, proof_refs: [] }],
+          } satisfies RefuterResult),
+      });
+      const result = await runPipeline(await makeInput(), { runner });
+      expect(runner.specs.map((s) => s.name)).toContain("refuter-F001");
+      expect(result.skillOutput.findings[0]?.refuter_verdict).toBe(outcome);
+      expect(result.skillOutput.findings[0]?.tier).toBe(tier);
+    });
+  }
+
+  // Only the deterministic class is skipped: an `insufficient` severe finding
+  // is still submitted, and it stays advisory whatever the refuter says.
+  test("an insufficient BLOCKER is still submitted and stays advisory", async () => {
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) =>
         ok(spec, {
           findings: [
-            draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+            draft({ severity: "BLOCKER", evidence_class: "insufficient" }),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: (spec) =>
+        ok(spec, {
+          results: [
+            { finding_id: "F001", outcome: "corroborated", proof_refs: [] },
+          ],
+        } satisfies RefuterResult),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(runner.specs.map((s) => s.name)).toContain("refuter-F001");
+    expect(result.skillOutput.findings[0]?.tier).toBe("advisory");
+  });
+
+  test("a mixed batch submits only the inferential finding", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            inferentialBlocker("REL-1", 10),
+            draft({
+              id: "REL-2",
+              line: 20,
+              symbol: "sym20",
+              severity: "BLOCKER",
+              evidence_class: "deterministic",
+              claim: BLOCKER_CLAIMS[20] as string,
+              dedupe_key: "src/app.ts:sym20:1",
+            }),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: (spec) =>
+        ok(spec, {
+          results: [
+            {
+              finding_id: spec.name.replace("refuter-", ""),
+              outcome: "corroborated",
+              proof_refs: [],
+            },
+          ],
+        } satisfies RefuterResult),
+    });
+    const input = await makeInput();
+    const result = await runPipeline(input, { runner });
+    const batch = (await Bun.file(
+      path.join(input.runDir, "steps", "refuter-batch.json"),
+    ).json()) as Array<Record<string, unknown>>;
+    expect(batch.map((b) => b.location)).toEqual(["src/app.ts:10"]);
+    expect(
+      runner.specs.filter((s) => s.name.startsWith("refuter-")),
+    ).toHaveLength(1);
+    const byClass = new Map(
+      result.skillOutput.findings.map((f) => [f.evidence_class, f] as const),
+    );
+    expect(byClass.get("inferential")?.refuter_verdict).toBe("corroborated");
+    expect(byClass.get("deterministic")?.refuter_verdict).toBe("not_submitted");
+    expect(byClass.get("deterministic")?.tier).toBe("blocking");
+  });
+
+  // The unwired-code answer: a real defect nothing can execute yet is neither
+  // deleted (that was the G6 mistake) nor merge-blocking. It lands advisory,
+  // and it survives in findings[] where a human can still read it. The
+  // finding is inferential because only that class reaches the refuter.
+  test("downgraded-latent keeps an inferential BLOCKER but demotes it to advisory", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            draft({ severity: "BLOCKER", evidence_class: "inferential" }),
           ],
         }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
@@ -1800,6 +1899,131 @@ describe("refuter", () => {
     // one, because a failed attempt costs real money too.
     expect(result.perAgent.refuter?.status).toBe("failed");
     expect(result.perAgent.refuter?.tokens_total).toBe(116);
+  });
+
+  // R003 (PR #610): a survivor's own evidence_class is its dedupe winner's
+  // alone. Two hunters reporting one defect, the winner `deterministic` and a
+  // folded partner `inferential`, are not a unanimous proof, so the group is
+  // still owed the refuter's check, exactly as on base: submitted, and tiered
+  // from the winner's class and the verdict that comes back.
+  const foldedPair = (partnerClass: "deterministic" | "inferential") => ({
+    "hunter-reliability": (spec: StepSpec) =>
+      ok(spec, {
+        findings: [
+          draft({
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            proof_refs: ["src/app.ts:10", "src/app.ts:12"],
+          }),
+        ],
+      }),
+    "hunter-resilience": (spec: StepSpec) =>
+      ok(spec, {
+        findings: [
+          draft({
+            id: "RES-1",
+            hunter: "resilience",
+            severity: "BLOCKER",
+            evidence_class: partnerClass,
+          }),
+        ],
+      }),
+  });
+
+  test("a mixed-evidence group (deterministic winner, inferential partner) still reaches the refuter", async () => {
+    const runner = new FakeStepRunner({
+      ...foldedPair("inferential"),
+      refuter: (spec) =>
+        ok(spec, {
+          results: [
+            {
+              finding_id: "F001",
+              outcome: "downgraded-latent",
+              proof_refs: ["src/app.ts:1 nothing calls this yet"],
+            },
+          ],
+        } satisfies RefuterResult),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.skillOutput.debug.deduped).toHaveLength(1);
+    expect(runner.specs.map((s) => s.name)).toContain("refuter-F001");
+    const [finding] = result.skillOutput.findings;
+    // The winner's class is what the artifact keeps and what tiering reads.
+    expect(finding?.evidence_class).toBe("deterministic");
+    expect(finding?.refuter_verdict).toBe("downgraded-latent");
+    expect(finding?.tier).toBe("advisory");
+  });
+
+  test("a unanimously deterministic group skips the refuter", async () => {
+    const runner = new FakeStepRunner({
+      ...foldedPair("deterministic"),
+      refuter: (spec) =>
+        ok(spec, {
+          results: [
+            {
+              finding_id: "F001",
+              outcome: "downgraded-latent",
+              proof_refs: [],
+            },
+          ],
+        } satisfies RefuterResult),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.skillOutput.debug.deduped).toHaveLength(1);
+    expect(
+      runner.specs.filter((s) => s.name.startsWith("refuter")),
+    ).toHaveLength(0);
+    const [finding] = result.skillOutput.findings;
+    expect(finding?.refuter_verdict).toBe("not_submitted");
+    expect(finding?.tier).toBe("blocking");
+  });
+
+  // The zero-refuter spec end to end, through the re-review gate. A
+  // deterministic BLOCKER the PR did not cause lands advisory (#457) with
+  // `not_submitted`, the only verdict it can have here. That verdict no longer
+  // means a lost check (owesRefuterCheck), so the gate recomputes it as
+  // introduced, sees blocking, and releases the blocking prior at its spot.
+  test("zero-refuter spec: a pre-existing deterministic BLOCKER releases its re-found prior", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            draft({
+              severity: "BLOCKER",
+              evidence_class: "deterministic",
+              causal_disposition: "pre-existing",
+            }),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+    });
+    const base = defaultReviewSpec();
+    const input = await makeInput({
+      spec: {
+        ...base,
+        agents: base.agents.filter((a) => a.role !== "refuter"),
+      },
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    const [finding] = result.skillOutput.findings;
+    expect(finding?.refuter_verdict).toBe("not_submitted");
+    expect(finding?.tier).toBe("advisory");
+    const prior: GateRow = {
+      id: "R001",
+      tier: "blocking",
+      locs: ["src/app.ts:10"],
+      status: "carried",
+      claim: "the width value is scaled by the device pixel ratio twice",
+    };
+    expect(
+      unresolvedBlockingCount(
+        result.skillOutput.findings,
+        [prior],
+        result.skillOutput.debug.deduped ?? [],
+      ),
+    ).toBe(0);
   });
 
   test("refuter duration_ms is the leg's elapsed time, not summed step wall_ms", async () => {
@@ -2703,7 +2927,7 @@ describe("progress events", () => {
       "hunter-reliability": (spec) =>
         ok(spec, {
           findings: [
-            draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+            draft({ severity: "BLOCKER", evidence_class: "inferential" }),
           ],
         }),
       "hunter-resilience": (spec) => failed(spec),
@@ -3932,14 +4156,15 @@ describe("pipeline ceiling snapshot", () => {
 // ---------------------------------------------------------------------------
 
 describe("pipeline ceiling admission (§13 closure line)", () => {
-  // A BLOCKER survivor is what makes the refuter leg reachable, and a queued
-  // prior is what makes the verify leg reachable. Without BOTH, "the leg never
-  // spawned" would be true of every run in this file — vacuously.
+  // An inferential BLOCKER survivor is what makes the refuter leg reachable (a
+  // deterministic one never reaches it), and a queued prior is what makes the
+  // verify leg reachable. Without BOTH, "the leg never spawned" would be true
+  // of every run in this file — vacuously.
   const script = (): StepScript => ({
     "hunter-reliability": (spec) =>
       ok(spec, {
         findings: [
-          draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+          draft({ severity: "BLOCKER", evidence_class: "inferential" }),
         ],
       }),
     "hunter-resilience": (spec) => ok(spec, emptyDraft()),
@@ -4088,26 +4313,28 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
     expect(runner.specs.map((s) => s.name)).toEqual([]);
   });
 
-  // This test once pinned the OPPOSITE — "ships a deterministic BLOCKER at
-  // blocking tier, unrefuted" — deliberately, because a comment had denied an
-  // exposure that was really there and the truth deserved a test rather than
-  // prose. It was never a desired behaviour, only an honest one: blocking tier
-  // is the report's loudest register — the red badge and the headline count a
-  // human reads first — and claiming it for a finding whose adversarial check
-  // never ran asserts scrutiny nobody performed. (It gates no merge; pr-hero is
-  // an assistant. This comment claimed otherwise until 2026-08-27.) The
-  // 2026-07-29 AudioTrimmer data put 26 of 26 blocking findings in exactly the
-  // deterministic + unrefuted class, so this was the dominant case.
+  // History, because this pair has flipped twice. The first test here pinned
+  // "ships a deterministic BLOCKER at blocking tier, unrefuted" as an honest,
+  // not desired, behaviour; from 2026-08-27 a configured refuter cut short by
+  // the ceiling demoted every unrefuted severe survivor, deterministic ones
+  // included, because blocking tier claimed a check nobody performed. Lever D
+  // (2026-11-25) took deterministic findings out of the refuter's batch, so
+  // that check is no longer owed to them and a timer no longer decides their
+  // tier; the inferential half of the demotion stands.
   //
-  // `finish()` now conjoins `ceilingFired && refuterConfigured` and hands it to
-  // `deriveTier` as `refuterCutShort`, which demotes precisely that pair
-  // (src/review/findings.ts). The default spec is used here on purpose: it CONFIGURES
-  // a refuter, so the ceiling really did cut an owed check short. What is NOT
-  // demoted stays pinned in that module's own table, and in the two guard tests
-  // below: a corroborated verdict that arrived before the ceiling still blocks,
-  // an inconclusive one still blocks, a non-ceiling `partial` still blocks, and
-  // a ceiling on a zero-refuter spec still blocks.
-  test("§13 — a ceiling-truncated run demotes its unrefuted deterministic BLOCKER to advisory", async () => {
+  // `finish()` now conjoins `ceilingFired && refuterConfigured` with the
+  // finding's own entitlement — a check is owed only to a severe finding that
+  // is not `deterministic`, the class the refuter leg submits — and hands it to
+  // `deriveTier` as `refuterCutShort`, which demotes the cut-short +
+  // `not_submitted` pair (src/review/findings.ts). The default spec is used
+  // here on purpose: it CONFIGURES a refuter, so the ceiling really did cut an
+  // owed check short for the inferential finding. What is NOT demoted stays
+  // pinned in that module's own table, and in the guard tests below: a
+  // deterministic finding was never owed a check, a non-ceiling `partial` still
+  // blocks, and a ceiling on a zero-refuter spec still blocks.
+  const truncatedRun = async (
+    evidence_class: "deterministic" | "inferential",
+  ) => {
     // AMPLE_GRACE_MS, not tiny: the run has to reach dedupe inside the grace
     // for there to be a survivor to tier at all. The ceiling still fires
     // mid-hunt, so the refuter leg is still refused admission.
@@ -4115,9 +4342,7 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
       {
         "hunter-reliability": (spec) =>
           ok(spec, {
-            findings: [
-              draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
-            ],
+            findings: [draft({ severity: "BLOCKER", evidence_class })],
           }),
         "hunter-resilience": (spec) => ok(spec, emptyDraft()),
       },
@@ -4127,9 +4352,7 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
       pipelineTimeoutMs: 50,
       ceilingGraceMs: AMPLE_GRACE_MS,
     });
-
     const result = await runPipeline(input, { runner });
-
     expect(result.skillOutput.run_status).toBe("partial");
     // No refuter step was spawned — a `refuter-F001` reaching this runner
     // would throw `unscripted step`, and `specs` is what proves it never did.
@@ -4138,10 +4361,72 @@ describe("pipeline ceiling admission (§13 closure line)", () => {
       "hunter-resilience",
     ]);
     // The finding is never deleted — it survives, visible, with its verdict
-    // intact. It just cannot wear blocking tier on the strength of a check
-    // that ran out of time before it started.
+    // intact.
     expect(result.skillOutput.findings).toHaveLength(1);
     const finding = result.skillOutput.findings[0];
+    expect(finding?.refuter_verdict).toBe("not_submitted");
+    return finding;
+  };
+
+  // The inferential finding was owed a refuter check the ceiling cut short, so
+  // it cannot wear blocking tier on the strength of that missing check.
+  test("§13 — a ceiling-truncated run leaves its unrefuted inferential BLOCKER advisory", async () => {
+    const finding = await truncatedRun("inferential");
+    expect(finding?.tier).toBe("advisory");
+  });
+
+  // A deterministic finding never reaches the refuter (lever D), so the
+  // ceiling cut no check of its short: it blocks on its own evidence, exactly
+  // as it would on a complete run. Demoting it would make a timer, not the
+  // evidence, decide its tier.
+  test("§13 — a ceiling-truncated run keeps its deterministic BLOCKER blocking — no check was owed", async () => {
+    const finding = await truncatedRun("deterministic");
+    expect(finding?.tier).toBe("blocking");
+  });
+
+  // R003 (PR #610): a deterministic winner with an inferential partner folded
+  // in was owed the check the ceiling cut short, so it is demoted exactly as on
+  // base, though the artifact keeps the winner's `deterministic` class.
+  test("§13 — a ceiling-truncated run demotes a mixed-evidence group's deterministic winner", async () => {
+    const runner = new SlowStepRunner(
+      {
+        "hunter-reliability": (spec) =>
+          ok(spec, {
+            findings: [
+              draft({
+                severity: "BLOCKER",
+                evidence_class: "deterministic",
+                proof_refs: ["src/app.ts:10", "src/app.ts:12"],
+              }),
+            ],
+          }),
+        "hunter-resilience": (spec) =>
+          ok(spec, {
+            findings: [
+              draft({
+                id: "RES-1",
+                hunter: "resilience",
+                severity: "BLOCKER",
+                evidence_class: "inferential",
+              }),
+            ],
+          }),
+      },
+      300,
+    );
+    const input = await makeInput({
+      pipelineTimeoutMs: 50,
+      ceilingGraceMs: AMPLE_GRACE_MS,
+    });
+    const result = await runPipeline(input, { runner });
+    expect(result.skillOutput.run_status).toBe("partial");
+    expect(runner.specs.map((s) => s.name)).toEqual([
+      "hunter-reliability",
+      "hunter-resilience",
+    ]);
+    expect(result.skillOutput.debug.deduped).toHaveLength(1);
+    const [finding] = result.skillOutput.findings;
+    expect(finding?.evidence_class).toBe("deterministic");
     expect(finding?.refuter_verdict).toBe("not_submitted");
     expect(finding?.tier).toBe("advisory");
   });
@@ -4415,7 +4700,7 @@ describe("D1-10c attempt provenance", () => {
       "hunter-reliability": (spec) =>
         ok(spec, {
           findings: [
-            draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+            draft({ severity: "BLOCKER", evidence_class: "inferential" }),
           ],
         }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
@@ -4623,7 +4908,7 @@ describe("agentFiles: a prompt set with no directory behind it", () => {
       "hunter-reliability": (spec) =>
         ok(spec, {
           findings: [
-            draft({ severity: "BLOCKER", evidence_class: "deterministic" }),
+            draft({ severity: "BLOCKER", evidence_class: "inferential" }),
           ],
         }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
@@ -4697,7 +4982,11 @@ describe("#152 proof_refs resolvability wiring", () => {
     // neither file, with read/grep/glob all available.
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) =>
-        ok(spec, { findings: [draft({ severity: "CRITICAL" })] }),
+        ok(spec, {
+          findings: [
+            draft({ severity: "CRITICAL", evidence_class: "inferential" }),
+          ],
+        }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
       refuter: (spec) => {
         expect(() =>

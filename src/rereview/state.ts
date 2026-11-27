@@ -19,6 +19,8 @@ import {
   identityFromFinding,
   identityFromLocs,
 } from "#rereview/identity";
+import { isConsolidationSplit } from "#review/consolidate";
+import { type DedupeLoser, groupEvidenceClass } from "#review/dedupe";
 import {
   deriveTier,
   type Finding,
@@ -562,6 +564,7 @@ export type GateSurvivor = Pick<
   Partial<
     Pick<
       Finding,
+      | "id"
       | "severity"
       | "evidence_class"
       | "refuter_verdict"
@@ -570,6 +573,30 @@ export type GateSurvivor = Pick<
     >
   >;
 
+// What the gate needs from debug.deduped[]: each folded draft's class and the
+// survivor id it merged into (groupEvidenceClass in review/dedupe.ts). Absent
+// means the caller did not say what was folded.
+export type GateFolded = readonly Pick<
+  DedupeLoser,
+  "merged_into" | "evidence_class"
+>[];
+
+// Whether a survivor's whole folded group is known to be `deterministic`,
+// read through the pipeline's own groupEvidenceClass so the gate and the
+// refuter's admission cannot disagree. Unknown (no folded drafts, no id) is
+// not unanimous.
+function isUnanimouslyDeterministic(
+  id: string | undefined,
+  evidence_class: Finding["evidence_class"],
+  folded: GateFolded | undefined,
+): boolean {
+  if (folded === undefined || id === undefined) return false;
+  // A consolidation split names no folded draft and copies its primary's
+  // class, so it would read as unanimous; it is not the group's proof.
+  if (isConsolidationSplit(id)) return false;
+  return groupEvidenceClass({ id, evidence_class }, folded) === "deterministic";
+}
+
 // A survivor demoted from blocking: advisory now, and blocking but for one
 // rule. Either the materiality gate's immaterial verdict
 // (review/materiality-gate.ts), or #457's causal rule: the PR did not cause it.
@@ -577,11 +604,25 @@ export type GateSurvivor = Pick<
 // (see the note above GateRow). The causal case asks deriveTier what the
 // finding would be as `introduced`, so a pre-existing finding that would have
 // been advisory anyway (an unrefuted inferential one) releases nothing. A
-// `not_submitted` survivor never counts as demoted: on a run the ceiling cut
-// short, deriveTier demoted it for the missing check (refuterCutShort), which
-// this row cannot see, so the recompute would call it blocking and release a
-// prior it never earned. Failing closed costs one prior staying counted.
-function isDemotedFromBlocking(survivor: GateSurvivor): boolean {
+// `not_submitted` survivor counts as demoted only when its whole folded group
+// is known to be `deterministic`. Since lever D such a group is never owed a
+// refuter check, so `not_submitted` is its normal verdict, no ceiling demoted
+// it, and the recompute below is exact: a pre-existing one releases its prior
+// as a refuter-checked one did. Any other `not_submitted` survivor fails
+// closed. It may have been owed the check and demoted for losing it on a run
+// the ceiling cut short (refuterCutShort), which this row cannot see. That
+// includes a survivor stored as `deterministic` (a finding keeps only its
+// dedupe winner's class) whose group folded in an inferential draft (PR #610,
+// R003): the pipeline submits by the GROUP's class, so the gate must read it
+// the same way, from the run's debug.deduped[] via groupEvidenceClass. A
+// caller that passes no folded drafts, or a survivor with no id, cannot vouch
+// for the group, and fails closed too, as does a consolidation split
+// (isConsolidationSplit), which is forced `not_submitted` whatever its class. (An inferential `not_submitted` one is
+// advisory as introduced anyway.)
+function isDemotedFromBlocking(
+  survivor: GateSurvivor,
+  folded: GateFolded | undefined,
+): boolean {
   if (survivor.tier !== "advisory") return false;
   if (survivor.materiality?.label === "immaterial") return true;
   const {
@@ -595,7 +636,8 @@ function isDemotedFromBlocking(survivor: GateSurvivor): boolean {
     severity === undefined ||
     evidence_class === undefined ||
     refuter_verdict === undefined ||
-    refuter_verdict === "not_submitted" ||
+    (refuter_verdict === "not_submitted" &&
+      !isUnanimouslyDeterministic(survivor.id, evidence_class, folded)) ||
     causal_disposition === undefined ||
     claim === undefined
   )
@@ -696,6 +738,7 @@ interface GatePairing {
 function gatePairing(
   survivors: readonly GateSurvivor[],
   rows: readonly GateRow[],
+  folded: GateFolded | undefined,
 ): GatePairing {
   // One entry per prior id, and verified-gone never enters the count.
   const seen = new Set<string>();
@@ -719,7 +762,8 @@ function gatePairing(
       survivors,
       open,
       taken,
-      (survivor) => (isDemotedFromBlocking(survivor) ? ["blocking"] : null),
+      (survivor) =>
+        isDemotedFromBlocking(survivor, folded) ? ["blocking"] : null,
       (i) => isReleasable(open[i]),
     ).map((p) => p.row),
   );
@@ -749,14 +793,18 @@ function isReleasable(row: GateRow | undefined): boolean {
   return paths.every((path) => !isSafetyProtected({ claim, path }));
 }
 
+// `folded` is the run's debug.deduped[]. Optional only because a caller with
+// no record of what dedupe folded exists in tests; without it a deterministic
+// `not_submitted` survivor releases nothing (fail closed, isDemotedFromBlocking).
 export function unresolvedBlockingCount(
   survivors: readonly GateSurvivor[],
   rows: readonly GateRow[],
+  folded?: GateFolded,
 ): number {
   const blockingSurvivors = survivors.filter(
     (survivor) => survivor.tier === "blocking",
   ).length;
-  const { open, carried, released } = gatePairing(survivors, rows);
+  const { open, carried, released } = gatePairing(survivors, rows, folded);
 
   // WHY unrecoverable counts: fail closed, see the note above the GateRow type.
   // Counting only "blocking" would let an unreadable tier turn the gate green.
@@ -775,11 +823,14 @@ export function unresolvedBlockingCount(
 // run's count. WHY ids, not a second pairing in the merge: the merge sees other
 // rows (live, not gate rows) and other survivors (posted only, after the
 // posting floor), so pairing again there can release a different row.
+// `folded` must be the same debug.deduped[] the count read, or the two can
+// disagree on a deterministic `not_submitted` survivor (fail closed without it).
 export function materialityReleasedIds(
   survivors: readonly GateSurvivor[],
   rows: readonly GateRow[],
+  folded?: GateFolded,
 ): string[] {
-  const { open, released } = gatePairing(survivors, rows);
+  const { open, released } = gatePairing(survivors, rows, folded);
   return [...released].flatMap((i) => {
     const row = open[i];
     return row === undefined ? [] : [row.id];
