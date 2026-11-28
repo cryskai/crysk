@@ -33,17 +33,19 @@ import {
   agentFilePath,
   assertBasenameOnly,
   type CliOptions,
+  GENERAL_AGENT_FILE,
   gotchasErrorMessage,
   gotchasUnusableReason,
   type LocalConfig,
   localReviewSpec,
-  PARITY_REMOVED,
   parseNumstatFiles,
   preflightAgentsDir,
+  removedHunterRoleWarning,
   resolveAgentsDir,
   resolvePost,
   resolveSummary,
   type SummarySettings,
+  withBundledGeneralPrompt,
 } from "#review/preflight";
 import {
   type ParsedAgent,
@@ -70,6 +72,7 @@ import {
   validateReviewSpec,
 } from "#review/spec";
 import { ClaudeCodeRunner } from "#review/step-runner";
+import { resolveEngineAssets } from "../assets";
 import { resolveRepoDir } from "../brand-paths";
 import { CliError, withRecordClass } from "../errors";
 import {
@@ -423,19 +426,31 @@ export async function resolvePromptSet(
   // prompt set once per run, so each notice prints once.
   warn: (line: string) => void = warnOnStderr,
 ): Promise<ResolvedPromptSet> {
-  const agents = resolveAgentsDir(options, loaded, undefined, prompts);
+  const resolved = resolveAgentsDir(options, loaded, undefined, prompts);
   const spec = validateReviewSpec(localReviewSpec());
   spec.agents.forEach((agent, i) => {
     assertBasenameOnly(agent.file, i);
   });
-  // The removed hunter's leftovers: a file in a custom directory, and a
-  // `models.hunter.parity` role. Neither is an error, neither does anything.
-  const warnings = await preflightAgentsDir(
-    agents,
+  // A custom directory without the general hunter's prompt runs the bundled
+  // one, with a warning (withBundledGeneralPrompt).
+  const fallback = await withBundledGeneralPrompt(
+    resolved,
     spec.agents.map((a) => a.file),
+    resolveEngineAssets().bundledAgentFiles[GENERAL_AGENT_FILE],
   );
+  const agents = fallback.agents;
+  // Removed hunters' leftovers (parity, and the four specialists the general
+  // hunter replaced): a file in a custom directory, and a `models.hunter.<key>`
+  // role. Neither is an error, neither does anything; each warns once.
+  const warnings = [
+    ...fallback.warnings,
+    ...(await preflightAgentsDir(
+      agents,
+      spec.agents.map((a) => a.file),
+    )),
+  ];
   for (const role of removedHunterRoles(loaded.effective.models, spec.agents)) {
-    warnings.push(`models.${role} ${PARITY_REMOVED}`);
+    warnings.push(removedHunterRoleWarning(role));
   }
   for (const line of warnings) warn(line);
   const agentFiles = new Map<string, ParsedAgent>();

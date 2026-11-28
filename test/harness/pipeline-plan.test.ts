@@ -55,7 +55,7 @@ const VOLUME_DRAFT: DraftFinding = {
   severity: "CRITICAL",
   evidence_class: "inferential",
   causal_disposition: "introduced",
-  hunter: "reliability",
+  hunter: "general",
   hops_used: 1,
   hop_trail: [],
   claim: "volumeToGain no longer divides by 100, so gain exceeds unity.",
@@ -316,7 +316,7 @@ describe("fixture-eval on a route plan", () => {
     expect(input.bundledAgents).not.toBe(true);
     const plan = await buildPipelineHarnessPlan(input);
     expect(stepModel(plan, "scout")).toBeUndefined();
-    expect(stepModel(plan, "hunter-reliability")?.modelSnapshot).toBe("haiku");
+    expect(stepModel(plan, "hunter-general")?.modelSnapshot).toBe("haiku");
   });
 
   test("every step the run executes carries a route from the plan", async () => {
@@ -325,7 +325,7 @@ describe("fixture-eval on a route plan", () => {
       mcpConfigPath: await mcpConfig(fixture.runDir),
     });
     const plan = await buildPipelineHarnessPlan(input);
-    const runner = new FakeRunner({ "hunter-reliability": VOLUME_DRAFT });
+    const runner = new FakeRunner({ "hunter-general": VOLUME_DRAFT });
     await runPipeline(
       { ...input, routePlan: plan },
       { runner, transportRegistry: new DefaultTransportRegistry() },

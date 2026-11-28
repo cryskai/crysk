@@ -975,13 +975,7 @@ describe("assertBasenameOnly", () => {
 });
 
 describe("agentsDirProblems", () => {
-  const CLEAN_SET = [
-    "deep-review-logic.md",
-    "deep-review-reliability.md",
-    "deep-review-resilience.md",
-    "deep-review-security.md",
-    "review-refuter.md",
-  ];
+  const CLEAN_SET = ["deep-review-general.md", "review-refuter.md"];
 
   test("a matching set has no problems", () => {
     expect(agentsDirProblems(CLEAN_SET, CLEAN_SET)).toEqual([]);
@@ -990,21 +984,21 @@ describe("agentsDirProblems", () => {
   test("a file the spec names but the dir lacks is reported", () => {
     const problems = agentsDirProblems(
       CLEAN_SET,
-      CLEAN_SET.filter((f) => f !== "deep-review-logic.md"),
+      CLEAN_SET.filter((f) => f !== "review-refuter.md"),
     );
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("deep-review-logic.md");
+    expect(problems[0]).toContain("review-refuter.md");
   });
 
   // THE check: a spec that omits a file the dir carries silently drops that
   // hunter, and nothing downstream notices.
   test("an unreferenced agent file in the dir is reported", () => {
-    const specWithoutLogic = CLEAN_SET.filter(
-      (f) => f !== "deep-review-logic.md",
+    const specWithoutRefuter = CLEAN_SET.filter(
+      (f) => f !== "review-refuter.md",
     );
-    const problems = agentsDirProblems(specWithoutLogic, CLEAN_SET);
+    const problems = agentsDirProblems(specWithoutRefuter, CLEAN_SET);
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("deep-review-logic.md");
+    expect(problems[0]).toContain("review-refuter.md");
     expect(problems[0]).toContain("would never run");
   });
 
@@ -1025,28 +1019,27 @@ describe("agentsDirProblems", () => {
     );
   });
 
-  // The security hunter joined the default spec. A custom set copied from an
-  // older default lacks its file and stops running; the error has to say why
-  // and what to do, not only that a file is missing.
-  test("a set copied before the security hunter existed says the hunter was added and where its file is", () => {
-    const problems = agentsDirProblems(
-      CLEAN_SET,
-      CLEAN_SET.filter((f) => f !== "deep-review-security.md"),
-    );
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("deep-review-security.md");
-    expect(problems[0]).toContain("does not have it");
-    expect(problems[0]).toContain("added to the default spec");
-    expect(problems[0]).toContain("prompts/default/deep-review-security.md");
+  // The general hunter's file gets no hint: a review never reaches this
+  // message for it (withBundledGeneralPrompt runs the bundled prompt), so a
+  // direct check reports it plainly, like any other missing file.
+  test("a set without the general hunter's file gets the plain message", () => {
+    expect(
+      agentsDirProblems(
+        CLEAN_SET,
+        CLEAN_SET.filter((f) => f !== "deep-review-general.md"),
+      ),
+    ).toEqual([
+      'the spec references "deep-review-general.md" but the dir does not have it',
+    ]);
   });
 
   test("a missing file with no history keeps the plain message", () => {
     const problems = agentsDirProblems(
       CLEAN_SET,
-      CLEAN_SET.filter((f) => f !== "deep-review-logic.md"),
+      CLEAN_SET.filter((f) => f !== "review-refuter.md"),
     );
     expect(problems).toEqual([
-      'the spec references "deep-review-logic.md" but the dir does not have it',
+      'the spec references "review-refuter.md" but the dir does not have it',
     ]);
   });
 
@@ -1072,16 +1065,10 @@ describe("agentsDirProblems", () => {
 });
 
 describe("localReviewSpec", () => {
-  test("is valid, carries the logic hunter the default spec omits, and no longer runs lifecycle", () => {
+  test("is valid, runs the one general hunter, and no longer runs lifecycle", () => {
     const spec = validateReviewSpec(localReviewSpec());
     const keys = spec.agents.map((a) => a.key);
-    expect(keys).toEqual([
-      "reliability",
-      "resilience",
-      "logic",
-      "security",
-      "refuter",
-    ]);
+    expect(keys).toEqual(["general", "refuter"]);
     // No conditional hunter: the parity hunter left the product (the lab's
     // defaultReviewSpec keeps it).
     expect(spec.agents.some((a) => a.trigger !== undefined)).toBe(false);
@@ -1101,22 +1088,7 @@ describe("localReviewSpec", () => {
   test("is byte-identical to today's wiring when PRHERO_EXTRA_HUNTERS is unset", () => {
     expect(localReviewSpec({})).toEqual({
       agents: [
-        {
-          key: "reliability",
-          file: "deep-review-reliability.md",
-          role: "hunter",
-        },
-        {
-          key: "resilience",
-          file: "deep-review-resilience.md",
-          role: "hunter",
-        },
-        { key: "logic", file: "deep-review-logic.md", role: "hunter" },
-        {
-          key: "security",
-          file: "deep-review-security.md",
-          role: "hunter",
-        },
+        { key: "general", file: "deep-review-general.md", role: "hunter" },
         { key: "refuter", file: "review-refuter.md", role: "refuter" },
       ],
     });
@@ -1133,14 +1105,7 @@ describe("localReviewSpec", () => {
       PRHERO_EXTRA_HUNTERS: "reliability-b:deep-review-reliability.md",
     });
     const keys = spec.agents.map((a) => a.key);
-    expect(keys).toEqual([
-      "reliability",
-      "resilience",
-      "logic",
-      "security",
-      "reliability-b",
-      "refuter",
-    ]);
+    expect(keys).toEqual(["general", "reliability-b", "refuter"]);
     expect(spec.agents.find((a) => a.key === "reliability-b")).toEqual({
       key: "reliability-b",
       file: "deep-review-reliability.md",
@@ -1156,10 +1121,7 @@ describe("localReviewSpec", () => {
     });
     const keys = spec.agents.map((a) => a.key);
     expect(keys).toEqual([
-      "reliability",
-      "resilience",
-      "logic",
-      "security",
+      "general",
       "reliability-b",
       "resilience-b",
       "refuter",
@@ -1664,7 +1626,7 @@ describe("parseLocalConfig admits the same keys it does today", () => {
     const raw = JSON.stringify({ routing: { mappings: [] } });
     expect(() => parseLocalConfig(raw)).toThrow(CliUsageError);
     expect(messageOf(() => parseLocalConfig(raw))).toBe(
-      '.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
+      '.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`',
     );
   });
 });
@@ -1680,7 +1642,7 @@ describe("routing is gone from the person file too (S2)", () => {
         parseGlobalConfig(JSON.stringify({ routing })),
       );
       expect(msg).toBe(
-        '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
+        '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`',
       );
       expect(msg).not.toContain("sk-ant");
     }
@@ -2589,7 +2551,7 @@ describe("parse errors carry their record class (T2d-1)", () => {
     expect(error).toBeInstanceOf(CliUsageError);
     expect(error.cls).toBeUndefined();
     expect(error.message).toBe(
-      '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
+      '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`',
     );
   });
 

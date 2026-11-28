@@ -110,7 +110,10 @@ import {
   sweepWork,
 } from "./run-case";
 
-const ALWAYS_ON = ["reliability", "resilience", "logic", "security"];
+// What `--hunter all` runs: the bundled set's hunters, which since the general
+// hunter replaced the four specialists is that one hunter. A specialist is
+// still examinable as a candidate, `logic:deep-review-logic.md` with --agents.
+const ALWAYS_ON = ["general"];
 // A run that delivered nothing is retried in place, this many times per case.
 const INFRA_RETRIES = 2;
 

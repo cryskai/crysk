@@ -27,7 +27,7 @@ export interface PlatformLimits {
   // The platform's estimate for this review, its high side. Absent when the
   // platform cannot price the run.
   readonly estimateUsd?: number;
-  // `estimateUsd` split per model role (`hunter.logic`, `refuter`, ...): the
+  // `estimateUsd` split per model role (`hunter.general`, `refuter`, ...): the
   // platform's setup estimate priced line by line. Present only when the
   // platform priced every line. It lets the engine compare the share of the
   // estimate that runs on an API key instead of the whole of it (S17).

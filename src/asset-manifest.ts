@@ -5,16 +5,7 @@
 // compile.assets is a silent no-op on Bun 1.3.14 — this manifest is the permanent mechanism.
 
 import consolidatePrompt from "../prompts/consolidate.md" with { type: "file" };
-import logicPrompt from "../prompts/default/deep-review-logic.md" with {
-  type: "file",
-};
-import reliabilityPrompt from "../prompts/default/deep-review-reliability.md" with {
-  type: "file",
-};
-import resiliencePrompt from "../prompts/default/deep-review-resilience.md" with {
-  type: "file",
-};
-import securityPrompt from "../prompts/default/deep-review-security.md" with {
+import generalPrompt from "../prompts/default/deep-review-general.md" with {
   type: "file",
 };
 import refuterPrompt from "../prompts/default/review-refuter.md" with {
@@ -67,10 +58,7 @@ import triageSkill from "../skills/crysk-loop/SKILL.md" with { type: "file" };
 import prSkill from "../skills/crysk-pr/SKILL.md" with { type: "file" };
 
 export const BUNDLED_AGENT_FILES: Record<string, string> = {
-  "deep-review-logic.md": logicPrompt,
-  "deep-review-reliability.md": reliabilityPrompt,
-  "deep-review-resilience.md": resiliencePrompt,
-  "deep-review-security.md": securityPrompt,
+  "deep-review-general.md": generalPrompt,
   "review-refuter.md": refuterPrompt,
 };
 

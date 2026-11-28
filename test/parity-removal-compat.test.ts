@@ -193,7 +193,7 @@ describe("the models.hunter.parity role", () => {
   test("is skipped with no throw, one warning, and no step when the spec has no parity hunter", async () => {
     const { loaded, warnings, result } = await resolveWith({
       "hunter.parity": ["claude:opus-latest"],
-      "hunter.logic": ["claude:sonnet-latest"],
+      "hunter.general": ["claude:sonnet-latest"],
     });
     expect(warnings).toEqual([`models.hunter.parity ${TAIL}`]);
     const plan = buildResolvedRoutePlan({
@@ -203,13 +203,13 @@ describe("the models.hunter.parity role", () => {
       bundledAgents: true,
     });
     expect(plan.steps.map((s) => s.stepKey)).not.toContain("hunter-parity");
-    const logic = plan.steps.find((s) => s.stepKey === "hunter-logic");
-    expect(logic?.route.modelSnapshot).toContain("sonnet");
+    const general = plan.steps.find((s) => s.stepKey === "hunter-general");
+    expect(general?.route.modelSnapshot).toContain("sonnet");
   });
 
   test("a review without the role warns about nothing", async () => {
     const { warnings } = await resolveWith({
-      "hunter.logic": ["claude:sonnet-latest"],
+      "hunter.general": ["claude:sonnet-latest"],
     });
     expect(warnings).toEqual([]);
   });
@@ -416,13 +416,7 @@ describe("crysk config set parity_trigger_paths", () => {
 describe("the bundled set and the product spec", () => {
   test("the product spec has no parity hunter and the bundle no parity prompt", () => {
     const spec = localReviewSpec({});
-    expect(spec.agents.map((a) => a.key)).toEqual([
-      "reliability",
-      "resilience",
-      "logic",
-      "security",
-      "refuter",
-    ]);
+    expect(spec.agents.map((a) => a.key)).toEqual(["general", "refuter"]);
     expect(spec.agents.some((a) => a.trigger !== undefined)).toBe(false);
     expect(Object.keys(BUNDLED_AGENT_FILES)).not.toContain(
       "deep-review-parity.md",

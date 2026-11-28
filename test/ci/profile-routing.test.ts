@@ -72,18 +72,21 @@ describe("the doctor's route plan (S6)", () => {
       s.route.modelSnapshot,
       s.route.modelVariant,
     ]);
+    // The general hunter runs Sol 6.2 at high on this profile, like the
+    // refuter, so both seats probe the same route.
     expect(routes).toEqual([
-      ["opencode", "openai", "gpt-6.1-terra", "xhigh"],
+      ["opencode", "openai", "gpt-6.2-sol", "high"],
       ["opencode", "openai", "gpt-6.2-sol", "high"],
     ]);
   });
 
-  test("the claude profile's doctor plan is unchanged: no variant", () => {
+  test("the claude profile's doctor plan carries no variant", () => {
     const plan = buildDoctorRoutePlan(undefined, { profile: CLAUDE });
+    // The general hunter's seat runs opus, like the refuter's.
     expect(
       plan.steps.map((s) => [s.logicalIdentity, s.route.modelVariant]),
     ).toEqual([
-      ["claude:sonnet-latest", undefined],
+      ["claude:opus-latest", undefined],
       ["claude:opus-latest", undefined],
     ]);
   });

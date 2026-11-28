@@ -280,7 +280,7 @@ consecutive runs.
 
 Presets the user picks with one setting, each with its own measured number, like today's Claude default:
 
-- **Claude** (default): Sonnet hunters, Opus refuter.
+- **Claude** (default): an Opus general hunter, Opus refuter.
 - **OpenAI** models, on an API key or, through Stage 3's App, a ChatGPT subscription.
 - **Low-cost** models (the DeepSeek/GLM family already runs through OpenCode).
 - Mixed providers in one review (#195), reasoning effort across backends (#207), and the OpenCode

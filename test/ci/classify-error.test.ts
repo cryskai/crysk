@@ -231,7 +231,7 @@ describe("classifyCliError: the routing class depends on the layer that parsed",
     const error = thrownBy(() => parseGlobalConfig('{"routing": "invalid"}'));
     expect(error).toBeInstanceOf(CliUsageError);
     expect((error as CliUsageError).message).toBe(
-      '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
+      '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`',
     );
     expect(classifyCliError(error)).toEqual({ kind: "unknown" });
   });

@@ -22,7 +22,7 @@ import { setConfigValue } from "#ui/config-edit";
 import type { CliUsageError } from "../../src/errors";
 
 const ROUTING_GONE =
-  '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`';
+  '`routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`';
 
 function messageOf(fn: () => unknown): string {
   try {

@@ -507,7 +507,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when a model needs it"
       expect(doctorRan).toBe(true);
       expect(result.ok).toBe(false);
       expect(result.errors.join("\n")).toContain(
-        '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
+        '`routing` is gone: set models per role, e.g. `"models": {"hunter.general": ["claude:opus-latest"]}`',
       );
     } finally {
       await fixture.cleanup();

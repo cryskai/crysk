@@ -8,7 +8,7 @@
 // pipeline input the run gets, so the fixture's haiku agents, the summarizer's
 // frontmatter and `--model` route exactly as they did with no plan.
 import path from "node:path";
-import { validateFinding } from "#review/findings";
+import { validateFindingV11 } from "#review/findings";
 import { runPipeline } from "#review/pipeline";
 import {
   buildPlantedFixture,
@@ -76,7 +76,10 @@ const { skillOutput } = result;
 if (Array.isArray(skillOutput.findings)) {
   for (const [i, finding] of skillOutput.findings.entries()) {
     try {
-      validateFinding(finding, i);
+      // v1.1, the schema the engine writes: its hunter is an open slug, so
+      // the general hunter validates. The v1.0 validator's closed hunter enum
+      // only ever passed because this fixture ran reliability and resilience.
+      validateFindingV11(finding, i);
     } catch (error) {
       failures.push(`findings[${i}] invalid: ${(error as Error).message}`);
     }
@@ -118,11 +121,7 @@ if (!hit) {
 
 // (3) Run-dir artifacts: every hunter that ran must have left its templated
 // system prompt and its delivered draft next to each other in steps/.
-const hunters = [
-  "reliability",
-  "resilience",
-  ...(skillOutput.parity_hunter_fired ? ["parity"] : []),
-];
+const hunters = ["general"];
 for (const hunter of hunters) {
   for (const suffix of ["system.md", "draft.json"]) {
     const artifact = path.join(
@@ -166,7 +165,7 @@ for (const hunter of hunters) {
 let routeFingerprint: string | null = null;
 try {
   routeFingerprint = (
-    await readPipelineRouteIdentity(fixture.runDir, "hunter-reliability")
+    await readPipelineRouteIdentity(fixture.runDir, "hunter-general")
   ).routeFingerprint;
 } catch (error) {
   failures.push(`no route identity: ${(error as Error).message}`);

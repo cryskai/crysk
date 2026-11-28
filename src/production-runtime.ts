@@ -838,7 +838,8 @@ export async function probeBindingsReadiness(
 }
 
 // The plan `crysk doctor` probes: the active profile's hunter and refuter (on
-// `claude`, the sonnet hunter and opus refuter a zero-config review runs),
+// `claude`, the opus general hunter and opus refuter a zero-config review
+// runs, one binding since they share the route),
 // plus one step per distinct route `models` names, fallbacks included, so
 // every binding a configured review could open is checked before a review
 // needs it. Distinct by route, not by entry: an OpenCode effort is the route's
@@ -868,7 +869,7 @@ export function buildDoctorRoutePlan(
   };
   const base = buildResolvedRoutePlan({
     agents: [
-      agent("reliability", "hunter", "hunter.reliability"),
+      agent("general", "hunter", "hunter.general"),
       agent("refuter", "refuter", "refuter"),
     ],
     bundledAgents: true,

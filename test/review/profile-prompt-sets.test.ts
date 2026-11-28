@@ -337,14 +337,8 @@ describe("the pipeline over a profile's prompt set (S4, S3)", () => {
       sha(expected.steps, "consolidate"),
     );
     // Fallen back: byte-identical to the default set's.
-    for (const name of [
-      "hunter-logic",
-      "hunter-security",
-      "hunter-reliability",
-      "hunter-resilience",
-      "summarizer",
-      "materiality-F001",
-    ]) {
+    for (const name of ["hunter-general", "summarizer", "materiality-F001"]) {
+      expect(sha(baseline.steps, name)).toBeDefined();
       expect(sha(baseline.steps, name)).toBe(sha(expected.steps, name));
     }
     const r = routing(baseline.pipelineSteps);

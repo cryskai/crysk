@@ -6,7 +6,7 @@
 // were the same word, and a hunter could not get a model of its own. A name is
 // now self-describing — `claude:<name>` runs on the Claude Code CLI,
 // `opencode:<provider>/<model>` on OpenCode — and the role it is assigned to
-// (`hunter.logic`, `summary`) is a separate key. How hard the model works is
+// (`hunter.general`, `summary`) is a separate key. How hard the model works is
 // not part of its name: it is a list entry's `effort` (S7, below).
 //
 // WHY `-latest` and not the bare alias: Juanma, on "sonnet-latest": "explicito

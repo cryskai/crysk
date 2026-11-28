@@ -990,11 +990,13 @@ describe("doctor tri-state evaluation", () => {
       ).toBe("blocking");
     });
 
-    test("zero-config doctor route plan is the profile's sonnet hunter and opus refuter, as before profiles", () => {
-      // The plan 61587429 built from literal aliases, pinned by fingerprint.
+    test("zero-config doctor route plan is the profile's opus general hunter and opus refuter", () => {
+      // The plan built from literal aliases, pinned by fingerprint. The probe
+      // seat was the reliability hunter on sonnet until the general hunter
+      // replaced the four specialists.
       const before = buildResolvedRoutePlan({
         agents: [
-          { key: "reliability", role: "hunter", model: "sonnet" },
+          { key: "general", role: "hunter", model: "opus" },
           { key: "refuter", role: "refuter", model: "opus" },
         ],
       });
@@ -1014,7 +1016,7 @@ describe("doctor tri-state evaluation", () => {
         ]),
       );
       expect(plan.steps.map((s) => s.route.modelSnapshot)).toEqual([
-        "sonnet",
+        "opus",
         "opus",
       ]);
       // A Claude configuration keeps both profile steps ahead of its own.
@@ -1127,10 +1129,7 @@ describe("doctor tri-state evaluation", () => {
     // A COMPILED bundle, which is the mode that broke: the paths are the
     // manifest's embedded ones, so nothing here touches a real filesystem.
     const embedded: Record<string, string> = {
-      "deep-review-reliability.md": "/embedded/reliability-aaaa.md",
-      "deep-review-resilience.md": "/embedded/resilience-bbbb.md",
-      "deep-review-logic.md": "/embedded/logic-ffff.md",
-      "deep-review-security.md": "/embedded/security-gggg.md",
+      "deep-review-general.md": "/embedded/general-aaaa.md",
       "review-refuter.md": "/embedded/refuter-eeee.md",
     };
     const compiledAssets = (files: Record<string, string>): EngineAssets => ({
@@ -1163,7 +1162,7 @@ describe("doctor tri-state evaluation", () => {
 
       const check = report.checks.find((c) => c.name === "agents_dir");
       expect(check?.severity).toBe("healthy");
-      expect(check?.message).toContain("5 prompts read");
+      expect(check?.message).toContain("2 prompts read");
     });
 
     test("a prompt that cannot be read is blocking, named by its logical file", async () => {
@@ -1192,14 +1191,14 @@ describe("doctor tri-state evaluation", () => {
         assets: compiledAssets(embedded),
         readFile: (p) => {
           if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
-          if (p === "/embedded/security-gggg.md") return "   \n";
+          if (p === "/embedded/general-aaaa.md") return "   \n";
           return "# a prompt body\n";
         },
       });
 
       const check = report.checks.find((c) => c.name === "agents_dir");
       expect(check?.severity).toBe("blocking");
-      expect(check?.message).toContain("deep-review-security.md");
+      expect(check?.message).toContain("deep-review-general.md");
     });
 
     test("a manifest the build never embedded is blocking, not a crash", async () => {

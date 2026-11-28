@@ -388,10 +388,20 @@ export function agentModelRole(agent: {
 }
 
 // The hunter roles of `models` that this review's hunters cannot take. A role
-// of a hunter the product removed (`hunter.parity`) is ignored, not an error:
-// the same file kept working before the removal, so it keeps working. Every
-// other `hunter.<key>` that names no hunter of the spec is a typo.
-const REMOVED_HUNTER_ROLES: readonly string[] = ["hunter.parity"];
+// of a hunter the product removed (`hunter.parity`, and the four specialists
+// the general hunter replaced) is ignored, not an error: the same file kept
+// working before the removal, so it keeps working, and the platform sends
+// stored profiles that may still name them. Every other `hunter.<key>` that
+// names no hunter of the spec is a typo. A spec that carries one of these
+// hunters again (CRYSK_EXTRA_HUNTERS) makes its role live: only a role no
+// hunter of the spec takes is ever skipped.
+const REMOVED_HUNTER_ROLES: readonly string[] = [
+  "hunter.parity",
+  "hunter.logic",
+  "hunter.reliability",
+  "hunter.resilience",
+  "hunter.security",
+];
 
 function unknownHunterRoles(
   models: ModelsConfig | undefined,

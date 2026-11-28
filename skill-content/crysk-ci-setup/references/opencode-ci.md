@@ -29,7 +29,7 @@ If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk@0.
 | Role | Steps |
 |---|---|
 | `default` | every role not listed (not the judge) |
-| `hunter.<key>` | one hunter: `logic`, `reliability`, `resilience`, `security` |
+| `hunter.<key>` | one hunter: `general`, the only bundled one (with no `models` it runs `claude:opus-latest` at `high` on the `claude` profile and `opencode:openai/gpt-6.2-sol` at `high` on `openai`). The old `logic`, `reliability`, `resilience` and `security` roles are ignored with a warning |
 | `refuter` | refuter, re-review verifier, CI adjudicator |
 | `consolidate`, `summary` | those steps |
 | `judge` | materiality judge: only its profile's judge models (`claude:sonnet-latest` or `claude:opus-latest`; on the `openai` profile also `opencode:openai/gpt-6.1-terra`), never `default` |

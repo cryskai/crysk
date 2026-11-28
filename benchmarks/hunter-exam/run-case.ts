@@ -565,7 +565,7 @@ export async function checkCase(examCase: ExamCase): Promise<string[]> {
   return problems;
 }
 
-// `logic` names a hunter of the local review spec; `key:file.md` names one
+// `general` names a hunter of the local review spec; `key:file.md` names one
 // that is not in the spec yet (a candidate under --agents). Either way the
 // returned hunter carries no trigger: an exam run asked for this hunter, so it
 // runs.

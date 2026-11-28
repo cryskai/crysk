@@ -66,11 +66,11 @@ const bank = await loadBank();
 const pilot = bank.cases.find((c) => c.id === "py-invoice-reassign");
 if (pilot === undefined) throw new Error("pilot case missing from the bank");
 const pilotDir = caseDir(pilot.id);
-const logic = resolveHunter("logic");
+const general = resolveHunter("general");
 
 function draft(path: string, line: number, n: number): DraftFinding {
   return {
-    id: `LOG-${n}`,
+    id: `GEN-${n}`,
     category: 15,
     path,
     line,
@@ -79,7 +79,7 @@ function draft(path: string, line: number, n: number): DraftFinding {
     causal_disposition: "introduced",
     claim: "a claim",
     proof_refs: [],
-    hunter: "logic",
+    hunter: "general",
     hops_used: 0,
     hop_trail: [],
     dedupe_key: `k-${n}`,
@@ -114,7 +114,7 @@ class FixedDraftRunner implements StepRunner {
 async function runWith(findings: DraftFinding[] | "fail") {
   const runDir = await mkdtemp(path.join(tmpdir(), "hunter-exam-test-"));
   try {
-    const record = await runHunterOnCase(pilotDir, logic, {
+    const record = await runHunterOnCase(pilotDir, general, {
       agentsDir: BUNDLED_AGENTS_DIR,
       runDir,
       runner: new FixedDraftRunner(findings),
@@ -445,20 +445,20 @@ describe("exam.ts refuses instead of guessing", () => {
   // `--max-usd --fresh` read "--fresh" as the amount; NaN never trips a cap.
   test.each([
     [
-      ["run", "--hunter", "logic", "--max-usd", "--fresh"],
+      ["run", "--hunter", "general", "--max-usd", "--fresh"],
       /--max-usd must be a number/,
     ],
-    [["run", "--hunter", "logic", "--max-usd"], /--max-usd must be a number/],
+    [["run", "--hunter", "general", "--max-usd"], /--max-usd must be a number/],
     [
-      ["run", "--hunter", "logic", "--max-usd", "abc"],
+      ["run", "--hunter", "general", "--max-usd", "abc"],
       /--max-usd must be a number/,
     ],
     [
-      ["run", "--hunter", "logic", "--concurrency", "0"],
+      ["run", "--hunter", "general", "--concurrency", "0"],
       /--concurrency must be a whole number/,
     ],
     [
-      ["score", "--hunter", "logic", "--min-depth", "deep"],
+      ["score", "--hunter", "general", "--min-depth", "deep"],
       /--min-depth must be a whole number/,
     ],
   ])("a numeric option that does not parse: %j", async (args, message) => {
@@ -501,16 +501,48 @@ describe("exam.ts refuses instead of guessing", () => {
     const { code } = await exam([
       "score",
       "--hunter",
-      "logic",
+      "general",
       "--failed-from",
       report,
     ]);
     expect(code).toBe(0);
   });
 
+  // `--hunter all` expands to the bundled set's hunters, which is the general
+  // hunter alone; it must reach the case selection, not die resolving a key the
+  // spec no longer has.
+  test("--hunter all resolves against the bundled set", async () => {
+    const { stderr, code } = await exam([
+      "plan",
+      "--hunter",
+      "all",
+      "--project",
+      "no-such-project",
+    ]);
+    expect(stderr).not.toMatch(/unknown hunter/);
+    expect(code).toBe(64);
+    expect(stderr).toMatch(/no case matches this selection/);
+  });
+
+  // The four specialists left the bundled set: naming one without its file is
+  // the unknown-hunter error, pointing at the `key:file.md` form.
+  test("--hunter logic against the bundled set is an unknown hunter", async () => {
+    const { stderr, code } = await exam([
+      "plan",
+      "--hunter",
+      "logic",
+      "--project",
+      "no-such-project",
+    ]);
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(
+      /unknown hunter "logic": not in the local review spec; name a new one as key:file\.md/,
+    );
+  });
+
   // An empty selection used to exit 0 with pass: true.
   test.each([
-    [["score", "--hunter", "logic", "--project", "no-such-project"]],
+    [["score", "--hunter", "general", "--project", "no-such-project"]],
     [["check", "--area", "concurrency", "--origin", "synthetic"]],
   ])("a selection that matches no case: %j", async (args) => {
     const { stderr, code } = await exam(args);
@@ -559,24 +591,24 @@ describe("checkCase", () => {
 
 describe("renderRequest", () => {
   test("is stable, and carries the profile's model and effort", async () => {
-    const a = await renderRequest(pilotDir, logic, BUNDLED_AGENTS_DIR);
-    const b = await renderRequest(pilotDir, logic, BUNDLED_AGENTS_DIR);
+    const a = await renderRequest(pilotDir, general, BUNDLED_AGENTS_DIR);
+    const b = await renderRequest(pilotDir, general, BUNDLED_AGENTS_DIR);
     expect(a).toEqual(b);
-    expect(a.model).toBe("sonnet");
-    expect(a.effort).toBe("xhigh");
+    expect(a.model).toBe("opus");
+    expect(a.effort).toBe("high");
   });
 
   test("changes when the hunter's prompt changes", async () => {
     const agents = await mkdtemp(path.join(tmpdir(), "hunter-exam-agents-"));
     try {
       await cp(BUNDLED_AGENTS_DIR, agents, { recursive: true });
-      const same = await renderRequest(pilotDir, logic, agents);
-      const file = path.join(agents, logic.file);
+      const same = await renderRequest(pilotDir, general, agents);
+      const file = path.join(agents, general.file);
       await writeFile(
         file,
         `${await readFile(file, "utf8")}\nOne more line.\n`,
       );
-      const edited = await renderRequest(pilotDir, logic, agents);
+      const edited = await renderRequest(pilotDir, general, agents);
       expect(edited.key).not.toBe(same.key);
     } finally {
       await rm(agents, { recursive: true, force: true });
@@ -716,11 +748,19 @@ describe("where the exam writes", () => {
 
 describe("resolveHunter", () => {
   test("names a hunter of the local spec by its key", () => {
-    expect(resolveHunter("logic")).toEqual({
-      key: "logic",
-      file: "deep-review-logic.md",
+    expect(resolveHunter("general")).toEqual({
+      key: "general",
+      file: "deep-review-general.md",
       role: "hunter",
     });
+  });
+
+  test("no longer knows the four specialists the general hunter replaced", () => {
+    for (const key of ["logic", "reliability", "resilience", "security"]) {
+      expect(() => resolveHunter(key)).toThrow(
+        new RegExp(`unknown hunter "${key}"`),
+      );
+    }
   });
 
   test("names a candidate hunter by key and file", () => {
