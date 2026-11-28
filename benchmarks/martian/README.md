@@ -641,6 +641,30 @@ Reading:
 - FP rose by 27. More distinct findings now reach the report, so precision fell 2.5 points.
 - Among the tools judged on 66 H+C issues, the arm ties for first with `qodo-extended-v2` and `augment`, both at 61-68% precision. It remains 4 H+C below `dev-2026-11-13`.
 
+## Martian 50, arm `integrated-2026-11-26`, Opus 4.5 judge (2026-11-26/27, Martian's own pipeline)
+
+The same 50 PRs and judge as `dev-2026-11-24`, on the engine of #611 (one `general` hunter, prompt v2, `claude-opus-5-5` at `high`) stacked on #610 (the refuter skips a severe finding when every draft merged into it marks its evidence `deterministic`). The refuter runs `claude-opus-5-5` at `high`, consolidation `claude-sonnet-5-5`. Bundled `prompts/default`, no environment knobs. The variable is the hunter set: one general hunter in place of the four specialist hunters.
+
+- **Qualification.** All 50 complete. The runs were interrupted twice by the subscription's 5-hour limit (HTTP 429) and once by API connection errors (3 Cal.com PRs, cut by the 30-minute watchdog); every interrupted PR was rerun to a complete run.
+- **Judge.** Upstream `e616e849`, steps 2/2.5/3, Opus 4.5 through the shim, with the same two disclosed deviations. 50/50 judged, 0 errors after the resume that followed the quota reset.
+- **Cost.** $0 cash (subscription). 0.40M tokens per PR on average, against 1.95M for `dev-2026-11-24`. At Anthropic list prices (Opus 5.5 $4/$20, Sonnet 5.5 $2/$10 per million, cache write at the 5-minute rate an API key pays) a review costs $0.47 on average ($0.39 median), against $1.45 ($1.40) for `dev-2026-11-24`.
+- **Time.** 1.4 minutes per PR at the median (2.4 at p90), against 3.3 (5.0), measured as the per-run critical path (the slowest step of each stage, summed).
+- Unreplicated. Surface B: **not run**.
+
+| | H+C recall | recall | precision | F1 | tp | fp |
+|---|---|---|---|---|---|---|
+| `dev-2026-11-13` | 80.3% (53/66) | 61.8% | 31.2% | 41.5% | 107 | 236 |
+| `dev-2026-11-24` | 74.2% (49/66) | 54.9% | 33.5% | 41.6% | 95 | 189 |
+| **`integrated-2026-11-26`** | **63.6% (42/66)** | 42.8% | 48.7% | 45.5% | 74 | 78 |
+
+Reading:
+
+- Against the four hunters it trades recall for precision and cost: 7 fewer H+C issues (42 against 49), precision +15 points, 111 fewer false positives, about 3 times cheaper and 2.4 times faster.
+- H+C by corpus, four hunters to one: Cal.com 15 to 14, Sentry 12 to 10, Grafana 8 to 7, Keycloak 8 to 5, Discourse 6 to 6. The loss is larger than the replicate spread of about 2 H+C, but it has no replicate.
+- Among the tools judged on 66 H+C issues it ranks sixth on H+C (tied with `coderabbit`), sixth on precision and seventh on F1.
+
+Raw data in the lab: `bench/experiments/2026-11-26-integrated-martian50/`, ledger entries 2026-11-27 (FINAL) and 2026-11-28 (price correction).
+
 ## Benchmark qualification gates and metrics (Unit 7)
 
 Only **schema-valid, attributable completed attempts** qualify for resume and
