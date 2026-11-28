@@ -13,9 +13,10 @@ almost always real (13% false positives measured, with the earlier specialist hu
 retries, swallowed errors, stale derived state), contracts between parts (shapes, units, lookup keys,
 shared components) and trust boundaries (outside input reaching a query, command, file path or
 server-side request; missing or misplaced permission checks), following each changed value to its
-callers and consumers. On a 13-PR subset of the Martian benchmark it cost about a third of the four
-specialist hunters it replaced, with higher precision and a few fewer severe defects caught; a run on
-the full benchmark is pending. It says nothing about style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
+callers and consumers. On the 50 pull requests of the Martian benchmark, against the four specialist
+hunters it replaced, it cost about a third at list prices ($0.47 against $1.45 a review), finished in
+less than half the time (1.4 against 3.3 minutes, median), and raised precision from 34% to 49%, while
+catching fewer of the severe defects (42 against 49 of 66). It says nothing about style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
 disclaimer, and nothing it prints blocks a merge. In CI its commit status is a gate by default: require the
 `crysk` check in branch protection, and blocking findings block the merge. `mode: advisory` keeps that check
 green.
