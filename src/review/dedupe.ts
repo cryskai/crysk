@@ -239,6 +239,7 @@ function clusterByProximity(
 // whether a group yields one winner or five.
 function foldGroup(
   group: DraftFinding[],
+  crossHunterOnly = false,
 ): Array<{ winner: DraftFinding; folded: DraftFinding[] }> {
   const rounds: Array<{ winner: DraftFinding; folded: DraftFinding[] }> = [];
   let remaining = group;
@@ -248,7 +249,8 @@ function foldGroup(
     const carried: DraftFinding[] = [];
     for (const member of remaining) {
       if (member === winner) continue;
-      if (mayFold(member, winner)) folded.push(member);
+      const eligible = !crossHunterOnly || member.hunter !== winner.hunter;
+      if (eligible && mayFold(member, winner)) folded.push(member);
       else carried.push(member);
     }
     rounds.push({ winner, folded });
@@ -321,6 +323,17 @@ export function mergeAndDedupe(drafts: DraftFinding[]): {
   // component whose lines fall inside DEDUPE_SYMBOL_LINE_WINDOW — and greedy
   // leader-based folding then decides, inside that cluster, what may be
   // discarded.
+  //
+  // Only drafts from DIFFERENT hunters fold here. Pass 2 exists for one defect
+  // reported by several hunters under their own categories; one hunter that
+  // writes two drafts with two dedupe_keys has already said they are two
+  // findings (the same key still folds in pass 1). Measured on the stored
+  // Martian 50 drafts (lab bench/experiments/2026-11-29-dedupe-same-hunter): no
+  // same-hunter fold was one defect written twice; all 14 joined two distinct
+  // defects or one pattern at two sites, and in the one-hunter arm 2 of its 3
+  // folds each cost a known bug (sentry-1 get_result into get_item_key,
+  // cal-14740 duplicate guests into the blacklist case check). With one general
+  // hunter, this pass now folds only against hunters added beside it.
   const byPath = new Map<string, DraftFinding[]>();
   for (const draft of pass1) {
     const group = byPath.get(draft.path);
@@ -337,7 +350,7 @@ export function mergeAndDedupe(drafts: DraftFinding[]): {
       group,
       DEDUPE_SYMBOL_LINE_WINDOW,
     )) {
-      for (const { winner, folded } of foldGroup(cluster)) {
+      for (const { winner, folded } of foldGroup(cluster, true)) {
         foldedInto.set(winner, folded);
         clusterWinnerOf.set(winner, winner);
         for (const loser of folded) {

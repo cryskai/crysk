@@ -245,6 +245,7 @@ describe("pass 2 — cross-category collapse on path", () => {
       category: 5,
       symbol: undefined,
       claim: WEAKER_LENS_CLAIM,
+      hunter: "logic",
       dedupe_key: "src/upload.ts::5",
     });
     const { survivors, deduped } = mergeAndDedupe([a, b]);
@@ -371,6 +372,7 @@ describe("pass 2 — cross-category collapse on path", () => {
       id: "R2",
       line: 1 + DEDUPE_SYMBOL_LINE_WINDOW,
       category: 5,
+      hunter: "logic",
       dedupe_key: "src/upload.ts:abortUpload:5",
     });
     expect(mergeAndDedupe([a, atWindow]).survivors).toHaveLength(1);
@@ -378,9 +380,71 @@ describe("pass 2 — cross-category collapse on path", () => {
       id: "R3",
       line: 1 + DEDUPE_SYMBOL_LINE_WINDOW + 1,
       category: 5,
+      hunter: "logic",
       dedupe_key: "src/upload.ts:abortUpload:5",
     });
     expect(mergeAndDedupe([a, past]).survivors).toHaveLength(2);
+  });
+});
+
+describe("pass 2 — only drafts from different hunters collapse", () => {
+  // Pass 2 exists to merge one defect that several hunters each reported under
+  // their own category. A single hunter that writes two drafts with different
+  // dedupe_keys has already told the pipeline they are two findings: on the
+  // stored Martian 50 drafts every such fold (3 of 3 in the one-hunter arm, 11
+  // of 11 in the four-hunter arms) joined two distinct defects or one pattern at
+  // two sites, and two of them cost a known bug.
+  test("two drafts of one hunter on the same path stay two findings, even with the same claim", () => {
+    const a = draft({
+      id: "GEN-1",
+      hunter: "general",
+      line: 838,
+      dedupe_key: "p.py:get_item_key:15",
+    });
+    const b = draft({
+      id: "GEN-3",
+      hunter: "general",
+      line: 877,
+      dedupe_key: "p.py:get_result:15",
+    });
+    const { survivors, deduped } = mergeAndDedupe([a, b]);
+    expect(survivors.map((s) => s.line)).toEqual([838, 877]);
+    expect(deduped).toEqual([]);
+  });
+
+  test("one hunter's exact dedupe_key still folds in pass 1", () => {
+    const a = draft({ id: "GEN-1", hunter: "general", severity: "CRITICAL" });
+    const b = draft({ id: "GEN-2", hunter: "general" });
+    const { survivors, deduped } = mergeAndDedupe([a, b]);
+    expect(survivors).toHaveLength(1);
+    expect(deduped.map((d) => d.id)).toEqual(["GEN-2"]);
+  });
+
+  test("another hunter's duplicate still folds while the first hunter's two drafts both survive", () => {
+    const a = draft({
+      id: "GEN-1",
+      hunter: "general",
+      severity: "CRITICAL",
+      line: 40,
+      dedupe_key: "src/upload.ts:abortUpload:1",
+    });
+    const b = draft({
+      id: "GEN-2",
+      hunter: "general",
+      line: 60,
+      dedupe_key: "src/upload.ts:retry:1",
+    });
+    const c = draft({
+      id: "LOG-1",
+      hunter: "logic",
+      line: 41,
+      dedupe_key: "src/upload.ts:abortUpload:15",
+    });
+    const { survivors, deduped } = mergeAndDedupe([a, b, c]);
+    expect(survivors.map((s) => s.line)).toEqual([40, 60]);
+    expect(deduped.map((d) => [d.id, d.merged_into])).toEqual([
+      ["LOG-1", "F001"],
+    ]);
   });
 });
 
@@ -770,6 +834,7 @@ describe("#153 claim-similarity gate — the gate itself", () => {
         severity: "BLOCKER",
         proof_refs: ["b1"],
         category: 5,
+        hunter: "logic",
         dedupe_key: "src/upload.ts:abortUpload:5",
       });
       const c = draft({
@@ -808,6 +873,7 @@ describe("#153 claim-similarity gate — the gate itself", () => {
         severity: "BLOCKER",
         proof_refs: ["b1", "b2", "b3"],
         category: 5,
+        hunter: "logic",
         dedupe_key: "src/upload.ts:abortUpload:5",
       });
       const c = draft({
